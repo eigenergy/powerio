@@ -39,6 +39,33 @@ def test_native_time_varying_branch_limits(tmp_path):
         assert all(b["in_service"] for b in restored.value[index].branches)
 
 
+@pytest.mark.parametrize("format", ["pypsa-netcdf", "pypsa-hdf5"])
+def test_time_varying_branch_limits_write_to_binary_files(format, tmp_path):
+    # The CSV writer states each point's rating as its s_nom, which PyPSA
+    # cannot vary across snapshots, so writing a varying rating failed.
+    import pandas as pd
+    import pypsa
+    network = pypsa.Network()
+    network.set_snapshots(pd.date_range("2026-01-01", periods=3, freq="h"))
+    network.add("Bus", "a", v_nom=110.0)
+    network.add("Bus", "b", v_nom=110.0)
+    network.add("Line", "varied", bus0="a", bus1="b", x=0.1, s_nom=100.0,
+                s_max_pu=[0.0, float("inf"), 0.75])
+    network.add("Transformer", "varied", bus0="a", bus1="b", x=0.1, s_nom=50.0,
+                s_max_pu=[float("inf"), 0.0, 0.5])
+    source = tmp_path / "limits"
+    network.export_to_csv_folder(source)
+    module = pio.parse(source)
+    emitted = pio.emit(module.sever_source(), format)
+    recovered = pio.parse(emitted.artifacts[0].data, format=format)
+    for index in range(3):
+        expected = [b["rate_a"] for b in module.value[index].branches]
+        actual = [b["rate_a"] for b in recovered.value[index].branches]
+        assert actual == pytest.approx(expected)
+        for before, after in zip(module.value[index].branches, recovered.value[index].branches, strict=True):
+            assert after["x"] == pytest.approx(before["x"])
+
+
 @pytest.mark.parametrize("format,suffix", [("pypsa-netcdf", ".nc"), ("pypsa-hdf5", ".h5")])
 def test_binary_roundtrip_and_destination(format, suffix, tmp_path):
     source = pio.parse(CASE)

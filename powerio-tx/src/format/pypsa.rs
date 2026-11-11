@@ -284,8 +284,10 @@ fn read_pypsa_csv_static(
     }
 
     let mut branches = Vec::new();
+    let mut extendable = 0;
     if let Some(table) = folder.optional("lines.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
+            extendable += usize::from(row.bool("s_nom_extendable") == Some(true));
             let from = bus_ref("lines.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("lines.csv", i + 1, row, "bus1", &id_of_name)?;
             // PyPSA per-unitizes line ohms on the BUS0 v_nom
@@ -326,6 +328,7 @@ fn read_pypsa_csv_static(
     }
     if let Some(table) = folder.optional("transformers.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
+            extendable += usize::from(row.bool("s_nom_extendable") == Some(true));
             let from = bus_ref("transformers.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("transformers.csv", i + 1, row, "bus1", &id_of_name)?;
             // PyPSA stores transformer impedances per unit on the transformer's
@@ -371,6 +374,12 @@ fn read_pypsa_csv_static(
                 extras: Extras::default(),
             });
         }
+    }
+
+    if extendable > 0 {
+        warnings.push(&codes::READ_PYPSA_VALUE_APPROXIMATED, format!(
+            "{extendable} extendable line(s) or transformer(s) read with s_nom_max * s_max_pu as the thermal bound: capacity expansion has no source neutral field"
+        ));
     }
 
     let mut storage = Vec::new();
@@ -1135,14 +1144,37 @@ struct CsvRow {
 /// PyPSA constrains passive branch flow by s_nom * s_max_pu. In particular,
 /// zero is a real bound; an infinite product means no finite thermal bound.
 fn thermal_limit(row: &CsvRow) -> Result<f64> {
-    let read = |key: &str, default: f64| -> Result<f64> {
-        row.get(key).map_or(Ok(default), |text| {
-            text.parse::<f64>()
-                .map_err(|_| bad(format!("{key} must be a nonnegative number")))
-        })
-    };
-    let nominal = read("s_nom", 0.0)?;
-    let multiplier = read("s_max_pu", 1.0)?;
+    let multiplier = read_rating_field(row, "s_max_pu", 1.0)?;
+    thermal_bound(thermal_nominal(row)?, multiplier)
+}
+
+fn read_rating_field(row: &CsvRow, key: &str, default: f64) -> Result<f64> {
+    row.get(key).map_or(Ok(default), |text| {
+        text.parse::<f64>()
+            .map_err(|_| bad(format!("{key} must be a nonnegative number")))
+    })
+}
+
+/// The capacity that bounds a passive branch before `s_max_pu`, and whether
+/// the branch is extendable. An expansion model chooses an extendable
+/// branch's capacity up to `s_nom_max`, so `s_nom` is only its starting value,
+/// often zero, and `s_nom_max` (unbounded by default) is the bound every
+/// expansion keeps.
+fn thermal_nominal(row: &CsvRow) -> Result<(f64, bool)> {
+    if row.bool("s_nom_extendable") == Some(true) {
+        Ok((read_rating_field(row, "s_nom_max", f64::INFINITY)?, true))
+    } else {
+        Ok((read_rating_field(row, "s_nom", 0.0)?, false))
+    }
+}
+
+fn thermal_bound((nominal, extendable): (f64, bool), multiplier: f64) -> Result<f64> {
+    // Every expansion picks a finite capacity, so a zero multiplier bounds
+    // the flow at zero even when s_nom_max is unbounded.
+    if extendable && multiplier == 0.0 {
+        thermal_product(nominal, 1.0)?;
+        return Ok(0.0);
+    }
     thermal_product(nominal, multiplier)
 }
 
@@ -1417,8 +1449,9 @@ pub fn parse_pypsa_csv_time_series(source: &powerio_core::Source) -> Result<Pyps
             if file == "lines.csv" {
                 line_count = table.rows.len();
             }
-            branch_nominal_ratings
-                .extend(table.rows.iter().map(|row| row.f("s_nom").unwrap_or(0.0)));
+            for row in &table.rows {
+                branch_nominal_ratings.push(thermal_nominal(row)?);
+            }
         }
     }
     // `p_nom` scales the per unit dispatch bound series, with the static
@@ -1522,7 +1555,7 @@ pub fn parse_pypsa_csv_time_series(source: &powerio_core::Source) -> Result<Pyps
                 }
                 SeriesField::LineRating | SeriesField::TransformerRating => {
                     network.branches_mut()[column.row].rate_a =
-                        thermal_product(branch_nominal_ratings[column.row], value)?;
+                        thermal_bound(branch_nominal_ratings[column.row], value)?;
                 }
             }
         }
@@ -1832,6 +1865,37 @@ mod tests {
 
     fn net_with(buses: Vec<Bus>) -> BalancedNetwork {
         BalancedNetwork::in_memory("t", 100.0, buses, Vec::new())
+    }
+
+    #[test]
+    fn an_extendable_branch_is_bounded_by_its_maximum_capacity() {
+        // Expansion models state s_nom = 0 for a line to be built. Reading
+        // that as a zero bound pinned the line's flow to zero.
+        let dir = folder(
+            "extendable",
+            &[
+                ("buses.csv", "name,v_nom\na,110\nb,110\n"),
+                (
+                    "lines.csv",
+                    "name,bus0,bus1,x,s_nom,s_nom_extendable,s_nom_max,s_max_pu\n\
+                     open,a,b,1,0,True,,1\n\
+                     capped,a,b,1,0,True,150,0.8\n\
+                     closed,a,b,1,0,True,,0\n\
+                     fixed,a,b,1,0,False,150,1\n",
+                ),
+            ],
+        );
+        let parsed = read_pypsa_csv_folder(&dir).unwrap();
+        let rates: Vec<f64> = parsed.network.branches().iter().map(|b| b.rate_a).collect();
+        assert_eq!(rates, [f64::INFINITY, 120.0, 0.0, 0.0]);
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("3 extendable line(s)")),
+            "{:?}",
+            parsed.render_diagnostics()
+        );
     }
 
     #[test]

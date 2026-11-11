@@ -321,7 +321,56 @@ def _static_network(module, directory: Path):
     return network, list(csv.diagnostics)
 
 
+# A transformer's per unit impedances use its own s_nom as their base.
+_TRANSFORMER_IMPEDANCE = ("r", "x", "b", "g")
+
+
+def _fixed_rating_bases(series) -> dict[int, float]:
+    """One s_nom for each branch whose rating varies across snapshots.
+
+    PyPSA varies a flow bound only through s_max_pu: s_nom is static, and is a
+    transformer's impedance base. The CSV writer derives each point's s_nom
+    from that point's rating, so a branch whose rating varies is restated on
+    one positive s_nom: its first finite positive rating, otherwise the system
+    base, which is the s_nom the writer gives an unlimited branch.
+    """
+    import math
+
+    ratings = []
+    for point in series:
+        network = getattr(point, "network", point)
+        ratings.append([branch["rate_a"] for branch in network.branches])
+    base = getattr(series[0], "network", series[0]).base_mva
+    bases = {}
+    for index, values in enumerate(zip(*ratings, strict=True)):
+        if any(value != values[0] for value in values):
+            bases[index] = next((value for value in values if 0.0 < value < math.inf), base)
+    return bases
+
+
+def _restate_ratings(static, bases: dict[int, float], prefix: str, impedance: bool) -> None:
+    """Restate the varying branches in a static table on their fixed s_nom."""
+    for index, s_nom in bases.items():
+        # The CSV writer names a branch after its position among all branches.
+        name = f"{prefix}_{index + 1}"
+        if name not in static.index:
+            continue
+        current = float(static.at[name, "s_nom"])
+        if current == s_nom:
+            continue
+        multiplier = float(static.at[name, "s_max_pu"])
+        rating = 0.0 if current == 0.0 or multiplier == 0.0 else current * multiplier
+        static.at[name, "s_nom"] = s_nom
+        static.at[name, "s_max_pu"] = rating / s_nom
+        if impedance:
+            for column in ("r", "x"):
+                static.at[name, column] = static.at[name, column] * s_nom / current
+            for column in ("b", "g"):
+                static.at[name, column] = static.at[name, column] * current / s_nom
+
+
 def _network(module, directory: Path):
+    import numpy as np
     import pandas as pd
 
     import powerio as pio
@@ -343,9 +392,12 @@ def _network(module, directory: Path):
     diagnostics = []
     dynamic: dict[tuple[str, str], list[Any]] = {}
     expanded_bytes = 0
+    bases = _fixed_rating_bases(series)
     for point in series:
         current, findings = _static_network(pio.PioModule.from_value(point), directory / "csv")
         diagnostics.extend(findings)
+        _restate_ratings(current.components["lines"].static, bases, "line", impedance=False)
+        _restate_ratings(current.components["transformers"].static, bases, "transformer", impedance=True)
         if network is None:
             network = current
             network.set_snapshots(snapshots)
@@ -363,6 +415,16 @@ def _network(module, directory: Path):
                         raise ValueError("PyPSA temporal arrays exceed the 64 MiB acquisition limit")
                     dynamic.setdefault((name, column), []).append(values)
                 elif not first[column].equals(following[column]):
+                    # Restating a transformer on its fixed s_nom rescales its
+                    # impedances, which can differ from the first point's in
+                    # the last digit.
+                    if name == "transformers" and column in _TRANSFORMER_IMPEDANCE and np.allclose(
+                        first[column].to_numpy(dtype=float),
+                        following[column].to_numpy(dtype=float),
+                        rtol=1e-12,
+                        atol=0.0,
+                    ):
+                        continue
                     raise ValueError(f"PyPSA cannot vary static attribute {name}.{column} across snapshots")
     assert network is not None
     for (name, column), values in dynamic.items():
