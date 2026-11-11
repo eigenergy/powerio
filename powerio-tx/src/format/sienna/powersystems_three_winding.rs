@@ -18,8 +18,11 @@ pub(super) fn decode(row: &mut Value, doc: &mut Value, next: &mut i64, base: f64
             "tap":optional(row,&format!("{side}_turns_ratio"),1.0)?,
             "alpha":optional(row,&format!("α_{side}"),clock_angle(row,&format!("{side}_group_number"))?)?,
             "rating":match row.get(format!("rating_{side}")) {
-                None => 0.0, // PowerSystems' constructor default is a finite zero.
-                Some(_) => number(row, &format!("rating_{side}"))?,
+                None => json!(0.0), // PowerSystems' constructor default is a finite zero.
+                Some(_) => {
+                    let rating = number(row, &format!("rating_{side}"))?;
+                    if super::is_infinite_bound(rating) { Value::Null } else { json!(rating) }
+                }
             },
             "active_power_flow":optional(row,&format!("active_power_flow_{side}"),0.0)?,
             "reactive_power_flow":optional(row,&format!("reactive_power_flow_{side}"),0.0)?,
@@ -115,12 +118,14 @@ pub(super) fn prepare(doc: &mut Value, base: f64, warnings: &mut Diagnostics) ->
             row[format!("available_{side}")] = c["available"].clone();
             any_available |= c["available"] == true;
             // Native winding ratings are Float64, unlike the parent's optional
-            // aggregate rating. Absence must not become a finite zero bound.
+            // aggregate rating. Absence is PowerSystems' unbounded marker,
+            // never a finite zero bound.
             let rating = super::thermal_limit(c, "rating", 1.0 / basis)?;
-            let magnitude = crate::thermal_limit::as_option(rating).ok_or_else(|| error(format!(
-                "PowerSystems rating_{side} is required and numeric; an unlimited winding rating cannot be represented in this JSON profile"
-            )))?;
-            row[format!("rating_{side}")] = json!(magnitude);
+            row[format!("rating_{side}")] = json!(if rating.is_finite() {
+                rating
+            } else {
+                super::INFINITE_BOUND
+            });
             for field in ["rating_b", "rating_c"] {
                 let rating = super::thermal_limit(c, field, 1.0 / basis)?;
                 if !rating.is_infinite() {
