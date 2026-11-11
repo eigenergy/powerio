@@ -50,6 +50,7 @@ def test_selection_metadata_is_bounded():
         with pytest.raises(ValueError, match="selection metadata exceeds 1 MiB"):
             collection.parse({"primary": "x" * (1 << 20)})
 
+
 @pytest.mark.parametrize(
     "kwargs, message",
     [
