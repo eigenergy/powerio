@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- OpenDSS output writes a closed PMD switch with all zero impedance and shunt
+  matrices as the ideal switch pair with `EMIT.DSS.IDEAL_SWITCH_EQUIVALENT`.
+  It used to write a zero impedance line, which OpenDSS rejects with error 183
+  (#862).
+
 ## 0.11.12
 
 **XIIDM**
