@@ -374,7 +374,7 @@ fn real_export_field_names_map_gen_shunt_and_transformer() {
     let br = &net.branches()[0];
     assert_eq!((br.r, br.x, br.b), (0.001, 0.05, 0.002));
     assert_eq!((br.tap, br.shift), (0.9875, -2.5));
-    assert_eq!((br.rate_a, br.rate_b, br.rate_c), (250.0, 260.0, 270.0));
+    assert_eq!([br.rate_a, br.rate_b, br.rate_c], [250.0, 260.0, 270.0]);
     assert!(br.is_transformer());
     // A padded " 1" is the allocator's default with PowerWorld's padding on
     // it; both PowerWorld readers drop it (trim-insensitively) so the pwb and

@@ -271,13 +271,19 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
                 mb.b
             );
             assert!(
-                (ab.rate_a - mb.rate_a).abs() < 5e-2,
+                thermal_compare(ab.rate_a, mb.rate_a, |x, y| (x - y).abs() < 5e-2),
                 "{pair:?} rate_a {} vs {}",
                 ab.rate_a,
                 mb.rate_a
             );
-            assert!((ab.rate_b - mb.rate_b).abs() < 5e-2, "{pair:?} rate_b");
-            assert!((ab.rate_c - mb.rate_c).abs() < 5e-2, "{pair:?} rate_c");
+            assert!(
+                thermal_compare(ab.rate_b, mb.rate_b, |x, y| (x - y).abs() < 5e-2),
+                "{pair:?} rate_b"
+            );
+            assert!(
+                thermal_compare(ab.rate_c, mb.rate_c, |x, y| (x - y).abs() < 5e-2),
+                "{pair:?} rate_c"
+            );
             compared += 1;
         }
     }
@@ -303,4 +309,10 @@ fn activsg200_contingencies_are_reachable() {
         "every contingency carries at least one action"
     );
     assert_eq!(ctgs[0].actions[0], "BRANCH 2 1 1 OPEN");
+}
+
+// Unlimited and finite zero are different even when their historical spelling
+// was the same. Apply each source precision tolerance only to finite pairs.
+fn thermal_compare(a: f64, b: f64, finite: impl FnOnce(f64, f64) -> bool) -> bool {
+    (a == f64::INFINITY && b == f64::INFINITY) || (a.is_finite() && b.is_finite() && finite(a, b))
 }

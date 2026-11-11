@@ -86,7 +86,10 @@ pub fn read_module(text: &str) -> Result<PioModule<PioValue>> {
     // is a version this build does not read, a readable document that is
     // invalid, or not PowerIO IR at all.
     let decode_error = match serde_json::from_str::<StoredModule>(text) {
-        Ok(stored) if is_readable(&stored.schema, &stored.version) => {
+        Ok(mut stored) if is_readable(&stored.schema, &stored.version) => {
+            if matches!(stored.version, dto::StoredVersion::Integer(VERSION_0_11)) {
+                super::legacy::read_ratings(&mut stored.value);
+            }
             dto::validate(&stored).map_err(invalid)?;
             return decode_stored(stored);
         }

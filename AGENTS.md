@@ -360,8 +360,11 @@ docs/                         the mdBook guide, the schema archive, release note
   that states a linear curve often carries a quadratic term near `1e-17`.
   `GenCost::LEADING_COEFF_TOL` (`1e-12`) is the tolerance the quadratic
   projections apply before counting the row's degree.
-- **`rate_a == 0` means unlimited.** The opt in `synthesize_unrated_limits`
-  build option replaces it with `Branch::synthesize_rate_a`. `angmin` and
+- **Thermal ratings are numeric.** `0.0` is a zero bound; `f64::INFINITY`
+  imposes no thermal constraint. Neither changes equipment status. Readers and
+  writers translate format-specific conventions. The opt in
+  `synthesize_unrated_limits` build option replaces only infinity with
+  `Branch::synthesize_rate_a`. `angmin` and
   `angmax` are degrees in the neutral model and radians after
   `to_normalized`; the builders convert so a raw case and its normalized form
   get the same bound.

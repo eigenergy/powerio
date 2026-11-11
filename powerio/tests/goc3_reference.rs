@@ -146,6 +146,7 @@ fn assert_dimensions_and_time_axis(
     );
 }
 
+#[allow(clippy::too_many_lines)] // Field-level comparisons with the independent GO3 fixture.
 fn assert_bus_and_branch_values(instance: &powerio::AcScucInstance, path: &Path) {
     let network = instance.network();
     let inputs = instance.inputs();

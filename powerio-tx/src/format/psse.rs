@@ -83,7 +83,10 @@ fn read_extra_branch_ratings(
     for slot in 0..PSSE_EXTRA_BRANCH_RATINGS {
         let rate_mva = num_at(fields, rating_start + 3 + slot, 0.0)?;
         if rate_mva.abs() > f64::EPSILON {
-            ratings.push(BranchRatingSet::new(psse_extra_rating_name(slot), rate_mva));
+            ratings.push(BranchRatingSet::new(
+                psse_extra_rating_name(slot),
+                crate::thermal_limit::from_zero_unlimited(rate_mva)?,
+            ));
         }
     }
     Ok(ratings)
@@ -105,7 +108,7 @@ fn psse_extra_rating_slots(
         if let Some(slot) = psse_extra_rating_slot(&rating.name)
             && !used[slot]
         {
-            values[slot] = rating.rate_mva;
+            values[slot] = crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(0.0);
             used[slot] = true;
             continue;
         }
@@ -115,7 +118,7 @@ fn psse_extra_rating_slots(
     for rating in deferred {
         let slot = used.iter().position(|is_used| !*is_used);
         if let Some(slot) = slot {
-            values[slot] = rating.rate_mva;
+            values[slot] = crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(0.0);
             used[slot] = true;
         }
         report(rating, slot);
@@ -1399,9 +1402,9 @@ fn write_psse_rev_inner(
                 num(br.x),
                 num(b_total),
                 name,
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
                 num(extra_ratings[0]),
                 num(extra_ratings[1]),
                 num(extra_ratings[2]),
@@ -1436,9 +1439,9 @@ fn write_psse_rev_inner(
                 num(br.r),
                 num(br.x),
                 num(b_total),
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
                 num(charging.g_fr),
                 num(bi),
                 num(charging.g_to),
@@ -1672,9 +1675,9 @@ fn write_psse_rev_inner(
                 "{}, 0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {control}",
                 num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
                 num(extra_ratings[0]),
                 num(extra_ratings[1]),
                 num(extra_ratings[2]),
@@ -1691,9 +1694,9 @@ fn write_psse_rev_inner(
                 "{}, 0, {}, {}, {}, {}, {control}",
                 num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::as_option(br.rate_a).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_b).unwrap_or(0.0)),
+                num(crate::thermal_limit::as_option(br.rate_c).unwrap_or(0.0)),
             );
         }
         let _ = writeln!(s, "{}, 0", num(ratio2));
@@ -1890,9 +1893,9 @@ fn write_psse_rev_inner(
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
-                    num(w.rate_a),
-                    num(w.rate_b),
-                    num(w.rate_c),
+                    num(crate::thermal_limit::as_option(w.rate_a).unwrap_or(0.0)),
+                    num(crate::thermal_limit::as_option(w.rate_b).unwrap_or(0.0)),
+                    num(crate::thermal_limit::as_option(w.rate_c).unwrap_or(0.0)),
                     num(extra_ratings[0]),
                     num(extra_ratings[1]),
                     num(extra_ratings[2]),
@@ -1910,9 +1913,9 @@ fn write_psse_rev_inner(
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
-                    num(w.rate_a),
-                    num(w.rate_b),
-                    num(w.rate_c),
+                    num(crate::thermal_limit::as_option(w.rate_a).unwrap_or(0.0)),
+                    num(crate::thermal_limit::as_option(w.rate_b).unwrap_or(0.0)),
+                    num(crate::thermal_limit::as_option(w.rate_c).unwrap_or(0.0)),
                 );
             }
         }
@@ -5645,9 +5648,9 @@ fn read_branch(f: &[Cow<'_, str>], raw_rev: u32) -> Result<Branch> {
             g_to,
             b_to,
         }),
-        rate_a: num_at(f, rating, 0.0)?,
-        rate_b: num_at(f, rating + 1, 0.0)?,
-        rate_c: num_at(f, rating + 2, 0.0)?,
+        rate_a: crate::thermal_limit::from_zero_unlimited(num_at(f, rating, 0.0)?)?,
+        rate_b: crate::thermal_limit::from_zero_unlimited(num_at(f, rating + 1, 0.0)?)?,
+        rate_c: crate::thermal_limit::from_zero_unlimited(num_at(f, rating + 2, 0.0)?)?,
         rating_sets: read_extra_branch_ratings(f, rating, named_record)?,
         current_ratings: None,
         tap: 0.0,
@@ -5904,9 +5907,9 @@ fn read_transformer(
                 g_to: 0.0,
                 b_to: 0.0,
             }),
-            rate_a: num_at(l3, 3, 0.0)?,
-            rate_b: num_at(l3, 4, 0.0)?,
-            rate_c: num_at(l3, 5, 0.0)?,
+            rate_a: crate::thermal_limit::from_zero_unlimited(num_at(l3, 3, 0.0)?)?,
+            rate_b: crate::thermal_limit::from_zero_unlimited(num_at(l3, 4, 0.0)?)?,
+            rate_c: crate::thermal_limit::from_zero_unlimited(num_at(l3, 5, 0.0)?)?,
             rating_sets: read_extra_branch_ratings(l3, 3, modern)?,
             current_ratings: None,
             tap,
@@ -6150,9 +6153,9 @@ fn read_transformer_3w(
                     tap,
                     shift: num_at(w, 2, 0.0)?,
                     nominal_kv: num_at(w, 1, 0.0)?,
-                    rate_a: num_at(w, 3, 0.0)?,
-                    rate_b: num_at(w, 4, 0.0)?,
-                    rate_c: num_at(w, 5, 0.0)?,
+                    rate_a: crate::thermal_limit::from_zero_unlimited(num_at(w, 3, 0.0)?)?,
+                    rate_b: crate::thermal_limit::from_zero_unlimited(num_at(w, 4, 0.0)?)?,
+                    rate_c: crate::thermal_limit::from_zero_unlimited(num_at(w, 5, 0.0)?)?,
                     control,
                 },
                 node,
@@ -7701,9 +7704,9 @@ Q
                 g_to: 0.03,
                 b_to: 0.05,
             }),
-            rate_a: 100.0,
-            rate_b: 110.0,
-            rate_c: 120.0,
+            rate_a: (100.0),
+            rate_b: (110.0),
+            rate_c: (120.0),
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
@@ -7728,9 +7731,9 @@ Q
             x: 0.1,
             b: 0.0,
             charging: Some(charging),
-            rate_a: 100.0,
-            rate_b: 110.0,
-            rate_c: 120.0,
+            rate_a: (100.0),
+            rate_b: (110.0),
+            rate_c: (120.0),
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.05,
@@ -8507,6 +8510,7 @@ Q
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Complete native header and named-rating fixture assertions.
     fn reads_comment_headers_system_wide_block_and_named_branch_records() {
         let raw = r#"@!IC, SBASE,REV,XFRRAT,NXFRAT,BASFRQ
 0, 100.00, 34, 0, 0, 60.00 / synthetic v34 export
@@ -9491,7 +9495,7 @@ Q
         let net = parse_psse(raw).unwrap();
 
         assert_eq!(net.branches().len(), 1);
-        close(net.branches()[0].rate_a, 0.0);
+        assert_eq!(net.branches()[0].rate_a, f64::INFINITY);
         close(net.branches()[0].rate_b, 90.0);
         close(net.branches()[0].rate_c, 80.0);
         assert!(net.branches()[0].in_service);

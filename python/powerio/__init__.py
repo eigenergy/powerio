@@ -904,6 +904,10 @@ class BalancedNetwork:
         ``gencost`` is present only when every generator carries cost data,
         because MATPOWER requires cost rows for all generators or none.
         :func:`from_ppc` reads the tables back.
+
+        Infinite branch ratings become PYPOWER's zero (no bound). A real
+        zero rating raises ``ValueError`` because those tables cannot state
+        a zero flow bound.
         """
         np = _require("numpy", "matrix")
         buses = self._inner.buses
@@ -961,6 +965,12 @@ class BalancedNetwork:
         ).reshape(len(gens), width)
 
         branches = self._inner.branches
+
+        def ppc_rating(rating):
+            if rating == 0.0:
+                raise ValueError("PYPOWER's zero means no bound; it cannot represent a zero branch rating")
+            return 0.0 if rating == float("inf") else rating
+
         branch = np.array(
             [
                 (
@@ -969,9 +979,9 @@ class BalancedNetwork:
                     br["r"],
                     br["x"],
                     br["b"],
-                    br["rate_a"],
-                    br["rate_b"],
-                    br["rate_c"],
+                    ppc_rating(br["rate_a"]),
+                    ppc_rating(br["rate_b"]),
+                    ppc_rating(br["rate_c"]),
                     br["tap"],
                     br["shift"],
                     float(br["in_service"]),

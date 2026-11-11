@@ -2490,6 +2490,8 @@ pub struct Branch {
     /// susceptance from [`b`](Branch::b).
     #[serde(default)]
     pub charging: Option<BranchCharging>,
+    /// Apparent-power limit: zero is a zero bound; positive infinity is unbounded.
+    /// MVA in a physical network, per unit after normalization.
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
@@ -2780,9 +2782,9 @@ impl Branch {
             x,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
@@ -2844,7 +2846,7 @@ impl Branch {
     }
 
     /// Apparent power bound, per unit, for a branch the source left unrated
-    /// (`rate_a == 0`, which reads as unlimited). `angle_window_rad` is the
+    /// (`rate_a == f64::INFINITY`). `angle_window_rad` is the
     /// widest angle difference the branch may hold, in radians. That window and
     /// the two terminal voltage bands give the widest voltage phasor difference
     /// the branch can hold. The difference over `|Z|` bounds the current, and
@@ -3660,6 +3662,7 @@ pub struct Winding {
     pub shift: f64,
     /// Winding nominal voltage (kV); 0 defers to the terminal bus base kV.
     pub nominal_kv: f64,
+    /// Apparent-power limit: zero is a zero bound; positive infinity is unbounded.
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
@@ -3676,9 +3679,9 @@ impl Winding {
             tap: 1.0,
             shift: 0.0,
             nominal_kv: 0.0,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         }
     }
@@ -3835,7 +3838,11 @@ impl Transformer3W {
         if sets.iter().all(Vec::is_empty) {
             self.extras.remove(WINDING_RATING_SETS_EXTRA);
         } else {
-            let value = serde_json::to_value(sets).expect("rating sets serialize to JSON");
+            let value = sets
+                .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
+                    serde_json::value::Serializer,
+                ))
+                .expect("rating sets serialize to JSON");
             self.extras
                 .insert(WINDING_RATING_SETS_EXTRA.to_owned(), value);
         }
@@ -3844,8 +3851,33 @@ impl Transformer3W {
     fn stored_winding_rating_sets(&self) -> [Vec<BranchRatingSet>; 3] {
         self.extras
             .get(WINDING_RATING_SETS_EXTRA)
-            .and_then(|value| <[Vec<BranchRatingSet>; 3]>::deserialize(value).ok())
+            .and_then(|value| {
+                <[Vec<BranchRatingSet>; 3]>::deserialize(
+                    powerio_core::__implementation::nonfinite::NonFiniteDe(value),
+                )
+                .ok()
+            })
             .unwrap_or_default()
+    }
+
+    fn checked_winding_rating_sets(&self) -> Result<[Vec<BranchRatingSet>; 3]> {
+        self.extras
+            .get(WINDING_RATING_SETS_EXTRA)
+            .map(|value| {
+                let sets = <[Vec<BranchRatingSet>; 3]>::deserialize(
+                    powerio_core::__implementation::nonfinite::NonFiniteDe(value),
+                )
+                .map_err(|error| Error::FormatRead {
+                    format: "network",
+                    message: format!("invalid winding rating sets: {error}"),
+                })?;
+                for rating in sets.iter().flatten() {
+                    crate::thermal_limit::validate(rating.rate_mva)?;
+                }
+                Ok(sets)
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 
     /// The sole adjustable winding for PSS/E bus-to-bus correction. The
@@ -4442,6 +4474,28 @@ impl BalancedNetwork {
         self.check_references("network")
     }
 
+    /// Validate the explicit limit magnitudes before a calculation or output
+    /// path that does not need to rebuild the bus-reference index.
+    pub(crate) fn check_thermal_limits(&self) -> crate::Result<()> {
+        for branch in self.branches() {
+            for limit in [branch.rate_a, branch.rate_b, branch.rate_c]
+                .into_iter()
+                .chain(branch.rating_sets.iter().map(|rating| rating.rate_mva))
+            {
+                crate::thermal_limit::validate(limit)?;
+            }
+        }
+        for transformer in self.transformers_3w() {
+            for winding in &transformer.windings {
+                for limit in [winding.rate_a, winding.rate_b, winding.rate_c] {
+                    crate::thermal_limit::validate(limit)?;
+                }
+            }
+            transformer.checked_winding_rating_sets()?;
+        }
+        Ok(())
+    }
+
     /// Error if two buses share an id, or if any element references a bus that
     /// doesn't exist. Readers call this after parsing so a missing/garbled id
     /// (which would otherwise default to a placeholder and silently re-wire the
@@ -4483,6 +4537,12 @@ impl BalancedNetwork {
         };
         // Format the context only on the error path, not once per branch.
         for (i, br) in self.branches().iter().enumerate() {
+            for limit in [br.rate_a, br.rate_b, br.rate_c] {
+                crate::thermal_limit::validate(limit)?;
+            }
+            for set in &br.rating_sets {
+                crate::thermal_limit::validate(set.rate_mva)?;
+            }
             for bus in [br.from, br.to] {
                 if !ids.contains(&bus) {
                     return Err(Error::FormatRead {
@@ -4548,7 +4608,11 @@ impl BalancedNetwork {
             }
         }
         for t in self.transformers_3w() {
+            t.checked_winding_rating_sets()?;
             for w in &t.windings {
+                for limit in [w.rate_a, w.rate_b, w.rate_c] {
+                    crate::thermal_limit::validate(limit)?;
+                }
                 check(w.bus, "3-winding transformer")?;
                 if let Some(control) = w.control.as_ref() {
                     if control.controlled_bus_on_winding_side
@@ -5470,7 +5534,11 @@ impl BalancedNetwork {
 /// that checks a field survives that trip.
 #[cfg(test)]
 pub(crate) fn serde_round_trip(network: &BalancedNetwork) -> BalancedNetwork {
-    serde_json::from_str(&serde_json::to_string(network).unwrap()).unwrap()
+    use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
+    let value = network
+        .serialize(NonFiniteSer(serde_json::value::Serializer))
+        .unwrap();
+    BalancedNetwork::deserialize(NonFiniteDe(value)).unwrap()
 }
 
 #[cfg(test)]
@@ -6343,8 +6411,8 @@ mod tests {
             shift: 0.0,
             nominal_kv: 230.0,
             rate_a: 100.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         }
     }
@@ -6644,9 +6712,9 @@ mod tests {
             x: 0.1,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.0,
@@ -6780,9 +6848,9 @@ mod tests {
             x: f64::INFINITY,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,

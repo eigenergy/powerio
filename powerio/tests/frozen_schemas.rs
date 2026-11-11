@@ -617,6 +617,31 @@ fn assert_reads_documents_of(earlier: &str) {
                     "{earlier}: type {type_name} changed"
                 );
             }
+        } else if matches!(name.as_str(), "Branch" | "Winding" | "BranchRatingSet") {
+            // 0.12 keeps the numeric layout and documents zero/+Infinity.
+            // The version-aware reader translates 0.11 zeros; thermal_limit_ir
+            // tests that interpretation separately from schema compatibility.
+            let mut expected = definition.clone();
+            let fields: &[&str] = if name == "BranchRatingSet" {
+                &["rate_mva"]
+            } else {
+                &["rate_a", "rate_b", "rate_c"]
+            };
+            for field in fields {
+                expected["properties"][field]["x-infinity-means"] = "no bound".into();
+            }
+            if name == "Branch" {
+                expected["properties"]["rate_a"]["description"] =
+                    "Apparent-power limit: zero is a zero bound; positive infinity is unbounded.\nMVA in a physical network, per unit after normalization.".into();
+            } else if name == "Winding" {
+                expected["properties"]["rate_a"]["description"] =
+                    "Apparent-power limit: zero is a zero bound; positive infinity is unbounded."
+                        .into();
+            }
+            assert_eq!(
+                current_defs[name], expected,
+                "{earlier}: {name} changed beyond rating annotations"
+            );
         } else if name == "DistLoadVoltageModel" {
             assert_additive_load_laws(earlier, definition, &current_defs[name]);
         } else if name == "MulticonductorNetwork" {

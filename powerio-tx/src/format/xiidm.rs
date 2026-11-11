@@ -5774,7 +5774,7 @@ fn read_transformer(
 
 #[derive(Default)]
 struct LoadingLimitProjection {
-    permanent: f64,
+    permanent: Option<f64>,
     temporary: Vec<(i32, String, f64)>,
 }
 
@@ -5939,7 +5939,7 @@ fn calc_loading_limit_projection(
         .collect::<Vec<_>>();
     temporary.sort_by_key(|(duration, _, _)| std::cmp::Reverse(*duration));
     Ok(LoadingLimitProjection {
-        permanent: permanent.into_iter().reduce(f64::min).unwrap_or(0.0),
+        permanent: permanent.into_iter().reduce(f64::min),
         temporary,
     })
 }
@@ -5973,10 +5973,10 @@ fn apply_branch_operational_limits(
             calc_loading_limit_projection(equipment, side, |group| group.apparent_power.as_ref())?;
         let current =
             calc_loading_limit_projection(equipment, side, |group| group.current.as_ref())?;
-        if apparent.permanent > 0.0 || !apparent.temporary.is_empty() {
+        if apparent.permanent.is_some() || !apparent.temporary.is_empty() {
             apparent_by_side.push(apparent);
         }
-        if current.permanent > 0.0 || !current.temporary.is_empty() {
+        if current.permanent.is_some() || !current.temporary.is_empty() {
             current_by_side.push(current);
         }
         if selected_operational_limits_groups(equipment, side)?
@@ -5993,25 +5993,35 @@ fn apply_branch_operational_limits(
         }
         add_unselected_apparent_ratings(equipment, side, &mut named_apparent_ratings)?;
     }
-    branch.rating_sets.extend(
-        named_apparent_ratings
-            .into_iter()
-            .map(|(name, value)| BranchRatingSet::new(name, value)),
-    );
+    for (name, value) in named_apparent_ratings {
+        branch.rating_sets.push(BranchRatingSet::new(
+            name,
+            crate::thermal_limit::finite(value)?,
+        ));
+    }
     branch.rate_a = apparent_by_side
         .iter()
-        .map(|limits| limits.permanent)
-        .filter(|value| *value > 0.0)
+        .filter_map(|limits| limits.permanent)
         .reduce(f64::min)
-        .unwrap_or(0.0);
+        .map(crate::thermal_limit::finite)
+        .transpose()?
+        .unwrap_or(f64::INFINITY);
     let apparent_temporary = combined_temporary_limits(&apparent_by_side);
-    branch.rate_b = apparent_temporary.first().map_or(0.0, |(_, value)| *value);
-    branch.rate_c = apparent_temporary.get(1).map_or(0.0, |(_, value)| *value);
+    branch.rate_b = apparent_temporary
+        .first()
+        .map(|(_, value)| crate::thermal_limit::finite(*value))
+        .transpose()?
+        .unwrap_or(f64::INFINITY);
+    branch.rate_c = apparent_temporary
+        .get(1)
+        .map(|(_, value)| crate::thermal_limit::finite(*value))
+        .transpose()?
+        .unwrap_or(f64::INFINITY);
 
     if !current_by_side.is_empty() {
         let permanent = current_by_side
             .iter()
-            .map(|limits| limits.permanent)
+            .filter_map(|limits| limits.permanent)
             .filter(|value| *value > 0.0)
             .reduce(f64::min)
             .unwrap_or(0.0);
@@ -6152,7 +6162,7 @@ fn read_three_winding_transformer(
         let apparent = calc_loading_limit_projection(equipment, suffix as u8, |group| {
             group.apparent_power.as_ref()
         })?;
-        let states_apparent = apparent.permanent > 0.0 || !apparent.temporary.is_empty();
+        let states_apparent = apparent.permanent.is_some() || !apparent.temporary.is_empty();
         // A leg that states current limits and no apparent power limits is
         // rated in MVA at its terminal's nominal voltage, as PowSybl's PSS/E
         // exporter rates it (psse-converter `TransformerConverter.createRates(Leg)`
@@ -6167,23 +6177,45 @@ fn read_three_winding_transformer(
             let factor = super::powsybl_psse::current_limit_mva(1.0, level.nominal_v);
             (current, factor)
         };
-        windings[side].rate_a = ratings.permanent * factor;
-        windings[side].rate_b = ratings
-            .temporary
-            .first()
-            .map_or(0.0, |(_, _, value)| *value * factor);
-        windings[side].rate_c = ratings
-            .temporary
-            .get(1)
-            .map_or(0.0, |(_, _, value)| *value * factor);
+        windings[side].rate_a = crate::thermal_limit::scaled(
+            ratings
+                .permanent
+                .map(crate::thermal_limit::finite)
+                .transpose()?
+                .unwrap_or(f64::INFINITY),
+            factor,
+        )?;
+        windings[side].rate_b = crate::thermal_limit::scaled(
+            ratings
+                .temporary
+                .first()
+                .map(|(_, _, value)| crate::thermal_limit::finite(*value))
+                .transpose()?
+                .unwrap_or(f64::INFINITY),
+            factor,
+        )?;
+        windings[side].rate_c = crate::thermal_limit::scaled(
+            ratings
+                .temporary
+                .get(1)
+                .map(|(_, _, value)| crate::thermal_limit::finite(*value))
+                .transpose()?
+                .unwrap_or(f64::INFINITY),
+            factor,
+        )?;
         // Unselected groups are the winding's further rating sets, as they
         // are a branch's.
         let mut named = BTreeMap::new();
         add_unselected_apparent_ratings(equipment, suffix as u8, &mut named)?;
         winding_rating_sets[side] = named
             .into_iter()
-            .map(|(name, value)| BranchRatingSet::new(name, value))
-            .collect();
+            .map(|(name, value)| {
+                Ok(BranchRatingSet::new(
+                    name,
+                    crate::thermal_limit::finite(value)?,
+                ))
+            })
+            .collect::<Result<_>>()?;
         let selected = selected_operational_limits_groups(equipment, suffix as u8)?;
         let unmapped_current =
             states_apparent && selected.iter().any(|group| group.current.is_some());
@@ -12774,7 +12806,9 @@ fn write_three_winding_transformer(
     });
     let limits_attributes = selected_operational_limits_attributes(index, &component, 3, |side| {
         let winding = &transformer.windings[usize::from(side - 1)];
-        winding.rate_a != 0.0 || winding.rate_b != 0.0 || winding.rate_c != 0.0
+        !winding.rate_a.is_infinite()
+            || !winding.rate_b.is_infinite()
+            || !winding.rate_c.is_infinite()
     });
     output.push_str(&format!(
         "    <iidm:threeWindingsTransformer id=\"{}\"{} ratedU0=\"{}\" r1=\"{}\" x1=\"{}\" g1=\"{}\" b1=\"{}\" ratedU1=\"{}\" r2=\"{}\" x2=\"{}\" g2=\"0\" b2=\"0\" ratedU2=\"{}\" r3=\"{}\" x3=\"{}\" g3=\"0\" b3=\"0\" ratedU3=\"{}\"{}{}{}{}>\n",
@@ -12846,16 +12880,19 @@ fn write_three_winding_transformer(
         write_exact_operational_limit_groups(index, &component, output, diagnostics);
     } else {
         for (side, winding) in transformer.windings.iter().enumerate() {
-            if winding.rate_a != 0.0 || winding.rate_b != 0.0 || winding.rate_c != 0.0 {
+            if !winding.rate_a.is_infinite()
+                || !winding.rate_b.is_infinite()
+                || !winding.rate_c.is_infinite()
+            {
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{} id=\"powerio\">\n",
                     side + 1
                 ));
                 write_loading_limits(
                     "apparentPowerLimits",
-                    winding.rate_a,
-                    winding.rate_b,
-                    winding.rate_c,
+                    crate::thermal_limit::as_option(winding.rate_a),
+                    crate::thermal_limit::as_option(winding.rate_b),
+                    crate::thermal_limit::as_option(winding.rate_c),
                     output,
                 );
                 output.push_str(&format!(
@@ -12869,7 +12906,7 @@ fn write_three_winding_transformer(
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
                     index + 1,
-                    number(rating.rate_mva),
+                    number(crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(f64::NAN)),
                     xml(&rating.name),
                     side = side + 1,
                 ));
@@ -13385,9 +13422,9 @@ fn tap_changer_from_control(
 }
 
 fn has_branch_operational_limits(branch: &Branch) -> bool {
-    branch.rate_a != 0.0
-        || branch.rate_b != 0.0
-        || branch.rate_c != 0.0
+    !branch.rate_a.is_infinite()
+        || !branch.rate_b.is_infinite()
+        || !branch.rate_c.is_infinite()
         || branch.current_ratings.is_some()
         || !branch.rating_sets.is_empty()
 }
@@ -13487,17 +13524,17 @@ fn write_branch_operational_limits(
         ));
         write_loading_limits(
             "apparentPowerLimits",
-            branch.rate_a,
-            branch.rate_b,
-            branch.rate_c,
+            crate::thermal_limit::as_option(branch.rate_a),
+            crate::thermal_limit::as_option(branch.rate_b),
+            crate::thermal_limit::as_option(branch.rate_c),
             output,
         );
         if let Some(current) = branch.current_ratings {
             write_loading_limits(
                 "currentLimits",
-                current.c_rating_a,
-                current.c_rating_b,
-                current.c_rating_c,
+                (current.c_rating_a != 0.0).then_some(current.c_rating_a),
+                (current.c_rating_b != 0.0).then_some(current.c_rating_b),
+                (current.c_rating_c != 0.0).then_some(current.c_rating_c),
                 output,
             );
         }
@@ -13507,7 +13544,7 @@ fn write_branch_operational_limits(
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
                     index + 1,
-                    number(rating.rate_mva),
+                    number(crate::thermal_limit::as_option(rating.rate_mva).unwrap_or(f64::NAN)),
                     xml(&rating.name),
                 ));
             }
@@ -13676,29 +13713,28 @@ fn write_exact_loading_limits(
 
 fn write_loading_limits(
     element: &str,
-    permanent: f64,
-    long_term: f64,
-    short_term: f64,
+    permanent: Option<f64>,
+    long_term: Option<f64>,
+    short_term: Option<f64>,
     output: &mut String,
 ) {
-    if permanent == 0.0 && long_term == 0.0 && short_term == 0.0 {
+    if permanent.is_none() && long_term.is_none() && short_term.is_none() {
         return;
     }
     output.push_str(&format!(
         "        <iidm:{element}{}>\n",
-        if permanent == 0.0 {
-            String::new()
-        } else {
-            format!(" permanentLimit=\"{}\"", number(permanent))
-        },
+        permanent.map_or_else(String::new, |value| format!(
+            " permanentLimit=\"{}\"",
+            number(value)
+        )),
     ));
-    if long_term != 0.0 {
+    if let Some(long_term) = long_term {
         output.push_str(&format!(
             "          <iidm:temporaryLimit name=\"rate_b\" acceptableDuration=\"1200\" value=\"{}\"/>\n",
             number(long_term)
         ));
     }
-    if short_term != 0.0 {
+    if let Some(short_term) = short_term {
         output.push_str(&format!(
             "          <iidm:temporaryLimit name=\"rate_c\" acceptableDuration=\"60\" value=\"{}\"/>\n",
             number(short_term)
@@ -16452,7 +16488,7 @@ mod tests {
             "",
         );
         let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
-        assert_f64_close(network.branches()[0].rate_a, 0.0);
+        assert_eq!(network.branches()[0].rate_a, f64::INFINITY);
         let groups = &network
             .detailed_connectivity()
             .as_ref()

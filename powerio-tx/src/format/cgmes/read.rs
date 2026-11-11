@@ -6070,7 +6070,9 @@ fn apply_limits_to_targets(
                 CgmesVersion::V3_0 => store.enum_value(limit_type, "eu:OperationalLimitType.kind"),
             };
             let class = store.class_of(limit).unwrap_or_default();
-            let value = operational_limit_value(store, limit, class)?.unwrap_or(0.0);
+            let Some(value) = operational_limit_value(store, limit, class)? else {
+                continue;
+            };
             let mva = if class == "CurrentLimit" {
                 3f64.sqrt() * kv * value / 1000.0
             } else {
@@ -6094,8 +6096,9 @@ fn apply_limits_to_targets(
             if let Some(slot) = slot {
                 // Several sets can constrain one branch; the binding limit
                 // is the smallest.
-                if *slot == 0.0 || mva < *slot {
-                    *slot = mva;
+                let limit = crate::thermal_limit::finite(mva)?;
+                if crate::thermal_limit::as_option(*slot).is_none_or(|existing| mva < existing) {
+                    *slot = limit;
                 }
             }
         }

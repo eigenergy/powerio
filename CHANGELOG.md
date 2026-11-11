@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use numeric zero for a zero flow bound and positive infinity for no bound
+  across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
+  conventions at import/export and preserve 0.11 IR meanings on read (#841).
+
 - Forward `powerio-prob/schema` to the distribution model so standalone schema
   builds include the LinDist3Flow preparation policy.
 

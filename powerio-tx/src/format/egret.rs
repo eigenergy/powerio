@@ -329,16 +329,16 @@ fn branch_obj(br: &Branch) -> Value {
     } else {
         m.insert("branch_type".into(), Value::String("line".into()));
     }
-    // PowerIO reserves zero for unlimited; Egret uses absent/null ratings.
+    // Egret uses absent/null ratings for unlimited.
     // A numeric zero in Egret is an enforced zero thermal limit.
-    if br.rate_a != 0.0 {
-        m.insert("rating_long_term".into(), jnum(br.rate_a));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_a) {
+        m.insert("rating_long_term".into(), jnum(limit));
     }
-    if br.rate_b != 0.0 {
-        m.insert("rating_short_term".into(), jnum(br.rate_b));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_b) {
+        m.insert("rating_short_term".into(), jnum(limit));
     }
-    if br.rate_c != 0.0 {
-        m.insert("rating_emergency".into(), jnum(br.rate_c));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_c) {
+        m.insert("rating_emergency".into(), jnum(limit));
     }
     if let Some(flow) = br.solution {
         m.insert("pf".into(), jnum(flow.pf));
@@ -1068,20 +1068,13 @@ fn num_cell(slot: Option<&Value>, key: &str, default: f64) -> Result<f64> {
     }
 }
 
-/// Egret's missing/null rating is unlimited; its numeric zero is a real
-/// thermal constraint. The stable branch model reserves zero for unlimited,
-/// so refuse the unsupported constraint before it can be silently relaxed.
+/// Egret's missing/null rating is unlimited; numeric zero is a real bound.
 fn rating_cell(slot: Option<&Value>, key: &str) -> Result<f64> {
     if slot.is_none_or(Value::is_null) {
-        return Ok(0.0);
+        return Ok(f64::INFINITY);
     }
-    let rating = num_cell(slot, key, 0.0)?;
-    if rating == 0.0 {
-        return Err(bad(format!(
-            "`{key}` states a zero thermal limit, which PowerIO's branch model cannot represent: its zero rating means unlimited; use null only when unlimited flow is intended"
-        )));
-    }
-    Ok(rating)
+    crate::thermal_limit::finite(num_cell(slot, key, 0.0)?)
+        .map_err(|error| bad(format!("`{key}`: {error}")))
 }
 
 fn bool_cell(slot: Option<&Value>, key: &str, default: bool) -> Result<bool> {

@@ -119,6 +119,11 @@ generator's curve.
 
 ## Manifest (`dcopf_meta.json`)
 
+Starting in 0.12, `fmax.mtx` uses zero for a zero flow bound and positive
+infinity for no bound, including inactive constraints. Zero never changes
+branch status. Earlier bundles used zero for no bound; check `powerio_version`
+when reading those files.
+
 The manifest has schema `powerio.dcopf` and is stamped with the writing
 release in `powerio_version`. It describes the Matrix Market files with
 structured metadata:

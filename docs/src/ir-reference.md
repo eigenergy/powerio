@@ -201,6 +201,12 @@ Schema definition: `ShuntBlock`.
 
 ### Branch
 
+Ratings use zero for a zero bound and `"Infinity"` for no bound in 0.12 JSON,
+using the same nonfinite spelling as other numeric fields. The reader converts
+zero ratings in 0.11 documents (integer version `2`) to infinity; it does not
+reinterpret zero in a 0.12 document. This also applies to winding and named
+ratings. The record shapes stay unchanged.
+
 Schema definition: `Branch`.
 
 | field | type | unit | sign | invariant | if absent |
@@ -211,9 +217,9 @@ Schema definition: `Branch`.
 | `x` | float | p.u. | | `r` and `x` not both zero when a matrix is built | required |
 | `b` | float | p.u. | positive is capacitive | total line charging; half at each end unless `charging` is present | required |
 | `charging` | `BranchCharging` or null | | | canonical per terminal admittance when present | null (derive from `b`) |
-| `rate_a` | float | MVA | | 0 is unrated | required |
-| `rate_b` | float | MVA | | 0 is unrated | required |
-| `rate_c` | float | MVA | | 0 is unrated | required |
+| `rate_a` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_b` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_c` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
 | `rating_sets` | array of `BranchRatingSet` | | | | `[]` |
 | `current_ratings` | `BranchCurrentRatings` or null | | | | null |
 | `tap` | float | ratio at the from side | | 0 means 1 (a line); otherwise positive | required |
@@ -258,7 +264,7 @@ Schema definition: `BranchRatingSet`.
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `name` | string | | | | required |
-| `rate_mva` | float | MVA | | | required |
+| `rate_mva` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
 
 Schema definition: `BranchCurrentRatings`.
 
@@ -513,9 +519,9 @@ Schema definition: `Winding`.
 | `nominal_kv` | float | kV | | 0 defers to the terminal bus `base_kv` | required |
 | `tap` | float | ratio | | 1 is nominal (PSS/E `WINDV` with `CW = 1`) | required |
 | `shift` | float | degrees | as `Branch.shift` | | required |
-| `rate_a` | float | MVA | | 0 is unrated | required |
-| `rate_b` | float | MVA | | | required |
-| `rate_c` | float | MVA | | | required |
+| `rate_a` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_b` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_c` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
 | `control` | `TransformerControl` or null | | | | null |
 
 Schema definition: `Impedance`.

@@ -11,6 +11,7 @@ wrote.
 """
 
 import argparse
+import copy
 import io
 import json
 import os
@@ -79,6 +80,45 @@ def write_with_legacy(directory: Path) -> None:
             (directory / f"{index:02}.json").write_text(text)
 
 
+def numeric_ratings(value: dict) -> dict:
+    """Expected 0.12 spelling of 0.11's zero-as-no-bound ratings.
+
+    Visit only the typed balanced networks exercised below, never arbitrary
+    extras or similarly named fields in distribution networks.
+    """
+    expected = copy.deepcopy(value)
+    paths = {
+        "powerio.BalancedNetwork": (),
+        "powerio.DcPfInstance": ("network",),
+        "powerio.AcPfInstance": ("network",),
+        "powerio.DcOpfInstance": ("network",),
+        "powerio.AcOpfInstance": ("network",),
+        "powerio.AcOtsInstance": ("base", "network"),
+    }
+    if value["type"] not in paths:
+        return expected
+    network = expected["data"]
+    for field in paths[value["type"]]:
+        network = network[field]
+    records = list(network["branches"])
+    for transformer in network.get("transformers_3w", []):
+        if transformer.get("type") == "powerio.PartialTransformer3W":
+            transformer = transformer["value"]
+        records.extend(transformer["windings"])
+        for sets in transformer["extras"].get("winding_rating_sets", []):
+            for rating in sets:
+                if rating["rate_mva"] == 0:
+                    rating["rate_mva"] = "Infinity"
+    for row in records:
+        for field in ("rate_a", "rate_b", "rate_c"):
+            if row[field] == 0:
+                row[field] = "Infinity"
+        for rating in row.get("rating_sets", []):
+            if rating["rate_mva"] == 0:
+                rating["rate_mva"] = "Infinity"
+    return expected
+
+
 def read_legacy_documents(legacy_package: Path) -> None:
     """Read with this build what one 0.11 package writes."""
     with tempfile.TemporaryDirectory(prefix="powerio-ir-0.11-") as temporary:
@@ -99,7 +139,7 @@ def read_legacy_documents(legacy_package: Path) -> None:
             module = powerio.deserialize(path)
             rewritten = json.loads(powerio.serialize(module).text)
             assert rewritten["version"] == powerio.versions()["powerio_ir"]["version"]
-            assert rewritten["value"] == document["value"], document["value"]["type"]
+            assert rewritten["value"] == numeric_ratings(document["value"]), document["value"]["type"]
             types.add(document["value"]["type"])
         assert len(types) >= 8, sorted(types)
         # The parsed case comes first; its producer is the 0.11 release.
