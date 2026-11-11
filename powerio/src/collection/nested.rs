@@ -161,6 +161,9 @@ impl Collection {
         let mut work = Work::new(self.limits.work_bytes);
         let source = self.source(selected)?;
         let primary = source.primary_buffer().ok();
+        let acquired_tables = primary
+            .as_ref()
+            .is_some_and(|p| selected.has_sincal_tables(p.content_bytes()));
         let mut buffers = Vec::new();
         for name in source.entry_names()? {
             if primary.as_ref().is_none_or(|p| p.name() != name.as_str()) {
@@ -185,7 +188,8 @@ impl Collection {
                 Some("sincal" | "sincal-balanced" | "sincal-multiconductor")
             ) || selected.format.is_none()
                 && extension.is_some_and(|e| e.eq_ignore_ascii_case("sinx"));
-            let native = !selected.has_companions()
+            let native = !acquired_tables
+                && !selected.has_companions()
                 && (sincal && !bytes.starts_with(b"SQLite format 3\0")
                     || extension.is_some_and(|e| e.eq_ignore_ascii_case("zip"))
                     || bytes.starts_with(b"PK\x03\x04")

@@ -112,3 +112,59 @@ fn native_zip_reaches_the_adapter_intact_without_outer_companions() {
     assert!(source.root_buffer("external.db").is_err());
     assert!(c.parse(&selection, &ParseOptions::default()).is_err());
 }
+
+#[test]
+fn sincal_mdb_companions_stay_inside_the_selected_root() {
+    let mdb = b"\0\x01\0\0Standard Jet DB\0synthetic";
+    let c = collection(&[
+        ("case/input.mdb", mdb),
+        ("case/records.json", b"{}"),
+        ("other/records.json", b"outside"),
+    ]);
+    for format in [
+        "sincal-balanced",
+        "sincal-multiconductor",
+        "SINCAL_BALANCED",
+    ] {
+        let mut selection = CollectionSelection::file("input.mdb").format(format);
+        selection.root = Some("case".into());
+        let source = c.source(&selection).unwrap();
+        assert_eq!(source.primary_buffer().unwrap().bytes(), mdb);
+        assert_eq!(source.root_buffer("records.json").unwrap().bytes(), b"{}");
+        assert!(source.root_buffer("../other/records.json").is_err());
+        assert!(source.root_buffer("other/records.json").is_err());
+        // Jet input is never decoded as ZIP, even without table options.
+        let error = c.parse(&selection, &ParseOptions::default()).unwrap_err();
+        assert!(!error.to_string().contains("ZIP"), "{error}");
+        #[cfg(feature = "sincal")]
+        assert!(error.to_string().contains("acquired_tables"), "{error}");
+    }
+}
+
+#[test]
+fn sincal_mdb_companions_are_charged_as_opaque_work() {
+    let mdb = b"\0\x01\0\0Standard Jet DB\0synthetic";
+    let files = [
+        ("input.mdb", &mdb[..]),
+        ("records.json", &b"PK\x03\x04opaque"[..]),
+    ];
+    let limits = CollectionLimits {
+        work_bytes: mdb.len() as u64,
+        ..CollectionLimits::default()
+    };
+    let c = Collection::from_files(
+        "bounded",
+        files
+            .iter()
+            .map(|(p, b)| (ArtifactPath::new(*p).unwrap(), Arc::<[u8]>::from(*b))),
+        limits,
+    )
+    .unwrap();
+    let selection = CollectionSelection::file("input.mdb").format("sincal-balanced");
+    let error = c.parse(&selection, &ParseOptions::default()).unwrap_err();
+    assert!(error.to_string().contains("work limit"), "{error}");
+    let error = collection(&files)
+        .parse(&selection, &ParseOptions::default())
+        .unwrap_err();
+    assert!(!error.to_string().contains("ZIP"), "{error}");
+}
