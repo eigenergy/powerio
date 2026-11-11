@@ -5,11 +5,14 @@
 - Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
 
 - Correct the contributor IR compatibility guidance and canonical HVDC format
-  descriptions. Clarify that disconnecting an Egret branch does not preserve
-  an energized branch's zero thermal limit.
+  descriptions.
 - Reuse a recognized CIM namespace during CGMES parsing with a bounded
   per-document cache, preserving namespace rebinding, mixed-version checks,
   and acceptance of long namespace URIs.
+- Parse explicitly selected SINCAL MDB inputs with acquired-table companions
+  through collections, preserving root confinement and work budgets.
+- Clarify that taking a branch out of service is not an equivalent substitute
+  for a finite zero thermal limit in the 0.12 migration guide.
 
 ## 0.12.0-rc.1
 

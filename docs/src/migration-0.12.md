@@ -202,9 +202,9 @@ without saying so. 0.12 refuses it (#828).
   unlimited points as `null`, as 0.11.11 does.
 - If the source meant unlimited flow, change the `0` to `null` or remove the
   field. If it meant a real zero limit, keep the case in Egret until PowerIO
-  can represent that constraint. Taking a branch out of service changes its
-  electrical connectivity and is not an equivalent replacement for a zero
-  thermal limit on an energized branch.
+  can represent that constraint (tracked in #841). Taking the branch out of
+  service (`in_service: false`) is not an equivalent workaround: it changes
+  connectivity, admittance, and voltage constraints as well as power flow.
 - Egret files that PowerIO 0.11.10 or earlier wrote may have a `0` in a mixed
   rating series where the model meant unlimited. Regenerate them from the
   original model with 0.11.11 or later, which writes `null` there.

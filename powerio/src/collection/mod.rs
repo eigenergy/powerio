@@ -84,7 +84,8 @@ pub enum CollectionOperation {
 
 /// An explicit primary relative to a permitted root. `None` means collection
 /// root. Nonstandard file names work with an explicit format. DSS/GLM can read
-/// companions throughout the root; standalone formats receive only the primary.
+/// companions throughout the root, as do explicit SINCAL MDB selections with
+/// acquired tables. Other standalone formats receive only the primary.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CollectionSelection {
@@ -121,6 +122,15 @@ impl CollectionSelection {
                 })
             }),
         }
+    }
+
+    // Access MDB is not a native ZIP. Its explicitly acquired tables and any
+    // referenced profiles must remain inside the selected collection root.
+    pub(super) fn has_sincal_tables(&self, bytes: &[u8]) -> bool {
+        matches!(
+            self.format_token(),
+            Some("sincal" | "sincal-balanced" | "sincal-multiconductor")
+        ) && bytes.starts_with(b"\0\x01\0\0Standard Jet DB\0")
     }
 
     #[must_use]
@@ -425,7 +435,9 @@ impl Collection {
                 "transport ZIP members require explicit nested inspection; CGMES ZIPs require format cgmes",
             ));
         }
-        let mut source = if selection.has_companions() {
+        let mut source = if selection.has_companions()
+            || selection.has_sincal_tables(scoped.primary_buffer()?.content_bytes())
+        {
             scoped
         } else {
             let bytes = scoped.primary_buffer()?.shared_bytes();
