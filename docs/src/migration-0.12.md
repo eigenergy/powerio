@@ -186,30 +186,27 @@ repeated, or whose header decodes but places nothing, with
 file. The display's save stamp, an undocumented header number the reader uses
 to recognize drawing records, is not part of the `GeoLayer`.
 
-## Egret branch ratings
+## Numeric thermal ratings
 
-Egret states an unlimited branch rating as `null` or as an absent field, and
-enforces a numeric `0` as a zero thermal limit. PowerIO's `rate_a`, `rate_b`,
-and `rate_c` use zero to mean unlimited, so a branch cannot hold a zero limit.
-0.11 read a native Egret `0` as unlimited, which relaxed the constraint
-without saying so. 0.12 refuses it (#828).
+Branch and winding ratings remain ordinary numbers in Rust, Python, C, and
+Julia. In 0.12, zero means a zero apparent-power bound and positive infinity
+means no bound. Neither changes equipment status, impedance, or connectivity.
+The existing thermal-rating update accepts these same values. Normalization
+converts MVA to per unit; zero and infinity keep their meaning.
 
-- The Egret reader refuses a numeric `0` or `-0.0` in `rating_long_term`,
-  `rating_short_term`, or `rating_emergency`, whether a scalar or at any point
-  of a time series, with `PARSE.SOURCE.MALFORMED`. The message names the field
-  and, in a time series, the time point.
-- `null` and an absent field still read as unlimited, and the writer emits
-  unlimited points as `null`, as 0.11.11 does.
-- If the source meant unlimited flow, change the `0` to `null` or remove the
-  field. If it meant a real zero limit, take the branch out of service at
-  those points (`in_service: false`) or keep the case in Egret, since PowerIO
-  cannot carry a zero limit.
-- Egret files that PowerIO 0.11.10 or earlier wrote may have a `0` in a mixed
-  rating series where the model meant unlimited. Regenerate them from the
-  original model with 0.11.11 or later, which writes `null` there.
-- A 0.11 PowerIO IR document made from such an Egret file already holds
-  unlimited and still reads. Regenerate it from the original Egret input if
-  the zero limit matters.
+Readers and writers translate format conventions. MATPOWER uses zero for no
+bound; Egret uses null or an absent field. Egret numeric zero stays zero.
+Writers report values a target cannot represent rather than silently changing
+the constraint. NaN is not accepted as a usable thermal bound.
+
+PowerIO IR uses its existing nonfinite encoding: `"Infinity"` in JSON.
+The document version distinguishes 0.11 files, where zero meant no bound,
+from 0.12 files. No thermal-specific record wrappers are needed. See also
+[DC OPF bundles](dcopf-bundle.md) for the corresponding numeric output change.
+
+PowerIO 0.11.10 and earlier could interpret an Egret zero as no bound.
+Regenerate affected data from the original Egret input; an old IR document
+cannot recover a distinction its producer discarded.
 
 ## Conversion output
 

@@ -119,7 +119,7 @@ fn foreign_extras_cannot_populate_optional_powermodels_native_fields() {
             .unwrap();
     assert!(network(&restored).branches()[0].solution.is_none());
     assert!(network(&restored).branches()[0].current_ratings.is_none());
-    assert_eq!(network(&restored).branches()[0].rate_a, 0.0);
+    assert_eq!(network(&restored).branches()[0].rate_a, f64::INFINITY);
 }
 
 #[test]

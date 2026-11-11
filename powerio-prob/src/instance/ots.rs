@@ -708,7 +708,7 @@ fn apply_current_policy(
 ///
 /// ```text
 /// c = |1/(r + jx)| · sqrt(vmax_f² + vmax_t² − 2·vmax_f·vmax_t·cos θmax)
-/// c = min(c, rate_a / min(vmin_f, vmin_t))      when rate_a > 0
+/// c = min(c, rate_a / min(vmin_f, vmin_t))      when rate_a is finite (including zero)
 /// ```
 ///
 /// `θmax` is the larger magnitude of the branch's angle difference bounds
@@ -762,7 +762,12 @@ fn derive_current_limits(base: &AcOpfInstance) -> Vec<Option<f64>> {
                     vmax_f * vmax_f + vmax_t * vmax_t - 2.0 * vmax_f * vmax_t * theta_max.cos();
                 limit = Some(spread.max(0.0).sqrt() / impedance);
             }
-            if branch.rate_a > 0.0 && constraints.thermal_limits.selects(&identity) {
+            if branch.rate_a.is_finite()
+                && constraints.thermal_limits.selects(&identity)
+                // S = V I only bounds current when the voltage floor is
+                // positive. At V = 0 even a zero apparent-power bound does not.
+                && vmin_f.min(vmin_t) > 0.0
+            {
                 let rate = if normalized {
                     branch.rate_a
                 } else {

@@ -234,6 +234,14 @@ fn a_solution_assembled_from_ir_answers_the_fixed_topology() {
         "ac_solution": ac_data,
     });
     let solution_text = with_value(&instance_text, "powerio.AcOtsSolution", &solution_data);
+    helpers::thermal_migration::check(&instance_text, &["/value/data/base/network"]);
+    helpers::thermal_migration::check(
+        &solution_text,
+        &[
+            "/value/data/instance/base/network",
+            "/value/data/ac_solution/instance/network",
+        ],
+    );
     let restored = deserialize(&solution_text).unwrap();
     let PioValue::AcOtsSolution(restored_solution) = restored.value() else {
         panic!("the document holds an AC OTS solution")

@@ -350,9 +350,11 @@ fn verify_electrical(original: &BalancedNetwork, recovered: &BalancedNetwork) ->
                 "branch ratio",
             ),
             (branch.shift, out.shift, "branch shift"),
-            (branch.rate_a, out.rate_a, "branch thermal limit"),
         ] {
             same(a, b, context)?;
+        }
+        if branch.rate_a != out.rate_a {
+            same(branch.rate_a, out.rate_a, "branch thermal limit")?;
         }
     }
     Ok(())
@@ -517,7 +519,7 @@ fn write_branches(
             || (branch.r == 0.0 && branch.x == 0.0)
             || !branch.calc_effective_tap().is_finite()
             || branch.calc_effective_tap() <= 0.0
-            || !branch.rate_a.is_finite()
+            || branch.rate_a.is_nan()
             || branch.rate_a < 0.0
         {
             return Err(error(format!(
@@ -529,6 +531,11 @@ fn write_branches(
             && branch.shift == 0.0
             && y.g_fr == 0.0
             && y.b_fr >= 0.0;
+        if branch.rate_a == 0.0 {
+            return Err(error(format!(
+                "branch {index}: a finite zero thermal limit is not representable by this SINCAL writer's supported rating profile"
+            )));
+        }
         let (kind, input) = if line {
             let input = line_row(net, branch, from);
             ("Line", input)
@@ -536,8 +543,8 @@ fn write_branches(
             let input = transformer_row(net, branch, from, to, y, index)?;
             ("TwoWindingTransformer", input)
         };
-        if branch.rate_b != 0.0
-            || branch.rate_c != 0.0
+        if branch.rate_b.is_finite()
+            || branch.rate_c.is_finite()
             || !branch.rating_sets.is_empty()
             || branch.current_ratings.is_some()
             || branch.angmin != -360.0
@@ -655,7 +662,14 @@ fn line_row(net: &BalancedNetwork, branch: &Branch, from: &Bus) -> Row {
             "c",
             2.0 * y.b_fr / (std::f64::consts::TAU * net.base_frequency() * 1e-9 * zbase),
         ),
-        ("Ith", branch.rate_a / (3.0_f64.sqrt() * from.base_kv)),
+        (
+            "Ith",
+            if branch.rate_a.is_finite() {
+                branch.rate_a / (3.0_f64.sqrt() * from.base_kv)
+            } else {
+                0.0
+            },
+        ),
     ] {
         real(&mut input, key, value);
     }
@@ -670,7 +684,12 @@ fn transformer_row(
     y: BranchCharging,
     index: usize,
 ) -> Result<Row> {
-    if branch.x < 0.0 || y.g_fr < 0.0 || y.b_fr > 0.0 || branch.rate_a <= 0.0 {
+    let rating = if branch.rate_a.is_finite() {
+        branch.rate_a
+    } else {
+        0.0
+    };
+    if branch.x < 0.0 || y.g_fr < 0.0 || y.b_fr > 0.0 || rating <= 0.0 {
         return Err(error(format!(
             "branch {index}: transformer needs nonnegative R/X/core loss, inductive magnetization and positive MVA rating"
         )));
@@ -687,21 +706,18 @@ fn transformer_row(
     for (key, value) in [
         ("Un1", from.base_kv * branch.calc_effective_tap()),
         ("Un2", to.base_kv),
-        ("Sn", branch.rate_a),
-        ("ur", 100.0 * branch.r * branch.rate_a / net.base_mva()),
+        ("Sn", rating),
+        ("ur", 100.0 * branch.r * rating / net.base_mva()),
         (
             "uk",
-            100.0 * branch.r.hypot(branch.x) * branch.rate_a / net.base_mva(),
+            100.0 * branch.r.hypot(branch.x) * rating / net.base_mva(),
         ),
         ("roh", 0.0),
         ("rohm", 0.0),
         ("ukr", 0.0),
         ("AddRotate", branch.shift),
         ("Vfe", 2.0 * y.g_fr * net.base_mva() * 1000.0),
-        (
-            "i0",
-            200.0 * y.g_fr.hypot(y.b_fr) * net.base_mva() / branch.rate_a,
-        ),
+        ("i0", 200.0 * y.g_fr.hypot(y.b_fr) * net.base_mva() / rating),
     ] {
         real(&mut input, key, value);
     }

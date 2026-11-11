@@ -119,8 +119,15 @@ pub(crate) fn annotate(schema: &mut schemars::Schema) {
         definitions[kind]["properties"][field]["x-sign-convention"] = json!(meaning);
     }
     definitions["Branch"]["properties"]["tap"]["x-zero-means"] = json!(1.0);
-    for field in ["rate_a", "rate_b", "rate_c"] {
-        definitions["Branch"]["properties"][field]["x-zero-means"] = json!("unlimited");
+    for (kind, fields) in [
+        ("Branch", &["rate_a", "rate_b", "rate_c"][..]),
+        ("Winding", &["rate_a", "rate_b", "rate_c"][..]),
+        ("BranchRatingSet", &["rate_mva"][..]),
+    ] {
+        for field in fields {
+            definitions[kind]["properties"][*field]["x-zero-means"] = json!("zero bound");
+            definitions[kind]["properties"][*field]["x-infinity-means"] = json!("no bound");
+        }
     }
 }
 

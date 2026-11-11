@@ -2750,7 +2750,7 @@ mod tests {
             before.tap,
             after.tap
         );
-        assert!((before.rate_a - after.rate_a).abs() < 1e-10);
+        crate::thermal_limit::assert_close(before.rate_a, after.rate_a, 1e-10);
     }
 
     #[test]

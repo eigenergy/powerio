@@ -8,6 +8,7 @@
 
 mod convert;
 mod dto;
+mod legacy;
 
 pub(crate) use convert::{emit_module, encode_diagnostics, read_module};
 #[cfg(feature = "schema")]

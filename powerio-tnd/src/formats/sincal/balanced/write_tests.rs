@@ -179,7 +179,10 @@ fn rejects_unsupported_physics_and_numeric_loss_atomically() {
         (|n| n.buses_mut()[1].vmin = 0.8, "heterogeneous"),
         (|n| n.buses_mut()[1].id = BusId(90), "duplicate"),
         (|n| n.loads_mut()[0].p = f64::NAN, "finite"),
-        (|n| n.branches_mut()[0].rate_a = 0.0, "positive MVA"),
+        (
+            |n| n.branches_mut()[0].rate_a = f64::INFINITY,
+            "positive MVA",
+        ),
         (|n| n.branches_mut()[0].x = -1.0, "nonnegative"),
         (|n| n.branches_mut()[0].x = 1e-30, "loses electrical"),
         (
@@ -239,7 +242,7 @@ fn bus_only_and_unrated_lines_do_not_invent_sources_or_limits() {
     net.branches_mut()
         .push(Branch::new(BusId(7), BusId(8), 0.01, -0.02));
     let out = reread(&net);
-    close(out.branches()[0].rate_a, 0.0);
+    assert_eq!(out.branches()[0].rate_a, f64::INFINITY);
     close(out.branches()[0].x, -0.02);
     close(out.branches()[0].calc_effective_tap(), 1.0);
 }

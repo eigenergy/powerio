@@ -728,9 +728,9 @@ impl Reader<'_> {
 
         let mut branch = Branch::new(from, to, r, x);
         branch.b = b;
-        branch.rate_a = rate_a;
-        branch.rate_b = rate_b;
-        branch.rate_c = rate_c;
+        branch.rate_a = crate::thermal_limit::from_zero_unlimited(rate_a)?;
+        branch.rate_b = crate::thermal_limit::from_zero_unlimited(rate_b)?;
+        branch.rate_c = crate::thermal_limit::from_zero_unlimited(rate_c)?;
         branch.shift = angle;
         branch.tap = if kind == 0 || ratio != 0.0 {
             ratio

@@ -540,7 +540,15 @@ fn build_network_from_columns(
             x_col[row],
         );
         branch.b = b_col[row];
-        branch.rate_a = rate_a[row];
+        branch.rate_a = if rate_a[row] == 0.0 {
+            f64::INFINITY
+        } else if rate_a[row] >= 0.0 {
+            rate_a[row]
+        } else {
+            return Err(powerio_tx::Error::InvalidThermalLimit {
+                magnitude: rate_a[row],
+            });
+        };
         branch.tap = tap_out;
         branch.shift = shift_v;
         branch.in_service = br_status[row] != 0;
