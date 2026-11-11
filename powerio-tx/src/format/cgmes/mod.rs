@@ -5524,6 +5524,81 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_or_low_flow_limit_is_reported_not_fatal() {
+        use std::fmt::Write as _;
+
+        // A low limit is a floor on the flow and may be negative; refusing
+        // its value aborted the whole import.
+        for version in [CgmesVersion::V2_4_15, CgmesVersion::V3_0] {
+            let (kind_property, kind_namespace, value_property, cim) = match version {
+                CgmesVersion::V2_4_15 => (
+                    "entsoe:OperationalLimitType.limitType",
+                    "http://entsoe.eu/CIM/SchemaExtension/3/1#LimitTypeKind",
+                    "ActivePowerLimit.value",
+                    "http://iec.ch/TC57/2013/CIM-schema-cim16",
+                ),
+                CgmesVersion::V3_0 => (
+                    "eu:OperationalLimitType.kind",
+                    "http://iec.ch/TC57/CIM100-European#LimitKind",
+                    "ActivePowerLimit.normalValue",
+                    "http://iec.ch/TC57/CIM100",
+                ),
+            };
+            let mut network = network();
+            network.branches_mut()[0].rate_a = 80.0;
+            let documents = write::write_cgmes(&network, version).unwrap().files;
+            let equipment = &documents
+                .iter()
+                .find(|(name, _)| name.ends_with("_EQ.xml"))
+                .unwrap()
+                .1;
+            let open = "<cim:ACLineSegment rdf:ID=\"";
+            let start = equipment.find(open).unwrap() + open.len();
+            let line = &equipment[start..start + equipment[start..].find('"').unwrap()];
+            let mut records = format!(
+                r##"  <cim:OperationalLimitSet rdf:ID="_flow-set">
+    <cim:OperationalLimitSet.Equipment rdf:resource="#{line}"/>
+  </cim:OperationalLimitSet>
+"##
+            );
+            for (id, direction, value) in [
+                ("flow-floor", "low", -50.0),
+                ("flow-cap", "absoluteValue", -30.0),
+            ] {
+                write!(
+                    records,
+                    r##"  <cim:OperationalLimitType rdf:ID="_{id}-type">
+    <{kind_property} rdf:resource="{kind_namespace}.patl"/>
+    <cim:OperationalLimitType.direction rdf:resource="{cim}#OperationalLimitDirectionKind.{direction}"/>
+  </cim:OperationalLimitType>
+  <cim:ActivePowerLimit rdf:ID="_{id}">
+    <cim:OperationalLimit.OperationalLimitSet rdf:resource="#_flow-set"/>
+    <cim:OperationalLimit.OperationalLimitType rdf:resource="#_{id}-type"/>
+    <cim:{value_property}>{value}</cim:{value_property}>
+  </cim:ActivePowerLimit>
+"##
+                )
+                .unwrap();
+            }
+            let documents = insert_profile_records(documents, &records, None, None);
+            let parsed = read::read_cgmes_documents(documents, Some("flow-limits"))
+                .unwrap_or_else(|error| panic!("{version:?}: {error}"));
+            assert_eq!(parsed.network.branches()[0].rate_a, 80.0, "{version:?}");
+            for expected in [
+                "ActivePowerLimit `flow-floor` is a low limit",
+                "ActivePowerLimit `flow-cap` value -30 is negative",
+            ] {
+                assert!(
+                    parsed.warnings.iter().any(|warning| warning.info.code
+                        == crate::diagnostics::codes::READ_CGMES_FIELD_UNMAPPED.code
+                        && warning.contains(expected)),
+                    "{version:?}: {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn real_cgmes_tap_associations_and_table_steps_round_trip() {
         const RATIO_TAP_MRID: &str = "de305d54-75b4-431b-adb2-eb6b9e546077";

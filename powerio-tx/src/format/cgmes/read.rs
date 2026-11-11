@@ -5658,12 +5658,26 @@ fn read_two_winding_transformer(
         let ends_connected = end_connected(end1) && end_connected(end2);
         branch.in_service = mapper.in_service(transformer_id)? && ends_connected;
         branch.uid = Some(transformer_id.to_string());
-        apply_limits_to_targets(store, &[transformer_id], &mut branch, kv1, version)?;
+        apply_limits_to_targets(
+            store,
+            &[transformer_id],
+            &mut branch,
+            kv1,
+            version,
+            mapper.warnings,
+        )?;
         for (end, kv) in [(end1, kv1), (end2, kv2)] {
             // A current limit constrains its own terminal. Transformer ends
             // need not share a voltage or follow Terminal.sequenceNumber.
             if let Some(terminal) = store.refv(end, "TransformerEnd.Terminal") {
-                apply_limits_to_targets(store, &[terminal, end], &mut branch, kv, version)?;
+                apply_limits_to_targets(
+                    store,
+                    &[terminal, end],
+                    &mut branch,
+                    kv,
+                    version,
+                    mapper.warnings,
+                )?;
             }
         }
         Some(branch)
@@ -5761,12 +5775,14 @@ fn read_three_winding_transformer(
                 .try_map_or(0.0, |phase_tap| phase_shift_deg(mapper, &phase_tap, false))?;
 
             let mut limits = Branch::new(bus, bus, 0.0, 1.0);
+            let kv = mapper.kv(bus);
             apply_limits_to_targets(
                 mapper.store,
                 &[terminals[index].as_str(), end.as_str()],
                 &mut limits,
-                mapper.kv(bus),
+                kv,
                 version,
+                mapper.warnings,
             )?;
             windings[index] = Winding {
                 bus,
@@ -6070,7 +6086,14 @@ fn apply_limits(
         .map(String::as_str)
         .collect();
     terminals.push(equipment);
-    apply_limits_to_targets(mapper.store, &terminals, branch, kv, version)?;
+    apply_limits_to_targets(
+        mapper.store,
+        &terminals,
+        branch,
+        kv,
+        version,
+        mapper.warnings,
+    )?;
     Ok(())
 }
 
@@ -6084,6 +6107,7 @@ fn apply_limits_to_targets(
     branch: &mut Branch,
     kv: f64,
     version: CgmesVersion,
+    warnings: &mut CgmesDiagnostics,
 ) -> Result<()> {
     // Limit sets point at their terminal or equipment, and limits point at
     // their set; both are reverse indexed.
@@ -6119,6 +6143,21 @@ fn apply_limits_to_targets(
             let Some(value) = operational_limit_value(store, limit, class)? else {
                 continue;
             };
+            // A low limit is a floor on the flow, not a thermal rating.
+            if store.enum_value(limit_type, "OperationalLimitType.direction") == Some("low") {
+                warnings.push_as(
+                    &codes::READ_CGMES_FIELD_UNMAPPED,
+                    format!("{class} `{limit}` is a low limit; a branch has no source neutral field for a lower flow bound"),
+                );
+                continue;
+            }
+            if value < 0.0 {
+                warnings.push_as(
+                    &codes::READ_CGMES_FIELD_UNMAPPED,
+                    format!("{class} `{limit}` value {value} is negative and is not read as a thermal rating"),
+                );
+                continue;
+            }
             let mva = if class == "CurrentLimit" {
                 3f64.sqrt() * kv * value / 1000.0
             } else {
