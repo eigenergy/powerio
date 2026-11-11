@@ -183,6 +183,10 @@ action.
   `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
   in-service branch over dense bus indices; build a graph with any library
   from it.
+- Python table rows state a nonfinite value as a float in every table. The
+  `hvdc`, `storage`, `static_var_compensators`, `areas`, and distribution
+  rows carried the IR's `"Infinity"` and `"-Infinity"` strings in 0.11, while
+  branch and winding ratings were already floats.
 - The Rust MSRV is 1.89, as in 0.11.10.
 
 **Collections**

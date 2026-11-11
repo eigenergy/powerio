@@ -206,6 +206,12 @@ The document version distinguishes 0.11 files, where zero meant no bound,
 from 0.12 files. No thermal-specific record wrappers are needed. See also
 [DC OPF bundles](dcopf-bundle.md) for the corresponding numeric output change.
 
+Python table rows state a nonfinite value as a float in every table, so
+`math.isinf(row["qmaxf"])` holds for an unlimited bound. In 0.11 the `hvdc`,
+`storage`, `static_var_compensators`, `areas`, and distribution table rows
+carried the IR's `"Infinity"` and `"-Infinity"` strings instead; a text field
+that reads `"Infinity"` stays text.
+
 PowerIO 0.11.10 and earlier could interpret an Egret zero as no bound.
 Regenerate affected data from the original Egret input; an old IR document
 cannot recover a distinction its producer discarded.

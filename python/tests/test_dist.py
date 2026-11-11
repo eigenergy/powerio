@@ -1,5 +1,6 @@
 """The multiconductor value surface and canonical parse/emit path."""
 
+import copy
 import inspect
 import io
 import json
@@ -476,10 +477,11 @@ def test_referenced_source_rows_read_like_earth_source_rows():
     assert "type" not in rows[0]
 
 
-def test_table_nonfinite_limits_keep_the_network_spelling():
+def test_table_nonfinite_limits_are_python_floats():
     stored = json.loads(_emit_module(powerio.parse(FOURWIRE)))
-    expected = stored["value"]["data"]["lines"]
-    expected[0]["i_max"][0] = "Infinity"
+    stored["value"]["data"]["lines"][0]["i_max"][0] = "Infinity"
+    expected = copy.deepcopy(stored["value"]["data"]["lines"])
+    expected[0]["i_max"][0] = float("inf")
     value = _parse_module(json.dumps(stored)).value
     assert value.lines == expected
 

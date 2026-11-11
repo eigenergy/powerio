@@ -1830,15 +1830,85 @@ fn json_value_to_py<'py>(
     })
 }
 
-/// Materialize only the requested table, with the network's nonfinite spelling.
-/// Serializing the entire network both scales with unrelated tables and exposes
-/// durable IR wrappers that are not part of Python's physical row interface.
-fn table_json<T: serde::Serialize + ?Sized>(table: &T) -> PyResult<serde_json::Value> {
-    table
-        .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
-            serde_json::value::Serializer,
-        ))
-        .map_err(serialize_pyerr)
+/// One table, serialized twice. JSON has no infinity: `spelled` writes a
+/// nonfinite float as the network's `"Infinity"`, `"-Infinity"`, or `"NaN"`,
+/// and `plain` writes it as `null`. A spelling that is `null` in `plain` was a
+/// float and reaches Python as one; text that reads the same stays text.
+struct TableJson {
+    spelled: serde_json::Value,
+    plain: serde_json::Value,
+}
+
+impl TableJson {
+    /// Python exposes physical table rows, not the tagged IR record: each
+    /// `{"type": tag, "value": row}` becomes its row.
+    fn untag_rows(&mut self, tag: &str) {
+        for value in [&mut self.spelled, &mut self.plain] {
+            for row in value.as_array_mut().into_iter().flatten() {
+                if row.get("type").and_then(serde_json::Value::as_str) == Some(tag) {
+                    *row = row.get_mut("value").expect("tagged row body").take();
+                }
+            }
+        }
+    }
+
+    fn into_py<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        table_json_to_py(py, &self.spelled, &self.plain)
+    }
+}
+
+/// Materialize only the requested table. Serializing the entire network both
+/// scales with unrelated tables and exposes durable IR wrappers that are not
+/// part of Python's physical row interface.
+fn table_json<T: serde::Serialize + ?Sized>(table: &T) -> PyResult<TableJson> {
+    Ok(TableJson {
+        spelled: table
+            .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
+                serde_json::value::Serializer,
+            ))
+            .map_err(serialize_pyerr)?,
+        plain: serde_json::to_value(table).map_err(serialize_pyerr)?,
+    })
+}
+
+/// [`json_value_to_py`] over the two serializations in a [`TableJson`].
+fn table_json_to_py<'py>(
+    py: Python<'py>,
+    spelled: &serde_json::Value,
+    plain: &serde_json::Value,
+) -> PyResult<Bound<'py, PyAny>> {
+    use powerio_core::__implementation::nonfinite::{INFINITY, NAN, NEG_INFINITY};
+    use serde_json::Value as J;
+    match (spelled, plain) {
+        (J::String(text), J::Null) => {
+            let value = match text.as_str() {
+                INFINITY => f64::INFINITY,
+                NEG_INFINITY => f64::NEG_INFINITY,
+                NAN => f64::NAN,
+                _ => return json_value_to_py(py, spelled),
+            };
+            Ok(value.into_pyobject(py)?.into_any())
+        }
+        (J::Array(items), J::Array(plain)) if items.len() == plain.len() => {
+            let mut out = Vec::with_capacity(items.len());
+            for (item, plain) in items.iter().zip(plain) {
+                out.push(table_json_to_py(py, item, plain)?);
+            }
+            Ok(PyList::new(py, out)?.into_any())
+        }
+        (J::Object(map), J::Object(plain)) => {
+            let dict = PyDict::new(py);
+            for (key, value) in map {
+                let item = match plain.get(key) {
+                    Some(plain) => table_json_to_py(py, value, plain)?,
+                    None => json_value_to_py(py, value)?,
+                };
+                dict.set_item(key, item)?;
+            }
+            Ok(dict.into_any())
+        }
+        _ => json_value_to_py(py, spelled),
+    }
 }
 
 /// Return one balanced model field through that model's own serde surface.
@@ -1847,7 +1917,7 @@ fn balanced_field_to_py<'py>(
     model: &BalancedNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let mut value = match field {
+    let mut table = match field {
         "static_var_compensators" => table_json(model.static_var_compensators()),
         "storage" => table_json(model.storage()),
         "hvdc" => table_json(model.hvdc()),
@@ -1859,43 +1929,13 @@ fn balanced_field_to_py<'py>(
             )));
         }
     }?;
-    // Python exposes physical table rows, not the tagged IR representation.
     // Partial three-winding transformers keep the same dictionary fields as
     // ordinary transformers even though their durable IR must fail closed in
     // older readers that do not implement per-winding status.
-    if field == "transformers_3w"
-        && let Some(rows) = value.as_array_mut()
-    {
-        for row in rows {
-            if row.get("type").and_then(serde_json::Value::as_str)
-                == Some("powerio.PartialTransformer3W")
-            {
-                *row = row
-                    .get_mut("value")
-                    .expect("partial transformer body")
-                    .take();
-            }
-        }
-    }
-    let result = json_value_to_py(py, &value)?;
     if field == "transformers_3w" {
-        for (index, transformer) in model.transformers_3w().iter().enumerate() {
-            let row = result.get_item(index)?;
-            let windings = row.get_item("windings")?;
-            for (index, winding) in transformer.windings.iter().enumerate() {
-                let winding_row = windings.get_item(index)?;
-                for (key, rating) in [
-                    ("rate_a", winding.rate_a),
-                    ("rate_b", winding.rate_b),
-                    ("rate_c", winding.rate_c),
-                ] {
-                    // Pass numeric fields directly: JSON would turn infinity into null.
-                    winding_row.set_item(key, rating)?;
-                }
-            }
-        }
+        table.untag_rows("powerio.PartialTransformer3W");
     }
-    Ok(result)
+    table.into_py(py)
 }
 
 /// Return one multiconductor model field through that model's own serde
@@ -1905,7 +1945,7 @@ fn dist_field_to_py<'py>(
     model: &powerio_dist::MulticonductorNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let mut value = match field {
+    let mut table = match field {
         "buses" => table_json(model.buses()),
         "linecodes" => table_json(model.line_codes()),
         "lines" => table_json(model.lines()),
@@ -1925,21 +1965,12 @@ fn dist_field_to_py<'py>(
             )));
         }
     }?;
-    // Python exposes physical source rows, not the tagged IR record: a
-    // referenced source keeps every earth-referenced field and adds
+    // A referenced source keeps every earth-referenced field and adds
     // `reference_terminal`, so `row["name"]` reads the same for both.
-    if field == "sources"
-        && let Some(rows) = value.as_array_mut()
-    {
-        for row in rows {
-            if row.get("type").and_then(serde_json::Value::as_str)
-                == Some("powerio.ReferencedVoltageSource")
-            {
-                *row = row.get_mut("value").expect("referenced source body").take();
-            }
-        }
+    if field == "sources" {
+        table.untag_rows("powerio.ReferencedVoltageSource");
     }
-    json_value_to_py(py, &value)
+    table.into_py(py)
 }
 
 /// [`json_value_to_py`] for a JSON object, kept separate so a diagnostic's
