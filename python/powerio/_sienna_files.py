@@ -36,10 +36,16 @@ def _array(value):
     values = array.reshape(-1).tolist()
     if array.dtype.kind == "f" and not np.isfinite(array).all():
         values = [v if math.isfinite(v) else str(v) for v in values]
+    record = {"dtype": array.dtype.str, "shape": list(array.shape), "values": values}
     if array.dtype.kind == "S":
-        # Attribute strings and fixed-width hash values are explicit text.
-        values = [v.decode("utf-8") for v in values]
-    return {"dtype": array.dtype.str, "shape": list(array.shape), "values": values}
+        # Fixed-width strings are bytes. UTF-8 text stays readable in IR;
+        # other bytes are stated as hex so JSON carries them unchanged.
+        try:
+            record["values"] = [v.decode("utf-8") for v in values]
+        except UnicodeDecodeError:
+            record["encoding"] = "hex"
+            record["values"] = [v.hex() for v in values]
+    return record
 
 
 def _decode(value):
@@ -53,9 +59,15 @@ def _decode(value):
         count *= n
         if count * max(dtype.itemsize, 1) > MAX_BYTES:
             raise ValueError("HDF5 array exceeds the 64 MiB limit")
-    if count != len(value["values"]):
+    values = value["values"]
+    if count != len(values):
         raise ValueError("HDF5 array shape does not match values")
-    return np.asarray(value["values"], dtype=dtype).reshape(shape)
+    if dtype.kind == "S":
+        encoding = value.get("encoding", "utf-8")
+        if encoding not in {"utf-8", "hex"} or not all(isinstance(v, str) for v in values):
+            raise ValueError("Invalid HDF5 string values")
+        values = [bytes.fromhex(v) if encoding == "hex" else v.encode("utf-8") for v in values]
+    return np.asarray(values, dtype=dtype).reshape(shape)
 
 
 def _read_hdf(data: bytes) -> str:
@@ -125,7 +137,9 @@ def _write_hdf(records):
                 total += array.nbytes
                 if total > MAX_BYTES:
                     raise ValueError("HDF5 attributes exceed the 64 MiB limit")
-                obj.attrs[key] = array.item() if array.shape == () else array
+                # A 0-d array keeps its stored type. h5py has no numpy
+                # unicode type, so text becomes a variable-length string.
+                obj.attrs[key] = array.item() if array.dtype.kind == "U" else array
     data = buffer.getvalue()
     if len(data) > MAX_BYTES:
         raise ValueError("HDF5 output exceeds the 64 MiB limit")
