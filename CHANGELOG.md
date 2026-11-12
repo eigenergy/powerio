@@ -26,9 +26,6 @@ action.
   topology or matrix query. Counts and metadata no longer allocate that index;
   subsequent analysis queries reuse it. Updated and derived handles retain
   their own immutable network and index state.
-- Python table getters read only the requested table. Distribution tables
-  remain accessible when a network carries component coordinates; the tagged
-  IR wrapper no longer causes a missing-field error.
 - `reduce_passthrough_buses` keeps the sections' named rating sets on the
   equivalent branch instead of dropping them: a set both sections state takes
   the smaller rating, and an invalid one stays invalid, so validation still
@@ -326,19 +323,6 @@ action.
   every branch has a solution.
 - The PMD ENGINEERING writer writes back a generator control mode the source
   stated instead of always writing `FREQUENCYDROOP`.
-- The validation oracles and the `bench` extra use pandapower 3.5.6 instead
-  of 3.2.2.
-- XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
-  extension when its target equipment cannot be written, and report
-  the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
-  loss report.
-  Partial substation data could previously leave an extension referring to
-  absent equipment, making the output invalid (#837).
-- Piecewise costs read from `pwl_cost` start at the first power times the
-  first marginal slope, matching pandapower's native objective. Previously
-  PowerIO started every curve at zero, shifting costs whose first power was
-  nonzero. Emission now diagnoses an objective shift by comparing with that
-  native anchor, rather than assuming every nonzero first cost is lost.
 - With these and the format fixes above, the conversion matrix has 25 more
   lossless cells than 0.11, 26 fewer dropped ones, and no cell is worse.
 
@@ -366,6 +350,13 @@ action.
   See [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings)
   (#828, #841).
 
+**Carried from 0.11.12**
+
+- Everything in [0.11.12](#01112): XIIDM and JIIDM extensions for equipment
+  that is not written (#837, #839), the native pandapower piecewise cost
+  anchor (#840), Python table getters that read only the requested table
+  (#842), and the pandapower 3.5.6 validation oracles (#851).
+
 **Contributor credit**
 
 - @frederikgeth authored the collection/archive stack (#775, #776,
@@ -381,6 +372,33 @@ action.
 - @samtalki integrated the release, compatibility migration, adapters, and
   review follow-ups in #821 and #823. Original contributor commits and
   coauthor attribution are retained.
+
+## 0.11.12
+
+**XIIDM**
+
+- XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
+  extension when its target equipment cannot be written, and report
+  the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
+  loss report.
+  Partial substation data could previously leave an extension referring to
+  absent equipment, making the output invalid (#837, #839).
+
+**pandapower**
+
+- Piecewise costs read from `pwl_cost` start at the first power times the
+  first marginal slope, matching pandapower's native objective. Previously
+  PowerIO started every curve at zero, shifting costs whose first power was
+  nonzero. Emission now diagnoses an objective shift by comparing with that
+  native anchor, rather than assuming every nonzero first cost is lost (#840).
+- The validation oracles and the `bench` extra use pandapower 3.5.6 instead
+  of 3.2.2 (#851).
+
+**Python**
+
+- Python table getters read only the requested table. Distribution tables
+  remain accessible when a network carries component coordinates; the tagged
+  IR wrapper no longer causes a missing-field error (#842).
 
 ## 0.11.11
 
