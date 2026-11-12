@@ -32,8 +32,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # pandapower holds at its pin because the Y_bus cross-check has not run
-    # against 3.4 or later.
+    # pandapower holds at its exact pin because the oracles call private
+    # pandapower functions. A bump reruns every pandapower oracle first.
     ignore:
       - dependency-name: pandapower
     groups:
