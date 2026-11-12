@@ -8,6 +8,16 @@ use powerio_dist::{
     IbrVoltageAggregation, ReactivePowerReference, ReactivePowerUnit, VoltVarControl,
     VoltWattControl,
 };
+/// The inverter extras preparation reads: the price (`energy_cost_rate`, or
+/// its earlier spelling `cost`) and the DC-link coupling.
+const INTERPRETED_EXTRAS: &[&str] = &[
+    "energy_cost_rate",
+    "cost",
+    "dc_link_coupled",
+    "p_dc_min",
+    "p_dc_max",
+];
+
 pub(super) fn prepare(
     ctx: &Context<'_>,
     instance: &powerio_prob::McAcOpfInstance,
@@ -21,11 +31,7 @@ pub(super) fn prepare(
         extras(&profile.name, &profile.extras, &[])?;
     }
     for (row, inv) in ctx.net.ibrs().iter().enumerate() {
-        extras(
-            &inv.name,
-            &inv.extras,
-            &["cost", "dc_link_coupled", "p_dc_min", "p_dc_max"],
-        )?;
+        extras(&inv.name, &inv.extras, INTERPRETED_EXTRAS)?;
         let config = match inv.topology {
             IbrTopology::SinglePhase => Configuration::SinglePhase,
             IbrTopology::ThreeLeg => Configuration::Delta,
@@ -49,7 +55,9 @@ pub(super) fn prepare(
         let qmax = bounds(&inv.name, inv.q_max.as_ref(), n, sb)?;
         let cost = inverter_cost(inv, n, sb)?;
         let (profile, pf) = control_profile(ctx, inv, config)?;
-        let power_factor_coefficients = pf.map(|v| [((1.0 - v.abs()) * (1.0 + v.abs())).sqrt(), v]);
+        // pf > 0: Q on the same side as P (OpenDSS, BMOPF); Q/P = a/pf.
+        let power_factor_coefficients =
+            pf.map(|v| [((1.0 - v.abs()) * (1.0 + v.abs())).sqrt(), -v]);
         let slope = power_factor_coefficients
             .map(|[a, b]| -a / b)
             .filter(|v| v.is_finite());
@@ -296,10 +304,13 @@ fn control_profile<'a>(
     Ok((profile, pf))
 }
 
+/// The inverter's per-phase price: `energy_cost_rate`, the BMOPF field,
+/// or the earlier `cost` spelling when only that is stated.
 fn inverter_cost(inv: &DistIbr, n: usize, sb: f64) -> Result<Vec<Option<f64>>> {
     let cost: Option<Vec<f64>> = inv
         .extras
-        .get("cost")
+        .get("energy_cost_rate")
+        .or_else(|| inv.extras.get("cost"))
         .map(|v| {
             if let Some(x) = v.as_f64() {
                 Ok(vec![x])

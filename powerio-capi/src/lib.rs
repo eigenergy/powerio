@@ -20229,7 +20229,7 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
                     "schema": powerio::IR_SCHEMA_NAME,
                     "version": powerio::IR_VERSION
                 },
-                "bmopf_schema": powerio_dist::BMOPF_SCHEMA_VERSION,
+                "bmopf_schema": powerio_dist::BMOPF_SCHEMA_ID,
                 // The C ABI exports one fixed symbol set. Matrices, the
                 // multiconductor model, and calculation types are always
                 // present; only GridFM Parquet support is a build option.
@@ -20240,7 +20240,7 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
                     "prob": true
                 },
                 "foreign_schemas": {
-                    "bmopf": powerio_dist::BMOPF_SCHEMA_VERSION
+                    "bmopf": powerio_dist::BMOPF_SCHEMA_ID
                 },
                 "error_categories": powerio_core::ErrorCategory::TOKENS,
                 "diagnostic_namespaces": powerio_core::DiagnosticStage::NAMESPACES,
@@ -21362,7 +21362,7 @@ mod tests {
             assert_eq!(parsed["powerio_ir"]["version"], powerio::IR_VERSION);
             assert_eq!(
                 parsed["bmopf_schema"],
-                serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)
+                serde_json::json!(powerio_dist::BMOPF_SCHEMA_ID)
             );
             assert_eq!(parsed["foreign_schemas"]["bmopf"], parsed["bmopf_schema"]);
             assert_eq!(

@@ -1180,6 +1180,7 @@ def versions() -> Any:
 
     ``powerio_ir`` is ``{"schema": "pio-ir", "version": <release>}``: the
     release whose schema the documents this build writes follow.
+    ``bmopf_schema`` is the ``$id`` of the one BMOPF schema PowerIO writes.
     """
     return _json.loads(_powerio.versions_json())
 

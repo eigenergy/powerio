@@ -227,6 +227,87 @@ action.
   and `PSRType` are reported as context.
 - Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
 
+**BMOPF**
+
+- There is one BMOPF. PowerIO reads and writes the schema proposed in
+  [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
+  vendored from the Task Force repository at commit
+  [`6796394`](https://github.com/distribution-system-opt/dsopt-schema/commit/6796394f6a4326b61c7fcf5ab5c0d55181b67d25):
+  the proposal reconciled with the Task Force's schema, the Task Force review
+  answers (`vng_max`, geometry for every located element) and the review
+  fixes to dsopt-schema#2. The pin moves to the release tag the schema's
+  `$id` names once the Task Force ratifies it (#844).
+- Multiconductor IVR preparation follows the schema's inverter power factor
+  sign, the OpenDSS PVSystem and Storage convention: `pf > 0` puts Q on the
+  same side as P. Preparation used the opposite sign, so an OpenDSS `pf=0.9`
+  inverter absorbed reactive power where OpenDSS injects it; the coefficient
+  row is now `a*P - pf*Q = 0`.
+- A type-A regulator's `tap_ratio` is the regulated over source voltage ratio,
+  as for type B; `regulator_type` records the hardware only. IVR preparation
+  read a type-A ratio inverted.
+- IVR preparation prices an inverter from its `energy_cost_rate`. It priced
+  only from `cost` and refused `energy_cost_rate` as an uninterpreted field,
+  so an inverter price read from BMOPF was never honoured.
+- The schema removed `voltage_source.cost` and `ibr.cost`. A document that
+  still states them reads them as `energy_cost_rate`, and a write states only
+  `energy_cost_rate`. A writer drops a negative or nonfinite n-winding neutral
+  field with `EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED`, and drops an inverter
+  `dc_bus` that states no `dc_terminal_map`, which the schema requires beside
+  it; the semantic check names the missing map.
+- Output names the bus phase to ground bounds `vpg_min`/`vpg_max` and the
+  neutral to ground cap `vng_max` (earlier `vn_max`), and writes geometry in
+  the schema's typed slots, `bus.*.geo`, `line.*.geo` and
+  `meta.crs`, instead of the `extras.geojson` layer.
+- Component locations travel as the `geo` Point of the voltage source, load,
+  generator, IBR, shunt, capacitor, switch or transformer they attach to, in
+  a WGS84 document, and read back as component locations. A switch or
+  transformer `geo` LineString reads as the midpoint of its end positions.
+  BMOPF output no longer reports line routes it writes as dropped.
+- Output states `meta.schema_version`, which the schema requires, as the
+  document's one version identifier and no `meta.$schema`, which the schema
+  removed; a PowerIO archive URL no longer appears
+  ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
+  The schema's `$id`, the commit, digest and retrieval permalink stay in
+  `meta.provenance`. The reader identifies a document by
+  `meta.schema_version` (any patch release of the schema's line) and falls
+  back to the older drafts' `meta.$schema` classification; a current
+  document still carrying `$schema` reads, counted in the one legacy warning.
+- An absent `meta.crs` means `OGC:CRS84`, and coordinates are always longitude
+  then latitude; `EPSG:4326` reads the same way, and the writer leaves the CRS
+  out for WGS84.
+- The schema renamed tokens, which the writer follows and the reader takes
+  in either spelling: UPPER_SNAKE `wire_data.kind`, `line_geometry.earth_model`
+  and `dc_control` (`DROOP`), `STATCOM` for `DSTATCOM`, `PU` for
+  `VA_FRACTION`, and the regulators' `voltage_ratio` (with `_min`/`_max` and
+  `time_series` keys) for `tap_ratio`.
+- Line and linecode `s_max` have one entry per conductor. A per-phase line
+  `s_max` from an older document reads per conductor with the neutral
+  unbounded; the writer drops an `s_max` of any other length.
+- The writer never states a value the schema rejects: a non-positive rating,
+  nominal voltage, tap or ratio, a control law of the wrong shape or without a
+  `voltage_reference`, or a bus bound the bus cannot carry is dropped with a
+  finding, and a record whose required rating or nominal voltage is not
+  positive is dropped whole. The reader checks the schema's semantic rules
+  (neutral and phase-count bounds, frequency consistency, control
+  breakpoints, Volt-Watt and Volt-VAr limits, per-conductor `s_max`, wire
+  and load requirements).
+- A document from an older BMOPF draft (including the `bmopf-report` drafts
+  and the early draft PowerIO 0.11 wrote) reads as BMOPF and is reported once
+  with the new `READ.BMOPF.SCHEMA_LEGACY` warning. A current document that
+  uses the `v_min`/`v_max` or `vn_max` spelling gets the same single warning.
+  Writing a legacy document produces the current schema; only a source that
+  states it is echoed byte for byte.
+- Removed every version-bearing BMOPF name: the `bmopf-json@<version>`
+  output tokens (a token naming a version is refused with a pointer to
+  `bmopf-json`), `BmopfSchemaVersion`, `BmopfEmitOptions::schema_version` and
+  `with_schema_version`, `BMOPF_SCHEMA_VERSION`, and
+  `BmopfEmitOptions::sideload_coordinates`. `BMOPF_PROPOSAL_URL` is now the
+  function `bmopf_proposal_url()`, and `BMOPF_SCHEMA_ID` moved from the writer
+  to the schema pin; the version reports of the C ABI (`pio_schema_report`)
+  and Python (`powerio.versions()`) state the schema's `$id` as
+  `bmopf_schema`. The Rust crate and the Python package ship the one schema
+  at `schemas/bmopf/bmopf.schema.json`.
+
 **Conversion fidelity**
 
 - PowerModels JSON and egret JSON carry, as keys those tools leave alone and

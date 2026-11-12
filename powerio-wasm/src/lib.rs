@@ -21,10 +21,7 @@ pub fn capabilities() -> String {
                 // for it, so the bulk targets stay as they were. The catalog
                 // still lists both profiles for reading and family detection.
                 "canEmit": entry.format.can_emit
-                    && !matches!(
-                        entry.format.token,
-                        "bmopf-json" | "gridlabd" | "gridlabd-arras"
-                    ),
+                    && !matches!(entry.format.token, "gridlabd" | "gridlabd-arras"),
                 "isDirectory": entry.format.is_directory,
                 "extension": entry.format.extension,
                 "requiresValueType": (entry.format.token == "goc3-json")

@@ -182,9 +182,9 @@ pub mod dist {
     }
 }
 pub use powerio_dist::{
-    BmopfEmitOptions, BmopfSchemaVersion, ConductorMatrix, DistComponentLocation, DistGeoMeta,
-    DistGeographicPoint, DistGraphEdgeKind, DistLocationTarget, MulticonductorNetwork,
-    NeutralKronOptions, NeutralKronReport,
+    BmopfEmitOptions, ConductorMatrix, DistComponentLocation, DistGeoMeta, DistGeographicPoint,
+    DistGraphEdgeKind, DistLocationTarget, MulticonductorNetwork, NeutralKronOptions,
+    NeutralKronReport,
 };
 
 pub use powerio_prob::solution::{SocwrOpfDuals, SocwrOpfSolution, SocwrOpfValues};

@@ -19,10 +19,12 @@ Benchmarking Multiconductor OPF.
   `48707ea839c20032c88df715587e50d097637cd0cc8a17b2d213d4591eea8bc7`
 - `example_enwl_n1_f2.json` sha256
   `24d2c054b70b5e09d179f785cb09ff90cddbf73c859756154e9eb604782b69f1`
-- Versioned schemas are under `powerio-dist/schemas/bmopf/`, with their exact
-  source revisions, hashes, and CC BY 4.0 license. The historical schema stays
-  beside the examples for source-fidelity tests. Its rules match archived
-  0.1.0; only the embedded identifier differs. Archived 0.2.0 is a proposal.
+- The one BMOPF schema PowerIO writes is under `powerio-dist/schemas/bmopf/`,
+  with its exact source revision, hash, and CC BY 4.0 license; it is a
+  proposal. The historical draft schema stays beside the examples as the test
+  oracle for input from that older draft, which PowerIO reads as BMOPF. Its
+  rules match the first released schema; only the embedded identifier
+  differs.
 
 ## cim/
 

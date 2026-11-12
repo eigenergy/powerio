@@ -73,7 +73,7 @@ pub mod readiness;
 pub(crate) mod testkit;
 mod transform_audit;
 
-pub use bmopf::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions, BmopfSchemaVersion};
+pub use bmopf::{BMOPF_SCHEMA_ID, BmopfEmitOptions};
 pub use cim::{
     CIM_DIST_HEAD_BYTES, looks_like_cim_dist, looks_like_cim_dist_header,
     source_looks_like_cim_dist,

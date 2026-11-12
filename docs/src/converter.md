@@ -44,7 +44,9 @@ needs review, even when a file was produced. The portal displays PowerIO's
 diagnostic codes, messages, locations when available, and suggested actions.
 See [Formats and fidelity](format-fidelity.md) for the supported profiles.
 
-BMOPF outputs explicitly select **0.1.0** or the **0.2.0 proposal**. The
+BMOPF output follows the Task Force's proposed schema, the one BMOPF PowerIO
+writes. A BMOPF file from an older draft reads as BMOPF, with one warning.
+The
 [BMOPF task force](https://github.com/distribution-system-opt) maintains the
 collaborative distribution-system optimization work. GO Challenge 3
 writing requires a complete SCUC solution. The converter does not solve a

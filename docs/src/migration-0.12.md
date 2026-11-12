@@ -221,6 +221,42 @@ rating series where the model meant unlimited; 0.12 reads that `0` as a zero
 bound. Regenerate them from the original model with 0.11.11 or later, which
 writes `null` there.
 
+## BMOPF output
+
+There is one BMOPF. PowerIO 0.12 reads and writes the schema proposed in
+[dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
+vendored from the Task Force repository at commit `6796394`. Its pin moves to
+the release tag the schema's `$id` names once the Task Force ratifies it.
+
+| 0.11 | 0.12 |
+|---|---|
+| `--to bmopf-json@<version>`, `emit(module, "bmopf-json@<version>")` | refused; write `bmopf-json` |
+| `BmopfSchemaVersion`, `BmopfEmitOptions::with_schema_version` | removed; there is nothing to select |
+| `BMOPF_SCHEMA_VERSION` | removed; a written document's `meta.schema_version` is the release the schema's `$id` names |
+| `bmopf::BMOPF_PROPOSAL_URL` | the function `bmopf::bmopf_proposal_url()` |
+| `bmopf_schema` in `pio_schema_report` and `powerio.versions()`, a version number | the schema's `$id` |
+| `BmopfEmitOptions::sideload_coordinates` | removed; geometry is in the typed `bus.*.geo`, `line.*.geo` and `meta.crs` slots |
+| bus bounds written as `v_min`/`v_max` | written as `vpg_min`/`vpg_max` |
+| bus neutral to ground cap written as `vn_max` | written as `vng_max` |
+| `meta.$schema` stating a PowerIO archive URL | no `meta.$schema`; `meta.schema_version`, which the schema requires, is the one identifier, and the schema's `$id` is in `meta.provenance` |
+| bus `vn_max` | `vng_max` |
+| regulator `tap_ratio`, `tap_ratio_min`, `tap_ratio_max` | `voltage_ratio`, `voltage_ratio_min`, `voltage_ratio_max` |
+| `prime_mover: "DSTATCOM"`, `p_unit`/`q_unit` `VA_FRACTION`, `dc_control: "droop"` | `STATCOM`, `PU`, `DROOP` |
+| line `s_max` per phase | one entry per conductor; a per-phase array is dropped on write |
+| an absent `meta.crs` read as `EPSG:4326` | read as `OGC:CRS84`; both are WGS84 longitude then latitude |
+
+Multiconductor IVR preparation changes three results. A fixed inverter power
+factor follows the OpenDSS sign convention, `pf > 0` putting Q on the same
+side as P, so `McOpfCoil::power_factor_coefficients` is `[a, -pf]` where it
+was `[a, pf]`, and `reactive_slope` changes sign. A type-A regulator prepares
+with the regulated over source ratio and `tap_inverse = true`, as type B
+does. An inverter's `energy_cost_rate` sets its dispatch cost.
+
+Documents from older BMOPF drafts, PowerIO 0.11 output among them, still
+read, as BMOPF, with one `READ.BMOPF.SCHEMA_LEGACY` warning. A consumer that
+still needs an older draft's document has to keep its source file: writing
+such a document, even unchanged, produces the current schema.
+
 ## Conversion output
 
 No action is needed unless a consumer compares output byte for byte or

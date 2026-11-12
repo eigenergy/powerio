@@ -773,7 +773,7 @@ format!(
         balanced_buses
     }
 
-    /// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`) has no
+    /// A rated capacitor bank (the BMOPF `capacitor`) has no
     /// balanced equivalent yet: `q_rated` at `v_nom` is a nameplate rating,
     /// not the admittance a balanced `Shunt` carries. The bank therefore
     /// drops, and the record names it, because a silent drop removes
@@ -1618,7 +1618,7 @@ fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
     sum.sqrt()
 }
 
-/// The branch rating, in MVA. BMOPF schema 0.1.0 gives a line its own
+/// The branch rating, in MVA. BMOPF gives a line its own
 /// `i_max`/`s_max`, which "overrides the linecode's i_max for this line", so
 /// both line fields are tried before either linecode field. Within one owner
 /// `s_max` comes first, because an apparent power limit needs no voltage.

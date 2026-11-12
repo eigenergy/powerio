@@ -179,7 +179,8 @@ fn echo_retained_source(module: &PioModule<PioValue>, format: &str) -> Option<Ve
     }
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    Some(buffer.bytes().to_vec())
+    let bytes = buffer.bytes();
+    bmopf_echo_allowed(format, bytes).then(|| bytes.to_vec())
 }
 
 fn unsupported_type(module: &PioModule<PioValue>, format: &str) -> Error {
@@ -1071,78 +1072,25 @@ fn emit_solution(
     }
 }
 
-fn emit_versioned_bmopf(
-    module: &PioModule<PioValue>,
-    version: &str,
-    destination: Destination,
-) -> Result<EmitResult, Error> {
-    let format = format!("bmopf-json@{version}");
-    let profile = match version {
-        "0.1.0" => powerio_dist::BmopfSchemaVersion::Bmopf010,
-        "0.2.0" => powerio_dist::BmopfSchemaVersion::Bmopf020,
-        _ => return Err(unknown_format(&format)),
-    };
-    let (network, diagnostics) = match module.value() {
-        PioValue::MulticonductorNetwork(network) => (network.clone(), Vec::new()),
-        PioValue::McAcPfInstance(instance) => (
-            instance.network().clone(),
-            vec![calculation_data_omitted(
-                module.value().type_name(),
-                &format,
-            )],
-        ),
-        PioValue::McAcOpfInstance(instance) => (
-            instance.network().clone(),
-            vec![calculation_data_omitted(
-                module.value().type_name(),
-                &format,
-            )],
-        ),
-        PioValue::LinDist3FlowPfInstance(instance) => (
-            instance.source_network().clone(),
-            vec![calculation_data_omitted(
-                module.value().type_name(),
-                &format,
-            )],
-        ),
-        PioValue::LinDist3FlowOpfInstance(instance) => (
-            instance.source_network().clone(),
-            vec![calculation_data_omitted(
-                module.value().type_name(),
-                &format,
-            )],
-        ),
-        PioValue::MulticonductorOperatingPoint(point) => {
-            network_with_multiconductor_operating_point(point, &format)
-        }
-        PioValue::McAcPfSolution(solution) => (
-            solution.instance().network().clone(),
-            vec![solution_data_omitted(module.value().type_name(), &format)],
-        ),
-        PioValue::McAcOpfSolution(solution) => (
-            solution.instance().network().clone(),
-            vec![solution_data_omitted(module.value().type_name(), &format)],
-        ),
-        PioValue::LinDist3FlowPfSolution(solution) => (
-            solution.instance().source_network().clone(),
-            vec![solution_data_omitted(module.value().type_name(), &format)],
-        ),
-        PioValue::LinDist3FlowOpfSolution(solution) => (
-            solution.instance().source_network().clone(),
-            vec![solution_data_omitted(module.value().type_name(), &format)],
-        ),
-        _ => return Err(unsupported_type(module, &format)),
-    };
-    let typed = typed_sibling(module, network)?.sever_source();
-    let mut options = powerio_dist::EmitOptions::default();
-    options.bmopf.schema_version = profile;
-    powerio_dist::emit_with_options(
-        &typed,
-        powerio_dist::DistTargetFormat::BmopfJson,
-        &options,
-        destination,
-    )
-    .map(|result| result.__with_diagnostics(diagnostics))
+/// Refuses a `bmopf-json@<version>` request. PowerIO writes one BMOPF, as
+/// `bmopf-json`, so a token naming a version selects nothing.
+fn refuse_bmopf_version_suffix(format: &str) -> Result<(), Error> {
+    if format.starts_with("bmopf-json@") {
+        return Err(Error::new(
+            &codes::REQUEST_EMIT_UNKNOWN_FORMAT,
+            format!("{format} names a BMOPF version; PowerIO writes one BMOPF, as `bmopf-json`"),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether retained BMOPF source bytes may be echoed: only a document that
+/// states the schema PowerIO writes. A document from an older draft, or
+/// stating none, is written fresh instead.
+fn bmopf_echo_allowed(format: &str, bytes: &[u8]) -> bool {
+    powerio_dist::parse_dist_target_format(format)
+        != Some(powerio_dist::DistTargetFormat::BmopfJson)
+        || std::str::from_utf8(bytes).is_ok_and(powerio_dist::bmopf::__states_written_version)
 }
 
 pub(crate) fn is_sincal_format(format: &str) -> bool {
@@ -1241,9 +1189,7 @@ fn emit_dynamic(
         #[cfg(not(feature = "sincal"))]
         return Err(crate::sincal_feature_disabled());
     }
-    if let Some(version) = format.strip_prefix("bmopf-json@") {
-        return emit_versioned_bmopf(module, version, destination);
-    }
+    refuse_bmopf_version_suffix(format)?;
     if let Some(artifacts) = echo_retained_directory(module, format)? {
         return destination.__commit_artifacts(
             true,

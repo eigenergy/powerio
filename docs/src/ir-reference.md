@@ -956,8 +956,8 @@ Schema definition: `VoltVarControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `breakpoints` | array of float | p.u. voltage | | ascending | required |
-| `q_limits` | array of float | `q_unit` | positive is injection | same length as `breakpoints` | required |
+| `breakpoints` | array of float | p.u. voltage | | four, `[U1, U2, U3, U4]`, ascending | required |
+| `q_limits` | array of float | `q_unit` | positive is injection | two, `[q_absorb, q_inject]`: injects `q_inject` below U1 and absorbs `q_absorb` above U4 | required |
 | `voltage_reference` | token `PN_PER_PHASE`, `PP_PER_PHASE`, `PP_AVERAGED`, `PG_AVERAGED`, `PN_AVERAGED`, `PG_PER_PHASE`, or null | | | | null |
 | `q_ref` | token `VAR_MAX`, `VAR_AVAILABLE`, or null | | | | null |
 | `q_unit` | token `VA_FRACTION`, `VAR`, or null | | | | null |
@@ -968,8 +968,8 @@ Schema definition: `VoltWattControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `breakpoints` | array of float | p.u. voltage | | ascending | required |
-| `p_limits` | array of float | `p_unit` | | same length as `breakpoints` | required |
+| `breakpoints` | array of float | p.u. voltage | | two, `[U5, U6]`, ascending | required |
+| `p_limits` | array of float | `p_unit` | | two, `[p_low, p_high]` ordered by value: `p_high` at or below U5, `p_low` at or above U6; a `VA_FRACTION` limit is a fraction of the `p_ref` base, `S_MAX` when absent | required |
 | `voltage_reference` | token as `VoltVarControl.voltage_reference`, or null | | | | null |
 | `p_ref` | token `P_AVAILABLE`, `P_MAX`, `S_MAX`, or null | | | | null |
 | `p_unit` | token `VA_FRACTION`, `W`, or null | | | | null |
@@ -978,7 +978,7 @@ Schema definition: `PowerFactorControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `pf` | float | | | in `[-1, 1]` | required |
+| `pf` | float | | positive when Q has the same sign as P, negative when opposite (the OpenDSS PVSystem and Storage convention) | `0 < abs(pf) <= 1` | required |
 
 ### VoltageSource
 

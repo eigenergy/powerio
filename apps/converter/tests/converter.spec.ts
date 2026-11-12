@@ -258,15 +258,14 @@ test('every applicable transmission writer runs in browser WASM', async ({ page 
   await expect(page.getByText("Couldn't convert", { exact: true })).toHaveCount(0);
 });
 
-test('all seven distribution outputs download and re-import with explicit BMOPF profiles', async ({ page }) => {
+test('all six distribution outputs download and re-import, with BMOPF in the current schema', async ({ page }) => {
   const outputs = [
     { label: 'OpenDSS' },
     { label: 'CIM distribution (CIM100 cim17v40, GridAPPS-D profile)' },
     { label: 'PMD JSON', dataModel: 'ENGINEERING' },
     { label: 'PMD MATHEMATICAL JSON', dataModel: 'MATHEMATICAL' },
     { label: 'MG-RAVENS JSON (balanced and multiconductor profiles)' },
-    { label: 'BMOPF 0.1.0', schemaVersion: '0.1.0' },
-    { label: 'BMOPF 0.2.0 proposal', schemaVersion: '0.2.0' },
+    { label: 'BMOPF JSON', bmopf: true },
   ];
   await ready(page);
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({ name: 'feeder.dss', mimeType: 'text/plain', buffer: feeder });
@@ -279,7 +278,7 @@ test('all seven distribution outputs download and re-import with explicit BMOPF 
   await expect(page.getByText('Conversion finished. Review any warnings, then download your files.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Download feeder.dss as / })).toHaveCount(outputs.length);
   await expect(page.getByRole('link', { name: /BMOPF task force/ }).first()).toHaveAttribute('href', 'https://github.com/distribution-system-opt');
-  for (const { label, dataModel, schemaVersion } of outputs) {
+  for (const { label, dataModel, bmopf } of outputs) {
     await test.step(`${label}: download and re-import`, async () => {
       const completed = page.waitForEvent('download');
       await page.getByRole('button', { name: `Download feeder.dss as ${label}`, exact: true }).click();
@@ -287,11 +286,12 @@ test('all seven distribution outputs download and re-import with explicit BMOPF 
       const bytes = await downloadBytes(output);
       expect(bytes.length).toBeGreaterThan(0);
       if (dataModel) expect(JSON.parse(bytes.toString()).data_model).toBe(dataModel);
-      if (schemaVersion) {
+      if (bmopf) {
         const meta = JSON.parse(bytes.toString()).meta;
-        expect(meta.$schema).toContain(`/bmopf/${schemaVersion}/bmopf.schema.json`);
-        // The 0.1.0 schema forbids a separate schema_version field.
-        expect(meta.schema_version).toBe(schemaVersion === '0.1.0' ? undefined : schemaVersion);
+        // A current document names its release in `schema_version`, the
+        // directory of the schema's `$id`, and no schema URL.
+        expect(meta.$schema).toBeUndefined();
+        expect(meta.schema_version).toBe(meta.provenance.powerio_bmopf.schema_id.split('/').at(-2));
       }
       const newPage = await page.context().newPage();
       try {

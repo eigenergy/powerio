@@ -238,7 +238,7 @@ jobs:
       - name: Install powerio + test deps
         run: pip install '.[all,mcp]' pytest
       - name: Check installed schema archive
-        run: python -c 'from importlib.resources import files; import json; p = files("powerio").joinpath("schemas/bmopf/manifest.json"); assert len(json.loads(p.read_text())["schemas"]) == 2'
+        run: python -c 'from importlib.resources import files; import json; p = files("powerio").joinpath("schemas/bmopf/manifest.json"); assert len(json.loads(p.read_text())["schemas"]) == 1'
       - name: Run tests
         run: pytest python/tests -q -rs
       # The core import path: parse/emit import nothing but the

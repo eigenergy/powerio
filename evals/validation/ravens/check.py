@@ -17,8 +17,12 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[3]
 # The archived ENWL document already fails PowerIO's source semantic check.
 # Require this precise refusal instead of describing it as valid RAVENS output.
+# It is an older BMOPF draft, which PowerIO reads as BMOPF with one warning.
 SOURCE_REFUSALS = {
-    "tests/data/dist/bmopf/example_enwl_n1_f2.json": "READ.BMOPF.SEMANTIC_INVALID: bus.sourcebus: a perfectly grounded terminal is absent from terminal_names",
+    "tests/data/dist/bmopf/example_enwl_n1_f2.json": [
+        "READ.BMOPF.SCHEMA_LEGACY: the document is an older BMOPF draft; it is read as BMOPF, and a BMOPF write states the current schema",
+        "READ.BMOPF.SEMANTIC_INVALID: bus.sourcebus: a perfectly grounded terminal is absent from terminal_names",
+    ],
 }
 
 
@@ -175,7 +179,7 @@ def main() -> None:
                     diagnostics = run(args.powerio, "serialize", source, "-o", ir)
                 except RuntimeError as error:
                     expected_refusal = [
-                        SOURCE_REFUSALS.get(label),
+                        *SOURCE_REFUSALS.get(label, []),
                         f"wrote {ir}",
                         "Error: PARSE.CLI.ERRORS_REPORTED: the reader reported 1 error(s); the output is incomplete",
                     ]
