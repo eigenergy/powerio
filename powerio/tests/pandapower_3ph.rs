@@ -29,14 +29,17 @@ fn the_fixture_reads_with_its_element_counts() {
     assert_eq!(network.buses().len(), 5);
     assert_eq!(network.lines().len(), 2);
     assert_eq!(network.line_codes().len(), 1);
-    assert_eq!(network.transformers().len(), 0);
+    assert_eq!(network.transformers().len(), 1);
     // the asymmetric load, the delta load and the wye load
     assert_eq!(network.loads().len(), 3);
     // the asymmetric sgen, not the sgen without a type
     assert_eq!(network.generators().len(), 1);
     assert_eq!(network.sources().len(), 1);
     assert_eq!(network.switches().len(), 0);
-    assert_eq!(network.shunts().len(), 0);
+    // the transformer's zero-sequence correction
+    assert_eq!(network.shunts().len(), 1);
+    let lv = &network.transformers()[0].windings[1];
+    assert_eq!(lv.terminal_map, ["3", "1", "2", "4"]);
     let mut codes: Vec<_> = module
         .diagnostics()
         .iter()
@@ -47,15 +50,15 @@ fn the_fixture_reads_with_its_element_counts() {
         codes,
         [
             "READ.DIST.PANDAPOWER_APPROXIMATED",
+            "READ.DIST.PANDAPOWER_APPROXIMATED",
             "READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED",
             "READ.DIST.PANDAPOWER_RETAINED_SOURCE_ONLY",
             "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED",
             "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED",
-            "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED",
         ]
     );
-    // The transformer, shunt and switch tables have no mapping yet.
-    for table in ["trafo", "shunt", "switch"] {
+    // The shunt and switch tables have no mapping yet.
+    for table in ["shunt", "switch"] {
         assert!(
             module.diagnostics().iter().any(|d| {
                 d.code() == "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED"
@@ -100,7 +103,7 @@ fn the_ir_keeps_the_source_format() {
         network.source_format().as_ref().map(|format| format.name()),
         Some("pandapower-json")
     );
-    assert_eq!(network.shunts().len(), 0);
+    assert_eq!(network.shunts().len(), 1);
 }
 
 #[test]

@@ -21,10 +21,11 @@
   map through the `READ.DIST.PANDAPOWER_*` codes. A duplicate index in any
   mapped table is refused. The 0.12.1 IR schema adds `pandapower-json` to the
   distribution source formats. This step maps buses, lines, external grids,
-  loads and static generators. Transformers, shunts and switches are reported
-  as unsupported until their steps land, and a report names the
-  connectivity a dropped transformer or switch changes. An element on an
-  out-of-service bus is kept with `in_service` false.
+  loads, static generators and transformers of vector group Dyn or YNyn at the
+  nominal tap. Tap changers, shunts and switches are reported as unsupported
+  until their steps land, and a report names the connectivity a dropped
+  transformer or switch changes. An element on an out-of-service bus is kept
+  with `in_service` false.
 
 ## 0.12.0
 

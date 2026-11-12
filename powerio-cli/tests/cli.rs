@@ -996,9 +996,9 @@ fn pandapower_frame(columns: &[&str], data: &serde_json::Value) -> serde_json::V
 #[test]
 fn batch_reads_three_phase_pandapower_multiconductor() {
     // The balanced reader refuses the fixture (its empty `res_shunt_3ph`),
-    // so it reads multiconductor. Its transformer and closed bus-bus switch
-    // have no three-phase mapping yet, which would leave the LV buses
-    // without their source, so batch skips it. A feeder whose connectivity
+    // so it reads multiconductor. Its closed bus-bus switch has no
+    // three-phase mapping yet, which would leave the LV buses without their
+    // source, so batch skips it. A feeder whose connectivity
     // the reading maps exports, after the Kron reduction batch reports.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -1044,7 +1044,7 @@ fn batch_reads_three_phase_pandapower_multiconductor() {
         "an islanded network was exported:\n{stderr}"
     );
     assert!(
-        stderr.contains("tiny_3ph.json") && stderr.contains("trafo, switch rows"),
+        stderr.contains("tiny_3ph.json") && stderr.contains("its switch rows"),
         "no skip warning:\n{stderr}"
     );
     assert!(out_dir.join("feeder_3ph_bprime.mtx").is_file(), "{stderr}");
