@@ -8,7 +8,7 @@ history, and extensions. A current document begins like this:
 {
   "schema": "pio-ir",
   "version": 2,
-  "producer": { "name": "powerio", "version": "0.11.11" },
+  "producer": { "name": "powerio", "version": "0.11.12" },
   "value": {
     "type": "powerio.BalancedNetwork",
     "data": {}
@@ -189,7 +189,7 @@ only when an existing representation changes incompatibly. `producer.version` re
 that wrote the document; the reader reports it and ignores it when deciding
 compatibility.
 
-PowerIO 0.11.11 keeps IR version 2. `powerio::IR_VERSION` and
+PowerIO 0.11.12 keeps IR version 2. `powerio::IR_VERSION` and
 `powerio::IR_MIN_VERSION` are both `2`. Additive structural types do not change
 the IR version: older readers continue to accept existing types and reject
 types they do not implement. A list of allowed names, or a union of
