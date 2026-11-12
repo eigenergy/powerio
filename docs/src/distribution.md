@@ -1014,31 +1014,31 @@ The [GridLAB-D oracle harness](https://github.com/eigenergy/powerio/tree/main/ev
 documents pinned engines, supported physics, canonical and project checks,
 and remaining limitations.
 
-## BMOPF schema version
+## BMOPF schema
 
-PowerIO 0.12 writes one BMOPF version: **0.2.0**, as proposed in
-[dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2)
-and subject to Task Force ratification. The schema version is separate from
-the PowerIO release and from the release a PowerIO IR document names. Producer
-provenance records the proposal revision and schema digest.
+There is one BMOPF. PowerIO reads and writes the schema proposed in
+[dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
+subject to Task Force ratification. No PowerIO format token, option, or type
+names a BMOPF version. Producer provenance records the proposal revision and
+schema digest.
 
-A document written against an earlier version is read as 0.2.0 and reported
-once with `READ.BMOPF.SCHEMA_LEGACY`, which names the version it stated: 0.1.0,
-0.1.1, the `bmopf-report` drafts, or the 0.2.0 draft PowerIO 0.11 wrote. The
-reader accepts the older layouts (tables and transformer fields under
-`extras`, the `tap` and `cost` spellings, `v_min`/`v_max`, `vn_max`, the
-`extras.geojson` layer). A `bmopf-json` emission preserves an unchanged source byte for byte
-only when that source states 0.2.0; an older document is written as 0.2.0:
+A document from an older BMOPF draft is read as BMOPF and reported once with
+`READ.BMOPF.SCHEMA_LEGACY`; the older drafts include the `bmopf-report`
+drafts and the early draft PowerIO 0.11 wrote. The reader accepts the older
+layouts (tables and transformer fields under `extras`, the `tap` and `cost`
+spellings, `v_min`/`v_max`, `vn_max`, the `extras.geojson` layer). A
+`bmopf-json` emission preserves an unchanged source byte for byte only when
+that source states the current schema; an older document is written in the
+current schema:
 
 ```sh
 powerio convert legacy.json --to bmopf-json -o feeder.json
 ```
 
-`bmopf-json@0.2.0` names the same version and is accepted wherever
-`bmopf-json` is. Any other `bmopf-json@<version>` is refused. The same format
-strings work with Rust `powerio::emit`, Python `powerio.emit`, C `pio_emit`,
-Julia `emit` and the PowerIO MCP emission tool. Rust also exposes
-`BmopfSchemaVersion` and `BmopfEmitOptions` for the distribution writer.
+`bmopf-json` is the one BMOPF format string; a `bmopf-json@<version>` string
+is refused. It works with Rust `powerio::emit`, Python `powerio.emit`, C
+`pio_emit`, Julia `emit` and the PowerIO MCP emission tool. Rust also exposes
+`BmopfEmitOptions` for the distribution writer.
 
 Output uses the declared tables and preserves winding ratings, taps, neutral
 impedances and current-limit data.
@@ -1047,14 +1047,14 @@ Unequal bus phase bounds remain individual values through parsing, PowerIO IR,
 and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
 use `v_min_phase`/`v_max_phase` in the typed Rust model. A present scalar takes
 precedence over the corresponding vector. In the document the phase to ground
-bound is `vpg_min`/`vpg_max` since schema 0.1.1, and 0.2.0 rejects the 0.1.0
-spelling `v_min`/`v_max`; the neutral to ground cap is `vng_max` since 0.2.0,
-`vn_max` before. Output writes `vpg_*` and `vng_max`; the reader takes either
-spelling, and a document stating 0.2.0 that uses an old name gets one
+bound is `vpg_min`/`vpg_max`, and the schema rejects the older spelling
+`v_min`/`v_max`; the neutral to ground cap is `vng_max`, `vn_max` in older
+drafts. Output writes `vpg_*` and `vng_max`; the reader takes either
+spelling, and a current document that uses an old name gets one
 `READ.BMOPF.SCHEMA_LEGACY`. PMD voltage arrays instead follow terminal order
 and use engineering voltage units.
 
-Schema 0.2.0 also declares geometry: `bus.*.geo` (GeoJSON Point), `line.*.geo`
+The schema also declares geometry: `bus.*.geo` (GeoJSON Point), `line.*.geo`
 (GeoJSON LineString) and `meta.crs`, and a `geo` on every other located
 element. Output writes bus locations and line routes there, and component
 locations as the `geo` Point of the element they attach to. The `extras.geojson` FeatureCollection PowerIO 0.11 wrote still
@@ -1083,34 +1083,34 @@ invalid ratios fail instead of producing an incomplete matrix.
 The BMOPF proposal schema is pinned to
 [`6796394`](https://github.com/distribution-system-opt/dsopt-schema/commit/6796394f6a4326b61c7fcf5ab5c0d55181b67d25),
 with SHA-256 `9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc`,
-the revision that reconciled the proposal with schema 0.1.1 (`vpg_*` bounds,
-typed geometry, one identifier) and applied the Task Force review answers
-(`vng_max`, geometry for every located element), the review fixes, and the
-identity and consistency changes. The pin moves to the `schema-v0.2.0` tag
-once the Task Force ratifies the proposal. Output states only
-`meta.schema_version`, the document's one version identifier, and no
+the revision that reconciled the proposal with the Task Force's schema
+(`vpg_*` bounds, typed geometry, one identifier) and applied the Task Force
+review answers (`vng_max`, geometry for every located element), the review
+fixes, and the identity and consistency changes. The pin moves to the release
+tag the schema's `$id` names once the Task Force ratifies the proposal.
+Output states only `meta.schema_version`, which the schema requires as the
+document's one version identifier, and no
 `meta.$schema`: a URL per release made every patch release reject every
 earlier document, and consumers had to allow-list producer archive URLs
 ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
-Output records the schema's `$id` (its URL at the `schema-v0.2.0` tag), the
-proposal commit, the schema digest, and the retrieval permalink of the exact
+Output records the schema's `$id`, the proposal commit, the schema digest, and the retrieval permalink of the exact
 bytes under `meta.provenance.powerio_bmopf`.
 Existing provenance is preserved; a name collision uses a numbered producer
 entry. Reading the PowerIO archive URLs that 0.11 stamped, the dsopt-schema
 commit permalinks, and the version-directory identifiers remains supported
 without fetching remote data.
 
-The 0.2.0 schema ships in the Rust crate at `schemas/bmopf/`, in the Python
-package at `powerio/schemas/bmopf/`, and in each C/Julia library archive at
-`schemas/bmopf/`. The manifest records the exact bytes and upstream review
-references. The 0.1.0 schema is no longer shipped. Python can read them with `importlib.resources.files("powerio")`.
+The schema ships in the Rust crate at `schemas/bmopf/bmopf.schema.json`, in
+the Python package at `powerio/schemas/bmopf/`, and in each C/Julia library
+archive at `schemas/bmopf/`. The manifest records the exact bytes and upstream
+review references. Older drafts' schemas are not shipped. Python can read them with `importlib.resources.files("powerio")`.
 Upstream review changes do not alter an installed release's schema. A new
 schema interpretation requires a reviewed PowerIO release; a PowerIO release
 does not establish Task Force acceptance.
 
 ### Energy prices
 
-BMOPF 0.2.0 uses `energy_cost_rate` in $/kWh. Generator entries follow phase
+BMOPF uses `energy_cost_rate` in $/kWh. Generator entries follow phase
 order, as do voltage-source entries. Neutral terminals have no price entry. PowerIO retains source prices in `VoltageSource.energy_cost_rate` and
 in PowerIO IR. C and Julia expose `energy_cost_rate_per_kwh`; Python's
 voltage-source records expose `energy_cost_rate`.

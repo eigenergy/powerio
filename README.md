@@ -142,7 +142,7 @@ After deserialization, `emit` writes fresh output from the stored value.
 | OpenDSS `.dss` | `dss` | yes | yes |
 | PowerModelsDistribution ENGINEERING JSON | `pmd-json` | yes | yes |
 | PowerModelsDistribution MATHEMATICAL JSON | `pmd-math-json` | yes | yes |
-| BMOPF JSON | `bmopf-json` (alias `bmopf-json@0.2.0`) | 0.2.0; 0.1.0, 0.1.1 and the 0.11 draft read as 0.2.0 | 0.2.0 proposal |
+| BMOPF JSON | `bmopf-json` | yes; older drafts, PowerIO 0.11 output among them, read as BMOPF | the Task Force's proposed schema |
 | Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
 | PSS SINCAL project, `sincal` feature | `sincal-balanced`, `sincal-multiconductor` | yes, with an explicit profile | an unchanged source byte for byte; an experimental fresh writer in Rust |
 | Geographic layer `.geo.json` | `geo-json` | yes | yes |

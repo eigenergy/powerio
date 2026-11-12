@@ -5,9 +5,9 @@ in wire coordinates. It converts between OpenDSS `.dss`,
 PowerModelsDistribution ENGINEERING JSON, BMOPF JSON, the schema of the
 IEEE PES Task Force on Benchmarking Multiconductor OPF published at
 <https://github.com/distribution-system-opt/dsopt-schema>, and distribution
-CIM. It writes BMOPF 0.2.0, as proposed in dsopt-schema#2, and reads documents
-written against 0.1.0, 0.1.1 or the 0.2.0 draft PowerIO 0.11 wrote as 0.2.0,
-with one `READ.BMOPF.SCHEMA_LEGACY` warning naming the stated version. Distribution CIM
+CIM. It reads and writes one BMOPF, the schema proposed in dsopt-schema#2, and
+reads documents from older BMOPF drafts, including the early draft PowerIO 0.11
+wrote, as BMOPF with one `READ.BMOPF.SCHEMA_LEGACY` warning. Distribution CIM
 (`cim-dist`) is CIM100 RDF/XML, the iec61970cim17v40 and iec61968cim13v13
 release that GridAPPS-D and CIMHub exchange, read from one document or a
 directory and written as one document. PMD's MATHEMATICAL model

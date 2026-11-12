@@ -93,7 +93,7 @@ removes the raw keys from `extras`. Writers read `location`.
 | PyPSA | `buses.csv` `x`/`y` | geographic |
 | DOE GO Challenge 3 | bus `longitude`/`latitude` | geographic |
 | OpenDSS | `Buscoords` | unknown; a diagnostic identifies values within longitude and latitude bounds |
-| BMOPF JSON | schema 0.2.0 `bus[id].geo` Point and `line[id].geo` LineString with `meta.crs`; the `geo` of every other located element as a component location (a switch or transformer LineString reads as the midpoint of its end positions); on read also the `extras.geojson` FeatureCollection PowerIO 0.11 wrote and pre-schema `longitude`/`latitude` | declared CRS, geographic when omitted |
+| BMOPF JSON | the schema's `bus[id].geo` Point and `line[id].geo` LineString with `meta.crs`; the `geo` of every other located element as a component location (a switch or transformer LineString reads as the midpoint of its end positions); on read also the `extras.geojson` FeatureCollection PowerIO 0.11 wrote and pre-schema `longitude`/`latitude` | declared CRS, geographic when omitted |
 
 MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have no place for
 geometry. Emitting a located case to one of them reports the dropped locations,
@@ -206,7 +206,7 @@ Python has `parse_geo`, and both network types have `to_geo_layer()` and
 
 ## BMOPF geometry and schema validity
 
-BMOPF schema 0.2.0 declares typed geometry, following
+The BMOPF schema declares typed geometry, following
 [BMOPFTools #258](https://github.com/frederikgeth/BMOPFTools.jl/pull/258) and
 the shape PowerIO 0.11 already read: `bus[id].geo` is a GeoJSON Point,
 `line[id].geo` a GeoJSON LineString from `bus_from` through any bends to
