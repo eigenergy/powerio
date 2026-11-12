@@ -6419,6 +6419,63 @@ fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDi
 
 #[cfg(test)]
 mod tests {
+    fn operational_limit_store(
+        kind_property: &str,
+        value: &str,
+        direction: Option<&str>,
+    ) -> Store {
+        let mut type_props = vec![(
+            kind_property.into(),
+            PropValue::Ref("LimitKind.patl".into()),
+        )];
+        if let Some(direction) = direction {
+            type_props.push((
+                "OperationalLimitType.direction".into(),
+                PropValue::Ref(format!("OperationalLimitDirectionKind.{direction}")),
+            ));
+        }
+        let mut store = Store::default();
+        store
+            .merge(CimDocument {
+                cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
+                header: None,
+                objects: vec![
+                    CimObject {
+                        class: "OperationalLimitSet".into(),
+                        id: "set".into(),
+                        definition: true,
+                        props: vec![(
+                            "OperationalLimitSet.Equipment".into(),
+                            PropValue::Ref("line".into()),
+                        )],
+                    },
+                    CimObject {
+                        class: "OperationalLimitType".into(),
+                        id: "type".into(),
+                        definition: true,
+                        props: type_props,
+                    },
+                    CimObject {
+                        class: "CurrentLimit".into(),
+                        id: "limit".into(),
+                        definition: true,
+                        props: vec![
+                            (
+                                "OperationalLimit.OperationalLimitSet".into(),
+                                PropValue::Ref("set".into()),
+                            ),
+                            (
+                                "OperationalLimit.OperationalLimitType".into(),
+                                PropValue::Ref("type".into()),
+                            ),
+                            ("CurrentLimit.value".into(), PropValue::Text(value.into())),
+                        ],
+                    },
+                ],
+            })
+            .unwrap();
+        store
+    }
     use super::*;
 
     #[test]
@@ -7049,7 +7106,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)] // keeps the version/value parity matrix in one regression
     fn operational_limit_classification_keeps_zero_and_rejects_unsupported_bounds() {
         for (version, kind_property) in [
             (
@@ -7064,56 +7120,7 @@ mod tests {
                 ("-1", None, false),
                 ("100", Some("low"), false),
             ] {
-                let mut type_props = vec![(
-                    kind_property.into(),
-                    PropValue::Ref("LimitKind.patl".into()),
-                )];
-                if let Some(direction) = direction {
-                    type_props.push((
-                        "OperationalLimitType.direction".into(),
-                        PropValue::Ref(format!("OperationalLimitDirectionKind.{direction}")),
-                    ));
-                }
-                let mut store = Store::default();
-                store
-                    .merge(CimDocument {
-                        cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
-                        header: None,
-                        objects: vec![
-                            CimObject {
-                                class: "OperationalLimitSet".into(),
-                                id: "set".into(),
-                                definition: true,
-                                props: vec![(
-                                    "OperationalLimitSet.Equipment".into(),
-                                    PropValue::Ref("line".into()),
-                                )],
-                            },
-                            CimObject {
-                                class: "OperationalLimitType".into(),
-                                id: "type".into(),
-                                definition: true,
-                                props: type_props,
-                            },
-                            CimObject {
-                                class: "CurrentLimit".into(),
-                                id: "limit".into(),
-                                definition: true,
-                                props: vec![
-                                    (
-                                        "OperationalLimit.OperationalLimitSet".into(),
-                                        PropValue::Ref("set".into()),
-                                    ),
-                                    (
-                                        "OperationalLimit.OperationalLimitType".into(),
-                                        PropValue::Ref("type".into()),
-                                    ),
-                                    ("CurrentLimit.value".into(), PropValue::Text(value.into())),
-                                ],
-                            },
-                        ],
-                    })
-                    .unwrap();
+                let store = operational_limit_store(kind_property, value, direction);
 
                 let classification =
                     classify_operational_limit(&store, "limit", "CurrentLimit", version).unwrap();
