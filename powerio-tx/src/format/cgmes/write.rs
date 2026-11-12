@@ -7754,7 +7754,7 @@ mod operational_limit_tests {
             },
             &mut warnings,
         );
-        assert!(body.body.is_empty());
+        assert_eq!(body.body, "");
         assert_eq!(warnings.len(), 2);
     }
 }
