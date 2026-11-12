@@ -5590,7 +5590,7 @@ mod tests {
             ] {
                 assert!(
                     parsed.warnings.iter().any(|warning| warning.info.code
-                        == crate::diagnostics::codes::READ_CGMES_FIELD_UNMAPPED.code
+                        == crate::diagnostics::codes::READ_CGMES_RECORD_UNMAPPED.code
                         && warning.contains(expected)),
                     "{version:?}: {expected}"
                 );
@@ -5855,7 +5855,7 @@ mod tests {
         }));
         assert!(dropped.iter().any(|warning| {
             warning.contains("temporary limit `invalid temporary`")
-                && warning.contains("must be positive and finite")
+                && warning.contains("must be nonnegative and finite")
         }));
         let all_xml = output
             .files
