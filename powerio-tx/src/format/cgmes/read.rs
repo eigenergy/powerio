@@ -5709,13 +5709,7 @@ fn read_two_winding_transformer(
             // A current limit constrains its own terminal. Transformer ends
             // need not share a voltage or follow Terminal.sequenceNumber.
             if let Some(terminal) = store.refv(end, "TransformerEnd.Terminal") {
-                apply_limits_to_targets(
-                    store,
-                    &[terminal, end],
-                    &mut branch,
-                    kv,
-                    version,
-                )?;
+                apply_limits_to_targets(store, &[terminal, end], &mut branch, kv, version)?;
             }
         }
         Some(branch)
