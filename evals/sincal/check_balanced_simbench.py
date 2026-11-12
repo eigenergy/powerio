@@ -1,6 +1,6 @@
 """Validate actual Rust balanced-reader output against the publisher's paired CSV.
 
-Requires numpy and pandapower==3.2.2. Builds the reference network solely from
+Requires numpy and pandapower==3.5.6. Builds the reference network solely from
 CSV input (not stored results or the Rust parameters), runs a fresh pandapower
 pi-transformer calculation, and independently solves the Rust network's nodal
 constant-power equations. Historical result agreement is reported separately.

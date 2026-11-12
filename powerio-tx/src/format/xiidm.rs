@@ -15,6 +15,7 @@
     reason = "the streaming event and table mappers keep XIIDM fields beside their source records"
 )]
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use powerio_core::ComponentId;
@@ -8105,6 +8106,9 @@ struct XiidmWriteIndex<'a> {
     tie_calculation_branches: HashSet<ComponentId>,
     boundary_calculation_loads: HashSet<ComponentId>,
     boundary_calculation_generators: HashSet<ComponentId>,
+    // Track only connectables named by extensions. A terminal in the input
+    // is insufficient: its equipment or containing hierarchy may be omitted.
+    extension_targets: HashMap<ComponentId, Cell<bool>>,
 }
 
 impl<'a> XiidmWriteIndex<'a> {
@@ -8240,7 +8244,30 @@ impl<'a> XiidmWriteIndex<'a> {
             tie_calculation_branches: HashSet::new(),
             boundary_calculation_loads: HashSet::new(),
             boundary_calculation_generators: HashSet::new(),
+            extension_targets: HashMap::new(),
         };
+
+        for generator in network.generators() {
+            if generator.active_power_control.is_some() {
+                let id = generator.uid.as_deref().expect("prepared identity");
+                index
+                    .extension_targets
+                    .insert(component_id("generator", id)?, Cell::new(false));
+            }
+        }
+        for storage in network.storage() {
+            if storage.active_power_control.is_some() {
+                let id = storage.uid.as_deref().expect("prepared identity");
+                index
+                    .extension_targets
+                    .insert(component_id("storage", id)?, Cell::new(false));
+            }
+        }
+        if let Some(reference) = slack_terminal_equipment(network) {
+            index
+                .extension_targets
+                .insert(reference.equipment, Cell::new(false));
+        }
 
         for value in &detailed.bus_breaker_buses {
             index
@@ -8440,6 +8467,10 @@ impl<'a> XiidmWriteIndex<'a> {
 
     fn metadata(&self, component: &ComponentId) -> Option<&'a ComponentMetadata> {
         self.metadata.get(component).copied()
+    }
+
+    fn extension_target_was_emitted(&self, component: &ComponentId) -> bool {
+        self.extension_targets.get(component).is_some_and(Cell::get)
     }
 
     fn is_omitted(&self, component: &ComponentId, field: OmittedFieldName) -> bool {
@@ -8830,13 +8861,21 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
             &mut output,
             &mut diagnostics,
         );
-        write_active_power_control_extensions(network, &root_components, 2, &mut output)?;
+        write_active_power_control_extensions(
+            network,
+            &index,
+            &root_components,
+            2,
+            &mut output,
+            &mut diagnostics,
+        )?;
         write_slack_terminal_extension(
             slack_terminal.as_ref(),
             &index,
             &root_components,
             2,
             &mut output,
+            &mut diagnostics,
         );
         output.push_str("</iidm:network>\n");
         return Ok(TextEmission::new(output, diagnostics));
@@ -8875,8 +8914,22 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         &mut output,
         &mut diagnostics,
     );
-    write_active_power_control_extensions(network, &|_| true, 2, &mut output)?;
-    write_slack_terminal_extension(slack_terminal.as_ref(), &index, &|_| true, 2, &mut output);
+    write_active_power_control_extensions(
+        network,
+        &index,
+        &|_| true,
+        2,
+        &mut output,
+        &mut diagnostics,
+    )?;
+    write_slack_terminal_extension(
+        slack_terminal.as_ref(),
+        &index,
+        &|_| true,
+        2,
+        &mut output,
+        &mut diagnostics,
+    );
     output.push_str("</iidm:network>\n");
     Ok(TextEmission::new(output, diagnostics))
 }
@@ -9920,9 +9973,11 @@ fn write_subnetwork(
     );
     write_active_power_control_extensions(
         network,
+        index,
         &|component| members.contains(component),
         4,
         output,
+        diagnostics,
     )?;
     write_slack_terminal_extension(
         slack_terminal_equipment(network).as_ref(),
@@ -9930,6 +9985,7 @@ fn write_subnetwork(
         &|component| members.contains(component),
         4,
         output,
+        diagnostics,
     );
     output.push_str("  </iidm:network>\n");
     Ok(())
@@ -9937,9 +9993,11 @@ fn write_subnetwork(
 
 fn write_active_power_control_extensions(
     network: &BalancedNetwork,
+    index: &XiidmWriteIndex<'_>,
     included: &dyn Fn(&ComponentId) -> bool,
     indent: usize,
     output: &mut String,
+    diagnostics: &mut Diagnostics,
 ) -> Result<()> {
     let parent_indent = " ".repeat(indent);
     let child_indent = " ".repeat(indent + 2);
@@ -9950,6 +10008,9 @@ fn write_active_power_control_extensions(
         let id = generator.uid.as_deref().unwrap_or("generator");
         let component = component_id("generator", id).expect("prepared identity");
         if included(&component) {
+            if !extension_target_is_emitted(index, &component, "activePowerControl", diagnostics) {
+                continue;
+            }
             validate_active_power_control_for_emission(
                 id,
                 control,
@@ -9972,6 +10033,9 @@ fn write_active_power_control_extensions(
         let id = storage.uid.as_deref().unwrap_or("battery");
         let component = component_id("storage", id).expect("prepared identity");
         if included(&component) {
+            if !extension_target_is_emitted(index, &component, "activePowerControl", diagnostics) {
+                continue;
+            }
             validate_active_power_control_for_emission(
                 id,
                 control,
@@ -10087,10 +10151,14 @@ fn write_slack_terminal_extension(
     included: &dyn Fn(&ComponentId) -> bool,
     indent: usize,
     output: &mut String,
+    diagnostics: &mut Diagnostics,
 ) {
     let Some(reference) = slack_terminal.filter(|reference| included(&reference.equipment)) else {
         return;
     };
+    if !extension_target_is_emitted(index, &reference.equipment, "slackTerminal", diagnostics) {
+        return;
+    }
     let Some(terminal) = index.terminal(&reference.equipment, reference.terminal) else {
         return;
     };
@@ -10108,6 +10176,22 @@ fn write_slack_terminal_extension(
         xml(terminal.voltage_level.local_id()),
         xml(reference.equipment.local_id()),
     ));
+}
+
+fn extension_target_is_emitted(
+    index: &XiidmWriteIndex<'_>,
+    component: &ComponentId,
+    extension: &str,
+    diagnostics: &mut Diagnostics,
+) -> bool {
+    if index.extension_target_was_emitted(component) {
+        return true;
+    }
+    diagnostics.push(
+        &codes::EMIT_XIIDM.field_dropped,
+        format!("`{component}` was not written; its {extension} extension cannot reference omitted equipment"),
+    );
+    false
 }
 
 fn validate_active_power_control_for_emission(
@@ -13742,6 +13826,11 @@ fn equipment_terminals_connect(
         .map(|side| side.to_string())
         .collect::<Vec<_>>();
     if unplaced.is_empty() {
+        // This guard is called by the equipment writers after containment
+        // filtering. Only records that reach their writer may be referenced.
+        if let Some(emitted) = index.extension_targets.get(equipment) {
+            emitted.set(true);
+        }
         return true;
     }
     diagnostics.push(

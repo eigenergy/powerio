@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The validation oracles and the `bench` extra use pandapower 3.5.6 instead
+  of 3.2.2.
+- XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
+  extension when its target equipment cannot be written, and report
+  the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
+  loss report.
+  Partial substation data could previously leave an extension referring to
+  absent equipment, making the output invalid (#837).
 - Python table getters read only the requested table. Distribution tables
   remain accessible when a network carries component coordinates; the tagged
   IR wrapper no longer causes a missing-field error.
