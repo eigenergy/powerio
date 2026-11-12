@@ -10,10 +10,10 @@
 # still supported by the package, but PyPSA 1.x and some oracle pins no longer
 # install there.
 # Keep this in sync with the `bench` optional dependency in pyproject.toml.
-# pandapower holds at 3.2.2 because the Y_bus cross-check has not run against
-# 3.4 or later, which pass matpowercaseframes a load engine object that only
-# the 2.x line accepts.
-pandapower==3.2.2      # validate_pandapower.py: parse + Y_bus cross-check
+# pandapower is pinned exactly because the oracles call private pandapower
+# functions. Rerun every pandapower oracle before a bump. Since 3.4 the
+# second argument of `_m2ppc` is a load engine.
+pandapower==3.5.6      # validate_pandapower*.py: parse, Y_bus and converter oracles
 matpowercaseframes<3   # CaseFrames reads the MATPOWER cases; 2.1 reads every reference case
 gridx-egret>=0.6.2       # validate_egret.py / validate_matrix.py: the egret oracle
 pypsa>=1.0             # validate_pypsa.py: PyPSA CSV folder import oracle

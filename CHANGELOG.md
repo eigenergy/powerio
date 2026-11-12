@@ -2,46 +2,6 @@
 
 ## Unreleased
 
-- Use numeric zero for a zero flow bound and positive infinity for no bound
-  across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
-  conventions at import/export and preserve 0.11 IR meanings on read (#841).
-  Sienna and PowerSystems JSON state an unlimited required rating as
-  PowerSystems' `INFINITE_BOUND` and read it back as unlimited.
-
-- `reduce_passthrough_buses` keeps the sections' named rating sets on the
-  equivalent branch instead of dropping them: a set both sections state takes
-  the smaller rating, and an invalid one stays invalid, so validation still
-  refuses it after the fold.
-
-- Python `Collection.parse` raises `TypeError` when `sincal_multiconductor` or
-  `sincal_balanced` is given the wrong options type, instead of reading the
-  wrong family's options or failing with an `AttributeError` (#845, by
-  @BurhanAbdullah).
-
-- Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
-
-- Correct the contributor IR compatibility guidance and canonical HVDC format
-  descriptions.
-- Reuse a recognized CIM namespace during CGMES parsing with a bounded
-  per-document cache, preserving namespace rebinding, mixed-version checks,
-  and acceptance of long namespace URIs.
-- Parse explicitly selected SINCAL MDB inputs with acquired-table companions
-  through collections, preserving root confinement and work budgets.
-- XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
-  extension when its target equipment cannot be written, and report
-  the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
-  loss report.
-  Partial substation data could previously leave an extension referring to
-  absent equipment, making the output invalid (#837).
-- Piecewise costs read from `pwl_cost` start at the first power times the
-  first marginal slope, matching pandapower's native objective. Previously
-  PowerIO started every curve at zero, shifting costs whose first power was
-  nonzero. Emission now diagnoses an objective shift by comparing with that
-  native anchor, rather than assuming every nonzero first cost is lost.
-- Python table getters read only the requested table. Distribution tables
-  remain accessible when a network carries component coordinates; the tagged
-  IR wrapper no longer causes a missing-field error.
-
 ## 0.12.0-rc.1
 
 The release candidate for PowerIO 0.12, which starts the 0.12.x release
@@ -59,10 +19,20 @@ action.
   conflict errors, and release temporary growth capacity before constructing
   the electrical network. Source replay, diagnostics and canonical output are
   unchanged.
+- Reuse a recognized CIM namespace during CGMES parsing with a bounded
+  per-document cache, preserving namespace rebinding, mixed-version checks,
+  and acceptance of long namespace URIs.
 - Build the Python balanced network's derived analysis index on its first
   topology or matrix query. Counts and metadata no longer allocate that index;
   subsequent analysis queries reuse it. Updated and derived handles retain
   their own immutable network and index state.
+- Python table getters read only the requested table. Distribution tables
+  remain accessible when a network carries component coordinates; the tagged
+  IR wrapper no longer causes a missing-field error.
+- `reduce_passthrough_buses` keeps the sections' named rating sets on the
+  equivalent branch instead of dropping them: a set both sections state takes
+  the smaller rating, and an invalid one stays invalid, so validation still
+  refuses it after the fold.
 - Combine Exact and Lossless as Preserved in the conversion-matrix overview,
   explain representation changes, adjustments, omitted data and incomplete
   checks, and retain the original JSON grades and byte-replay evidence.
@@ -135,6 +105,8 @@ action.
   `VoltageSourceConverter::reactive_power_setpoint_mvar` and its reactive
   limits use load convention at the point of common coupling (PowSybl
   `voltageSourceConverter`, CGMES `VsConverter.targetQpcc`).
+- Correct the contributor IR compatibility guidance and canonical HVDC format
+  descriptions.
 
 **Breaking changes**
 
@@ -183,6 +155,16 @@ action.
   `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
   in-service branch over dense bus indices; build a graph with any library
   from it.
+- Use numeric zero for a zero flow bound and positive infinity for no bound
+  across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
+  conventions at import/export and preserve 0.11 IR meanings on read (#841).
+  Sienna and PowerSystems JSON state an unlimited required rating as
+  PowerSystems' `INFINITE_BOUND` and read it back as unlimited. See
+  [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings).
+- Python table rows state a nonfinite value as a float in every table. The
+  `hvdc`, `storage`, `static_var_compensators`, `areas`, and distribution
+  rows carried the IR's `"Infinity"` and `"-Infinity"` strings in 0.11, while
+  branch and winding ratings were already floats.
 - The Rust MSRV is 1.89, as in 0.11.10.
 
 **Collections**
@@ -210,6 +192,12 @@ action.
   their format-specific namespace, diagnostic, and source replay policies.
 - Add `powerio-archive`: bounded ZIP indexing and verified member reads with
   explicit limits and namespace checks, as shared infrastructure for #774.
+- Parse explicitly selected SINCAL MDB inputs with acquired-table companions
+  through collections, preserving root confinement and work budgets.
+- Python `Collection.parse` raises `TypeError` when `sincal_multiconductor` or
+  `sincal_balanced` is given the wrong options type, instead of reading the
+  wrong family's options or failing with an `AttributeError` (#845, by
+  @BurhanAbdullah).
 
 **Distribution**
 
@@ -240,6 +228,7 @@ action.
   drawing first and reporting a drawing that places nothing. A CIM16 document
   set without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
   and `PSRType` are reported as context.
+- Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
 
 **BMOPF**
 
@@ -337,6 +326,19 @@ action.
   every branch has a solution.
 - The PMD ENGINEERING writer writes back a generator control mode the source
   stated instead of always writing `FREQUENCYDROOP`.
+- The validation oracles and the `bench` extra use pandapower 3.5.6 instead
+  of 3.2.2.
+- XIIDM and JIIDM output omit an `activePowerControl` or `slackTerminal`
+  extension when its target equipment cannot be written, and report
+  the format's `FIELD_DROPPED` diagnostic alongside the equipment's existing
+  loss report.
+  Partial substation data could previously leave an extension referring to
+  absent equipment, making the output invalid (#837).
+- Piecewise costs read from `pwl_cost` start at the first power times the
+  first marginal slope, matching pandapower's native objective. Previously
+  PowerIO started every curve at zero, shifting costs whose first power was
+  nonzero. Emission now diagnoses an objective shift by comparing with that
+  native anchor, rather than assuming every nonzero first cost is lost.
 - With these and the format fixes above, the conversion matrix has 25 more
   lossless cells than 0.11, 26 fewer dropped ones, and no cell is worse.
 
@@ -372,7 +374,8 @@ action.
 - @MohamedNumair authored the CIM16/layout and OpenDSS safe-name changes
   (#768, #770), fixed PyPSA HDF5 metadata handling, and contributed the
   convention and retained-document reviews in #821.
-- @BurhanAbdullah authored the absent OpenDSS ampacity correction (#790).
+- @BurhanAbdullah authored the absent OpenDSS ampacity correction (#790)
+  and the collection SINCAL option type check (#845).
 - @qian-harvard preserved foreign PowerModels/Egret extension-key values and
   strengthened refusal of executable HDF5 attribute metadata in #821.
 - @samtalki integrated the release, compatibility migration, adapters, and

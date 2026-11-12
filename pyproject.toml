@@ -37,11 +37,10 @@ graph = ["networkx>=2.6"]
 all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]
 # Benchmark and validation oracles. These mirror evals/validation/requirements.txt.
 bench = [
-    # pandapower holds at 3.2.2 because the Y_bus cross-check has not run
-    # against 3.4 or later, which pass matpowercaseframes a load engine
-    # object that only the 2.x line accepts. matpowercaseframes 2.1 reads
-    # every reference case, so the 2.x line is allowed.
-    "pandapower==3.2.2",
+    # pandapower is pinned exactly because the oracles call private
+    # pandapower functions. matpowercaseframes 2.1 reads every reference
+    # case, so the 2.x line is allowed.
+    "pandapower==3.5.6",
     "matpowercaseframes<3",
     "gridx-egret>=0.6",
     "pypsa>=1.0",

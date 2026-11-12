@@ -5,6 +5,7 @@ tests need the optional extras: `pip install '.[all]'`.
 """
 
 import ast
+import copy
 import importlib
 import io
 import json
@@ -189,11 +190,16 @@ def test_preferred_balanced_names_and_complete_tables():
 def test_hvdc_table_preserves_nonfinite_limits_and_independent_rows():
     module = powerio.parse(DATA / "t_case9_dcline.m")
     stored = json.loads(_emit_module(module))
-    expected = stored["value"]["data"]["hvdc"]
-    expected[0]["qminf"] = "-Infinity"
-    expected[0]["qmaxf"] = "Infinity"
+    row = stored["value"]["data"]["hvdc"][0]
+    row.update(qminf="-Infinity", qmaxf="Infinity", uid="Infinity")
+    # A text field that reads "Infinity" stays text.
+    row["extras"]["note"] = "Infinity"
+    expected = copy.deepcopy(stored["value"]["data"]["hvdc"])
+    expected[0]["qminf"] = float("-inf")
+    expected[0]["qmaxf"] = float("inf")
     value = _parse_module(json.dumps(stored)).value
     assert value.hvdc == expected
+    assert value.hvdc[0]["uid"] == value.hvdc[0]["extras"]["note"] == "Infinity"
     rows = value.hvdc
     rows[0]["qminf"] = 0
     assert value.hvdc == expected
