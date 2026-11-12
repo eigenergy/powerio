@@ -9,10 +9,7 @@ mod helpers;
 use helpers::{emit_bmopf_json, emit_dss, parse_bmopf_str, parse_dss_file, parse_dss_str};
 
 fn schema_validator() -> jsonschema::Validator {
-    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("schemas/bmopf")
-        .join(powerio_dist::BMOPF_SCHEMA_VERSION)
-        .join("bmopf.schema.json");
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/bmopf/bmopf.schema.json");
     let schema: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(schema_path).unwrap()).unwrap();
     jsonschema::validator_for(&schema).expect("vendored schema compiles")

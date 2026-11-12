@@ -168,7 +168,7 @@ fn canonical_key(name: &str) -> String {
 const DISTRIBUTION_ELEMENT_TABLES: &[&str] = &[
     "capacitor",
     // `control_profile` and `ibr` are typed dispatch tables of the reader,
-    // though schema 0.1.0 moved them under `extras`: a pre-0.1.0 document
+    // though the first draft moved them under `extras`: a pre-draft document
     // still declares them at the top level, and what the reader accepts the
     // classifier must identify.
     "control_profile",
@@ -658,7 +658,7 @@ fn echo_text(
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
     // PowerIO writes one BMOPF version: a document stating an earlier one,
-    // or none, is written fresh as 0.2.0 rather than echoed.
+    // or none, is written fresh rather than echoed.
     if target == DistTargetFormat::BmopfJson && !crate::bmopf::__states_written_version(text) {
         return None;
     }
@@ -863,13 +863,13 @@ mod tests {
         );
         for doc in [
             r#"{"bus": {}, "voltage_source": {}}"#,
-            // A pre-0.1.0 feeder fragment: no `voltage_source`, but the
+            // A pre-draft feeder fragment: no `voltage_source`, but the
             // reader accepts it, so the classifier must too.
             r#"{"bus": {}, "line": {}, "linecode": {}}"#,
             r#"{"bus": {}, "transformer": {}}"#,
             r#"{"bus": {}, "capacitor": {}}"#,
             r#"{"bus": {}, "generator": {}}"#,
-            // The pre-0.1.0 top-level spellings of the tables 0.1.0 moved
+            // The pre-draft top-level spellings of the tables the first draft moved
             // under `extras`; the reader dispatches both.
             r#"{"bus": {}, "ibr": {}}"#,
             r#"{"bus": {}, "control_profile": {}}"#,

@@ -4,9 +4,9 @@ use crate::{collect::Diagnostics, diagnostics::codes as C, model::DistBus};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-/// Checks the semantic rules of BMOPF 0.2.x conformance (dsopt-schema
+/// Checks the semantic rules of BMOPF conformance (dsopt-schema
 /// `docs/conformance.md`) and the structural constraints the reader relies
-/// on. `current` says the document states the 0.2 line; a document written
+/// on. `current` says the document states the current schema; a document written
 /// against an earlier version keeps that version's line `s_max` reading.
 pub(super) fn report(doc: &Map<String, Value>, diagnostics: &mut Diagnostics, current: bool) {
     let mut check = Check {
@@ -50,15 +50,15 @@ pub(super) fn report(doc: &Map<String, Value>, diagnostics: &mut Diagnostics, cu
             }
             let phases = phase_count(&names, doc.get("terminal_conventions"));
             check.bus_terminal_rules(bus, &names, phases, &path);
-            // `vpg_*` is the phase to ground bound since schema 0.1.1 and the
-            // only spelling 0.2.0 accepts; `v_*` is the 0.1.0 spelling.
+            // `vpg_*` is the phase to ground bound since the revised draft and the
+            // only spelling the schema accepts; `v_*` is the first draft's spelling.
             for key in ["vpg_min", "vpg_max", "v_min", "v_max", "vpn_min", "vpn_max"] {
                 check.dimension(bus, key, &[phases], &path);
             }
             for key in ["vpp_min", "vpp_max"] {
                 check.dimension(bus, key, &[phases * phases.saturating_sub(1) / 2], &path);
             }
-            // Renamed bounds: `vpg_*` since schema 0.1.1, `vng_max` since 0.2.0.
+            // Renamed bounds: `vpg_*` since the revised draft, `vng_max` in the current schema.
             for (current, legacy) in [
                 ("vpg_min", "v_min"),
                 ("vpg_max", "v_max"),
@@ -151,7 +151,7 @@ fn phase_count(names: &[&str], roles: Option<&Value>) -> usize {
 struct Check<'a> {
     doc: &'a Map<String, Value>,
     diagnostics: &'a mut Diagnostics,
-    /// The document states the 0.2 line.
+    /// The document states the current schema.
     current: bool,
 }
 
@@ -268,7 +268,7 @@ impl Check<'_> {
         self.dimension(value, "terminal_map_to", &[from.len()], path);
         self.matrices(record, from.len(), path);
         self.dimension(value, "i_max", &[from.len()], path);
-        // One entry per conductor in 0.2.x; 0.1.1's line text, and so an
+        // One entry per conductor in the schema; the revised draft's line text, and so an
         // earlier document, said one per phase.
         let phases = phase_count(from, self.doc.get("terminal_conventions"));
         let s_max: &[usize] = if self.current {
@@ -299,7 +299,7 @@ impl Check<'_> {
         }
     }
 
-    /// Strictly positive values and the field combinations schema 0.2.0
+    /// Strictly positive values and the field combinations the schema
     /// requires: ratings, nominal voltages, taps and ratios, wire radius and
     /// GMR, and frequencies are positive; a wire states a resistance and a
     /// radius or GMR; a voltage-dependent load states `v_nom`, and a ZIP or
@@ -500,7 +500,7 @@ impl Check<'_> {
             }
         }
         // An inverter's DC coupling names its DC terminals in
-        // `dc_terminal_map`, which schema 0.2.0 requires beside `dc_bus`; its
+        // `dc_terminal_map`, which the schema requires beside `dc_bus`; its
         // `terminal_map` names AC terminals, so it cannot stand in.
         let inverter = path.starts_with("ibr.");
         if inverter && record.contains_key("dc_bus") && !record.contains_key("dc_terminal_map") {

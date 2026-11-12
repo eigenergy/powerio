@@ -2338,7 +2338,7 @@ fn versions_json() -> PyResult<String> {
 }
 
 fn powerio_dist_bmopf_schema() -> &'static str {
-    powerio_dist::BMOPF_SCHEMA_VERSION
+    powerio_dist::BMOPF_SCHEMA_ID
 }
 
 #[pyclass(name = "ComponentId", module = "powerio._powerio", frozen, eq, hash)]

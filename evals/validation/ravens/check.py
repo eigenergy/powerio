@@ -17,10 +17,10 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[3]
 # The archived ENWL document already fails PowerIO's source semantic check.
 # Require this precise refusal instead of describing it as valid RAVENS output.
-# It states BMOPF 0.1.0, which PowerIO reads as 0.2.0 with one warning.
+# It is an older BMOPF draft, which PowerIO reads as BMOPF with one warning.
 SOURCE_REFUSALS = {
     "tests/data/dist/bmopf/example_enwl_n1_f2.json": [
-        "READ.BMOPF.SCHEMA_LEGACY: `meta.$schema` names BMOPF 0.1.0; the document is read as BMOPF 0.2.0, and a BMOPF write states 0.2.0",
+        "READ.BMOPF.SCHEMA_LEGACY: the document is an older BMOPF draft; it is read as BMOPF, and a BMOPF write states the current schema",
         "READ.BMOPF.SEMANTIC_INVALID: bus.sourcebus: a perfectly grounded terminal is absent from terminal_names",
     ],
 }

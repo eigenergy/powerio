@@ -741,10 +741,9 @@ enum FormatArg {
     /// PowerModelsDistribution MATHEMATICAL JSON (parse and emit).
     #[value(name = "pmd-math-json", alias = "pmd-math", alias = "mathematical")]
     PmdMathJson,
-    /// IEEE BMOPF JSON distribution case (parse and emit). Output is BMOPF
-    /// 0.2.0; a document written against an earlier version reads as 0.2.0.
-    /// `bmopf-json@0.2.0` names the same version.
-    #[value(name = "bmopf-json", alias = "bmopf", alias = "bmopf-json@0.2.0")]
+    /// IEEE BMOPF JSON distribution case (parse and emit). A document from an
+    /// older BMOPF draft reads as BMOPF.
+    #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
     /// Distribution CIM, CIM100 RDF/XML (parse and emit; parse also reads a
     /// directory of documents).

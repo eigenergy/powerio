@@ -224,7 +224,7 @@ pub struct McOpfCoil {
     pub reactive_slope: Option<f64>,
     /// Bounded `[a,b]` for fixed PF: `a * P + b * Q = 0`, where
     /// `a = sqrt((1 - |pf|) * (1 + |pf|))` and `b = -pf`. PF follows OpenDSS
-    /// and BMOPF 0.2.0 by sign: `pf > 0` gives `Q/P = +tan(acos |pf|)`, Q with
+    /// and BMOPF by sign: `pf > 0` gives `Q/P = +tan(acos |pf|)`, Q with
     /// the same sign as P; `pf < 0` the opposite sign.
     /// Coefficients retain tiny nonzero PF without trigonometric cancellation.
     #[serde(default, skip_serializing_if = "Option::is_none")]

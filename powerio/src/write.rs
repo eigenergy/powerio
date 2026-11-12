@@ -1072,29 +1072,21 @@ fn emit_solution(
     }
 }
 
-/// The one BMOPF token a `bmopf-json@<version>` request names. PowerIO writes
-/// only BMOPF 0.2.0, so `bmopf-json@0.2.0` is an alias of `bmopf-json` and
-/// any other version is refused, naming the version that is written.
-fn bmopf_version_alias(format: &str) -> Result<Option<&'static str>, Error> {
-    let Some(version) = format.strip_prefix("bmopf-json@") else {
-        return Ok(None);
-    };
-    if version == powerio_dist::BMOPF_SCHEMA_VERSION {
-        return Ok(Some("bmopf-json"));
+/// Refuses a `bmopf-json@<version>` request. PowerIO writes one BMOPF, as
+/// `bmopf-json`, so a token naming a version selects nothing.
+fn refuse_bmopf_version_suffix(format: &str) -> Result<(), Error> {
+    if format.starts_with("bmopf-json@") {
+        return Err(Error::new(
+            &codes::REQUEST_EMIT_UNKNOWN_FORMAT,
+            format!("{format} names a BMOPF version; PowerIO writes one BMOPF, as `bmopf-json`"),
+        ));
     }
-    Err(Error::new(
-        &codes::REQUEST_EMIT_UNKNOWN_FORMAT,
-        format!(
-            "{format} names BMOPF schema {version}, which PowerIO does not write; PowerIO writes \
-             only BMOPF {}, as `bmopf-json`",
-            powerio_dist::BMOPF_SCHEMA_VERSION
-        ),
-    ))
+    Ok(())
 }
 
 /// Whether retained BMOPF source bytes may be echoed: only a document that
-/// states the one version PowerIO writes. A document stating an earlier
-/// version, or none, is written fresh as 0.2.0 instead.
+/// states the schema PowerIO writes. A document from an older draft, or
+/// stating none, is written fresh instead.
 fn bmopf_echo_allowed(format: &str, bytes: &[u8]) -> bool {
     powerio_dist::parse_dist_target_format(format)
         != Some(powerio_dist::DistTargetFormat::BmopfJson)
@@ -1197,9 +1189,7 @@ fn emit_dynamic(
         #[cfg(not(feature = "sincal"))]
         return Err(crate::sincal_feature_disabled());
     }
-    if let Some(alias) = bmopf_version_alias(format)? {
-        return emit_dynamic(module, alias, destination);
-    }
+    refuse_bmopf_version_suffix(format)?;
     if let Some(artifacts) = echo_retained_directory(module, format)? {
         return destination.__commit_artifacts(
             true,

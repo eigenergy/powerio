@@ -2,14 +2,12 @@
   "format": 1,
   "schemas": [
     {
-      "version": "0.2.0",
-      "path": "0.2.0/bmopf.schema.json",
+      "path": "bmopf.schema.json",
       "status": "proposal",
       "sha256": "9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc",
       "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/schema-v0.2.0/schema/bmopf/0.2.0/bmopf.schema.json",
       "upstream_repository": "distribution-system-opt/dsopt-schema",
       "upstream_commit": "6796394f6a4326b61c7fcf5ab5c0d55181b67d25",
-      "upstream_path": "schema/bmopf/0.2.0/bmopf.schema.json",
       "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/2",
       "license": "CC-BY-4.0"
     }

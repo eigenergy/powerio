@@ -45,14 +45,14 @@ def main():
         check_package(Path(name))
     manifest = json.loads((ARCHIVE / "manifest.json").read_text())
     assert manifest["format"] == 1
-    # PowerIO writes one BMOPF version and ships only its schema.
-    assert [entry["version"] for entry in manifest["schemas"]] == ["0.2.0"]
+    # PowerIO writes one BMOPF schema and ships only it.
+    assert len(manifest["schemas"]) == 1
     for entry in manifest["schemas"]:
         data = (ARCHIVE / entry["path"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == entry["sha256"], entry["path"]
         assert json.loads(data)["$id"] == entry["schema_id"], entry["path"]
         assert entry["license"] == "CC-BY-4.0"
-    # The historical 0.1.0 draft schema stays beside the examples as the test
+    # The historical first draft schema stays beside the examples as the test
     # oracle for legacy input; its bytes are the ones tests/data/dist/README.md
     # records.
     historical = (ROOT / "tests/data/dist/bmopf/draft_bmopf_schema.json").read_bytes()

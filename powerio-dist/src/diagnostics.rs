@@ -256,23 +256,24 @@ pub mod codes {
             "a BMOPF field outside the schema survives in extras or untyped";
         READ_BMOPF_SOURCE_MALFORMED = "READ.BMOPF.SOURCE_MALFORMED", Warning,
             "a BMOPF value is not the shape its key declares";
-        /// The document was written against an earlier schema version and
-        /// was read as 0.2.0, the one version PowerIO writes. Reported once
-        /// per document: when it names 0.1.0, 0.1.1, the `bmopf-report`
-        /// drafts, or the 0.2.0 draft PowerIO 0.11 wrote, and when a document
-        /// stating a 0.2.x release uses an earlier spelling: `meta.$schema`,
-        /// the bus bounds `v_min`/`v_max`/`vn_max`, the regulators'
-        /// `tap_ratio`, `cost` on a source or inverter, `DSTATCOM`,
-        /// `VA_FRACTION`, or a lowercase enum value.
+        /// The document is an older BMOPF draft and was read as BMOPF, the one
+        /// schema PowerIO writes. Reported once per document: when it names
+        /// an older draft (including the `bmopf-report` drafts and the early
+        /// draft PowerIO 0.11 wrote), and when a document stating the current
+        /// schema uses an earlier spelling: `meta.$schema`, the bus bounds
+        /// `v_min`/`v_max`/`vn_max`, the regulators' `tap_ratio`, `cost` on a
+        /// source or inverter, `DSTATCOM`, `VA_FRACTION`, or a lowercase enum
+        /// value.
         READ_BMOPF_SCHEMA_LEGACY = "READ.BMOPF.SCHEMA_LEGACY", Warning,
-            "a BMOPF document written against an earlier schema version was read as 0.2.0";
+            "an older BMOPF draft was read as BMOPF";
         /// The document states neither `meta.schema_version` nor an earlier
         /// `meta.$schema`, so the release it was written against is unknown;
-        /// it is read as 0.2.0.
+        /// it is read as BMOPF.
         READ_BMOPF_SCHEMA_ABSENT = "READ.BMOPF.SCHEMA_ABSENT", Warning,
             "a BMOPF document states no schema, so its version is unknown";
-        /// The document states a `meta.schema_version` outside the 0.2 line and
-        /// before it, or a `meta.$schema` that names no known version.
+        /// The document states a `meta.schema_version` that names no BMOPF
+        /// release PowerIO knows, or a `meta.$schema` that names no known
+        /// schema.
         READ_BMOPF_SCHEMA_UNKNOWN = "READ.BMOPF.SCHEMA_UNKNOWN", Warning,
             "a BMOPF document states a schema naming no known version";
         READ_BMOPF_SEMANTIC_INVALID = "READ.BMOPF.SEMANTIC_INVALID", Error,

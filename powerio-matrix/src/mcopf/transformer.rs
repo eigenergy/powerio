@@ -533,7 +533,7 @@ fn prepare_regulator(
         return Err(invalid(&t.name, "regulator must have two single coils"));
     }
     let tap = t.windings[1].tap;
-    // `tap_ratio` is V_to/V_from for both ANSI types (BMOPF 0.2.0);
+    // `tap_ratio` is V_to/V_from for both ANSI types (BMOPF);
     // `regulator_type` records the A/B hardware and does not change it.
     if !matches!(
         t.extras

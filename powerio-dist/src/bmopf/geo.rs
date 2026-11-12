@@ -1,5 +1,5 @@
 //! BMOPF element geometry: the typed `bus.*.geo` Point, `line.*.geo`
-//! LineString and `meta.crs` slots of schema 0.2.0, which PowerIO writes, the
+//! LineString and `meta.crs` slots of the schema, which PowerIO writes, the
 //! `geo` of every other located element, which PowerIO maps to its component
 //! locations, and the GeoJSON FeatureCollection under `extras.geojson` that
 //! PowerIO 0.11 wrote, which the reader still accepts.
@@ -135,7 +135,7 @@ pub(super) fn read(
         );
         retain_collection(net, collection);
     }
-    // The typed `geo` fields are the schema 0.2.0 form and win; the
+    // The typed `geo` fields are the the schema form and win; the
     // `extras.geojson` layer is read only when no element carries one.
     let embedded = has_embedded_geometry(doc);
     let geographic = matches!(geo_meta.space, CoordinateSpace::Geographic { .. });

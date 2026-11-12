@@ -55,7 +55,7 @@ pub(super) fn prepare(
         let qmax = bounds(&inv.name, inv.q_max.as_ref(), n, sb)?;
         let cost = inverter_cost(inv, n, sb)?;
         let (profile, pf) = control_profile(ctx, inv, config)?;
-        // pf > 0: Q on the same side as P (OpenDSS, BMOPF 0.2.0); Q/P = a/pf.
+        // pf > 0: Q on the same side as P (OpenDSS, BMOPF); Q/P = a/pf.
         let power_factor_coefficients =
             pf.map(|v| [((1.0 - v.abs()) * (1.0 + v.abs())).sqrt(), -v]);
         let slope = power_factor_coefficients
@@ -304,7 +304,7 @@ fn control_profile<'a>(
     Ok((profile, pf))
 }
 
-/// The inverter's per-phase price: `energy_cost_rate`, the BMOPF 0.2.0 field,
+/// The inverter's per-phase price: `energy_cost_rate`, the BMOPF field,
 /// or the earlier `cost` spelling when only that is stated.
 fn inverter_cost(inv: &DistIbr, n: usize, sb: f64) -> Result<Vec<Option<f64>>> {
     let cost: Option<Vec<f64>> = inv

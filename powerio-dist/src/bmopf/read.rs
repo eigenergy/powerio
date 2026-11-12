@@ -11,8 +11,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use super::BmopfSchemaVersion;
-use super::profile::LegacySchema;
+use super::profile::{self, OlderDraft};
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -47,14 +46,14 @@ pub(crate) fn parse_bmopf_collecting(
     });
     report_non_numeric_fields(&doc, diags);
     let stated = report_schema_version(&doc, diags);
-    let schema_version = stated.current;
-    super::validate::report(&doc, diags, schema_version.is_some());
+    let states_current = stated.current;
+    super::validate::report(&doc, diags, states_current);
     super::capacitor::lower(&mut doc, diags)?;
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
         frequency_stated: false,
-        schema_version,
+        states_current,
         legacy_spellings: std::collections::BTreeMap::new(),
     };
     if stated.schema_key {
@@ -73,18 +72,19 @@ pub(crate) fn parse_bmopf_collecting(
 
 /// What a document's `meta` states about the release it was written against.
 struct StatedVersion {
-    /// The 0.2 line, when the document belongs to it.
-    current: Option<BmopfSchemaVersion>,
-    /// A 0.2.x document that also carries the earlier `meta.$schema` key.
+    /// Whether the document states the schema PowerIO writes.
+    current: bool,
+    /// A current document that also carries the earlier `meta.$schema` key.
     schema_key: bool,
 }
 
 /// Identify the release a document was written against and reject
-/// contradictory declarations. A 0.2.x document states `meta.schema_version`;
-/// a document written before 0.2.0 states only `meta.$schema`, which is
-/// classified as 0.1.x defined it. Every document is read as the one version
-/// PowerIO writes; one stating an earlier release is read through the legacy
-/// paths and reported once with `READ.BMOPF.SCHEMA_LEGACY`.
+/// contradictory declarations. A current document states
+/// `meta.schema_version`; a document from an older draft states only
+/// `meta.$schema`, which is classified as those drafts defined it. Every
+/// document is read as the one schema PowerIO writes; one from an older draft
+/// is read through the legacy paths and reported once with
+/// `READ.BMOPF.SCHEMA_LEGACY`.
 fn report_schema_version(
     doc: &Map<String, Value>,
     diags: &mut crate::collect::Diagnostics,
@@ -92,69 +92,65 @@ fn report_schema_version(
     let meta = doc.get("meta").and_then(Value::as_object);
     let release = meta.and_then(|m| m.get("schema_version"));
     let stated = meta.and_then(|m| m.get("$schema")).and_then(Value::as_str);
-    let by_id = stated.and_then(BmopfSchemaVersion::from_schema_id);
-    let target = BmopfSchemaVersion::default().version();
-    let legacy_found = |legacy: LegacySchema, diags: &mut crate::collect::Diagnostics| {
+    let by_id = stated.is_some_and(profile::names_current_schema);
+    let legacy_found = |diags: &mut crate::collect::Diagnostics| {
         diags.push(
             &C::READ_BMOPF_SCHEMA_LEGACY,
-            format!(
-                "the document names {}; it is read as BMOPF {target}, and a BMOPF write \
-                 states {target}",
-                legacy.label()
-            ),
+            "the document is an older BMOPF draft; it is read as BMOPF, and a BMOPF write \
+             states the current schema",
         );
     };
-    let mismatch = |release: &Value, named: &str, diags: &mut crate::collect::Diagnostics| {
+    let mismatch = |release: &Value, diags: &mut crate::collect::Diagnostics| {
         diags.push(
             &C::READ_BMOPF_SCHEMA_MISMATCH,
-            format!("meta.schema_version {release} disagrees with the {named} `meta.$schema`"),
+            format!("meta.schema_version {release} disagrees with the schema `meta.$schema` names"),
         );
     };
     let absent = StatedVersion {
-        current: None,
+        current: false,
         schema_key: false,
     };
-    // An earlier schema location identifies the document whatever release
-    // number it also states (PowerIO 0.11 stated 0.2.0 beside its draft).
-    if let Some(legacy) = stated.and_then(LegacySchema::from_schema_id) {
+    // An older draft's schema location identifies the document whatever
+    // release number it also states (PowerIO 0.11 stated a release beside
+    // its draft).
+    if let Some(draft) = stated.and_then(OlderDraft::from_schema_id) {
         if let Some(release) = release
             && release
                 .as_str()
-                .and_then(BmopfSchemaVersion::from_release)
-                .map(BmopfSchemaVersion::version)
-                .or_else(|| {
-                    release
-                        .as_str()
-                        .and_then(LegacySchema::from_release)
-                        .map(LegacySchema::version)
+                .and_then(|text| {
+                    if profile::states_current_release(text) {
+                        Some(profile::release())
+                    } else {
+                        OlderDraft::from_release(text).map(OlderDraft::release)
+                    }
                 })
-                .is_none_or(|line| line.get(..3) != legacy.version().get(..3))
+                .is_none_or(|line| line.get(..3) != draft.release().get(..3))
         {
-            mismatch(release, legacy.version(), diags);
+            mismatch(release, diags);
         }
-        legacy_found(legacy, diags);
+        legacy_found(diags);
         return absent;
     }
     match release {
         Some(release) => {
             let text = release.as_str();
-            if let Some(current) = text.and_then(BmopfSchemaVersion::from_release) {
+            if text.is_some_and(profile::states_current_release) {
                 return StatedVersion {
-                    current: Some(current),
+                    current: true,
                     schema_key: stated.is_some(),
                 };
             }
-            if by_id.is_some() {
-                mismatch(release, target, diags);
+            if by_id {
+                mismatch(release, diags);
             }
-            if let Some(legacy) = text.and_then(LegacySchema::from_release) {
-                legacy_found(legacy, diags);
+            if text.and_then(OlderDraft::from_release).is_some() {
+                legacy_found(diags);
             } else {
                 diags.push(
                     &C::READ_BMOPF_SCHEMA_UNKNOWN,
                     format!(
-                        "`meta.schema_version` is {release}, which names no release of the \
-                         0.2 line or before it; read as {target}"
+                        "`meta.schema_version` is {release}, which names no BMOPF release \
+                         PowerIO knows; read as BMOPF"
                     ),
                 );
             }
@@ -164,24 +160,22 @@ fn report_schema_version(
             (None, _) => {
                 diags.push(
                     &C::READ_BMOPF_SCHEMA_ABSENT,
-                    format!(
-                        "the document states no `meta.schema_version` (nor an earlier \
-                         `meta.$schema`), so the BMOPF release it was written against is \
-                         unknown; read as {target}"
-                    ),
+                    "the document states no `meta.schema_version` (nor an earlier \
+                     `meta.$schema`), so the BMOPF release it was written against is \
+                     unknown; read as BMOPF",
                 );
                 absent
             }
-            (Some(_), Some(current)) => StatedVersion {
-                current: Some(current),
+            (Some(_), true) => StatedVersion {
+                current: true,
                 schema_key: true,
             },
-            (Some(id), None) => {
+            (Some(id), false) => {
                 diags.push(
                     &C::READ_BMOPF_SCHEMA_UNKNOWN,
                     format!(
-                        "`meta.$schema` is `{id}`, which names no known BMOPF schema version; \
-                         read as {target}"
+                        "`meta.$schema` is `{id}`, which names no known BMOPF schema; read as \
+                         BMOPF"
                     ),
                 );
                 absent
@@ -206,7 +200,7 @@ fn nonuniform_bound(value: Option<&Value>) -> Option<Vec<f64>> {
         .flatten()
 }
 
-/// Numeric field names shared with 0.1.0, plus draft energy prices. Derived from
+/// Numeric field names shared with the first draft, plus draft energy prices. Derived from
 /// the vendored schema; `schema_numeric_fields_match_the_vendored_schema`
 /// holds the two together.
 const NUMERIC_FIELDS: &[&str] = &[
@@ -288,7 +282,7 @@ fn is_numeric_field(key: &str) -> bool {
 
 /// Report every schema-numeric field holding something that is not a number.
 ///
-/// Schema 0.1.0 spells no `null` anywhere and types the bounds and ratings as
+/// The first draft spells no `null` anywhere and types the bounds and ratings as
 /// `nonnegative_number`, so every value this reaches is already invalid. Each
 /// reads as `NaN`, which serializes on as `null` and restores as an unbounded
 /// limit — an explicit "no limit" the source never stated. The `Error`
@@ -370,18 +364,18 @@ struct Reader<'a> {
     /// done so a helper never borrows the network the caller is writing into.
     diagnostics: crate::diagnostics::Diagnostics,
     frequency_stated: bool,
-    /// The schema version `meta.$schema` names, when it names the current
-    /// one. Decides whether a legacy field spelling gets a finding.
-    schema_version: Option<BmopfSchemaVersion>,
+    /// Whether the document states the schema PowerIO writes. Decides
+    /// whether a legacy field spelling gets a finding.
+    states_current: bool,
     /// Earlier field spellings a document stating the current version used,
     /// with the number of records that used each; reported once.
     legacy_spellings: std::collections::BTreeMap<&'static str, usize>,
 }
 
 /// The bus fields the reader types; anything else lands in the bus's extras.
-/// `vpg_*` is the phase to ground bound since schema 0.1.1, `v_*` the 0.1.0
-/// spelling, `vng_max` the neutral to ground cap since 0.2.0, `vn_max` its
-/// earlier spelling, `geo` the 0.2.0 location, `longitude`/`latitude` and
+/// `vpg_*` is the phase to ground bound since the revised draft, `v_*` the first
+/// draft's spelling, `vng_max` the neutral to ground cap in the current schema, `vn_max` its
+/// earlier spelling, `geo` the current location, `longitude`/`latitude` and
 /// `vsym_*` pre-schema BMOPFTools fields.
 const BUS_KNOWN_FIELDS: &[&str] = &[
     "terminal_names",
@@ -655,8 +649,8 @@ impl Reader<'_> {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             *self.net.name_mut() = Some(name.to_string());
         }
-        // Schema 0.1.0 carries the frequency in `meta`; the top-level
-        // spellings are the pre-0.1.0 vintage.
+        // The first draft carries the frequency in `meta`; the top-level
+        // spellings are the pre-draft vintage.
         if let Some(frequency) = first_float(
             doc.get("meta")
                 .and_then(Value::as_object)
@@ -787,7 +781,7 @@ impl Reader<'_> {
         }
     }
 
-    /// The top-level `extras` escape hatch (schema 0.1.0). The IBR and
+    /// The top-level `extras` escape hatch (the first draft). The IBR and
     /// control profile tables that lost their top-level slots read typed from
     /// here, the transformer overflow is consumed by the transformer merge,
     /// the geometry layer (`geojson`, `powerio_geo`) is consumed by the
@@ -892,7 +886,7 @@ impl Reader<'_> {
                 &mut self.diagnostics,
             )
             .unwrap_or(IbrTopology::SinglePhase);
-            // Schema 0.2.0 removed DSTATCOM, a synonym of STATCOM.
+            // The schema removed DSTATCOM, a synonym of STATCOM.
             let dstatcom = o.get("prime_mover").and_then(Value::as_str) == Some("DSTATCOM");
             if dstatcom {
                 self.note_legacy_spelling("ibr.prime_mover DSTATCOM");
@@ -914,13 +908,13 @@ impl Reader<'_> {
                     extras.insert(key.clone(), value.clone());
                 }
             }
-            // Schema 0.2.0 prices an inverter with `energy_cost_rate` only;
+            // The schema prices an inverter with `energy_cost_rate` only;
             // the earlier `cost` spelling reads as it.
             if let Some(cost) = extras.remove("cost") {
                 self.note_legacy_spelling("ibr.cost");
                 extras.entry("energy_cost_rate".to_owned()).or_insert(cost);
             }
-            // Every 0.2.0 enum is UPPER_SNAKE; the DC control mode was `droop`.
+            // Every enum of the schema is UPPER_SNAKE; the DC control mode was `droop`.
             if let Some(Value::String(mode)) = extras.get_mut("dc_control")
                 && mode.as_str() == "droop"
             {
@@ -955,7 +949,7 @@ impl Reader<'_> {
     }
 
     /// True when `name` (case-insensitive) is already in `taken`. Schema
-    /// 0.1.0 moved the IBR and control profile tables under `extras`, and the
+    /// The first draft moved the IBR and control profile tables under `extras`, and the
     /// reader accepts both places, so a part-migrated document can declare
     /// the same name twice. Two elements of one name double every count and
     /// let the writer silently keep only the last, so the second reads as a
@@ -1088,11 +1082,11 @@ impl Reader<'_> {
                     extras.insert("latitude".into(), value.clone());
                 }
             }
-            // Legacy (pre-0.1.0) `vsym_min`/`vsym_max` arrays carried the
+            // Legacy (pre-draft) `vsym_min`/`vsym_max` arrays carried the
             // symmetrical component bounds in zero/positive/negative order.
-            // Schema 0.1.0 replaced them with named per-sequence scalars;
+            // The first draft replaced them with named per-sequence scalars;
             // map what has a slot and warn about what does not (the negative
-            // and zero sequence lower bounds are fixed at 0 in 0.1.0).
+            // and zero sequence lower bounds are fixed at 0 in the first draft).
             let legacy_min = floats(o.get("vsym_min"));
             let legacy_max = floats(o.get("vsym_max"));
             if legacy_min.is_some() || legacy_max.is_some() {
@@ -1116,14 +1110,14 @@ impl Reader<'_> {
                     &C::READ_BMOPF_FIELD_DROPPED,
                     format!(
                         "bus {id}: legacy vsym_min zero/negative sequence lower bounds have no \
-                     slot in schema 0.1.0 (fixed at 0); dropped"
+                     slot in the BMOPF schema (fixed at 0); dropped"
                     ),
                 );
             }
             // Renamed bounds read under either spelling, the current one
             // first: the phase to ground bounds are `vpg_min`/`vpg_max` since
-            // schema 0.1.1 (0.1.0 `v_min`/`v_max`), and the neutral to ground
-            // cap is `vng_max` since 0.2.0 (earlier `vn_max`).
+            // the revised draft (the first draft's `v_min`/`v_max`), and the neutral to ground
+            // cap is `vng_max` in the current schema (earlier `vn_max`).
             let vpg_min = self.renamed_bus_field(o, "vpg_min", "v_min");
             let vpg_max = self.renamed_bus_field(o, "vpg_max", "v_max");
             let vng_max = self.renamed_bus_field(o, "vng_max", "vn_max");
@@ -1150,9 +1144,9 @@ impl Reader<'_> {
         }
     }
 
-    /// A bus field schema 0.2.0 spells differently from an earlier version:
+    /// A bus field the schema spells differently from an earlier version:
     /// the current spelling, else the earlier one. A document that states
-    /// 0.2.0 and uses the earlier spelling is noted for the one
+    /// the current schema and uses the earlier spelling is noted for the one
     /// `READ.BMOPF.SCHEMA_LEGACY` finding, since that schema rejects it; a
     /// document stating an earlier version, or none, already has its one
     /// schema finding. Both spellings disagreeing is
@@ -1171,7 +1165,7 @@ impl Reader<'_> {
     }
 
     /// A regulator record with its ratio under the name the model keeps,
-    /// `tap_ratio` (with `_min`/`_max`). Schema 0.2.0 names it
+    /// `tap_ratio` (with `_min`/`_max`). The schema names it
     /// `voltage_ratio`, the regulated over source voltage, in the record and
     /// in its `time_series` references; the earlier `tap_ratio` spelling is
     /// noted for the one legacy finding.
@@ -1197,7 +1191,7 @@ impl Reader<'_> {
         o
     }
 
-    /// A control limit's unit token as the model names it. Schema 0.2.0 calls
+    /// A control limit's unit token as the model names it. The schema calls
     /// a limit stated per unit of its base `PU`; the model's `VA_FRACTION` is
     /// the earlier spelling, noted for the one legacy finding.
     fn unit_token(&mut self, value: Option<&Value>) -> Option<Value> {
@@ -1211,8 +1205,8 @@ impl Reader<'_> {
         }
     }
 
-    /// A line's `s_max` has one entry per conductor in schema 0.2.0. Schema
-    /// 0.1.1's line text, and the 0.2.0 proposal before its review, said one
+    /// A line's `s_max` has one entry per conductor in the schema. Schema
+    /// the revised draft's line text, and the proposal before its review, said one
     /// per phase conductor. A line stating one entry per phase on a map with a
     /// neutral is read faithfully: each phase conductor keeps its stated
     /// limit and the neutral conductor, which the document did not bound, has
@@ -1239,14 +1233,14 @@ impl Reader<'_> {
             self.diagnostics.push(
                 &C::READ_BMOPF_VALUE_INFERRED,
                 format!(
-                    "line {name}: `s_max` states one entry per phase conductor, the 0.1.x \
-                     reading; read per conductor with the neutral conductor unbounded"
+                    "line {name}: `s_max` states one entry per phase conductor, as older BMOPF \
+                     drafts did; read per conductor with the neutral conductor unbounded"
                 ),
             );
         }
     }
 
-    /// Notes the lowercase enum values earlier drafts used where schema 0.2.0
+    /// Notes the lowercase enum values earlier drafts used where the schema
     /// spells them UPPER_SNAKE: `wire_data.kind` and
     /// `line_geometry.earth_model`. Both tables are retained as source data,
     /// so only the spelling is noted.
@@ -1275,10 +1269,10 @@ impl Reader<'_> {
 
     /// Notes a field spelled the way an earlier schema version spells it,
     /// for the one `READ.BMOPF.SCHEMA_LEGACY` finding of a document that
-    /// states 0.2.0; a document stating an earlier version, or none, already
+    /// states the current schema; a document stating an earlier version, or none, already
     /// has its one schema finding.
     fn note_legacy_spelling(&mut self, field: &'static str) {
-        if self.schema_version.is_some() {
+        if self.states_current {
             *self.legacy_spellings.entry(field).or_default() += 1;
         }
     }
@@ -1289,7 +1283,6 @@ impl Reader<'_> {
         if self.legacy_spellings.is_empty() {
             return;
         }
-        let version = BmopfSchemaVersion::default().version();
         let fields = self
             .legacy_spellings
             .iter()
@@ -1299,8 +1292,8 @@ impl Reader<'_> {
         self.diagnostics.push(
             &C::READ_BMOPF_SCHEMA_LEGACY,
             format!(
-                "the document states BMOPF {version} but uses the earlier spellings {fields}, \
-                 which {version} rejects; read as {version}"
+                "the document states the current BMOPF schema but uses the spellings of an \
+                 older BMOPF draft, {fields}, which the schema rejects; read as BMOPF"
             ),
         );
     }
@@ -1367,7 +1360,7 @@ impl Reader<'_> {
                 "s_max",
                 "geo",
             ];
-            // Schema 0.1.0 lines carry either a linecode + length or inline
+            // The first draft lines carry either a linecode + length or inline
             // impedance matrices (the linecode oneOf). Inline matrices read
             // into a synthesized single-use linecode named after the line.
             let mut linecode = string(o.get("linecode"));
@@ -1625,7 +1618,7 @@ impl Reader<'_> {
             };
             // Cost is a per-phase array in the schema, kept exactly as
             // stated. A bare scalar is still accepted for documents written
-            // before v0.0.1 and reads as a one-entry statement.
+            // before the first draft and reads as a one-entry statement.
             let cost = match o.get("energy_cost_rate").or_else(|| o.get("cost")) {
                 Some(Value::Array(a)) => Some(a.iter().map(f).collect::<Vec<f64>>()),
                 Some(v) => Some(vec![f(v)]),
@@ -1727,7 +1720,7 @@ impl Reader<'_> {
                 "cost",
                 "geo",
             ];
-            // Schema 0.2.0 prices a source with `energy_cost_rate` only; the
+            // The schema prices a source with `energy_cost_rate` only; the
             // earlier `cost` spelling reads as it.
             if o.contains_key("cost") {
                 self.note_legacy_spelling("voltage_source.cost");
@@ -2652,7 +2645,7 @@ mod tests {
             );
         }
         let draft_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("schemas/bmopf/0.2.0/bmopf.schema.json");
+            .join("schemas/bmopf/bmopf.schema.json");
         let draft: Value =
             serde_json::from_str(&std::fs::read_to_string(draft_path).unwrap()).unwrap();
         walk(&draft, &mut names, &mut patterns);

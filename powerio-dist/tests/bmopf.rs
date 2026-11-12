@@ -1,14 +1,14 @@
-//! BMOPF reader/writer against the vendored 0.2.0 schema, the one version
-//! PowerIO writes, and the two public example networks from
-//! distribution-system-opt/bmopf-resources, which are 0.1.0 documents and
+//! BMOPF reader/writer against the vendored schema, the one BMOPF PowerIO
+//! writes, and the two public example networks from
+//! distribution-system-opt/bmopf-resources, which are older BMOPF drafts and
 //! read as legacy input.
 
 use std::path::PathBuf;
 
 use powerio_dist::{
-    BmopfSchemaVersion, Configuration, CoordinateSpace, DiagnosticSeverity, DiagnosticStage,
-    DistBus, DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation, DistTransformer, DistWinding,
-    DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
+    Configuration, CoordinateSpace, DiagnosticSeverity, DiagnosticStage, DistBus, DistCoordsKind,
+    DistGeoMeta, DistLineCode, DistLocation, DistTransformer, DistWinding, DistWindingConn, Extras,
+    MulticonductorNetwork, VoltageSource,
 };
 
 mod helpers;
@@ -27,6 +27,12 @@ fn beside_schema_version(warnings: &[String]) -> Vec<&String> {
         .iter()
         .filter(|w| !w.starts_with("READ.BMOPF.SCHEMA_"))
         .collect()
+}
+
+/// The release a written document states in `meta.schema_version`: the
+/// directory the schema's `$id` names.
+fn release() -> &'static str {
+    powerio_dist::BMOPF_SCHEMA_ID.rsplit('/').nth(1).unwrap()
 }
 
 fn fixture(rel: &str) -> PathBuf {
@@ -64,7 +70,7 @@ fn nonuniform_phase_bounds_survive_value_serialization_and_emission() {
 fn contradictory_schema_versions_are_reported_as_errors() {
     let input = format!(
         r#"{{"meta":{{"$schema":"{}","schema_version":"0.1.0"}},"bus":{{}}}}"#,
-        BmopfSchemaVersion::Bmopf020.retrieval_url()
+        powerio_dist::bmopf::bmopf_proposal_url()
     );
     let parsed = parse_bmopf_str(&input).unwrap();
     assert!(
@@ -85,17 +91,17 @@ fn validator_at(file: &str) -> jsonschema::Validator {
     jsonschema::validator_for(&schema).expect("schema compiles")
 }
 
-/// The validator for the one version the writer targets, 0.2.0.
+/// The validator for the one schema the writer targets.
 fn schema_validator() -> jsonschema::Validator {
-    validator_at("schemas/bmopf/0.2.0/bmopf.schema.json")
+    validator_at("schemas/bmopf/bmopf.schema.json")
 }
 
-/// The historical 0.1.0 draft schema, the oracle for legacy input.
+/// The historical first draft schema, the oracle for legacy input.
 fn legacy_schema_validator() -> jsonschema::Validator {
     validator_at("../tests/data/dist/bmopf/draft_bmopf_schema.json")
 }
 
-/// Schema 0.2.0 requires a non-empty `bus` and `voltage_source`. A test
+/// The schema requires a non-empty `bus` and `voltage_source`. A test
 /// network built without a source (or without buses) can only fail those two
 /// rules, which the writer reports rather than invents; these validate
 /// everything else.
@@ -170,7 +176,7 @@ fn vendored_examples_validate_after_canonicalization() {
     }
 }
 
-/// Both vendored fixtures are schema 0.1.0 documents and validate as shipped
+/// Both vendored fixtures are the first draft documents and validate as shipped
 /// against the historical draft schema, so any raw validation failure is a
 /// real schema mismatch.
 #[test]
@@ -223,12 +229,12 @@ fn parse_the_public_examples() {
     assert_eq!(net.generators().len(), 1);
     assert_eq!(net.transformers().len(), 2);
     assert_eq!(net.sources().len(), 1);
-    // A 0.1.0 document: the one finding is the version notice.
+    // An older draft: the one finding is the version notice.
     assert_eq!(
         net.warnings,
         vec![String::from(
-            "READ.BMOPF.SCHEMA_LEGACY: the document names BMOPF 0.1.0; it is read as BMOPF \
-             0.2.0, and a BMOPF write states 0.2.0"
+            "READ.BMOPF.SCHEMA_LEGACY: the document is an older BMOPF draft; it is read as \
+             BMOPF, and a BMOPF write states the current schema"
         )]
     );
 
@@ -306,7 +312,7 @@ fn assert_model_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork) {
 }
 
 /// Every distribution case fixture, whatever its source format, emits a
-/// document that the vendored schema 0.2.0 accepts. The emitted document
+/// document that the vendored the schema accepts. The emitted document
 /// must also read back, re-emit valid, and re-emit byte identical, so a
 /// schema break shows up here whether it is in the writer or the reader.
 #[test]
@@ -446,7 +452,7 @@ fn bmopf_dangling_bus_reference_warns() {
 }
 
 /// An ibr or control profile declared twice under one class, differing only
-/// by case, is the schema 0.1.0 top level plus `extras` migration overlap:
+/// by case, is the the first draft top level plus `extras` migration overlap:
 /// the second copy drops with a warning rather than doubling the count.
 #[test]
 fn an_ibr_declared_twice_differing_only_by_case_drops_the_second() {
@@ -2709,7 +2715,7 @@ fn missing_voltage_source_warns() {
     let net = parse_bmopf_str(r#"{"bus": {"a": {"terminal_names": ["1"]}}}"#).unwrap();
     let out = emit_bmopf_json(&net);
     assert!(out.warnings.iter().any(|w| w.contains("no voltage source")));
-    // Schema 0.2.0 requires a non-empty `voltage_source`, which the writer
+    // The schema requires a non-empty `voltage_source`, which the writer
     // reports rather than invents; that is the one rule the output fails.
     assert_eq!(
         errors(&schema_validator(), &out.text),
@@ -2921,7 +2927,7 @@ fn meta_block_is_kept_in_extras() {
     );
 }
 
-/// Schema 0.1.0 calls `length` "purely descriptive" on the inline impedance
+/// The first draft calls `length` "purely descriptive" on the inline impedance
 /// branch: the matrices are the whole impedance of the line, in ohms. A
 /// reader that scales them by a declared length multiplies the impedance.
 #[test]
@@ -2948,7 +2954,7 @@ fn inline_impedance_is_not_scaled_by_a_descriptive_length() {
     );
 }
 
-/// Schema 0.1.0 moved the IBR and control profile tables under `extras`, and
+/// The first draft moved the IBR and control profile tables under `extras`, and
 /// the reader accepts both places. A part-migrated document that declares a
 /// name twice must not produce two elements of that name.
 #[test]
@@ -3117,7 +3123,7 @@ fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
     assert_eq!(again.generators()[0].cost, generator.cost);
 }
 
-/// Schema 0.1.0 defines generator `s_max`/`i_max`, linecode `source`, and the
+/// The first draft defines generator `s_max`/`i_max`, linecode `source`, and the
 /// `meta` provenance fields. Each is read into the model without an
 /// outside-the-schema warning, survives the write, and validates; `meta`
 /// keeps the source provenance while the writer owns `$schema`, `frequency`,
@@ -3883,12 +3889,12 @@ fn regulator_banks_survive_a_dss_bmopf_dss_round_trip() {
 
 // ----- schema versions ----------------------------------------------------
 
-/// A 0.1.0 document reads as 0.2.0 with one `READ.BMOPF.SCHEMA_LEGACY`
-/// finding naming the version it stated, and writes as 0.2.0: the canonical
-/// `$id`, the version field, and the `vpg_*` bus bounds. The written document
-/// reads back with no schema finding at all.
+/// An older draft reads as BMOPF with one `READ.BMOPF.SCHEMA_LEGACY`
+/// finding, and writes as the current schema: the canonical `$id`, the
+/// version field, and the `vpg_*` bus bounds. The written document reads
+/// back with no schema finding at all.
 #[test]
-fn a_legacy_document_reads_once_reported_and_writes_as_0_2_0() {
+fn a_legacy_document_reads_once_reported_and_writes_as_the_current_schema() {
     let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
     let legacy: Vec<_> = net
         .diagnostics
@@ -3898,20 +3904,18 @@ fn a_legacy_document_reads_once_reported_and_writes_as_0_2_0() {
     assert_eq!(legacy.len(), 1, "{:?}", net.diagnostics);
     assert_eq!(legacy[0].code(), "READ.BMOPF.SCHEMA_LEGACY");
     assert_eq!(legacy[0].severity(), DiagnosticSeverity::Warning);
-    assert!(legacy[0].message().contains("BMOPF 0.1.0"), "{legacy:?}");
+    assert!(
+        legacy[0].message().contains("an older BMOPF draft"),
+        "{legacy:?}"
+    );
 
     let out = emit_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let version = BmopfSchemaVersion::Bmopf020;
-    // `meta.schema_version` is the one identifier; 0.2.x removed `$schema`,
-    // and the schema's `$id` is recorded in provenance.
+    // `meta.schema_version` is the one identifier; the current schema
+    // removed `$schema`, and the schema's `$id` is recorded in provenance.
     assert!(doc["meta"].get("$schema").is_none(), "{}", doc["meta"]);
-    assert_eq!(doc["meta"]["schema_version"], "0.2.0");
-    assert_eq!(
-        BmopfSchemaVersion::from_release(doc["meta"]["schema_version"].as_str().unwrap()),
-        Some(version)
-    );
+    assert_eq!(doc["meta"]["schema_version"], release());
     assert_eq!(
         doc["meta"]["provenance"]["powerio_bmopf"]["schema_id"],
         powerio_dist::BMOPF_SCHEMA_ID
@@ -3938,31 +3942,16 @@ fn a_legacy_document_reads_once_reported_and_writes_as_0_2_0() {
     );
 }
 
-/// Each earlier schema location a document can state reads with exactly one
-/// `READ.BMOPF.SCHEMA_LEGACY` finding naming that version.
+/// Each older draft's schema location a document can state reads with
+/// exactly one `READ.BMOPF.SCHEMA_LEGACY` finding.
 #[test]
 fn every_legacy_schema_location_is_reported_once() {
-    for (id, named) in [
-        (
-            "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json",
-            "BMOPF 0.1.0",
-        ),
-        (
-            "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.1/bmopf.schema.json",
-            "BMOPF 0.1.1",
-        ),
-        (
-            "https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks",
-            "BMOPF 0.1.0",
-        ),
-        (
-            "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.1.0/bmopf.schema.json",
-            "BMOPF 0.1.0",
-        ),
-        (
-            "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
-            "0.2.0 draft",
-        ),
+    for id in [
+        "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json",
+        "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.1/bmopf.schema.json",
+        "https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks",
+        "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.1.0/bmopf.schema.json",
+        "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
     ] {
         let text = format!(
             r#"{{"meta": {{"$schema": "{id}"}},
@@ -3978,7 +3967,10 @@ fn every_legacy_schema_location_is_reported_once() {
             .collect();
         assert_eq!(schema.len(), 1, "{id}: {:?}", net.diagnostics);
         assert_eq!(schema[0].code(), "READ.BMOPF.SCHEMA_LEGACY", "{id}");
-        assert!(schema[0].message().contains(named), "{id}: {schema:?}");
+        assert!(
+            schema[0].message().contains("an older BMOPF draft"),
+            "{id}: {schema:?}"
+        );
         let bus = net.buses().iter().find(|b| b.id == "b").unwrap();
         assert_eq!(bus.v_min, Some(200.0), "{id}");
     }
@@ -4012,7 +4004,7 @@ fn a_document_naming_no_schema_version_is_reported() {
     );
 }
 
-/// Schema 0.2.0 declares the IBR, control profile, DC and time series tables
+/// The schema declares the IBR, control profile, DC and time series tables
 /// at the top level, so writing it relocates nothing.
 #[test]
 fn the_ibr_time_series_and_dc_tables_stay_at_the_top_level() {
@@ -4092,7 +4084,7 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     let out = emit_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(doc["meta"].get("$schema").is_none());
-    assert_eq!(doc["meta"]["schema_version"], "0.2.0");
+    assert_eq!(doc["meta"]["schema_version"], release());
     let provenance = &doc["meta"]["provenance"];
     assert_eq!(provenance["powerio_bmopf"]["note"], "keep");
     assert_eq!(provenance["powerio_bmopf_1"]["schema_status"], "proposal");
@@ -4106,7 +4098,7 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     );
     assert_eq!(
         provenance["powerio_bmopf_1"]["schema_retrieval_url"],
-        BmopfSchemaVersion::Bmopf020.retrieval_url()
+        powerio_dist::bmopf::bmopf_proposal_url()
     );
     assert!(
         provenance["powerio_bmopf_1"]["schema_retrieval_url"]
@@ -4116,7 +4108,7 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     );
     assert_eq!(
         provenance["powerio_bmopf_1"]["schema_id"],
-        BmopfSchemaVersion::Bmopf020.schema_id()
+        powerio_dist::BMOPF_SCHEMA_ID
     );
     assert_eq!(
         emit_bmopf_json(&parse_bmopf_str(&out.text).unwrap()).text,
@@ -4711,9 +4703,9 @@ fn routed_network() -> MulticonductorNetwork {
 /// Output: `vpg_*` bounds and `vng_max`, geometry in the typed `geo` slots with the system
 /// in `meta.crs`, the canonical `$id` as the stamp, and no `extras.geojson`
 /// layer. The document validates against the vendored schema, which rejects
-/// the 0.1.0 spellings and knows the typed slots.
+/// the first draft's spellings and knows the typed slots.
 #[test]
-fn schema_020_output_embeds_geometry_and_names_the_vpg_bounds() {
+fn output_embeds_geometry_and_names_the_vpg_bounds() {
     let mut net = routed_network();
     net.buses_mut()[0].v_min = Some(207.0);
     net.buses_mut()[0].v_max = Some(253.0);
@@ -4722,14 +4714,14 @@ fn schema_020_output_embeds_geometry_and_names_the_vpg_bounds() {
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(doc["meta"].get("$schema").is_none());
-    assert_eq!(doc["meta"]["schema_version"], "0.2.0");
+    assert_eq!(doc["meta"]["schema_version"], release());
     assert_eq!(doc["meta"]["crs"], "EPSG:32617");
     assert_eq!(
         doc["bus"]["a"]["vpg_min"],
         serde_json::json!([207.0, 207.0, 207.0])
     );
     assert!(doc["bus"]["a"].get("v_min").is_none());
-    // The neutral to ground cap is `vng_max` since schema 0.2.0.
+    // The neutral to ground cap is `vng_max` since the schema.
     assert_eq!(doc["bus"]["a"]["vng_max"], 12.0);
     assert!(doc["bus"]["a"].get("vn_max").is_none());
     assert_eq!(
@@ -4751,22 +4743,22 @@ fn schema_020_output_embeds_geometry_and_names_the_vpg_bounds() {
     assert_eq!(provenance["schema_status"], "proposal");
     assert_eq!(
         provenance["schema_retrieval_url"],
-        BmopfSchemaVersion::Bmopf020.retrieval_url()
+        powerio_dist::bmopf::bmopf_proposal_url()
     );
     assert_eq!(
         provenance["schema_sha256"],
-        BmopfSchemaVersion::Bmopf020.sha256()
+        powerio_dist::bmopf::BMOPF_PROPOSAL_SHA256
     );
     assert_eq!(
         provenance["schema_commit"],
-        BmopfSchemaVersion::Bmopf020.upstream_commit()
+        powerio_dist::bmopf::BMOPF_PROPOSAL_COMMIT
     );
 }
 
-/// A document PowerIO 0.11 wrote states the 0.2.0 draft archive URL and
+/// A document PowerIO 0.11 wrote states its early draft's archive URL and
 /// carries `v_*` bounds and the `extras.geojson` layer. It reads with one
 /// `READ.BMOPF.SCHEMA_LEGACY` finding, keeps its bounds and geometry, and
-/// writes them in the 0.2.0 form: `vpg_*`, typed `geo` slots and `meta.crs`.
+/// writes them in the current form: `vpg_*`, typed `geo` slots and `meta.crs`.
 #[test]
 fn a_powerio_0_11_document_upgrades_its_bounds_and_geometry() {
     let text = r#"{"meta":{"$schema":"https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json","schema_version":"0.2.0"},
@@ -4794,7 +4786,7 @@ fn a_powerio_0_11_document_upgrades_its_bounds_and_geometry() {
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(doc["meta"].get("$schema").is_none());
-    assert_eq!(doc["meta"]["schema_version"], "0.2.0");
+    assert_eq!(doc["meta"]["schema_version"], release());
     assert_eq!(doc["meta"]["crs"], "EPSG:32617");
     assert_eq!(
         doc["bus"]["a"]["vpg_min"],
@@ -4818,9 +4810,9 @@ fn vertices(route: Option<&[DistLocation]>) -> Option<Vec<(u64, u64)>> {
 }
 
 /// The legacy spelling reads whatever the document states. A document that
-/// states schema 0.2.0 and uses it gets one `READ.BMOPF.SCHEMA_LEGACY`
+/// states the current schema and uses it gets one `READ.BMOPF.SCHEMA_LEGACY`
 /// finding naming the spellings, since that schema rejects them; a document
-/// stating an earlier version gets its one finding for the version, and one
+/// from an older draft gets its one finding for the draft, and one
 /// stating none gets `READ.BMOPF.SCHEMA_ABSENT` instead.
 #[test]
 fn legacy_v_bounds_read_and_are_reported_once_per_document() {
@@ -4833,8 +4825,9 @@ fn legacy_v_bounds_read_and_are_reported_once_per_document() {
         ),
         (
             format!(
-                r#""meta":{{"$schema":"{}","schema_version":"0.2.0"}},"#,
-                BmopfSchemaVersion::Bmopf020.schema_id()
+                r#""meta":{{"$schema":"{}","schema_version":"{}"}},"#,
+                powerio_dist::BMOPF_SCHEMA_ID,
+                release()
             ),
             1,
         ),
@@ -4854,8 +4847,9 @@ fn legacy_v_bounds_read_and_are_reported_once_per_document() {
         assert_eq!(legacy.len(), legacy_findings, "{meta}: {legacy:?}");
     }
     let stated = parse_bmopf_str(&format!(
-        r#"{{"meta":{{"$schema":"{}","schema_version":"0.2.0"}},{body}}}"#,
-        BmopfSchemaVersion::Bmopf020.schema_id()
+        r#"{{"meta":{{"$schema":"{}","schema_version":"{}"}},{body}}}"#,
+        powerio_dist::BMOPF_SCHEMA_ID,
+        release()
     ))
     .unwrap();
     let finding = stated
@@ -5009,11 +5003,11 @@ fn an_unnamed_coordinate_space_rides_beside_embedded_geometry() {
     assert_eq!(again.geo(), net.geo());
 }
 
-/// OpenDSS bus coordinates survive a conversion to schema 0.2.0 and a trip
+/// OpenDSS bus coordinates survive a conversion to BMOPF and a trip
 /// through the serialized network: the same locations, routes and
 /// coordinate metadata on both sides.
 #[test]
-fn opendss_coordinates_round_trip_through_schema_020_and_the_serialized_network() {
+fn opendss_coordinates_round_trip_through_bmopf_and_the_serialized_network() {
     let source = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
     let located = source
         .buses()
@@ -5195,14 +5189,14 @@ fn component_geo_line_strings_and_projected_points() {
     );
 }
 
-/// Schema 0.2.0 removed `voltage_source.cost` and `ibr.cost`. A document that
+/// The schema removed `voltage_source.cost` and `ibr.cost`. A document that
 /// still states them reads them as `energy_cost_rate`, under the one
-/// `READ.BMOPF.SCHEMA_LEGACY` finding when it states 0.2.0, and a write
+/// `READ.BMOPF.SCHEMA_LEGACY` finding when it states the current schema, and a write
 /// states only `energy_cost_rate`, which validates.
 #[test]
 fn source_and_inverter_cost_read_as_energy_cost_rate_and_never_write() {
     let text = serde_json::json!({
-        "meta": {"schema_version": "0.2.0"},
+        "meta": {"schema_version": release()},
         "bus": {"b": {"terminal_names": ["a", "n"], "perfectly_grounded_terminals": ["n"]}},
         "voltage_source": {"s": {"bus": "b", "terminal_map": ["a", "n"],
             "v_magnitude": [230.0, 0.0], "v_angle": [0.0, 0.0], "cost": [0.1]}},
@@ -5250,7 +5244,7 @@ fn source_and_inverter_cost_read_as_energy_cost_rate_and_never_write() {
     assert!(doc["ibr"]["pv"].get("cost").is_none());
 }
 
-/// Schema 0.2.0 takes nonnegative n-winding neutral fields: a negative or
+/// The schema takes nonnegative n-winding neutral fields: a negative or
 /// nonfinite `x_neutral` is dropped with the diagnostic the two-winding
 /// subtypes use, not written.
 #[test]
@@ -5292,7 +5286,7 @@ fn n_winding_negative_neutral_reactance_is_dropped_not_written() {
     );
 }
 
-/// Schema 0.2.0 requires `dc_terminal_map` beside an inverter's `dc_bus`. The
+/// The schema requires `dc_terminal_map` beside an inverter's `dc_bus`. The
 /// semantic check names the missing map instead of comparing the AC terminal
 /// map with the DC bus, and the writer reports the field it cannot write.
 #[test]
@@ -5330,12 +5324,12 @@ fn inverter_dc_bus_requires_dc_terminal_map() {
     );
 }
 
-/// A 0.2.x document names its release in `meta.schema_version` and no schema
-/// URL. Any 0.2.x release reads as the 0.2 line; a document that still carries
-/// `meta.$schema` reads too, with the key counted in the one legacy finding;
-/// a release outside the line is unknown.
+/// A current document names its release in `meta.schema_version` and no
+/// schema URL. Any patch release of the current line reads as current; a
+/// document that still carries `meta.$schema` reads too, with the key counted
+/// in the one legacy finding; a release outside the line is unknown.
 #[test]
-fn the_release_number_identifies_a_0_2_document() {
+fn the_release_number_identifies_a_current_document() {
     let body = r#""bus":{"b":{"terminal_names":["a","n"],"perfectly_grounded_terminals":["n"]}},
         "voltage_source":{"s":{"bus":"b","terminal_map":["a","n"],"v_magnitude":[230,0],"v_angle":[0,0]}}"#;
     let schema_findings = |meta: &str| {
@@ -5346,33 +5340,45 @@ fn the_release_number_identifies_a_0_2_document() {
             .map(|d| (d.code().to_owned(), d.message().to_owned()))
             .collect::<Vec<_>>()
     };
-    assert_eq!(schema_findings(r#"{"schema_version":"0.2.0"}"#), vec![]);
-    assert_eq!(schema_findings(r#"{"schema_version":"0.2.7"}"#), vec![]);
+    let stating = |release: &str| format!(r#"{{"schema_version":"{release}"}}"#);
+    // The current line, and its major and minor parts.
+    let line = &release()[..=release().rfind('.').unwrap()];
+    let (major, minor) = line.trim_end_matches('.').split_once('.').unwrap();
+    let next_minor = format!("{major}.{}.0", minor.parse::<u32>().unwrap() + 1);
+    for current in [
+        release().to_owned(),
+        format!("{line}7"),
+        format!("{line}12"),
+    ] {
+        assert_eq!(schema_findings(&stating(&current)), vec![], "{current}");
+    }
     let with_url = schema_findings(&format!(
-        r#"{{"schema_version":"0.2.0","$schema":"{}"}}"#,
+        r#"{{"schema_version":"{}","$schema":"{}"}}"#,
+        release(),
         powerio_dist::BMOPF_SCHEMA_ID
     ));
     assert_eq!(with_url.len(), 1, "{with_url:?}");
     assert_eq!(with_url[0].0, "READ.BMOPF.SCHEMA_LEGACY");
     assert!(with_url[0].1.contains("`meta.$schema` (1)"), "{with_url:?}");
-    let unknown = schema_findings(r#"{"schema_version":"0.3.0"}"#);
-    assert_eq!(unknown.len(), 1, "{unknown:?}");
-    assert_eq!(unknown[0].0, "READ.BMOPF.SCHEMA_UNKNOWN");
-    assert_eq!(
-        BmopfSchemaVersion::from_release("0.2.12"),
-        Some(BmopfSchemaVersion::Bmopf020)
-    );
-    for release in ["0.2", "0.2.01", "0.3.0", "0.2.x"] {
-        assert_eq!(BmopfSchemaVersion::from_release(release), None, "{release}");
+    for other in [
+        line.trim_end_matches('.').to_owned(),
+        format!("{line}01"),
+        next_minor,
+        format!("{line}x"),
+    ] {
+        let unknown = schema_findings(&stating(&other));
+        assert_eq!(unknown.len(), 1, "{other}: {unknown:?}");
+        assert_eq!(unknown[0].0, "READ.BMOPF.SCHEMA_UNKNOWN", "{other}");
     }
 
     // The writer states the release and no schema URL.
     let net = parse_bmopf_str(&format!(
-        r#"{{"meta":{{"schema_version":"0.2.0"}},{body}}}"#
+        r#"{{"meta":{{"schema_version":"{}"}},{body}}}"#,
+        release()
     ))
     .unwrap();
     let doc: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
-    assert_eq!(doc["meta"]["schema_version"], "0.2.0");
+    assert_eq!(doc["meta"]["schema_version"], release());
     assert!(doc["meta"].get("$schema").is_none());
     assert!(powerio_dist::bmopf::__states_written_version(
         &doc.to_string()
@@ -5422,14 +5428,14 @@ fn wgs84_reads_longitude_first_whatever_its_name_and_writes_no_crs() {
     }
 }
 
-/// Schema 0.2.0 spells every enum UPPER_SNAKE, names a per-unit limit `PU`,
+/// The schema spells every enum UPPER_SNAKE, names a per-unit limit `PU`,
 /// drops `DSTATCOM` for `STATCOM`, and names the regulators' ratio
 /// `voltage_ratio`. The earlier spellings read, counted in the one legacy
 /// finding; a write states the new ones.
 #[test]
-fn renamed_tokens_read_as_legacy_and_write_as_0_2_0() {
+fn renamed_tokens_read_as_legacy_and_write_as_the_current_schema() {
     let text = serde_json::json!({
-        "meta": {"schema_version": "0.2.0", "frequency": 60.0},
+        "meta": {"schema_version": release(), "frequency": 60.0},
         "terminal_conventions": {"phase": ["1", "2", "3"], "neutral": ["n"]},
         "bus": {
             "b1": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
@@ -5514,8 +5520,8 @@ fn renamed_tokens_read_as_legacy_and_write_as_0_2_0() {
     );
 }
 
-/// Line `s_max` has one entry per conductor in schema 0.2.0. A document
-/// stating one per phase (the 0.1.x line reading) reads per conductor with
+/// Line `s_max` has one entry per conductor in the schema. A document
+/// stating one per phase (the older drafts' line reading) reads per conductor with
 /// the unbounded neutral, reported; a write states only a full per-conductor
 /// array and drops any other length.
 #[test]
@@ -5580,9 +5586,9 @@ fn line_s_max_is_per_conductor() {
         out.warnings
     );
 
-    // In a 0.2.x document a per-phase line s_max is a dimension error.
+    // In a current document a per-phase line s_max is a dimension error.
     let mut current: serde_json::Value = serde_json::from_str(&text).unwrap();
-    current["meta"] = serde_json::json!({"schema_version": "0.2.0"});
+    current["meta"] = serde_json::json!({"schema_version": release()});
     let net = parse_bmopf_str(&current.to_string()).unwrap();
     assert!(
         net.diagnostics
@@ -5593,7 +5599,7 @@ fn line_s_max_is_per_conductor() {
     );
 }
 
-/// The writer never states a value schema 0.2.0 rejects: a transformer whose
+/// The writer never states a value the schema rejects: a transformer whose
 /// rating or nominal voltage is not positive is dropped whole, a tap outside
 /// the positive range leaves its record, and a control law of the wrong
 /// shape leaves its profile; each is reported.
@@ -5671,11 +5677,11 @@ fn the_writer_drops_values_the_schema_rejects() {
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
 }
 
-/// The semantic rules of 0.2.x conformance that the schema cannot state.
+/// The semantic rules of BMOPF conformance that the schema cannot state.
 #[test]
-fn the_semantic_rules_of_0_2_conformance_are_checked() {
+fn the_semantic_rules_of_conformance_are_checked() {
     let text = serde_json::json!({
-        "meta": {"schema_version": "0.2.0", "frequency": 50.0},
+        "meta": {"schema_version": release(), "frequency": 50.0},
         "bus": {
             "a": {"terminal_names": ["1", "2", "3"], "vng_max": [10.0], "vpn_max": [250.0, 250.0, 250.0]},
             "b": {"terminal_names": ["1", "n"], "vpp_max": [400.0], "vpos_max": 1.1}

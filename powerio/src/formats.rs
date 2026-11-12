@@ -123,14 +123,8 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
             Distribution,
             true,
         ),
-        // PowerIO writes one BMOPF version, the 0.2.0 proposal, and reads
-        // documents written against earlier versions as 0.2.0.
-        (
-            "bmopf-json",
-            "BMOPF JSON (0.2.0 proposal)",
-            Distribution,
-            true,
-        ),
+        // PowerIO reads and writes one BMOPF; older drafts read as it.
+        ("bmopf-json", "BMOPF JSON", Distribution, true),
         #[cfg(feature = "gridfm")]
         ("gridfm", "GridFM Parquet", Transmission, true),
     ];
@@ -197,12 +191,6 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
         == Some(powerio_tx::format::routing::DistributionFormat::SincalMulticonductor)
     {
         return Some(info("sincal-multiconductor", Some("sinx"), false, false));
-    }
-    // `bmopf-json@0.2.0` names the one version PowerIO writes, so it is an
-    // alias of `bmopf-json`; any other `@` version names none.
-    if let Some(version) = name.strip_prefix("bmopf-json@") {
-        return (version == powerio_dist::BMOPF_SCHEMA_VERSION)
-            .then(|| info("bmopf-json", Some("json"), false, true));
     }
 
     if crate::is_geo_layer_token(name) {

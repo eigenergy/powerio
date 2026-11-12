@@ -304,6 +304,16 @@
         "schema_upstream_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/6796394f6a4326b61c7fcf5ab5c0d55181b67d25/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_version": "0.2.0"
       },
+      "powerio_bmopf_15": {
+        "producer": "powerio",
+        "producer_version": "0.12.0-rc.1",
+        "schema_commit": "6796394f6a4326b61c7fcf5ab5c0d55181b67d25",
+        "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/schema-v0.2.0/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/6796394f6a4326b61c7fcf5ab5c0d55181b67d25/schema/bmopf/0.2.0/bmopf.schema.json",
+        "schema_sha256": "9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc",
+        "schema_status": "proposal",
+        "schema_upstream_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/6796394f6a4326b61c7fcf5ab5c0d55181b67d25/schema/bmopf/0.2.0/bmopf.schema.json"
+      },
       "powerio_bmopf_2": {
         "producer": "powerio",
         "producer_version": "0.11.0",

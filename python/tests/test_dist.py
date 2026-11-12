@@ -451,11 +451,16 @@ def test_parse_confines_includes_to_the_case_directory(tmp_path):
     assert "include_root" not in inspect.signature(powerio.parse).parameters
 
 
+def _bmopf_release():
+    """The release a written BMOPF document states: the schema's `$id` directory."""
+    return powerio.versions()["bmopf_schema"].rsplit("/", 2)[-2]
+
+
 def test_referenced_source_rows_read_like_earth_source_rows():
     # The IR keeps a referenced source in a tagged record so older readers
     # reject it; Python rows stay flat and add `reference_terminal`.
     document = {
-        "meta": {"schema_version": "0.2.0"},
+        "meta": {"schema_version": _bmopf_release()},
         "bus": {"b": {"terminal_names": ["a", "n"]}},
         "voltage_source": {"s": {
             "bus": "b", "terminal_map": ["a"],
@@ -488,7 +493,7 @@ def test_source_energy_prices_and_schema_digest_survive_ir():
     import hashlib
 
     document = {
-        "meta": {"schema_version": "0.2.0"},
+        "meta": {"schema_version": _bmopf_release()},
         "bus": {"b": {"terminal_names": ["a", "n"]}},
         "voltage_source": {"s": {
             "bus": "b", "terminal_map": ["a", "n"],
@@ -499,21 +504,22 @@ def test_source_energy_prices_and_schema_digest_survive_ir():
     module = powerio.parse(io.StringIO(json.dumps(document)), format="bmopf-json")
     restored = _parse_module(_emit_module(module))
     assert restored.value.voltage_sources[0]["energy_cost_rate"] == [0.1]
-    output = json.loads(powerio.emit(restored, "bmopf-json@0.2.0").text)
+    output = json.loads(powerio.emit(restored, "bmopf-json").text)
     provenance = output["meta"]["provenance"]["powerio_bmopf"]
-    schema = (DATA.parents[2] / "powerio-dist" / "schemas" / "bmopf" / "0.2.0" / "bmopf.schema.json").read_bytes()
+    schema = (DATA.parents[2] / "powerio-dist" / "schemas" / "bmopf" / "bmopf.schema.json").read_bytes()
     assert provenance["schema_sha256"] == hashlib.sha256(schema).hexdigest()
     assert provenance["schema_status"] == "proposal"
     assert provenance["schema_commit"] in provenance["schema_upstream_url"]
     assert provenance["schema_commit"] in provenance["schema_retrieval_url"]
     # `meta.schema_version` is the one version identifier; the schema's `$id`
-    # (its URL at the schema-v0.2.0 tag) and the retrieval permalink live in
-    # provenance.
+    # and the retrieval permalink live in provenance.
     assert "$schema" not in output["meta"]
-    assert output["meta"]["schema_version"] == "0.2.0"
-    assert provenance["schema_id"].endswith("/schema-v0.2.0/schema/bmopf/0.2.0/bmopf.schema.json")
+    assert output["meta"]["schema_version"] == _bmopf_release()
+    assert provenance["schema_id"] == json.loads(schema)["$id"]
+    assert provenance["schema_id"] == powerio.versions()["bmopf_schema"]
     assert output["voltage_source"]["s"]["energy_cost_rate"] == [0.1]
-    # PowerIO writes one BMOPF version: `@0.2.0` names it, any other refuses.
-    assert json.loads(powerio.emit(restored, "bmopf-json").text) == output
-    with pytest.raises(powerio.PowerIOError, match="only BMOPF 0.2.0"):
-        powerio.emit(restored, "bmopf-json@0.1.0")
+    # There is one BMOPF: a token naming a version (as PowerIO 0.11 accepted)
+    # is refused.
+    for token in ("bmopf-json@0.1.0", "bmopf-json@0.2.0"):
+        with pytest.raises(powerio.PowerIOError, match="PowerIO writes one BMOPF"):
+            powerio.emit(restored, token)
