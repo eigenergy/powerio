@@ -5704,13 +5704,7 @@ fn read_two_winding_transformer(
         let ends_connected = end_connected(end1) && end_connected(end2);
         branch.in_service = mapper.in_service(transformer_id)? && ends_connected;
         branch.uid = Some(transformer_id.to_string());
-        apply_limits_to_targets(
-            store,
-            &[transformer_id],
-            &mut branch,
-            kv1,
-            version,
-        )?;
+        apply_limits_to_targets(store, &[transformer_id], &mut branch, kv1, version)?;
         for (end, kv) in [(end1, kv1), (end2, kv2)] {
             // A current limit constrains its own terminal. Transformer ends
             // need not share a voltage or follow Terminal.sequenceNumber.
@@ -6419,11 +6413,7 @@ fn warn_regenerated_subordinate_identities(store: &Store, warnings: &mut CgmesDi
 
 #[cfg(test)]
 mod tests {
-    fn operational_limit_store(
-        kind_property: &str,
-        value: &str,
-        direction: Option<&str>,
-    ) -> Store {
+    fn operational_limit_store(kind_property: &str, value: &str, direction: Option<&str>) -> Store {
         let mut type_props = vec![(
             kind_property.into(),
             PropValue::Ref("LimitKind.patl".into()),
