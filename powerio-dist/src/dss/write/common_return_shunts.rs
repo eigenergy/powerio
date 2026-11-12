@@ -36,8 +36,8 @@ fn susceptance(shunt: &DistShunt) -> Option<(usize, f64)> {
         return None;
     }
     let total = (0..phases).fold(0.0, |sum, _| sum + b);
-    for i in 0..n {
-        for j in 0..n {
+    for (i, row) in shunt.b.iter().enumerate() {
+        for (j, &value) in row.iter().enumerate() {
             let expected = if i == phases && j == phases {
                 total
             } else if i == j {
@@ -47,7 +47,7 @@ fn susceptance(shunt: &DistShunt) -> Option<(usize, f64)> {
             } else {
                 0.0
             };
-            if shunt.b[i][j] != expected {
+            if value != expected {
                 return None;
             }
         }
