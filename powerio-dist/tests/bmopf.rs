@@ -5007,7 +5007,7 @@ fn an_unassignable_geo_is_reported_as_dropped() {
             "geo":{"type":"Polygon","coordinates":[]}}}}"#;
     let net = parse_bmopf_str(text).unwrap();
     assert!(net.buses()[0].location.is_none());
-    assert!(net.component_locations().is_empty());
+    assert_eq!(net.component_locations().as_slice(), []);
     for subject in ["bus a:", "load l:"] {
         assert_eq!(
             findings(&net.diagnostics, "READ.BMOPF.FIELD_DROPPED", subject).len(),
