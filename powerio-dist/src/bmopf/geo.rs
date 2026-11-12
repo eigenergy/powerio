@@ -34,6 +34,11 @@ pub(super) fn is_wgs84(crs: &str) -> bool {
     )
 }
 
+/// Whether a point lies in the longitude and latitude ranges, in degrees.
+fn in_degrees(p: &DistLocation) -> bool {
+    (-180.0..=180.0).contains(&p.x) && (-90.0..=90.0).contains(&p.y)
+}
+
 fn point(value: &Value) -> Option<DistLocation> {
     let p = value.as_array()?;
     if p.len() != 2 && p.len() != 3 {
@@ -236,9 +241,7 @@ pub(super) fn read(
         match (kind, geo["type"].as_str()) {
             ("bus", Some("Point")) => {
                 if let Some(location) = point(&geo["coordinates"])
-                    && (!geographic
-                        || ((-180.0..=180.0).contains(&location.x)
-                            && (-90.0..=90.0).contains(&location.y)))
+                    && (!geographic || in_degrees(&location))
                     && let Some(&row) = buses.get(id)
                 {
                     net.buses_mut()[row].location = Some(location);
@@ -250,10 +253,7 @@ pub(super) fn read(
                     .as_array()
                     .and_then(|items| items.iter().map(point).collect::<Option<Vec<_>>>())
                     && points.len() >= 2
-                    && (!geographic
-                        || points.iter().all(|p| {
-                            (-180.0..=180.0).contains(&p.x) && (-90.0..=90.0).contains(&p.y)
-                        }))
+                    && (!geographic || points.iter().all(in_degrees))
                     && let Some(&row) = lines.get(id)
                 {
                     net.lines_mut()[row].route = Some(points);
@@ -393,8 +393,7 @@ fn read_component_geometry(
                     _ => None,
                 };
                 let assigned = position.filter(|p| {
-                    (-180.0..=180.0).contains(&p.x)
-                        && (-90.0..=90.0).contains(&p.y)
+                    in_degrees(p)
                         && names.contains(&(target, name.as_str()))
                         && seen.insert((target, name.clone()))
                 });

@@ -25,3 +25,24 @@ class SincalBalancedReadOptions:
 
     def __post_init__(self):
         _validate_selection(self)
+
+
+def _native_selections(balanced, multiconductor):
+    """Checks the two SINCAL option types and returns the tuples the native
+    readers take, ``(balanced, multiconductor)``, each None when not given."""
+    from .dist import SincalReadOptions
+    tx = mc = None
+    if balanced is not None:
+        if not isinstance(balanced, SincalBalancedReadOptions):
+            raise TypeError("sincal_balanced must be SincalBalancedReadOptions")
+        tx = (balanced.variant, balanced.snapshot_hours, balanced.acquired_tables)
+    if multiconductor is not None:
+        if not isinstance(multiconductor, SincalReadOptions):
+            raise TypeError("sincal_multiconductor must be dist.SincalReadOptions")
+        mc = (
+            multiconductor.variant,
+            multiconductor.snapshot_hours,
+            multiconductor.acquired_tables,
+            multiconductor.assume_inactive_source_controls,
+        )
+    return tx, mc

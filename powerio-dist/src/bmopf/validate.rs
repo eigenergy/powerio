@@ -121,7 +121,7 @@ fn has_neutral(names: &[&str], roles: Option<&Value>) -> bool {
 }
 
 /// A number, or every entry of a non-empty array, finite and strictly positive.
-fn strictly_positive(value: &Value) -> bool {
+pub(super) fn strictly_positive(value: &Value) -> bool {
     let one = |v: &Value| v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0);
     one(value)
         || value

@@ -83,7 +83,7 @@ from ._powerio import (
     UpdateReport,
     __version__,
 )
-from ._sincal import SincalBalancedReadOptions
+from ._sincal import SincalBalancedReadOptions, _native_selections
 from .collection import Collection, CollectionResult
 
 __all__ = [
@@ -2207,21 +2207,7 @@ def parse(
         if name is not None and _path_from_source(source) is not None:
             raise ValueError("name is only valid for memory and file object sources")
         return _pypsa_files.parse(source, binary_format, name=name)
-    balanced_selection = None
-    if sincal_balanced is not None:
-        if not isinstance(sincal_balanced, SincalBalancedReadOptions):
-            raise TypeError("sincal_balanced must be SincalBalancedReadOptions")
-        balanced_selection = (sincal_balanced.variant, sincal_balanced.snapshot_hours, sincal_balanced.acquired_tables)
-    selection = None
-    if sincal_multiconductor is not None:
-        if not isinstance(sincal_multiconductor, dist.SincalReadOptions):
-            raise TypeError("sincal_multiconductor must be dist.SincalReadOptions")
-        selection = (
-            sincal_multiconductor.variant,
-            sincal_multiconductor.snapshot_hours,
-            sincal_multiconductor.acquired_tables,
-            sincal_multiconductor.assume_inactive_source_controls,
-        )
+    balanced_selection, selection = _native_selections(sincal_balanced, sincal_multiconductor)
     path = _path_from_source(source)
     if path is not None:
         if name is not None:
