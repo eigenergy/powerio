@@ -527,6 +527,78 @@ fn equipment_at_a_bus_outside_the_stated_hierarchy_is_reported_not_written_bare(
 }
 
 #[test]
+fn active_power_control_never_references_an_omitted_injection() {
+    let mut parsed = helpers::parse_str(PARTIAL_SUBSTATION_DATA, "psse").unwrap();
+    parsed.network.generators_mut()[0].active_power_control =
+        Some(powerio_tx::ActivePowerControl::new(true));
+    let mut battery = powerio_tx::Storage::new(BusId(1));
+    battery.uid = Some("omitted-battery".into());
+    battery.active_power_control = Some(powerio_tx::ActivePowerControl::new(true));
+    parsed.network.storage_mut().push(battery);
+    for target in [TargetFormat::Xiidm, TargetFormat::Jiidm] {
+        let out = helpers::emit_value(&parsed.network, target).unwrap();
+        assert!(
+            !out.text.contains("<apc:activePowerControl "),
+            "{}",
+            out.text
+        );
+        assert!(
+            !out.text.contains("\"activePowerControl\" :"),
+            "{}",
+            out.text
+        );
+        assert!(out.render_diagnostics().iter().any(|finding| {
+            finding.contains("RECORD_DROPPED") && finding.contains("generator/bus-1")
+        }));
+        for component in ["generator/bus-1", "storage/omitted-battery"] {
+            assert!(out.render_diagnostics().iter().any(|finding| {
+                finding.contains("FIELD_DROPPED")
+                    && finding.contains(component)
+                    && finding.contains("activePowerControl")
+            }));
+        }
+        helpers::parse_str(&out.text, target.token()).unwrap();
+    }
+}
+
+#[test]
+fn slack_terminal_never_references_a_partly_placeable_branch() {
+    let mut parsed = helpers::parse_str(PARTIAL_SUBSTATION_DATA, "psse").unwrap();
+    parsed.network.generators_mut().clear();
+    parsed.network.loads_mut().clear();
+    // The reference is the covered end of a branch whose other end cannot
+    // be placed. A terminal record alone does not mean the branch was emitted.
+    for bus in parsed.network.buses_mut() {
+        bus.kind = if bus.id == BusId(2) {
+            powerio_tx::BusType::Ref
+        } else {
+            powerio_tx::BusType::Pq
+        };
+    }
+    let detailed =
+        std::sync::Arc::make_mut(parsed.network.detailed_connectivity_mut().as_mut().unwrap());
+    let mut terminal = detailed.terminals[0].clone();
+    terminal.equipment = powerio_core::ComponentId::new("branch", "1-2").unwrap();
+    terminal.terminal = 2;
+    detailed.terminals.clear();
+    detailed.terminals.push(terminal);
+    for target in [TargetFormat::Xiidm, TargetFormat::Jiidm] {
+        let out = helpers::emit_value(&parsed.network, target).unwrap();
+        assert!(!out.text.contains("slackTerminal id="), "{}", out.text);
+        assert!(!out.text.contains("\"slackTerminal\" :"), "{}", out.text);
+        assert!(out.render_diagnostics().iter().any(|finding| {
+            finding.contains("RECORD_DROPPED") && finding.contains("branch/1-2")
+        }));
+        assert!(out.render_diagnostics().iter().any(|finding| {
+            finding.contains("FIELD_DROPPED")
+                && finding.contains("branch/1-2")
+                && finding.contains("slackTerminal")
+        }));
+        helpers::parse_str(&out.text, target.token()).unwrap();
+    }
+}
+
+#[test]
 fn a_stated_terminal_with_no_bus_or_node_drops_its_equipment_with_a_diagnostic() {
     let mut p = helpers::parse_str(PARTIAL_SUBSTATION_DATA, "psse").unwrap();
     let detailed = p.network.detailed_connectivity_mut().as_mut().unwrap();
