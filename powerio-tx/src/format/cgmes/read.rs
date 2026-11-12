@@ -4136,6 +4136,54 @@ fn limit_kind<'a>(store: &'a Store, limit_type: &str, version: CgmesVersion) -> 
     }
 }
 
+/// The shared interpretation of one CGMES operational limit.
+///
+/// Zero is a finite bound in the 0.12 model. A low-direction limit is a
+/// lower-flow constraint, not a thermal upper rating, and cannot be projected
+/// into the current branch rating fields.
+#[derive(Debug)]
+enum OperationalLimitClassification<'a> {
+    Accepted {
+        value: f64,
+        kind: Option<&'a str>,
+        limit_type: &'a str,
+    },
+    Rejected(&'static str),
+}
+
+fn classify_operational_limit<'a>(
+    store: &'a Store,
+    id: &str,
+    class: &str,
+    version: CgmesVersion,
+) -> Result<OperationalLimitClassification<'a>> {
+    let Some(limit_type) = store.refv(id, "OperationalLimit.OperationalLimitType") else {
+        return Ok(OperationalLimitClassification::Rejected(
+            "has no OperationalLimitType",
+        ));
+    };
+    let Some(value) = operational_limit_value(store, id, class)? else {
+        return Ok(OperationalLimitClassification::Rejected(
+            "has no numeric value",
+        ));
+    };
+    if !value.is_finite() || value < 0.0 {
+        return Ok(OperationalLimitClassification::Rejected(
+            "has a nonfinite or negative value",
+        ));
+    }
+    if store.enum_value(limit_type, "OperationalLimitType.direction") == Some("low") {
+        return Ok(OperationalLimitClassification::Rejected(
+            "is a low-direction limit",
+        ));
+    }
+    Ok(OperationalLimitClassification::Accepted {
+        value,
+        kind: limit_kind(store, limit_type, version),
+        limit_type,
+    })
+}
+
 #[derive(Default)]
 struct VoltageLimitCandidates {
     low_kv: Option<f64>,
@@ -4364,25 +4412,23 @@ fn loading_limits(
                 continue;
             }
             let object = &store.objects[store.by_id[limit]];
-            let Some(limit_type) = store.refv(&object.id, "OperationalLimit.OperationalLimitType")
-            else {
-                warnings.push(format!(
-                    "{class} `{}` has no OperationalLimitType and was not retained",
-                    object.id
-                ));
-                continue;
-            };
-            let value = operational_limit_value(store, &object.id, class)?;
-            let Some(value) = value.filter(|value| value.is_finite() && *value > 0.0) else {
-                warnings.push(format!(
-                "{class} `{}` has a missing, nonfinite, or nonpositive value and was not retained",
-                object.id
-            ));
-                continue;
-            };
+            let (value, kind, limit_type) =
+                match classify_operational_limit(store, &object.id, class, version)? {
+                    OperationalLimitClassification::Accepted {
+                        value,
+                        kind,
+                        limit_type,
+                    } => (value, kind, limit_type),
+                    OperationalLimitClassification::Rejected(reason) => {
+                        warnings.push_as(
+                            &codes::READ_CGMES_FIELD_UNMAPPED,
+                            format!("{class} `{}` {reason} and was not retained", object.id),
+                        );
+                        continue;
+                    }
+                };
             warn_distinct_normal_limit(store, &object.id, class, value, warnings)?;
             found = true;
-            let kind = limit_kind(store, limit_type, version);
             let permanent = store
                 .boolean(limit_type, "OperationalLimitType.isInfiniteDuration")?
                 .unwrap_or_else(|| kind == Some("patl"));
@@ -5664,7 +5710,6 @@ fn read_two_winding_transformer(
             &mut branch,
             kv1,
             version,
-            mapper.warnings,
         )?;
         for (end, kv) in [(end1, kv1), (end2, kv2)] {
             // A current limit constrains its own terminal. Transformer ends
@@ -5676,7 +5721,6 @@ fn read_two_winding_transformer(
                     &mut branch,
                     kv,
                     version,
-                    mapper.warnings,
                 )?;
             }
         }
@@ -5782,7 +5826,6 @@ fn read_three_winding_transformer(
                 &mut limits,
                 kv,
                 version,
-                mapper.warnings,
             )?;
             windings[index] = Winding {
                 bus,
@@ -6092,7 +6135,6 @@ fn apply_limits(
         branch,
         kv,
         version,
-        mapper.warnings,
     )?;
     Ok(())
 }
@@ -6107,7 +6149,6 @@ fn apply_limits_to_targets(
     branch: &mut Branch,
     kv: f64,
     version: CgmesVersion,
-    warnings: &mut CgmesDiagnostics,
 ) -> Result<()> {
     // Limit sets point at their terminal or equipment, and limits point at
     // their set; both are reverse indexed.
@@ -6129,30 +6170,17 @@ fn apply_limits_to_targets(
             ) {
                 continue;
             }
-            let Some(limit_type) = store.refv(limit, "OperationalLimit.OperationalLimitType")
+            let class = store.class_of(limit).unwrap_or_default();
+            // Unsupported limits are diagnosed by loading_limits when the retained
+            // operational-limit groups are assembled; this projection skips them.
+            let OperationalLimitClassification::Accepted {
+                value,
+                kind,
+                limit_type,
+            } = classify_operational_limit(store, limit, class, version)?
             else {
                 continue;
             };
-            let kind = limit_kind(store, limit_type, version);
-            let class = store.class_of(limit).unwrap_or_default();
-            let Some(value) = operational_limit_value(store, limit, class)? else {
-                continue;
-            };
-            // A low limit is a floor on the flow, not a thermal rating.
-            if store.enum_value(limit_type, "OperationalLimitType.direction") == Some("low") {
-                warnings.push_as(
-                    &codes::READ_CGMES_FIELD_UNMAPPED,
-                    format!("{class} `{limit}` is a low limit; a branch has no source neutral field for a lower flow bound"),
-                );
-                continue;
-            }
-            if value < 0.0 {
-                warnings.push_as(
-                    &codes::READ_CGMES_FIELD_UNMAPPED,
-                    format!("{class} `{limit}` value {value} is negative and is not read as a thermal rating"),
-                );
-                continue;
-            }
             let mva = if class == "CurrentLimit" {
                 3f64.sqrt() * kv * value / 1000.0
             } else {
@@ -7024,6 +7052,146 @@ mod tests {
         assert!(warnings.iter().any(|warning| {
             warning.contains("acceptableDuration=12.5") && warning.contains("13 whole seconds")
         }));
+    }
+
+    #[test]
+    fn operational_limit_classification_keeps_zero_and_rejects_unsupported_bounds() {
+        for (version, kind_property) in [
+            (
+                CgmesVersion::V2_4_15,
+                "entsoe:OperationalLimitType.limitType",
+            ),
+            (CgmesVersion::V3_0, "eu:OperationalLimitType.kind"),
+        ] {
+            for (value, direction, accepted) in [
+                ("0", None, true),
+                ("100", None, true),
+                ("-1", None, false),
+                ("100", Some("low"), false),
+            ] {
+                let mut type_props = vec![(
+                    kind_property.into(),
+                    PropValue::Ref("LimitKind.patl".into()),
+                )];
+                if let Some(direction) = direction {
+                    type_props.push((
+                        "OperationalLimitType.direction".into(),
+                        PropValue::Ref(format!("OperationalLimitDirectionKind.{direction}")),
+                    ));
+                }
+                let mut store = Store::default();
+                store
+                    .merge(CimDocument {
+                        cim_namespaces: BTreeSet::from(["http://iec.ch/TC57/CIM100#".into()]),
+                        header: None,
+                        objects: vec![
+                            CimObject {
+                                class: "OperationalLimitSet".into(),
+                                id: "set".into(),
+                                definition: true,
+                                props: vec![(
+                                    "OperationalLimitSet.Equipment".into(),
+                                    PropValue::Ref("line".into()),
+                                )],
+                            },
+                            CimObject {
+                                class: "OperationalLimitType".into(),
+                                id: "type".into(),
+                                definition: true,
+                                props: type_props,
+                            },
+                            CimObject {
+                                class: "CurrentLimit".into(),
+                                id: "limit".into(),
+                                definition: true,
+                                props: vec![
+                                    (
+                                        "OperationalLimit.OperationalLimitSet".into(),
+                                        PropValue::Ref("set".into()),
+                                    ),
+                                    (
+                                        "OperationalLimit.OperationalLimitType".into(),
+                                        PropValue::Ref("type".into()),
+                                    ),
+                                    (
+                                        "CurrentLimit.value".into(),
+                                        PropValue::Text(value.into()),
+                                    ),
+                                ],
+                            },
+                        ],
+                    })
+                    .unwrap();
+
+                let classification =
+                    classify_operational_limit(&store, "limit", "CurrentLimit", version).unwrap();
+                match classification {
+                    OperationalLimitClassification::Accepted {
+                        value: actual,
+                        kind,
+                        ..
+                    } if accepted => {
+                        assert_eq!(actual, value.parse::<f64>().unwrap());
+                        assert_eq!(kind, Some("patl"));
+                    }
+                    OperationalLimitClassification::Rejected(_) if !accepted => {}
+                    other => panic!(
+                        "value={value}, direction={direction:?}, accepted={accepted}: {other:?}"
+                    ),
+                }
+
+                let mut branch = Branch {
+                    name: None,
+                    from: BusId(1),
+                    to: BusId(2),
+                    r: 0.0,
+                    x: 0.1,
+                    b: 0.0,
+                    charging: None,
+                    rate_a: f64::INFINITY,
+                    rate_b: f64::INFINITY,
+                    rate_c: f64::INFINITY,
+                    rating_sets: Vec::new(),
+                    current_ratings: None,
+                    tap: 0.0,
+                    shift: 0.0,
+                    in_service: true,
+                    angmin: -360.0,
+                    angmax: 360.0,
+                    control: None,
+                    solution: None,
+                    uid: None,
+                    route: None,
+                    extras: BTreeMap::new(),
+                };
+                apply_limits_to_targets(
+                    &store,
+                    &["line"],
+                    &mut branch,
+                    10.0,
+                    version,
+                )
+                .unwrap();
+                if accepted {
+                    let expected = 3.0_f64.sqrt() * 10.0 * value.parse::<f64>().unwrap() / 1000.0;
+                    assert!((branch.rate_a - expected).abs() < 1e-12);
+                } else {
+                    assert_eq!(branch.rate_a, f64::INFINITY);
+                }
+
+                let mut warnings = CgmesDiagnostics::new(&codes::READ_CGMES_RECORD_UNMAPPED);
+                let limits =
+                    loading_limits(&store, "set", "CurrentLimit", version, &mut warnings).unwrap();
+                if value == "0" {
+                    let limits = limits.expect("zero is a retained finite limit");
+                    assert_eq!(limits.permanent_limit, Some(0.0));
+                    assert!(warnings.is_empty());
+                } else if !accepted {
+                    assert!(limits.is_none());
+                    assert_eq!(warnings.len(), 1);
+                }
+            }
+        }
     }
 
     #[test]
