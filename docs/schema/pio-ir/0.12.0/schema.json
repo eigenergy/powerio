@@ -4456,7 +4456,7 @@
               "type": "string"
             }
           ],
-          "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral and phase to phase families, and the per-sequence scalars\n(BMOPF schema 0.1.0: positive sequence has both bounds, negative and\nzero sequence and neutral to ground are magnitude caps whose lower\nbound is always 0)."
+          "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral and phase to phase families, and the per-sequence scalars\n(as in BMOPF: positive sequence has both bounds, negative and\nzero sequence and neutral to ground are magnitude caps whose lower\nbound is always 0)."
         },
         "v_min_phase": {
           "description": "Nonuniform phase-to-ground bounds in phase-terminal order, volts.\nA scalar bound, when present, takes precedence over this vector.",
@@ -4724,7 +4724,7 @@
       "type": "object"
     },
     "DistCapacitor": {
-      "description": "A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`): `q_rated` vars\ndelivered at `v_nom` volts across the element terminals, distinct from the\nraw admittance [`DistShunt`]. The DSS converter still lowers OpenDSS\ncapacitors to shunt B matrices; this element carries capacitors that arrive\nas BMOPF input.",
+      "description": "A rated capacitor bank (the BMOPF `capacitor`): `q_rated` vars\ndelivered at `v_nom` volts across the element terminals, distinct from the\nraw admittance [`DistShunt`]. The DSS converter still lowers OpenDSS\ncapacitors to shunt B matrices; this element carries capacitors that arrive\nas BMOPF input.",
       "properties": {
         "bus": {
           "type": "string"
@@ -5476,7 +5476,7 @@
           "type": "object"
         },
         "i_max": {
-          "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF schema 0.1.0 line fields, alongside the linecode's own).",
+          "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF line fields, alongside the linecode's own).",
           "items": {
             "anyOf": [
               {

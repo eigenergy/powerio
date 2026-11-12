@@ -498,6 +498,25 @@ fn without_sign_convention_descriptions(body: &serde_json::Value) -> serde_json:
     body
 }
 
+/// A definition without the description that named a BMOPF schema version
+/// in 0.11: `DistBus.v_min`, `DistLine.i_max`, and `DistCapacitor` itself.
+fn without_bmopf_version_descriptions(name: &str, body: &serde_json::Value) -> serde_json::Value {
+    let mut body = body.clone();
+    let field = match name {
+        "DistBus" => Some("v_min"),
+        "DistLine" => Some("i_max"),
+        _ => None,
+    };
+    let target = match field {
+        Some(field) => &mut body["properties"][field],
+        None => &mut body,
+    };
+    if let Some(object) = target.as_object_mut() {
+        object.remove("description");
+    }
+    body
+}
+
 /// A transformer body without the one field 0.12 adds to it. `magnetizing_connection`
 /// is optional, and a document without it states the star point, the meaning
 /// `mag_g` and `mag_b` have in every 0.11 document; 0.12 rewords those two
@@ -685,6 +704,15 @@ fn assert_reads_documents_of(earlier: &str) {
                 without_sign_convention_descriptions(&current_defs[name]),
                 without_sign_convention_descriptions(definition),
                 "{earlier}: definition {name} changed beyond the sign convention descriptions"
+            );
+        } else if matches!(name.as_str(), "DistBus" | "DistLine" | "DistCapacitor") {
+            // 0.12 names one BMOPF, so three descriptions drop the schema
+            // version they cited; a description adds no validation
+            // constraint, and nothing else may change.
+            assert_eq!(
+                without_bmopf_version_descriptions(name, &current_defs[name]),
+                without_bmopf_version_descriptions(name, definition),
+                "{earlier}: definition {name} changed beyond the BMOPF descriptions"
             );
         } else if name == "DcPfInstance" || name == "AcPfInstance" {
             assert_only_optional_property_added(
