@@ -6129,13 +6129,7 @@ fn apply_limits(
         .map(String::as_str)
         .collect();
     terminals.push(equipment);
-    apply_limits_to_targets(
-        mapper.store,
-        &terminals,
-        branch,
-        kv,
-        version,
-    )?;
+    apply_limits_to_targets(mapper.store, &terminals, branch, kv, version)?;
     Ok(())
 }
 
@@ -7055,6 +7049,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // keeps the version/value parity matrix in one regression
     fn operational_limit_classification_keeps_zero_and_rejects_unsupported_bounds() {
         for (version, kind_property) in [
             (
@@ -7113,10 +7108,7 @@ mod tests {
                                         "OperationalLimit.OperationalLimitType".into(),
                                         PropValue::Ref("type".into()),
                                     ),
-                                    (
-                                        "CurrentLimit.value".into(),
-                                        PropValue::Text(value.into()),
-                                    ),
+                                    ("CurrentLimit.value".into(), PropValue::Text(value.into())),
                                 ],
                             },
                         ],
@@ -7164,14 +7156,7 @@ mod tests {
                     route: None,
                     extras: BTreeMap::new(),
                 };
-                apply_limits_to_targets(
-                    &store,
-                    &["line"],
-                    &mut branch,
-                    10.0,
-                    version,
-                )
-                .unwrap();
+                apply_limits_to_targets(&store, &["line"], &mut branch, 10.0, version).unwrap();
                 if accepted {
                     let expected = 3.0_f64.sqrt() * 10.0 * value.parse::<f64>().unwrap() / 1000.0;
                     assert!((branch.rate_a - expected).abs() < 1e-12);
