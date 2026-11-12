@@ -48,10 +48,11 @@ const EARTH: &str = "4";
 const NEGLIGIBLE: f64 = 1e-6;
 /// The element tables the reader maps. Every other non-empty table is
 /// reported.
-const MAPPED: [&str; 8] = [
+const MAPPED: [&str; 9] = [
     "bus",
     "line",
     "trafo",
+    "trafo_characteristic_table",
     "ext_grid",
     "load",
     "asymmetric_load",
@@ -83,6 +84,10 @@ fn unmapped_trafos(obj: &Map<String, Value>, in_service_only: bool) -> bool {
 }
 
 type Result<T> = std::result::Result<T, powerio_tx::Error>;
+
+/// The `vk_percent` and `vkr_percent` of each transformer characteristic
+/// per step, keyed by the bits of the characteristic id and the step.
+type TrafoCharacteristics = HashMap<(u64, u64), (Option<f64>, Option<f64>)>;
 
 /// A parsed pandapower document: the module of whichever network kind its
 /// tables select.
@@ -199,6 +204,8 @@ struct Reader {
     dead_buses: HashSet<String>,
     /// The LV neutral terminals of YNyn windings, in transformer order.
     winding_neutrals: Vec<String>,
+    /// Whether pandapower converts the file from a format before 3.0.
+    legacy_taps: bool,
 }
 
 impl Reader {
@@ -219,6 +226,7 @@ impl Reader {
             .insert("sn_mva".into(), positive(&obj, "sn_mva", 1.0)?.into());
         self.read_buses(&obj)?;
         self.read_lines(&obj, f_hz)?;
+        self.legacy_taps = legacy_taps(&obj);
         self.read_trafos(&obj)?;
         // A winding neutral is a fifth terminal. The roles keep it out of the
         // phases.
@@ -492,6 +500,20 @@ impl Reader {
                 *entry = entry.zip(row.f_finite(key)).map(|(a, b)| a.max(b.abs()));
             }
         }
+        // The vk and vkr of each characteristic per step.
+        let mut characteristics = HashMap::new();
+        if let Some(table) = read_frame(obj, "trafo_characteristic_table")? {
+            for row in table.rows() {
+                if let (Some(id), Some(step)) =
+                    (row.f_finite("id_characteristic"), row.f_finite("step"))
+                {
+                    characteristics.insert(
+                        (id.to_bits(), step.to_bits()),
+                        (row.f_finite("vk_percent"), row.f_finite("vkr_percent")),
+                    );
+                }
+            }
+        }
         for row in frame.rows() {
             let index = row.index_usize()?;
             let name = format!("trafo_{index}");
@@ -520,7 +542,14 @@ impl Reader {
             let vn_lv = req_positive(&row, "trafo", "vn_lv_kv")?;
             let row_vk = row.req_f("vk_percent")?;
             let row_vkr = row.req_f("vkr_percent")?;
-            let (vk, vkr) = (row_vk, row_vkr);
+            let table_sc = match self.table_impedance(&row, &name, &characteristics) {
+                Ok(table_sc) => table_sc,
+                Err(e) => {
+                    self.unusable(&row, &name, e)?;
+                    continue;
+                }
+            };
+            let [vk, vkr] = table_sc.unwrap_or([row_vk, row_vkr]);
             let parallel = if vkr.abs() > vk.abs() {
                 Err(bad(format!(
                     "`trafo` row {}: `vkr_percent` ({vkr}) exceeds the magnitude of \
@@ -584,19 +613,29 @@ impl Reader {
             let xsc = short_circuit_x(vk, vkr);
             let mut trafo =
                 DistTransformer::new(name.clone(), vec![hv_winding, lv_winding], vec![xsc], 3);
-            let known = [
+            let mut known = vec![
                 "hv_bus",
                 "lv_bus",
                 "sn_mva",
                 "vn_hv_kv",
                 "vn_lv_kv",
-                "vk_percent",
-                "vkr_percent",
                 "pfe_kw",
                 "i0_percent",
                 "parallel",
             ];
+            // The row's vk and vkr stay in extras when the table replaces them.
+            if table_sc.is_none() {
+                known.extend(["vk_percent", "vkr_percent"]);
+            }
             trafo.extras = self.extras(&row, &name, &known, &[&hv, &lv]);
+            if table_sc.is_some() {
+                trafo
+                    .extras
+                    .insert("pandapower_table_vk_percent".into(), vk.into());
+                trafo
+                    .extras
+                    .insert("pandapower_table_vkr_percent".into(), vkr.into());
+            }
             // OpenDSS no-load percentages on the rating, as the CIM reader
             // derives them from a no-load test.
             let loss = row.f_or("pfe_kw", 0.0) / (sn * 10.0);
@@ -620,10 +659,11 @@ impl Reader {
                 };
             // The zero-sequence impedances are on the tapped LV voltage.
             let zb = (vn_lv * tap_lv).powi(2) / sn;
+            let sc = [vk, vkr];
             let in_service = row.bool_or("in_service", true)
                 && !self.dead_buses.contains(&hv)
                 && !self.dead_buses.contains(&lv);
-            match ZeroSequence::of(&row, zb, parallel, [vk, vkr], stated, zn) {
+            match ZeroSequence::of(&row, zb, parallel, sc, [row_vk, row_vkr], stated, zn) {
                 None => self.note(
                     &codes::READ_PANDAPOWER_APPROXIMATED,
                     format!(
@@ -698,24 +738,135 @@ impl Reader {
         Ok(())
     }
 
-    /// The HV and LV tap factors. Tap changers are not mapped yet, so both
-    /// stay at the nominal ratio. A stated changer is reported.
-    fn tap(&mut self, row: &Row<'_>, name: &str) -> (f64, f64) {
-        let moved = |changer: &str| {
-            row.f_finite(&format!("{changer}_pos"))
-                .zip(row.f_finite(&format!("{changer}_neutral")))
-                .is_some_and(|(pos, neutral)| pos - neutral != 0.0)
-        };
-        if row.bool_or("tap_dependency_table", false) || moved("tap") || moved("tap2") {
+    /// The vk and vkr that replace the row's when `tap_dependency_table` is
+    /// true. runpp_3ph takes them from the `trafo_characteristic_table` row
+    /// at `tap_pos` for the positive and negative sequence
+    /// (build_branch.py `_get_vk_values_from_table`). Without a matching row
+    /// pandapower takes 1 for both.
+    fn table_impedance(
+        &mut self,
+        row: &Row<'_>,
+        name: &str,
+        characteristics: &TrafoCharacteristics,
+    ) -> Result<Option<[f64; 2]>> {
+        if !row.bool_or("tap_dependency_table", false) {
+            return Ok(None);
+        }
+        let Some(id) = row.f_finite("id_characteristic_table") else {
+            if row.bool_or("in_service", true) {
+                return Err(bad(format!(
+                    "`trafo` row {}: `tap_dependency_table` is true without an \
+                     `id_characteristic_table`",
+                    row.label()
+                )));
+            }
             self.note(
                 &codes::READ_PANDAPOWER_APPROXIMATED,
                 format!(
-                    "{name}: a tap changer is stated. Tap changers are not mapped yet, so the \
-                     transformer keeps the nominal ratio. The tap columns stay in extras"
+                    "{name}: the impedance depends on a characteristic table, but no \
+                     `id_characteristic_table` names one. The transformer keeps `vk_percent` \
+                     and `vkr_percent`"
                 ),
             );
+            return Ok(None);
+        };
+        let step = row.f_finite("tap_pos");
+        match step.and_then(|step| characteristics.get(&(id.to_bits(), step.to_bits()))) {
+            Some(&(Some(vk), Some(vkr))) => Ok(Some([vk, vkr])),
+            Some(_) => Err(bad(format!(
+                "`trafo` row {}: the `trafo_characteristic_table` row for characteristic {id} \
+                 at step {} has no numeric `vk_percent` or `vkr_percent`",
+                row.label(),
+                step.unwrap_or(f64::NAN)
+            ))),
+            None => {
+                let step = step.map_or_else(|| "null".to_owned(), |step| step.to_string());
+                self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: no `trafo_characteristic_table` row for characteristic {id} at \
+                         step {step}. runpp_3ph then takes 1 percent for `vk_percent` and \
+                         `vkr_percent`, as the mapping does"
+                    ),
+                );
+                Ok(Some([1.0, 1.0]))
+            }
         }
-        (1.0, 1.0)
+    }
+
+    /// The HV and LV tap factors of the ratio tap changers `tap` and `tap2`,
+    /// which pandapower multiplies. Other changers are reported and left at
+    /// the nominal ratio.
+    fn tap(&mut self, row: &Row<'_>, name: &str) -> (f64, f64) {
+        let mut factors = (1.0, 1.0);
+        for changer in ["tap", "tap2"] {
+            let column = |key: &str| format!("{changer}_{key}");
+            let step = row.f_or(&column("step_percent"), 0.0);
+            let degree = row.f_or(&column("step_degree"), 0.0);
+            let kind = row.get(&column("changer_type"));
+            // pandapower reads `tap_dependency_table` for both changers. It
+            // applies the table row at `tap_pos` even at the neutral position.
+            if kind.is_some()
+                && row.get(&column("dependency_table")).is_some()
+                && row.bool_or("tap_dependency_table", false)
+            {
+                self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: runpp_3ph takes the `{changer}` ratio and angle from the \
+                         `trafo_characteristic_table` row at `tap_pos`. Only its `vk_percent` \
+                         and `vkr_percent` are mapped. The changer is left at the nominal \
+                         ratio, with its columns in extras"
+                    ),
+                );
+                continue;
+            }
+            let ratio = match kind {
+                // A pandapower 2 file has no changer type. pandapower converts a
+                // changer with only a degree step to ideal and any other one to a
+                // ratio changer. From format 3.0 a missing type applies no tap.
+                None if self.legacy_taps => !(step == 0.0 && degree != 0.0),
+                None | Some(Value::Null) => continue,
+                // pandapower compares the type exactly.
+                Some(kind) => matches!(kind.as_str(), Some("Ratio" | "Symmetrical")),
+            };
+            // pandapower's tap_pos - tap_neutral is NaN for a missing cell.
+            // nan_to_num then applies no tap.
+            let (Some(pos), Some(neutral)) = (
+                row.f_finite(&column("pos")),
+                row.f_finite(&column("neutral")),
+            ) else {
+                continue;
+            };
+            let diff = pos - neutral;
+            if diff == 0.0 {
+                continue;
+            }
+            if (!ratio && (step != 0.0 || degree != 0.0)) || (ratio && step != 0.0 && degree != 0.0)
+            {
+                self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: only a ratio tap without a phase step is mapped. The \
+                         `{changer}` changer is left at the nominal ratio, with its columns in \
+                         extras"
+                    ),
+                );
+                continue;
+            }
+            // A ratio changer without a percent step changes nothing in pandapower.
+            if step == 0.0 {
+                continue;
+            }
+            let tap = 1.0 + diff * step / 100.0;
+            // pandapower applies a tap with any other side on neither side.
+            match row.string(&column("side")).as_deref() {
+                Some("hv") => factors.0 *= tap,
+                Some("lv") => factors.1 *= tap,
+                _ => {}
+            }
+        }
+        factors
     }
 
     /// A zero-sequence-only shunt `(y/3) * ones(3, 3)` at `bus`, tagged with
@@ -1014,14 +1165,17 @@ struct ZeroSequence {
 }
 
 impl ZeroSequence {
-    /// `zb` is the impedance base in ohms. `[vk, vkr]` are the vk and vkr
-    /// the winding model maps. `stated` says whether `vk0` and `vkr0` apply
-    /// in place of them. `zn` is the neutral impedance in LV ohms.
+    /// `zb` is the impedance base in ohms. `sc` holds the vk and vkr the
+    /// winding model maps. `row_sc` holds the row's own, which
+    /// `pd2ppc_zero.py` reads even where a characteristic table replaces
+    /// them. `stated` says whether `vk0` and `vkr0` apply in place of the
+    /// row's vk and vkr. `zn` is the neutral impedance in LV ohms.
     fn of(
         row: &Row<'_>,
         zb: f64,
         parallel: f64,
         [vk, vkr]: [f64; 2],
+        [row_vk, row_vkr]: [f64; 2],
         stated: [bool; 2],
         zn: Complex64,
     ) -> Option<Self> {
@@ -1037,8 +1191,8 @@ impl ZeroSequence {
                 Some(positive)
             }
         };
-        let vk0 = zero("vk0_percent", stated[0], vk)?;
-        let vkr0 = zero("vkr0_percent", stated[1], vkr)?;
+        let vk0 = zero("vk0_percent", stated[0], row_vk)?;
+        let vkr0 = zero("vkr0_percent", stated[1], row_vkr)?;
         let mag0 = row.f_finite("mag0_percent")?;
         let rx = row.f_finite("mag0_rx")?;
         let si = row.f_finite("si0_hv_partial")?;
@@ -1217,6 +1371,50 @@ fn positive(obj: &Map<String, Value>, key: &str, default: f64) -> Result<f64> {
     })
 }
 
+/// Whether pandapower converts the file from a format before 3.0. This
+/// follows pandapower's `convert_format`. It takes the smaller of
+/// `format_version` and `version`. A `version` that is not a string wins.
+/// pandapower raises on a version it cannot parse, so such a file counts as
+/// current.
+fn legacy_taps(obj: &Map<String, Value>) -> bool {
+    // pandapower's empty network supplies a missing key.
+    let format_version = obj
+        .get("format_version")
+        .cloned()
+        .unwrap_or_else(|| "3.3.0".into());
+    let version = obj
+        .get("version")
+        .cloned()
+        .unwrap_or_else(|| "3.5.6".into());
+    let format_version = if version.is_string() {
+        format_version
+    } else {
+        version.clone()
+    };
+    let (Some(format_version), Some(version)) =
+        (version_tuple(&format_version), version_tuple(&version))
+    else {
+        return false;
+    };
+    format_version.min(version) < (3, 0, 0)
+}
+
+/// A version cell as `(major, minor, patch)`, with missing parts zero. A
+/// number reads as its decimal text, as pandapower's `str` gives it.
+fn version_tuple(value: &Value) -> Option<(u64, u64, u64)> {
+    let text = match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => return None,
+    };
+    let text = text.split(".dev").next().unwrap_or_default();
+    let mut parts = [0; 3];
+    for (k, part) in text.split('.').enumerate() {
+        *parts.get_mut(k)? = part.trim().parse().ok()?;
+    }
+    Some((parts[0], parts[1], parts[2]))
+}
+
 fn bad(message: impl Into<String>) -> powerio_tx::Error {
     powerio_tx::Error::FormatRead {
         format: "pandapower JSON",
@@ -1289,6 +1487,31 @@ mod tests {
         }
         json!({"_module": "pandapower.auxiliary", "_class": "pandapowerNet", "_object": object})
             .to_string()
+    }
+
+    /// `text` with the network's `format_version` set to `version`.
+    fn versioned(text: String, version: &str) -> String {
+        with_keys(text, &[("format_version", json!(version))])
+    }
+
+    /// `text` with the network keys `keys` set.
+    fn with_keys(text: String, keys: &[(&str, Value)]) -> String {
+        let mut root: Value = serde_json::from_str(&text).unwrap();
+        for (key, value) in keys {
+            root["_object"][*key] = value.clone();
+        }
+        root.to_string()
+    }
+
+    /// The HV and LV taps of the one transformer in `text`. The flag says
+    /// whether an approximation is reported.
+    fn taps_of(text: &str) -> ((f64, f64), bool) {
+        let module = read(text);
+        let w = &module.value().transformers()[0].windings;
+        (
+            (w[0].tap, w[1].tap),
+            codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+        )
     }
 
     /// A Dyn 20/0.4 kV transformer from bus 3 to bus 0 with `overrides`.
@@ -1994,6 +2217,25 @@ mod tests {
     }
 
     #[test]
+    fn a_ynyn_hv_tap_reflects_the_hv_correction_through_the_tapped_ratio() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({
+                "vector_group": "YNyn", "shift_degree": 0.0, "tap_side": "hv", "tap_neutral": 0,
+                "tap_pos": 2, "tap_step_percent": 2.5, "tap_changer_type": "Ratio"
+            })),
+        )]));
+        let shunts = module.value().shunts();
+        assert_eq!((shunts[0].bus.as_str(), shunts[1].bus.as_str()), ("3", "0"));
+        // An HV tap leaves the LV base and the LV shunt unchanged.
+        let tap2 = 1.05_f64.powi(2);
+        close(shunts[0].g[1][2], 6.327_265_627_003_232e-5 / 3.0 / tap2);
+        close(shunts[0].b[1][2], -0.002_302_581_094_410_822_6 / 3.0 / tap2);
+        close(shunts[1].g[0][0], 1.423_634_766_075_730_5 / 3.0);
+        close(shunts[1].b[0][0], -51.808_074_624_243_524 / 3.0);
+    }
+
+    #[test]
     fn a_ynyn_winding_neutral_is_not_a_phase() {
         let module = read(&net(vec![(
             "trafo",
@@ -2038,6 +2280,20 @@ mod tests {
                 .extras()
                 .contains_key("bmopf_terminal_conventions")
         );
+    }
+
+    #[test]
+    fn an_lv_tap_sets_the_zero_sequence_base() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({
+                "tap_side": "lv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                "tap_changer_type": "Ratio"
+            })),
+        )]));
+        let shunt = &module.value().shunts()[0];
+        close(shunt.g[0][0], 1.162_150_829_449_569 / 3.0);
+        close(shunt.b[0][0], -42.292_305_815_708_98 / 3.0);
     }
 
     #[test]
@@ -2163,6 +2419,358 @@ mod tests {
         assert_eq!(module.value().shunts().len(), 0);
         assert_eq!(module.value().transformers().len(), 1);
         assert_eq!(codes(&module), vec!["READ.DIST.PANDAPOWER_APPROXIMATED"]);
+    }
+
+    #[test]
+    fn ratio_taps_set_the_winding_tap() {
+        let tapped = |side: &str, kind: Value| {
+            let module = read(&net(vec![(
+                "trafo",
+                trafo(no_load_free(json!({
+                    "tap_side": side, "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                    "tap_step_degree": 0.0, "tap_changer_type": kind
+                }))),
+            )]));
+            let w = &module.value().transformers()[0].windings;
+            (
+                (w[0].tap, w[1].tap),
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+            )
+        };
+        assert_eq!(tapped("lv", json!("Ratio")), ((1.0, 1.05), false));
+        assert_eq!(tapped("hv", json!("Symmetrical")), ((1.05, 1.0), false));
+        assert_eq!(tapped("hv", json!(null)), ((1.0, 1.0), false));
+        assert_eq!(tapped("hv", json!("Ideal")), ((1.0, 1.0), true));
+        // pandapower compares the changer type exactly.
+        assert_eq!(tapped("lv", json!("ratio")), ((1.0, 1.0), true));
+        assert_eq!(tapped("hv", json!("RATIO")), ((1.0, 1.0), true));
+        // pandapower applies a tap of no known side nowhere.
+        assert_eq!(tapped("both", json!("Ratio")), ((1.0, 1.0), false));
+        let taps = |overrides: Value| {
+            let module = read(&net(vec![("trafo", trafo(no_load_free(overrides)))]));
+            let w = &module.value().transformers()[0].windings;
+            (
+                (w[0].tap, w[1].tap),
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+            )
+        };
+        let ratio = json!({
+            "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+            "tap_changer_type": "Ratio"
+        });
+        let with = |key: &str, value: Value| {
+            let mut row = ratio.clone();
+            row[key] = value;
+            row
+        };
+        // A pandapower 2 file has no changer type column and applies ratio
+        // taps. From format 3.0 a changer without a type applies none.
+        let mut legacy = ratio.clone();
+        legacy.as_object_mut().unwrap().remove("tap_changer_type");
+        let legacy_net = net(vec![("trafo", trafo(no_load_free(legacy.clone())))]);
+        for (version, expected) in [("2.14.0", 1.05), ("3.0.0", 1.0), ("3.1.0", 1.0)] {
+            assert_eq!(
+                taps_of(&versioned(legacy_net.clone(), version)),
+                ((expected, 1.0), false),
+                "{version}"
+            );
+        }
+        // A file without a version applies no tap without a changer type.
+        assert_eq!(taps(legacy.clone()), ((1.0, 1.0), false));
+        // pandapower takes the smaller of the two keys. A version that is
+        // not a string wins.
+        for keys in [
+            [
+                ("format_version", json!("3.1.0")),
+                ("version", json!("2.14.0")),
+            ],
+            [("format_version", json!("3.0.0")), ("version", json!(2))],
+            [("format_version", json!(2)), ("version", json!("3.5.4"))],
+        ] {
+            assert_eq!(
+                taps_of(&with_keys(legacy_net.clone(), &keys)),
+                ((1.05, 1.0), false),
+                "{keys:?}"
+            );
+        }
+        assert_eq!(
+            taps_of(&with_keys(
+                legacy_net.clone(),
+                &[("version", json!("2.14.0"))]
+            )),
+            ((1.05, 1.0), false)
+        );
+        assert_eq!(taps(with("tap_side", json!(null))), ((1.0, 1.0), false));
+        // A missing cell makes pandapower's step count NaN, so no tap applies.
+        assert_eq!(taps(with("tap_neutral", json!(null))), ((1.0, 1.0), false));
+        assert_eq!(taps(with("tap_pos", json!(null))), ((1.0, 1.0), false));
+        assert_eq!(
+            taps(with("tap_step_percent", json!(null))),
+            ((1.0, 1.0), false)
+        );
+        // The step count runs from the neutral position.
+        let mut offset = ratio.clone();
+        offset["tap_neutral"] = json!(2);
+        offset["tap_pos"] = json!(4);
+        assert_eq!(taps(offset), ((1.05, 1.0), false));
+        assert_eq!(
+            taps(with("tap_step_degree", json!(1.0))),
+            ((1.0, 1.0), true)
+        );
+        // A second changer multiplies on its own side.
+        let mut both = ratio.clone();
+        for (key, value) in [
+            ("tap2_side", json!("lv")),
+            ("tap2_neutral", json!(1)),
+            ("tap2_pos", json!(0)),
+            ("tap2_step_percent", json!(1.0)),
+            ("tap2_changer_type", json!("Ratio")),
+        ] {
+            both[key] = value;
+        }
+        assert_eq!(taps(both.clone()), ((1.05, 0.99), false));
+        both["tap2_side"] = json!("hv");
+        let ((hv, lv), _) = taps(both);
+        close(hv, 1.05 * 0.99);
+        assert_eq!(lv, 1.0);
+    }
+
+    /// Characteristic 0 at steps 0 to 2 with unit ratio and `vk`, `vkr`.
+    fn trafo_characteristic(vk: f64, vkr: f64) -> Value {
+        let row = |step: u8| {
+            json!({
+                "id_characteristic": 0, "step": step, "voltage_ratio": 1.0, "angle_deg": 0.0,
+                "vk_percent": vk, "vkr_percent": vkr
+            })
+        };
+        table(json!([row(0), row(1), row(2)]))
+    }
+
+    #[test]
+    fn a_dependency_table_is_reported_at_any_tap_position() {
+        let table = |overrides: Value| {
+            let mut row = json!({
+                "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                "tap_changer_type": "Ratio", "tap_dependency_table": true,
+                "id_characteristic_table": 0
+            });
+            for (key, value) in overrides.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            net(vec![
+                ("trafo", trafo(no_load_free(row))),
+                (
+                    "trafo_characteristic_table",
+                    trafo_characteristic(4.0, 1.325),
+                ),
+            ])
+        };
+        assert_eq!(taps_of(&table(json!({}))), ((1.0, 1.0), true));
+        // pandapower applies the table row at the neutral position too.
+        assert_eq!(taps_of(&table(json!({"tap_pos": 0}))), ((1.0, 1.0), true));
+        assert_eq!(
+            taps_of(&table(json!({"tap_neutral": null}))),
+            ((1.0, 1.0), true)
+        );
+        // pandapower reads `tap_dependency_table` for the second changer too.
+        let module = read(&table(json!({
+            "tap2_dependency_table": false, "tap2_changer_type": "Ratio"
+        })));
+        assert!(
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.message().contains("`tap2` ratio")),
+            "{:?}",
+            module.diagnostics()
+        );
+    }
+
+    /// A Dyn transformer with row vk 6 and vkr 1 whose characteristic table
+    /// states vk 12 and vkr 2, with `overrides` on the row.
+    fn table_trafo(overrides: Value) -> String {
+        let mut row = json!({
+            "vk_percent": 6.0, "vkr_percent": 1.0, "vk0_percent": 0.0, "vkr0_percent": 0.0,
+            "tap_side": "hv", "tap_neutral": 0, "tap_pos": 0, "tap_step_percent": 2.5,
+            "tap_changer_type": "Ratio", "tap_dependency_table": true,
+            "id_characteristic_table": 0
+        });
+        for (key, value) in overrides.as_object().unwrap() {
+            row[key] = value.clone();
+        }
+        let row = row.as_object().unwrap();
+        let row: Map<String, Value> = row
+            .iter()
+            .filter(|(_, value)| !value.is_null())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        net(vec![
+            ("trafo", trafo(no_load_free(Value::Object(row)))),
+            (
+                "trafo_characteristic_table",
+                trafo_characteristic(12.0, 2.0),
+            ),
+        ])
+    }
+
+    #[test]
+    fn a_dependency_table_sets_the_short_circuit_impedance() {
+        let ratio_note = |module: &PioModule<MulticonductorNetwork>| {
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.message().contains("ratio and angle"))
+        };
+        // Without a changer type pandapower applies the table impedance but
+        // no table ratio.
+        for (overrides, with_ratio_note) in [
+            (json!({}), true),
+            (json!({"tap_changer_type": null}), false),
+        ] {
+            let module = read(&table_trafo(overrides));
+            let t = &module.value().transformers()[0];
+            assert_eq!((t.windings[0].r_pct, t.windings[1].r_pct), (1.0, 1.0));
+            assert_eq!(t.xsc_pct, vec![short_circuit_x(12.0, 2.0)]);
+            assert_eq!(t.extras["vk_percent"], json!(6.0));
+            assert_eq!(t.extras["pandapower_table_vk_percent"], json!(12.0));
+            assert_eq!(t.extras["pandapower_table_vkr_percent"], json!(2.0));
+            assert_eq!(ratio_note(&module), with_ratio_note);
+            assert!(
+                module
+                    .diagnostics()
+                    .iter()
+                    .all(|d| d.code() != "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED"),
+                "{:?}",
+                module.diagnostics()
+            );
+        }
+        // pandapower takes 1 for both without a row at `tap_pos`.
+        let module = read(&table_trafo(json!({"tap_pos": 5})));
+        let t = &module.value().transformers()[0];
+        assert_eq!((t.windings[0].r_pct, t.xsc_pct[0]), (0.5, 0.0));
+        assert!(
+            module.diagnostics().iter().any(|d| {
+                d.code() == "READ.DIST.PANDAPOWER_APPROXIMATED"
+                    && d.message().contains("characteristic 0 at step 5")
+            }),
+            "{:?}",
+            module.diagnostics()
+        );
+        // pandapower refuses a table dependency without a characteristic.
+        let text = table_trafo(json!({"id_characteristic_table": null}));
+        let error =
+            parse_multiconductor(Source::from_memory("case.json", text.into_bytes()).unwrap())
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("`id_characteristic_table`"),
+            "{error}"
+        );
+        // Out of service it keeps the row's impedance with a note.
+        let module = read(&table_trafo(json!({
+            "id_characteristic_table": null, "in_service": false
+        })));
+        let t = &module.value().transformers()[0];
+        assert_eq!(t.xsc_pct, vec![short_circuit_x(6.0, 1.0)]);
+        assert!(codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"));
+    }
+
+    /// The zero-sequence correction takes the winding impedance from the
+    /// table but the vk0 fallback from the row, as pd2ppc_zero.py does.
+    #[test]
+    fn a_dependency_table_leaves_the_zero_sequence_on_the_row() {
+        let module = read(&table_trafo(json!({})));
+        let shunt = &module.value().shunts()[0];
+        let zb = 0.4_f64.powi(2) / 0.4;
+        let short = |vk: f64, vkr: f64| Complex64::new(vkr, short_circuit_x(vk, vkr)) / 100.0 * zb;
+        let z0k = short(6.0, 1.0);
+        let z3 = Complex64::new(0.0, 6.0 / 100.0 * zb);
+        let (z1, z2) = (0.9 * z0k, 0.1 * z0k);
+        let zt = z1 * z2 + z2 * z3 + z1 * z3;
+        let y = (z1 + z3) / zt - 1.0 / short(12.0, 2.0);
+        close(shunt.g[0][0], y.re / 3.0);
+        close(shunt.b[0][0], y.im / 3.0);
+    }
+
+    #[test]
+    fn ideal_and_stepless_changers_follow_pandapower() {
+        let taps = |overrides: Value| {
+            let module = read(&net(vec![("trafo", trafo(no_load_free(overrides)))]));
+            let w = &module.value().transformers()[0].windings;
+            (
+                (w[0].tap, w[1].tap),
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+            )
+        };
+        let with = |key: &str, value: Value| {
+            let mut row = json!({
+                "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                "tap_changer_type": "Ratio"
+            });
+            row[key] = value;
+            row
+        };
+        // An ideal changer with a degree step shifts the angle in pandapower.
+        let ideal = |overrides: Value| {
+            let mut row = json!({
+                "tap_changer_type": "Ideal", "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2,
+                "tap_step_percent": 0.0, "tap_step_degree": 5.0
+            });
+            for (key, value) in overrides.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            row
+        };
+        assert_eq!(taps(ideal(json!({}))), ((1.0, 1.0), true));
+        assert_eq!(
+            taps(ideal(json!({"tap_step_percent": null}))),
+            ((1.0, 1.0), true)
+        );
+        let mut untyped = ideal(json!({}));
+        untyped.as_object_mut().unwrap().remove("tap_changer_type");
+        let untyped_net = net(vec![("trafo", trafo(no_load_free(untyped.clone())))]);
+        assert_eq!(
+            taps_of(&versioned(untyped_net.clone(), "2.14.0")),
+            ((1.0, 1.0), true)
+        );
+        // pandapower 3 applies neither tap nor shift without a changer type.
+        assert_eq!(
+            taps_of(&versioned(untyped_net, "3.1.0")),
+            ((1.0, 1.0), false)
+        );
+        // So does a file without a version.
+        assert_eq!(taps(untyped), ((1.0, 1.0), false));
+        // At its neutral position an ideal changer changes nothing.
+        assert_eq!(
+            taps(ideal(json!({"tap_pos": 0, "tap_step_degree": 30.0}))),
+            ((1.0, 1.0), false)
+        );
+        assert_eq!(
+            taps(ideal(json!({"tap_step_degree": 0.0}))),
+            ((1.0, 1.0), false)
+        );
+        // A ratio changer without a percent step changes nothing.
+        assert_eq!(
+            taps(ideal(json!({"tap_changer_type": "Ratio"}))),
+            ((1.0, 1.0), false)
+        );
+        assert_eq!(
+            taps(with("tap_step_percent", json!(0.0))),
+            ((1.0, 1.0), false)
+        );
+        let row = ideal(json!({
+            "tap_changer_type": "Ratio", "tap_step_degree": 0.0, "tap_dependency_table": true,
+            "id_characteristic_table": 0, "vk_percent": 4.0, "vkr_percent": 1.325
+        }));
+        assert_eq!(
+            taps_of(&net(vec![
+                ("trafo", trafo(no_load_free(row))),
+                (
+                    "trafo_characteristic_table",
+                    trafo_characteristic(4.0, 1.325)
+                ),
+            ])),
+            ((1.0, 1.0), true)
+        );
     }
 
     #[test]
@@ -2346,10 +2954,6 @@ mod tests {
     #[test]
     fn tables_without_a_mapping_are_reported_unsupported() {
         let module = read(&net(vec![
-            (
-                "trafo_characteristic_table",
-                table(json!([{"id_characteristic": 0}])),
-            ),
             ("shunt", table(json!([{"bus": 0}]))),
             (
                 "shunt_characteristic_table",
@@ -2374,67 +2978,12 @@ mod tests {
             format!("`shunt` {ignored}"),
             format!("`shunt_characteristic_table` {ignored}"),
             format!("`switch` {ignored}. None of them changes the connectivity"),
-            format!("`trafo_characteristic_table` {ignored}"),
         ];
         expected.sort_unstable();
         assert_eq!(messages, expected);
         assert_eq!(module.value().transformers().len(), 0);
         assert_eq!(module.value().shunts().len(), 0);
         assert_eq!(module.value().switches().len(), 0);
-    }
-
-    #[test]
-    fn a_stated_tap_changer_is_reported_until_it_is_mapped() {
-        const APPROXIMATED: &str = "READ.DIST.PANDAPOWER_APPROXIMATED";
-        fn approximated(module: &PioModule<MulticonductorNetwork>) -> Vec<&str> {
-            module
-                .diagnostics()
-                .iter()
-                .filter(|d| d.code() == APPROXIMATED)
-                .map(Diagnostic::message)
-                .collect()
-        }
-        let moved = json!({
-            "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
-            "tap_changer_type": "Ratio"
-        });
-        let module = read(&net(vec![("trafo", trafo(no_load_free(moved.clone())))]));
-        let w = &module.value().transformers()[0].windings;
-        assert_eq!((w[0].tap, w[1].tap), (1.0, 1.0));
-        let notes = approximated(&module);
-        assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].contains("not mapped yet"), "{}", notes[0]);
-        assert_eq!(module.value().transformers()[0].extras["tap_pos"], json!(2));
-        // A changer at its neutral position states nothing.
-        let mut neutral = moved;
-        neutral["tap_pos"] = json!(0);
-        let module = read(&net(vec![("trafo", trafo(no_load_free(neutral)))]));
-        assert_eq!(approximated(&module).len(), 0);
-        // Null columns state nothing either.
-        let nulls = json!({
-            "tap_side": null, "tap_neutral": null, "tap_pos": null, "tap_step_percent": null,
-            "tap_changer_type": null, "tap_dependency_table": false
-        });
-        let module = read(&net(vec![("trafo", trafo(no_load_free(nulls)))]));
-        assert_eq!(approximated(&module).len(), 0);
-        // A dependency table and a second changer away from neutral give one note.
-        let table_driven = no_load_free(json!({
-            "tap_dependency_table": true, "tap2_pos": 1, "tap2_neutral": 0
-        }));
-        let module = read(&net(vec![
-            ("trafo", trafo(table_driven)),
-            (
-                "trafo_characteristic_table",
-                table(json!([{"id_characteristic": 0}])),
-            ),
-        ]));
-        assert_eq!(approximated(&module).len(), 1);
-        assert!(
-            module
-                .diagnostics()
-                .iter()
-                .any(|d| d.code() == "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED")
-        );
     }
 
     #[test]
