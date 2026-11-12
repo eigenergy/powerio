@@ -20,9 +20,10 @@ use crate::convert::{TextEmission, TextSidecar};
 use crate::diagnostics::codes as C;
 use crate::model::{
     ActivePowerReference, ConductorMatrix, Configuration, ControlVoltageReference, DistBus,
-    DistControlProfile, DistIbr, DistLineCode, DistLoad, DistLoadVoltageModel, DistTransformer,
-    DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
-    MulticonductorNetwork, ReactivePowerReference, VoltVarControl, VoltWattControl,
+    DistControlProfile, DistGenerator, DistIbr, DistLineCode, DistLoad, DistLoadVoltageModel,
+    DistTransformer, DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology,
+    IbrVoltageAggregation, MulticonductorNetwork, ReactivePowerReference, VoltVarControl,
+    VoltWattControl,
 };
 
 use super::read::delta_edges;
@@ -2325,8 +2326,105 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn generators(&mut self, net: &MulticonductorNetwork) {
+    /// A generator with unequal phase powers splits into one single phase
+    /// generator per branch, as [`Self::load_parts`] does for loads. OpenDSS
+    /// spreads a multi phase generator equally over its phases.
+    fn generator_parts<'g>(&mut self, g: &'g DistGenerator) -> Vec<Cow<'g, DistGenerator>> {
+        let phase_values = [
+            Some(g.p_nom.as_slice()),
+            Some(g.q_nom.as_slice()),
+            g.q_min.as_deref(),
+            g.q_max.as_deref(),
+        ];
+        if !phase_values.into_iter().flatten().any(loads::nonuniform) {
+            return vec![Cow::Borrowed(g)];
+        }
+        let n = g.p_nom.len();
+        let return_index = (g.configuration != Configuration::Delta)
+            .then(|| self.return_terminal_index(&g.bus, &g.terminal_map))
+            .flatten();
+        let maps = phase_values
+            .into_iter()
+            .flatten()
+            .all(|xs| xs.len() == n)
+            .then(|| loads::phase_branch_maps(g.configuration, &g.terminal_map, n, return_index))
+            .flatten();
+        let Some(maps) = maps else {
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "generator {}: unequal phase powers do not align with its terminal map; \
+                     written as one balanced generator",
+                    g.name
+                ),
+            );
+            return vec![Cow::Borrowed(g)];
+        };
+        let pick = |xs: &Option<Vec<f64>>, i: usize| {
+            xs.as_ref().map(|xs| {
+                if xs.len() == n {
+                    vec![xs[i]]
+                } else {
+                    xs.clone()
+                }
+            })
+        };
+        maps.into_iter()
+            .enumerate()
+            .map(|(i, map)| {
+                let mut part = g.clone();
+                part.name = format!("{}_{}", g.name, map[0]);
+                part.terminal_map = map;
+                part.p_nom = vec![g.p_nom[i]];
+                part.q_nom = vec![g.q_nom[i]];
+                part.p_min = pick(&g.p_min, i);
+                part.p_max = pick(&g.p_max, i);
+                part.q_min = pick(&g.q_min, i);
+                part.q_max = pick(&g.q_max, i);
+                part.cost = pick(&g.cost, i);
+                part.s_max = pick(&g.s_max, i);
+                part.i_max = pick(&g.i_max, i);
+                // Whole-bank voltage and power-factor spellings must not override
+                // the selected branch's typed values.
+                for key in ["conn", "kv", "pf"] {
+                    part.extras.remove(key);
+                }
+                part.extras.insert("phases".into(), 1.into());
+                Cow::Owned(part)
+            })
+            .collect()
+    }
+
+    /// Every generator record, after [`Self::generator_parts`] split and
+    /// deduplicated the native names.
+    fn generator_records<'n>(
+        &mut self,
+        net: &'n MulticonductorNetwork,
+    ) -> Vec<Cow<'n, DistGenerator>> {
+        let mut names: BTreeSet<_> = net
+            .generators()
+            .iter()
+            .map(|g| g.name.to_ascii_lowercase())
+            .collect();
+        let mut records = Vec::new();
         for g in net.generators() {
+            for mut part in self.generator_parts(g) {
+                if let Cow::Owned(ref mut part) = part {
+                    let base = part.name.clone();
+                    let mut suffix = 2;
+                    while !names.insert(part.name.to_ascii_lowercase()) {
+                        part.name = format!("{base}_{suffix}");
+                        suffix += 1;
+                    }
+                }
+                records.push(part);
+            }
+        }
+        records
+    }
+
+    fn generators(&mut self, net: &MulticonductorNetwork) {
+        for g in self.generator_records(net) {
             self.check_name("generator", &g.name);
             let node_map = self.return_last("generator", &g.name, &g.bus, &g.terminal_map);
             let phases = extras_usize(&g.extras, "phases")
@@ -5073,6 +5171,86 @@ mod tests {
             .unwrap();
         assert!(line.contains("phases=2 conn=delta"), "{line}");
         assert_eq!(line.matches("phases=").count(), 1, "{line}");
+    }
+
+    #[test]
+    fn an_unbalanced_generator_splits_into_one_generator_per_phase() {
+        // A dss Generator divides kw evenly across its phases, so one
+        // balanced object keeps the total and loses the profile.
+        let (b, vs) = three_phase_source(2400.0);
+        let mut unbalanced = DistGenerator::new(
+            "g1",
+            "sb",
+            strings(&["1", "2", "3", "4"]),
+            Configuration::Wye,
+            vec![0.0, 4e3, 0.0],
+            vec![0.0, 0.0, 300.0],
+        );
+        unbalanced.q_min = Some(vec![-5e3; 3]);
+        unbalanced.q_max = Some(vec![5e3; 3]);
+        unbalanced.extras.insert("kv".into(), 4.16.into());
+        let balanced = DistGenerator::new(
+            "g2",
+            "sb",
+            strings(&["1", "2", "3", "4"]),
+            Configuration::Wye,
+            vec![1e3; 3],
+            vec![0.0; 3],
+        );
+        // Unequal powers that do not fit the terminal map stay one balanced
+        // generator and say so.
+        let misaligned = DistGenerator::new(
+            "g3",
+            "sb",
+            strings(&["1", "2", "4"]),
+            Configuration::Wye,
+            vec![1e3, 2e3],
+            vec![0.0],
+        );
+        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            generators: vec![unbalanced, balanced, misaligned],
+            ..MulticonductorNetworkTables::default()
+        });
+        let out = emit_dss_text(&net);
+        let gens: Vec<&str> = out
+            .text
+            .lines()
+            .filter(|l| l.contains("New Generator."))
+            .collect();
+        assert_eq!(gens.len(), 5, "{}", out.text);
+        for (name, node, kw, kvar) in [
+            ("g1_1", "sb.1.0", "0", "0"),
+            ("g1_2", "sb.2.0", "4", "0"),
+            ("g1_3", "sb.3.0", "0", "0.3"),
+        ] {
+            let line = gens
+                .iter()
+                .find(|l| l.contains(&format!("New Generator.{name} ")))
+                .unwrap_or_else(|| panic!("no {name}: {}", out.text));
+            assert!(line.contains(&format!("bus1={node} phases=1 ")), "{line}");
+            assert!(line.contains(&format!("kw={kw} kvar={kvar} ")), "{line}");
+            assert!(line.contains("maxkvar=5 minkvar=-5"), "{line}");
+            assert!(!line.contains("kv=4.16"), "{line}");
+        }
+        assert_eq!(
+            gens.iter()
+                .filter(|l| l.contains("New Generator.g2 "))
+                .count(),
+            1,
+            "a balanced generator stays one object: {}",
+            out.text
+        );
+        assert!(gens.iter().any(|l| l.contains("New Generator.g3 ")));
+        assert!(
+            out.render_diagnostics()
+                .iter()
+                .any(|w| w.contains("generator g3: unequal phase powers")),
+            "{:?}",
+            out.render_diagnostics()
+        );
     }
 
     #[test]

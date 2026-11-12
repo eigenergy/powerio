@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- OpenDSS output writes one single phase generator per phase when a
+  generator's phase powers or reactive limits differ. OpenDSS splits a multi
+  phase generator equally over its phases. The writer used to sum the phase
+  powers into one balanced generator and report nothing (#861).
+
 ## 0.11.12
 
 **XIIDM**
