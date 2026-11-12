@@ -7,7 +7,7 @@ networkx==3.7
 pandas==2.3.3
 rdflib==7.6.0
 json-schema-for-humans==1.5.1
-markdownify==0.13.1
+markdownify==0.14.1
 lxml==5.4.0
 opendssdirect.py[extras]==0.9.4
 jschon[requests]==0.11.1
