@@ -721,8 +721,9 @@ impl Reader<'_> {
                 // `meta` is provenance (license, authors, generator tool),
                 // with no typed slot in the model. Stash it whole, the way the
                 // PMD reader stashes `pmd_settings`; the BMOPF writer owns
-                // `$schema`/`frequency`/`case_study_generator` and folds the
-                // other schema fields back from this stash.
+                // `schema_version`/`frequency`/`case_study_generator`/`crs`,
+                // drops `$schema`, and folds the other schema fields back
+                // from this stash.
                 "meta" => {
                     self.net
                         .extras_mut()

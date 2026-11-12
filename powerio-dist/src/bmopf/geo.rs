@@ -99,6 +99,89 @@ fn retain_collection(net: &mut MulticonductorNetwork, collection: &Value) {
     }
 }
 
+/// How many elements of the document state a `geo` field: buses, lines, and
+/// the located elements of [`COMPONENT_TABLES`].
+fn located_elements(doc: &Map<String, Value>) -> usize {
+    let mut located = 0;
+    for table in ["bus", "line"]
+        .into_iter()
+        .chain(COMPONENT_TABLES.map(|(table, _)| table))
+    {
+        let Some(items) = doc.get(table).and_then(Value::as_object) else {
+            continue;
+        };
+        let has_geo = |record: &&Value| record.get("geo").is_some();
+        located += if table == "transformer" {
+            items
+                .values()
+                .filter_map(Value::as_object)
+                .flat_map(Map::values)
+                .filter(has_geo)
+                .count()
+        } else {
+            items.values().filter(has_geo).count()
+        };
+    }
+    located
+}
+
+/// Reports a document whose coordinate metadata cannot be read. A legacy
+/// `extras.geojson` layer is retained verbatim. A typed `geo` is a known field
+/// with no other home in the model, so with no coordinate system to place it
+/// in, it is dropped.
+fn unreadable_metadata(
+    doc: &Map<String, Value>,
+    net: &mut MulticonductorNetwork,
+    collection: &Value,
+    reason: &str,
+    diagnostics: &mut crate::collect::Diagnostics,
+) {
+    if !collection.is_null() {
+        diagnostics.push(
+            &crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,
+            format!("{reason}; geometry retained without assigning coordinates"),
+        );
+        retain_collection(net, collection);
+    }
+    let located = located_elements(doc);
+    if located > 0 {
+        diagnostics.push(
+            &crate::diagnostics::codes::READ_BMOPF_FIELD_DROPPED,
+            format!("{reason}; the `geo` of {located} element(s) dropped"),
+        );
+    } else if collection.is_null() {
+        diagnostics.push(
+            &crate::diagnostics::codes::READ_BMOPF_FIELD_DROPPED,
+            format!("{reason}; dropped"),
+        );
+    }
+}
+
+/// Whether any bus or line carries a typed `geo` slot. The slots win, so a
+/// valid `extras.geojson` layer beside them is not merged in; the reader does
+/// not stash the layer either, so its features are reported as dropped.
+fn typed_geometry_wins(
+    doc: &Map<String, Value>,
+    collection: Option<&Value>,
+    diagnostics: &mut crate::collect::Diagnostics,
+) -> bool {
+    let embedded = has_embedded_geometry(doc);
+    let ignored = collection
+        .filter(|_| embedded)
+        .and_then(|layer| layer["features"].as_array())
+        .map_or(0, Vec::len);
+    if ignored > 0 {
+        diagnostics.push(
+            &crate::diagnostics::codes::READ_BMOPF_FIELD_DROPPED,
+            format!(
+                "`extras.geojson` is not read beside the typed `geo` slots, which win; its \
+                 {ignored} feature(s) dropped"
+            ),
+        );
+    }
+    embedded
+}
+
 /// Whether any bus or line of the document carries a typed `geo` field.
 fn has_embedded_geometry(doc: &Map<String, Value>) -> bool {
     ["bus", "line"].iter().any(|kind| {
@@ -118,11 +201,7 @@ pub(super) fn read(
     let geo_meta = match read_meta(doc.get("meta").unwrap_or(&Value::Null), extras, collection) {
         Ok(meta) => meta,
         Err(reason) => {
-            diagnostics.push(
-                &crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,
-                format!("{reason}; geometry retained without assigning coordinates"),
-            );
-            retain_collection(net, collection);
+            unreadable_metadata(doc, net, collection, &reason, diagnostics);
             return;
         }
     };
@@ -135,9 +214,9 @@ pub(super) fn read(
         );
         retain_collection(net, collection);
     }
-    // The typed `geo` fields are the the schema form and win; the
+    // The typed `geo` fields are the schema form and win; the
     // `extras.geojson` layer is read only when no element carries one.
-    let embedded = has_embedded_geometry(doc);
+    let embedded = typed_geometry_wins(doc, collection_valid.then_some(collection), diagnostics);
     let geographic = matches!(geo_meta.space, CoordinateSpace::Geographic { .. });
     let buses: std::collections::HashMap<_, _> = net
         .buses()
@@ -186,7 +265,10 @@ pub(super) fn read(
         if valid {
             changed = true;
         } else {
-            diagnostics.push(&crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,format!("{kind} {id}: geometry is invalid or names no matching element; not assigned as coordinates"));
+            diagnostics.push(
+                &crate::diagnostics::codes::READ_BMOPF_FIELD_DROPPED,
+                format!("{kind} {id}: geometry is invalid or names no matching element; dropped"),
+            );
         }
     };
     if embedded {
@@ -318,10 +400,10 @@ fn read_component_geometry(
                 });
                 let Some(p) = assigned else {
                     diagnostics.push(
-                        &crate::diagnostics::codes::READ_BMOPF_RETAINED_SOURCE_ONLY,
+                        &crate::diagnostics::codes::READ_BMOPF_FIELD_DROPPED,
                         format!(
                             "{table} {name}: geometry is invalid or names no matching element; \
-                             not assigned as coordinates"
+                             dropped"
                         ),
                     );
                     continue;

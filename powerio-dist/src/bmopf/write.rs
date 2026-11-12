@@ -485,8 +485,10 @@ impl Writer {
                     // Writer-owned: this document is powerio's emission, at
                     // the model's frequency, against the version above. A
                     // source `schema_version` names the version that document
-                    // was written against, not this one.
-                    "$schema" | "schema_version" | "frequency" | "case_study_generator" => {}
+                    // was written against, not this one, and `crs` is stated
+                    // from the network's geometry by `geometry`.
+                    "$schema" | "schema_version" | "frequency" | "case_study_generator" | "crs" => {
+                    }
                     "title" | "description" | "license" | "authors" | "data_sources"
                     | "created" | "modified" | "provenance" | "version" => {
                         m.insert(key.clone(), value.clone());

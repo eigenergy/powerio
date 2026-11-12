@@ -4964,6 +4964,120 @@ fn embedded_geometry_wins_over_the_legacy_extras_geojson_layer() {
     );
 }
 
+/// The diagnostics of a parse whose code is `code` and whose message names
+/// `subject`.
+fn findings<'a>(
+    diagnostics: &'a [powerio_dist::Diagnostic],
+    code: &str,
+    subject: &str,
+) -> Vec<&'a powerio_dist::Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|d| d.code() == code && d.message().contains(subject))
+        .collect()
+}
+
+/// The legacy `extras.geojson` layer beside typed `geo` slots is not read,
+/// and its features are reported as dropped rather than lost silently.
+#[test]
+fn a_legacy_geojson_layer_beside_typed_slots_is_reported_as_dropped() {
+    let both = r#"{"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[-83.7,42.3]}},"b":{"terminal_names":["1"]}},"extras":{"geojson":{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-80,35]}},{"type":"Feature","properties":{"kind":"bus","id":"b"},"geometry":{"type":"Point","coordinates":[-80,36]}}]}}}"#;
+    let net = parse_bmopf_str(both).unwrap();
+    assert!(net.buses()[1].location.is_none());
+    let dropped = findings(
+        &net.diagnostics,
+        "READ.BMOPF.FIELD_DROPPED",
+        "extras.geojson",
+    );
+    assert_eq!(dropped.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        dropped[0].message().contains("2 feature"),
+        "{:?}",
+        dropped[0]
+    );
+}
+
+/// A `geo` value the reader cannot assign has no other home in the model, so
+/// it is reported as dropped, not as retained source data.
+#[test]
+fn an_unassignable_geo_is_reported_as_dropped() {
+    let text = r#"{"bus":{"a":{"terminal_names":["1","n"],"geo":{"type":"Point","coordinates":["east","north"]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1","n"],"v_magnitude":[240.0,0.0],"v_angle":[0.0,0.0]}},
+        "load":{"l":{"bus":"a","terminal_map":["1","n"],"configuration":"WYE","p_nom":[1.0],"q_nom":[0.0],
+            "geo":{"type":"Polygon","coordinates":[]}}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(net.buses()[0].location.is_none());
+    assert!(net.component_locations().is_empty());
+    for subject in ["bus a:", "load l:"] {
+        assert_eq!(
+            findings(&net.diagnostics, "READ.BMOPF.FIELD_DROPPED", subject).len(),
+            1,
+            "{subject}: {:?}",
+            net.diagnostics
+        );
+        assert!(
+            findings(&net.diagnostics, "READ.BMOPF.RETAINED_SOURCE_ONLY", subject).is_empty(),
+            "{subject}: {:?}",
+            net.diagnostics
+        );
+    }
+    // Unreadable coordinate metadata drops every typed `geo` it would place.
+    let text = r#"{"meta":{"crs":123},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[1.0,2.0]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1"],"v_magnitude":[240.0],"v_angle":[0.0]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(net.buses()[0].location.is_none());
+    assert_eq!(
+        findings(&net.diagnostics, "READ.BMOPF.FIELD_DROPPED", "`geo`").len(),
+        1,
+        "{:?}",
+        net.diagnostics
+    );
+}
+
+/// A source `meta.crs` is the writer's to state: it writes the network's
+/// coordinate system back without reporting the source value as dropped.
+#[test]
+fn a_source_crs_is_restated_without_a_drop_finding() {
+    let text = r#"{"meta":{"crs":"EPSG:32617"},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[276500,4686200]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1"],"v_magnitude":[240.0],"v_angle":[0.0]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("`crs`")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// The canonical `$id` of the 0.2.0 draft PowerIO 0.11 targeted, before the
+/// proposal was reconciled with the Task Force's schema, names that older
+/// draft: a document stating it reads under the draft's rules, so its
+/// per-phase line `s_max` is no schema violation.
+#[test]
+fn the_pre_reconciliation_draft_id_reads_as_an_older_draft() {
+    let text = r#"{"meta":{"$schema":"https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json","schema_version":"0.2.0"},
+        "bus":{"a":{"terminal_names":["1","2","3","n"]},"b":{"terminal_names":["1","2","3","n"]}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1","2","3","n"],"v_magnitude":[240.0,240.0,240.0,0.0],"v_angle":[0.0,-2.0943951,2.0943951,0.0]}},
+        "line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1","2","3","n"],"terminal_map_to":["1","2","3","n"],
+            "R_series_1_1":1,"X_series_1_1":1,"s_max":[1.0e6,1.0e6,1.0e6]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        findings(&net.diagnostics, "READ.BMOPF.SEMANTIC_INVALID", "s_max").is_empty(),
+        "{:?}",
+        net.diagnostics
+    );
+    let schema = findings(&net.diagnostics, "READ.BMOPF.SCHEMA_LEGACY", "");
+    assert_eq!(schema.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        schema[0]
+            .message()
+            .starts_with("the document is an older BMOPF draft"),
+        "{schema:?}"
+    );
+}
+
 /// A space the schema cannot name travels as `extras.powerio_geo` beside the
 /// typed slots, so a read gets the same metadata back and does not take the
 /// coordinates for WGS84.
