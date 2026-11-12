@@ -227,7 +227,11 @@ pub(crate) fn negate_into(mut a: CsMat<f64>) -> CsMat<f64> {
 /// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).
 /// Useful as a quick sanity check before feeding it to an SDDM solver.
 pub fn check_sddm(a: &CsMat<f64>) -> bool {
-    if !is_symmetric(a) {
+    // IEEE comparisons with NaN are false, including the symmetry and
+    // diagonal-dominance checks below. Reject non-finite stored values before
+    // relying on those comparisons; otherwise an invalid matrix can pass as
+    // SDDM and reach a solver.
+    if !a.data().iter().all(|value| value.is_finite()) || !is_symmetric(a) {
         return false;
     }
     let stats = MatrixStats::from_csr(a);
