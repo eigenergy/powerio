@@ -111,6 +111,29 @@ Q
 }
 
 #[test]
+fn sddm_rejects_non_finite_sparse_entries() {
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut builder = CooBuilder::new(2);
+        builder.add(0, 0, 2.0);
+        builder.add(1, 1, 2.0);
+        builder.add(0, 1, value);
+        builder.add(1, 0, value);
+        let matrix = builder.finish_csr();
+        assert!(
+            !check_sddm(&matrix),
+            "non-finite matrix entry {value} must not pass SDDM validation"
+        );
+    }
+
+    // Finite symmetric diagonally dominant matrices remain accepted.
+    let mut builder = CooBuilder::new(2);
+    builder.add(0, 0, 2.0);
+    builder.add(1, 1, 2.0);
+    builder.add_sym(0, 1, -1.0);
+    assert!(check_sddm(&builder.finish_csr()));
+}
+
+#[test]
 fn bprime_three_bus_has_correct_structure() {
     let net = three_bus();
     let view = IndexedNetwork::new(&net);
