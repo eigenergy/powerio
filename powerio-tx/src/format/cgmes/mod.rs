@@ -5585,7 +5585,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{version:?}: {error}"));
             assert_eq!(parsed.network.branches()[0].rate_a, 80.0, "{version:?}");
             for expected in [
-                "ActivePowerLimit `flow-floor` is a low limit",
+                "ActivePowerLimit `flow-floor` is a low-direction limit",
                 "ActivePowerLimit `flow-cap` value -30 is negative",
             ] {
                 assert!(
@@ -5851,7 +5851,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(dropped.iter().any(|warning| {
             warning.contains("permanent limit `-1`")
-                && warning.contains("must be positive and finite")
+                && warning.contains("must be nonnegative and finite")
         }));
         assert!(dropped.iter().any(|warning| {
             warning.contains("temporary limit `invalid temporary`")
