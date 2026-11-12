@@ -8,10 +8,13 @@
 //! the balanced reader in `powerio-tx`. The `powerio` facade routes the token
 //! here.
 //!
-//! A three-phase document with rows in a table the balanced reader maps and
-//! this reading does not yet (`trafo`, `shunt`, `gen`, `storage`, `dcline`)
-//! reads balanced when the balanced reader accepts it, as in 0.12.0, so no
-//! element it read is lost. Only a document it refuses reads multiconductor.
+//! A three-phase document with rows the balanced reader maps and this
+//! reading does not yet reads balanced when the balanced reader accepts it,
+//! as in 0.12.0, so no element it read is lost. Such rows are those of `gen`,
+//! `storage` and `dcline`, a `trafo` row of a vector group without a winding
+//! mapping and a `shunt` row whose step has no characteristic row. So does an
+//! in-service `shunt` row whose step depends on a table it does not name.
+//! Only a document the balanced reader refuses reads multiconductor.
 //!
 //! The multiconductor reading follows the `runpp_3ph` model of pandapower 3.5.
 //! Every bus has the phase terminals 1, 2 and 3 and an ideally earthed
@@ -30,8 +33,8 @@ use powerio_dist::diagnostics::codes;
 use powerio_dist::{
     ConductorMatrix, Configuration, CoordinateSpace, DistBus, DistCoordsKind, DistGenerator,
     DistGeoMeta, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel, DistLocation, DistShunt,
-    DistSourceFormat, DistTransformer, DistWinding, DistWindingConn, Extras, MulticonductorNetwork,
-    VoltageSource,
+    DistSourceFormat, DistSwitch, DistTransformer, DistWinding, DistWindingConn, Extras,
+    MulticonductorNetwork, VoltageSource,
 };
 use powerio_tx::__internal::{DataFrame, MAX_I_KA, Row, network_object, read_bus_geo, read_frame};
 use powerio_tx::BalancedNetwork;
@@ -48,7 +51,7 @@ const EARTH: &str = "4";
 const NEGLIGIBLE: f64 = 1e-6;
 /// The element tables the reader maps. Every other non-empty table is
 /// reported.
-const MAPPED: [&str; 9] = [
+const MAPPED: [&str; 12] = [
     "bus",
     "line",
     "trafo",
@@ -58,11 +61,19 @@ const MAPPED: [&str; 9] = [
     "asymmetric_load",
     "sgen",
     "asymmetric_sgen",
+    "shunt",
+    "shunt_characteristic_table",
+    "switch",
 ];
+/// The `switch_rx_ratio` option of `runpp_3ph`. The JSON does not store it,
+/// so its default applies.
+const SWITCH_RX_RATIO: f64 = 2.0;
 
 /// Tables the balanced reader maps and this reading does not yet. A `trafo`
-/// row counts too when its vector group has no winding mapping here.
-const BALANCED_ONLY: [&str; 4] = ["shunt", "gen", "storage", "dcline"];
+/// row counts too when its vector group has no winding mapping here. So does
+/// a `shunt` row whose step has no characteristic row. So does an in-service
+/// `shunt` row whose step depends on a table it does not name.
+const BALANCED_ONLY: [&str; 3] = ["gen", "storage", "dcline"];
 /// Branch tables whose in-service rows join buses in pandapower. This
 /// reading maps none of them yet. In-service `trafo` rows count too when
 /// their vector group has no winding mapping here.
@@ -81,6 +92,41 @@ fn unmapped_trafos(obj: &Map<String, Value>, in_service_only: bool) -> bool {
         (!in_service_only || row.bool_or("in_service", true))
             && !maps_vector_group(&row.string("vector_group").unwrap_or_default())
     }))
+}
+
+/// Whether the document has `shunt` rows this reading does not map. Such a
+/// row's step depends on a characteristic without a row for that step. An
+/// in-service row that names no characteristic counts too.
+fn unmapped_shunts(obj: &Map<String, Value>) -> bool {
+    let characteristics = shunt_characteristics(obj).unwrap_or_default();
+    matches!(read_frame(obj, "shunt"), Ok(Some(frame)) if frame.rows().any(|row| {
+        row.bool_or("step_dependency_table", false)
+            && match row.f_finite("id_characteristic_table") {
+                None => row.bool_or("in_service", true),
+                Some(id) => !characteristics
+                    .contains_key(&(id.to_bits(), row.f_or("step", 1.0).to_bits())),
+            }
+    }))
+}
+
+/// The `p_mw` and `q_mvar` of each shunt characteristic per step, keyed by
+/// the bits of the characteristic id and the step. pandapower reads a gap as
+/// zero.
+fn shunt_characteristics(obj: &Map<String, Value>) -> Result<HashMap<(u64, u64), (f64, f64)>> {
+    let mut characteristics = HashMap::new();
+    if let Some(table) = read_frame(obj, "shunt_characteristic_table")? {
+        for row in table.rows() {
+            if let (Some(id), Some(step)) =
+                (row.f_finite("id_characteristic"), row.f_finite("step"))
+            {
+                characteristics.insert(
+                    (id.to_bits(), step.to_bits()),
+                    (row.f_or("p_mw", 0.0), row.f_or("q_mvar", 0.0)),
+                );
+            }
+        }
+    }
+    Ok(characteristics)
 }
 
 type Result<T> = std::result::Result<T, powerio_tx::Error>;
@@ -123,6 +169,7 @@ pub fn parse(source: Source) -> std::result::Result<PandapowerModule, Error> {
     // reading, unless that reader refuses the document.
     let balanced_only = object.as_ref().is_some_and(|obj| {
         unmapped_trafos(obj, false)
+            || unmapped_shunts(obj)
             || BALANCED_ONLY
                 .iter()
                 .any(|name| matches!(read_frame(obj, name), Ok(Some(frame)) if frame.rows().next().is_some()))
@@ -133,20 +180,20 @@ pub fn parse(source: Source) -> std::result::Result<PandapowerModule, Error> {
     parse_multiconductor(source).map(PandapowerModule::Multiconductor)
 }
 
-/// The tables of a pandapower document whose rows join or split buses in
-/// pandapower and that the three-phase reading does not map yet: in-service
-/// `trafo`, `trafo3w` and `impedance` rows, and `switch` rows that close a
-/// bus-bus coupling or open a line or transformer. A network read with any of
-/// them has a different connectivity than pandapower solves. Text that is
-/// not a pandapower document has none.
+/// The tables of a pandapower document whose rows join buses in pandapower
+/// and that the three-phase reading does not map yet. These are in-service
+/// `trafo` rows of a vector group without a winding mapping and in-service
+/// `trafo3w` and `impedance` rows. Switches are not among them. The reading
+/// maps every switch that joins buses or opens a mapped line or transformer.
+/// A network read with any of these tables has a different connectivity
+/// than pandapower solves. Text that is not a pandapower document has none.
 #[must_use]
 pub fn unmapped_connections(content: &str) -> Vec<&'static str> {
-    network_object(content).map_or_else(|_| Vec::new(), |obj| connections(&obj).0)
+    network_object(content).map_or_else(|_| Vec::new(), |obj| connections(&obj))
 }
 
-/// The connecting tables with rows, and the counts of closed bus-bus and
-/// open element switches.
-fn connections(obj: &Map<String, Value>) -> (Vec<&'static str>, usize, usize) {
+/// The connecting tables with in-service rows this reading does not map.
+fn connections(obj: &Map<String, Value>) -> Vec<&'static str> {
     let mut tables: Vec<&'static str> = Vec::new();
     if unmapped_trafos(obj, true) {
         tables.push("trafo");
@@ -155,21 +202,7 @@ fn connections(obj: &Map<String, Value>) -> (Vec<&'static str>, usize, usize) {
         matches!(read_frame(obj, name), Ok(Some(frame))
             if frame.rows().any(|row| row.bool_or("in_service", true)))
     }));
-    let (mut joining, mut opening) = (0, 0);
-    if let Ok(Some(frame)) = read_frame(obj, "switch") {
-        for row in frame.rows() {
-            let closed = row.bool_or("closed", true);
-            match row.get("et").and_then(Value::as_str) {
-                Some("b") if closed => joining += 1,
-                Some("l" | "t" | "t3") if !closed => opening += 1,
-                _ => {}
-            }
-        }
-    }
-    if joining + opening > 0 {
-        tables.push("switch");
-    }
-    (tables, joining, opening)
+    tables
 }
 
 fn parse_multiconductor(
@@ -251,6 +284,8 @@ impl Reader {
         ] {
             self.read_injections(&obj, table, asymmetric, generation)?;
         }
+        self.read_shunts(&obj)?;
+        self.read_switches(&obj)?;
         self.report_other_tables(&obj)
     }
 
@@ -1083,10 +1118,317 @@ impl Reader {
         Ok(())
     }
 
+    fn read_shunts(&mut self, obj: &Map<String, Value>) -> Result<()> {
+        let Some(frame) = read_frame(obj, "shunt")? else {
+            return Ok(());
+        };
+        unique_indices(&frame, "shunt")?;
+        let characteristics = shunt_characteristics(obj)?;
+        for row in frame.rows() {
+            let index = row.index_usize()?;
+            let name = format!("shunt_{index}");
+            let (bus, bus_kv) = self.bus("shunt", &row, "bus")?;
+            // p_mw and q_mvar are drawn at vn_kv. A positive q_mvar absorbs.
+            // A missing vn_kv means the bus voltage, as in pandapower
+            // _calc_shunts_and_add_on_ppc.
+            let vn_kv = match row.get("vn_kv") {
+                None | Some(Value::Null) => bus_kv,
+                Some(_) => req_positive(&row, "shunt", "vn_kv")?,
+            };
+            let step = row.f_or("step", 1.0);
+            let (p_mw, q_mvar) = if row.bool_or("step_dependency_table", false) {
+                match row.f_finite("id_characteristic_table") {
+                    None if row.bool_or("in_service", true) => {
+                        return Err(bad(format!(
+                            "`shunt` row {}: `step_dependency_table` is true without an \
+                             `id_characteristic_table`",
+                            row.label()
+                        )));
+                    }
+                    None => {
+                        self.note(
+                            &codes::READ_PANDAPOWER_APPROXIMATED,
+                            format!(
+                                "{name}: the step depends on a characteristic table, but no \
+                                 `id_characteristic_table` names one. The shunt draws `p_mw` \
+                                 and `q_mvar` times `step`"
+                            ),
+                        );
+                        (row.f_or("p_mw", 0.0) * step, row.f_or("q_mvar", 0.0) * step)
+                    }
+                    Some(id) => {
+                        if let Some(&powers) = characteristics.get(&(id.to_bits(), step.to_bits()))
+                        {
+                            powers
+                        } else {
+                            self.note(
+                                &codes::READ_PANDAPOWER_ELEMENT_UNSUPPORTED,
+                                format!(
+                                    "{name}: no `shunt_characteristic_table` row for \
+                                     characteristic {id} at step {step}. runpp_3ph fails on such \
+                                     a network unless this is its only shunt. It is not mapped"
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+                }
+            } else {
+                (row.f_or("p_mw", 0.0) * step, row.f_or("q_mvar", 0.0) * step)
+            };
+            let scale = 1.0 / (vn_kv * vn_kv);
+            let g = finite(&row, "shunt", "p_mw", p_mw * scale)?;
+            let b = finite(&row, "shunt", "q_mvar", -q_mvar * scale)?;
+            let known = ["bus", "p_mw", "q_mvar", "vn_kv", "step"];
+            let extras = self.extras(&row, &name, &known, &[&bus]);
+            let mut shunt = DistShunt::new(
+                name.clone(),
+                bus,
+                terminals(&PHASES),
+                diagonal(g),
+                diagonal(b),
+            );
+            shunt.extras = extras;
+            // pd2ppc writes the shunt over the ext_grid's zero-sequence
+            // admittance at the bus. runpp_3ph writes the ext_grid's
+            // negative-sequence admittance over the shunt.
+            let live = |extras: &Extras| extras.get("in_service") != Some(&Value::Bool(false));
+            if live(&shunt.extras)
+                && self
+                    .net
+                    .sources()
+                    .iter()
+                    .any(|s| s.bus == shunt.bus && live(&s.extras))
+            {
+                self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: the shunt sits at an ext_grid bus. runpp_3ph replaces the \
+                         ext_grid's zero-sequence admittance with this shunt. It replaces the \
+                         shunt's negative-sequence admittance with the ext_grid's. So \
+                         pandapower's result differs from this reading"
+                    ),
+                );
+            }
+            self.net.shunts_mut().push(shunt);
+        }
+        Ok(())
+    }
+
+    fn read_switches(&mut self, obj: &Map<String, Value>) -> Result<()> {
+        let Some(frame) = read_frame(obj, "switch")? else {
+            return Ok(());
+        };
+        unique_indices(&frame, "switch")?;
+        let mut closed_branch_switches = 0;
+        for row in frame.rows() {
+            let index = row.index_usize()?;
+            let name = format!("switch_{index}");
+            let (bus, _) = self.bus("switch", &row, "bus")?;
+            let closed = row.bool_or("closed", true);
+            match row.string("et").as_deref() {
+                Some("b") => {
+                    let (to, _) = self.bus("switch", &row, "element")?;
+                    let z_ohm = row.f_or("z_ohm", 0.0);
+                    if closed && z_ohm.is_finite() && z_ohm > 0.0 {
+                        self.impedance_switch(&row, &name, index, bus, to, z_ohm);
+                        continue;
+                    }
+                    let known = ["bus", "element", "et", "closed"];
+                    let extras = self.extras(&row, &name, &known, &[&bus, &to]);
+                    let mut switch = DistSwitch::new(
+                        name.clone(),
+                        bus,
+                        to,
+                        terminals(&PHASES),
+                        terminals(&PHASES),
+                        !closed,
+                    );
+                    switch.extras = extras;
+                    switch.i_max = switch_rating(&row, &mut switch.extras);
+                    // pandapower fuses a closed switch without impedance, so the
+                    // ideal switch is exact.
+                    if z_ohm <= 0.0 {
+                        switch.extras.remove("z_ohm");
+                    }
+                    self.net.switches_mut().push(switch);
+                }
+                Some("l" | "t") if closed => closed_branch_switches += 1,
+                Some(kind @ ("l" | "t")) => {
+                    let element = index_cell("switch", &row, "element")?;
+                    self.open_branch_end(&row, &name, kind == "l", element, &bus);
+                }
+                kind => self.note(
+                    &codes::READ_PANDAPOWER_ELEMENT_UNSUPPORTED,
+                    format!(
+                        "{name}: a switch of element type `{}` is not mapped",
+                        kind.unwrap_or("null")
+                    ),
+                ),
+            }
+        }
+        if closed_branch_switches > 0 {
+            self.note(
+                &codes::READ_PANDAPOWER_RETAINED_SOURCE_ONLY,
+                format!(
+                    "{closed_branch_switches} closed line or transformer switch(es) change \
+                     nothing in the solve and remain only in the retained source"
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    /// A closed bus-bus switch with `z_ohm` as the 1 m line `runpp_3ph`
+    /// solves. Its per-unit base is `vn^2/sn` where lines use
+    /// `vn^2/(3 sn)` (build_branch.py `_calc_switch_parameter`). So the
+    /// switch acts as `z_ohm/3` per phase in every sequence.
+    fn impedance_switch(
+        &mut self,
+        row: &Row<'_>,
+        name: &str,
+        index: usize,
+        bus: String,
+        to: String,
+        z_ohm: f64,
+    ) {
+        let z = z_ohm / 3.0;
+        let root = SWITCH_RX_RATIO.hypot(1.0);
+        let (r, x) = (z * SWITCH_RX_RATIO / root, z / root);
+        let linecode = format!("linecode_switch_{index}");
+        self.net.line_codes_mut().push(DistLineCode::new(
+            linecode.clone(),
+            diagonal(r),
+            diagonal(x),
+        ));
+        let extras = self.extras(row, name, &["bus", "element", "et", "closed"], &[&bus, &to]);
+        let mut line = DistLine::new(
+            name,
+            bus,
+            to,
+            terminals(&PHASES),
+            terminals(&PHASES),
+            linecode,
+            1.0,
+        );
+        line.extras = extras;
+        line.i_max = switch_rating(row, &mut line.extras);
+        line.extras
+            .insert("pandapower_table".into(), "switch".into());
+        self.note(
+            &codes::READ_PANDAPOWER_APPROXIMATED,
+            format!(
+                "{name}: runpp_3ph solves the closed switch as a series impedance of z_ohm/3 = \
+                 {z} ohm per phase at R/X {SWITCH_RX_RATIO} in every sequence. It is mapped as a \
+                 1 m line"
+            ),
+        );
+        self.net.lines_mut().push(line);
+    }
+
+    /// An open line or transformer switch: the element's end at `bus` moves
+    /// to an auxiliary bus behind an open switch, as pandapower's
+    /// `_switch_branches` opens it. A switch whose bus is no end of its
+    /// element opens the line's from end or the transformer's LV winding, as
+    /// pandapower's `_gather_branch_switch_info` picks the side.
+    fn open_branch_end(
+        &mut self,
+        row: &Row<'_>,
+        name: &str,
+        line: bool,
+        element: usize,
+        bus: &str,
+    ) {
+        let auxiliary = format!("{name}_open");
+        // The bus the moved end leaves. The moved YNyn winding takes its own
+        // neutral terminal along.
+        let (old, neutral) = if line {
+            let target = format!("line_{element}");
+            let Some(l) = self.net.lines_mut().iter_mut().find(|l| l.name == target) else {
+                return self.switch_not_mapped(name, "line", element);
+            };
+            let end = if l.bus_to == bus {
+                &mut l.bus_to
+            } else {
+                &mut l.bus_from
+            };
+            (std::mem::replace(end, auxiliary.clone()), None)
+        } else {
+            let target = format!("trafo_{element}");
+            let winding = self
+                .net
+                .transformers_mut()
+                .iter_mut()
+                .find(|t| t.name == target)
+                .and_then(|t| {
+                    let side = usize::from(t.windings.first().is_none_or(|w| w.bus != bus));
+                    t.windings.get_mut(side)
+                });
+            let Some(winding) = winding else {
+                return self.switch_not_mapped(name, "trafo", element);
+            };
+            let own = format!("n{element}");
+            let neutral = (winding.terminal_map.get(3) == Some(&own)).then_some(own);
+            let old = std::mem::replace(&mut winding.bus, auxiliary.clone());
+            // The transformer's zero-sequence corrections move with it.
+            let tag = Value::from(target);
+            for shunt in self.net.shunts_mut() {
+                if shunt.bus == old
+                    && shunt.extras.get("pandapower_zero_sequence_correction") == Some(&tag)
+                {
+                    shunt.bus.clone_from(&auxiliary);
+                }
+            }
+            (old, neutral)
+        };
+        let mut aux = DistBus::new(auxiliary.clone(), terminals(&WYE));
+        // pandapower copies the auxiliary bus from the switch's bus.
+        if let Some(original) = self.net.buses().iter().find(|b| b.id == bus) {
+            aux.grounded.clone_from(&original.grounded);
+            // The auxiliary bus shares the status of the bus it splits off.
+            if let Some(status) = original.extras.get("in_service") {
+                aux.extras.insert("in_service".into(), status.clone());
+            }
+        }
+        if let Some(neutral) = neutral {
+            if let Some(left) = self.net.buses_mut().iter_mut().find(|b| b.id == old) {
+                left.terminals.retain(|t| *t != neutral);
+            }
+            aux.terminals.push(neutral);
+        }
+        aux.extras
+            .insert("pandapower_open_switch".into(), name.into());
+        self.net.buses_mut().push(aux);
+        let mut switch = DistSwitch::new(
+            name,
+            bus,
+            auxiliary,
+            terminals(&PHASES),
+            terminals(&PHASES),
+            true,
+        );
+        switch.extras = self.extras(row, name, &["bus", "element", "et", "closed"], &[bus]);
+        switch.i_max = switch_rating(row, &mut switch.extras);
+        if row.f_or("z_ohm", 0.0) <= 0.0 {
+            switch.extras.remove("z_ohm");
+        }
+        self.net.switches_mut().push(switch);
+    }
+
+    fn switch_not_mapped(&mut self, name: &str, table: &str, element: usize) {
+        self.note(
+            &codes::READ_PANDAPOWER_ELEMENT_UNSUPPORTED,
+            format!(
+                "{name}: the open switch's {table} {element} is not mapped. The switch is not \
+                 mapped"
+            ),
+        );
+    }
+
     /// Every non-empty table the reader does not map, with one finding per
     /// element table. All result tables share one remark.
     fn report_other_tables(&mut self, obj: &Map<String, Value>) -> Result<()> {
-        let (connecting, joining, opening) = connections(obj);
+        let connecting = connections(obj);
         let mut results = Vec::new();
         for (key, value) in obj {
             if MAPPED.contains(&key.as_str())
@@ -1108,33 +1450,11 @@ impl Reader {
             if rows == 0 {
                 continue;
             }
-            let effect = if key == "switch" {
-                let mut acts = Vec::new();
-                if joining > 0 {
-                    acts.push(format!(
-                        "{joining} closed bus-bus switch(es) join their buses"
-                    ));
-                }
-                if opening > 0 {
-                    acts.push(format!(
-                        "{opening} open switch(es) disconnect their line or transformer"
-                    ));
-                }
-                if acts.is_empty() {
-                    ". None of them changes the connectivity".to_owned()
-                } else {
-                    format!(
-                        ". In pandapower {}. Here every bus stays separate and every line \
-                         connected, so the connectivity differs",
-                        acts.join(" and ")
-                    )
-                }
-            } else if connecting.contains(&key.as_str()) {
+            let effect = if connecting.contains(&key.as_str()) {
                 ". The buses it joins in pandapower are not joined here, so the connectivity \
                  differs"
-                    .to_owned()
             } else {
-                String::new()
+                ""
             };
             self.note(
                 &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
@@ -1266,6 +1586,21 @@ fn fortescue(zero: f64, positive: f64, scale: f64) -> ConductorMatrix {
     .into_iter()
     .map(|row| row.into_iter().map(|value| value * scale).collect())
     .collect()
+}
+
+fn diagonal(value: f64) -> ConductorMatrix {
+    fortescue(value, value, 1.0)
+}
+
+/// A switch's `in_ka` as amperes per phase, as lines map `max_i_ka`. A
+/// mapped rating leaves the extras.
+fn switch_rating(row: &Row<'_>, extras: &mut Extras) -> Option<Vec<f64>> {
+    let amps = row
+        .f_finite("in_ka")
+        .map(|i_ka| i_ka * 1e3)
+        .filter(|amps| amps.is_finite() && *amps > 0.0)?;
+    extras.remove("in_ka");
+    Some(vec![amps; 3])
 }
 
 fn terminals(names: &[&str]) -> Vec<String> {
@@ -1595,7 +1930,7 @@ mod tests {
 
     #[test]
     fn parse_routes_by_the_tables_the_document_fills() {
-        // The balanced reader refuses the fixture's empty `res_shunt_3ph`.
+        // Every row of the fixture is mapped, so it reads three-phase.
         let module = parse(fixture("dist/pandapower/tiny_3ph.json")).unwrap();
         assert!(matches!(module, PandapowerModule::Multiconductor(_)));
         let module = parse(fixture("pandapower/example.json")).unwrap();
@@ -1627,10 +1962,19 @@ mod tests {
             three_phase(Vec::new()),
             PandapowerModule::Multiconductor(_)
         ));
-        // A shunt the three-phase reading drops keeps the 0.12.0 reading.
+        // A mapped shunt keeps the three-phase reading.
         let shunt = table(json!([{"bus": 0, "q_mvar": 0.003, "p_mw": 0.0, "vn_kv": 0.4}]));
-        let PandapowerModule::Balanced(module) = three_phase(vec![("shunt", shunt)]) else {
-            panic!("a network with a shunt reads balanced");
+        let PandapowerModule::Multiconductor(module) = three_phase(vec![("shunt", shunt)]) else {
+            panic!("a network with a mapped shunt reads three-phase");
+        };
+        assert_eq!(module.value().shunts().len(), 1);
+        // A shunt the three-phase reading drops keeps the 0.12.0 reading.
+        let shunt = table(json!([{
+            "bus": 0, "q_mvar": 0.003, "p_mw": 0.0, "vn_kv": 0.4, "step": 2,
+            "step_dependency_table": true, "id_characteristic_table": 0
+        }]));
+        let PandapowerModule::Balanced(module) = three_phase(vec![("shunt", shunt.clone())]) else {
+            panic!("a network with an unmapped shunt reads balanced");
         };
         assert_eq!(module.value().shunts().len(), 1);
         assert!(
@@ -1641,6 +1985,15 @@ mod tests {
             "{:?}",
             module.diagnostics()
         );
+        // A document the balanced reader refuses reads three-phase.
+        let no_columns = json!({
+            "_module": "pandas.core.frame", "_class": "DataFrame", "orient": "split",
+            "_object": r#"{"columns":[],"index":[0],"data":[]}"#
+        });
+        assert!(matches!(
+            three_phase(vec![("shunt", shunt), ("res_shunt_3ph", no_columns)]),
+            PandapowerModule::Multiconductor(_)
+        ));
     }
 
     #[test]
@@ -1651,6 +2004,14 @@ mod tests {
                 vec![6.0, 3.0, 3.0],
                 vec![3.0, 6.0, 3.0],
                 vec![3.0, 3.0, 6.0]
+            ]
+        );
+        assert_eq!(
+            diagonal(2.0),
+            vec![
+                vec![2.0, 0.0, 0.0],
+                vec![0.0, 2.0, 0.0],
+                vec![0.0, 0.0, 2.0]
             ]
         );
     }
@@ -1795,32 +2156,109 @@ mod tests {
     }
 
     #[test]
-    fn switches_that_change_the_connectivity_are_named() {
+    fn shunts_and_switches_on_an_out_of_service_bus_are_out_of_service() {
+        let bus = table(json!([
+            {"vn_kv": 0.4, "in_service": true},
+            {"vn_kv": 0.4, "in_service": false},
+            {"vn_kv": 0.4, "in_service": true}
+        ]));
+        let shunt = table(json!([{"bus": 1, "q_mvar": 0.003, "p_mw": 0.0, "vn_kv": 0.4}]));
+        let switches = table(json!([
+            {"bus": 0, "element": 1, "et": "b", "closed": true, "z_ohm": 0.0},
+            {"bus": 2, "element": 1, "et": "b", "closed": true, "z_ohm": 0.1},
+            {"bus": 1, "element": 0, "et": "l", "closed": false, "z_ohm": 0.0},
+            {"bus": 0, "element": 2, "et": "b", "closed": true, "z_ohm": 0.0}
+        ]));
+        let module = read(&net(vec![
+            ("bus", bus),
+            ("line", one_line()),
+            ("shunt", shunt),
+            ("switch", switches),
+        ]));
+        let network = module.value();
+        let off = |extras: &Extras| extras.get("in_service") == Some(&json!(false));
+        assert!(off(&network.shunts()[0].extras));
+        let switches: Vec<_> = network
+            .switches()
+            .iter()
+            .map(|s| (s.name.as_str(), off(&s.extras)))
+            .collect();
+        assert_eq!(
+            switches,
+            [("switch_0", true), ("switch_2", true), ("switch_3", false)]
+        );
+        let line = |name: &str| network.lines().iter().find(|l| l.name == name).unwrap();
+        assert!(off(&line("switch_1").extras));
+        assert!(off(&line("line_0").extras));
+        // The auxiliary bus behind the open switch shares its bus's status.
+        assert!(off(&network.bus("switch_2_open").unwrap().extras));
+        let messages: Vec<_> = module
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == "READ.DIST.PANDAPOWER_OUT_OF_SERVICE")
+            .map(Diagnostic::message)
+            .collect();
+        for what in ["shunt_0", "switch_0", "switch_1", "switch_2"] {
+            let prefix = format!("{what} is on out-of-service bus 1");
+            assert!(
+                messages.iter().any(|m| m.starts_with(&prefix)),
+                "{messages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shunt_without_its_characteristic_row_is_unmapped() {
+        let characteristic = table(json!([
+            {"id_characteristic": 0, "step": 1, "p_mw": 0.0, "q_mvar": 0.010}
+        ]));
+        let unmapped = |shunt: Value| {
+            let text = net(vec![
+                ("shunt", table(json!([shunt]))),
+                ("shunt_characteristic_table", characteristic.clone()),
+            ]);
+            unmapped_shunts(&network_object(&text).unwrap())
+        };
+        let row = |step: u8, id: Value, in_service: bool| {
+            json!({
+                "bus": 1, "q_mvar": 0.004, "step": step, "step_dependency_table": true,
+                "id_characteristic_table": id, "in_service": in_service
+            })
+        };
+        assert!(!unmapped(row(1, json!(0), true)));
+        assert!(unmapped(row(2, json!(0), true)));
+        assert!(unmapped(row(2, json!(0), false)));
+        assert!(unmapped(row(1, json!(null), true)));
+        // An out-of-service shunt without a characteristic is approximated.
+        assert!(!unmapped(row(1, json!(null), false)));
+        assert!(!unmapped(json!({"bus": 1, "q_mvar": 0.004, "step": 2})));
+    }
+
+    #[test]
+    fn mapped_switches_keep_the_connectivity() {
+        // The reading maps bus-bus switches and open line switches, so they
+        // join and split the buses as pandapower does.
         let switches = table(json!([
             {"bus": 0, "element": 1, "et": "b", "closed": true},
             {"bus": 1, "element": 0, "et": "l", "closed": false},
             {"bus": 0, "element": 2, "et": "b", "closed": false},
             {"bus": 1, "element": 0, "et": "l", "closed": true}
         ]));
-        let text = net(vec![("switch", switches)]);
-        assert_eq!(unmapped_connections(&text), vec!["switch"]);
-        let module = read(&text);
+        let text = net(vec![("line", one_line()), ("switch", switches)]);
+        assert_eq!(unmapped_connections(&text), Vec::<&str>::new());
+        assert_eq!(read(&text).value().switches().len(), 3);
+        // An open switch of a three-winding transformer is not mapped. It
+        // acts on a transformer this reading leaves out, which `trafo3w`
+        // names when it is in service.
+        let t3 = table(json!([{"bus": 0, "element": 0, "et": "t3", "closed": false}]));
         assert_eq!(
-            module.diagnostics()[0].message(),
-            "`switch` table ignored (4 rows): the three-phase reading does not map it yet. In \
-             pandapower 1 closed bus-bus switch(es) join their buses and 1 open switch(es) \
-             disconnect their line or transformer. Here every bus stays separate and every \
-             line connected, so the connectivity differs"
-        );
-
-        // Open bus-bus and closed line switches change nothing.
-        let idle = table(json!([
-            {"bus": 0, "element": 2, "et": "b", "closed": false},
-            {"bus": 1, "element": 0, "et": "l", "closed": true}
-        ]));
-        assert_eq!(
-            unmapped_connections(&net(vec![("switch", idle)])),
+            unmapped_connections(&net(vec![("switch", t3.clone())])),
             Vec::<&str>::new()
+        );
+        let trafo3w = table(json!([{"hv_bus": 3, "mv_bus": 1, "lv_bus": 0}]));
+        assert_eq!(
+            unmapped_connections(&net(vec![("trafo3w", trafo3w), ("switch", t3)])),
+            vec!["trafo3w"]
         );
         let trafo = table(json!([
             {"hv_bus": 3, "lv_bus": 0, "in_service": true},
@@ -2919,6 +3357,338 @@ mod tests {
     }
 
     #[test]
+    fn shunts_draw_a_third_per_phase() {
+        let shunt = table(json!([
+            {"bus": 1, "p_mw": 0.001, "q_mvar": 0.003, "vn_kv": 0.4, "step": 2}
+        ]));
+        let module = read(&net(vec![("shunt", shunt)]));
+        let shunt = &module.value().shunts()[0];
+        assert_eq!((shunt.name.as_str(), shunt.bus.as_str()), ("shunt_0", "1"));
+        assert_eq!(shunt.terminal_map, terminals(&PHASES));
+        for i in 0..3 {
+            close(shunt.g[i][i], 0.0125);
+            // A positive q_mvar absorbs reactive power, so the susceptance is negative.
+            close(shunt.b[i][i], -0.0375);
+            assert_eq!(
+                (shunt.g[i][(i + 1) % 3], shunt.b[i][(i + 1) % 3]),
+                (0.0, 0.0)
+            );
+        }
+    }
+
+    #[test]
+    fn a_shunt_without_vn_kv_uses_the_bus_voltage() {
+        let shunt = table(json!([{"bus": 3, "p_mw": 0.4, "q_mvar": 0.8, "vn_kv": null}]));
+        let module = read(&net(vec![("shunt", shunt)]));
+        let shunt = &module.value().shunts()[0];
+        for i in 0..3 {
+            close(shunt.g[i][i], 0.001);
+            close(shunt.b[i][i], -0.002);
+        }
+        let shunt = table(json!([{"bus": 3, "p_mw": 0.4, "q_mvar": 0.8, "vn_kv": 0.0}]));
+        let text = net(vec![("shunt", shunt)]);
+        assert!(
+            parse_multiconductor(Source::from_memory("case.json", text.into_bytes()).unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_shunt_at_an_ext_grid_bus_is_reported() {
+        let grid = table(json!([{"bus": 3, "vm_pu": 1.0}]));
+        let shunts = table(json!([
+            {"bus": 3, "p_mw": 0.0, "q_mvar": 0.0001, "in_service": true},
+            {"bus": 1, "p_mw": 0.0, "q_mvar": 0.0001, "in_service": true},
+            {"bus": 3, "p_mw": 0.0, "q_mvar": 0.0001, "in_service": false}
+        ]));
+        let module = read(&net(vec![("ext_grid", grid), ("shunt", shunts)]));
+        let notes: Vec<_> = module
+            .diagnostics()
+            .iter()
+            .filter(|d| d.message().contains("ext_grid bus"))
+            .map(|d| (d.code(), d.message()))
+            .collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(notes[0].0, "READ.DIST.PANDAPOWER_APPROXIMATED");
+        assert!(notes[0].1.starts_with("shunt_0: "), "{}", notes[0].1);
+    }
+
+    #[test]
+    fn shunt_steps_read_the_characteristic_table() {
+        let characteristic = table(json!([
+            {"id_characteristic": 0, "step": 1, "p_mw": 0.0, "q_mvar": 0.010},
+            {"id_characteristic": 0, "step": 2, "p_mw": 0.0, "q_mvar": 0.020}
+        ]));
+        let shunt = |step: u8, id: Value| {
+            table(json!([{
+                "bus": 1, "p_mw": 0.0, "q_mvar": 0.004, "vn_kv": 0.4, "step": step,
+                "step_dependency_table": true, "id_characteristic_table": id
+            }]))
+        };
+        let module = read(&net(vec![
+            ("shunt", shunt(1, json!(0))),
+            ("shunt_characteristic_table", characteristic.clone()),
+        ]));
+        let mapped = &module.value().shunts()[0];
+        for i in 0..3 {
+            close(mapped.b[i][i], -0.0625);
+            assert_eq!(mapped.g[i][i], 0.0);
+        }
+        assert!(codes(&module).is_empty(), "{:?}", codes(&module));
+        // A shunt whose step has no table row is reported, not mapped.
+        let module = read(&net(vec![
+            ("shunt", shunt(3, json!(0))),
+            ("shunt_characteristic_table", characteristic.clone()),
+        ]));
+        assert_eq!(module.value().shunts().len(), 0);
+        assert_eq!(
+            codes(&module),
+            vec!["READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED"]
+        );
+        let message = module.diagnostics()[0].message();
+        assert!(
+            message.contains("unless this is its only shunt") && !message.contains("leaves it out"),
+            "{message}"
+        );
+        // pandapower refuses an in-service shunt without a characteristic.
+        let text = net(vec![
+            ("shunt", shunt(1, json!(null))),
+            ("shunt_characteristic_table", characteristic),
+        ]);
+        assert!(
+            parse_multiconductor(Source::from_memory("case.json", text.into_bytes()).unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn bus_bus_switches_map_their_state() {
+        let switches = table(json!([
+            {"bus": 0, "element": 1, "et": "b", "closed": true, "z_ohm": 0.0},
+            {"bus": 1, "element": 2, "et": "b", "closed": false, "z_ohm": 0.5},
+            {"bus": 0, "element": 2, "et": "b", "closed": true, "z_ohm": 0.1}
+        ]));
+        let module = read(&net(vec![("switch", switches)]));
+        let switches = module.value().switches();
+        let state: Vec<_> = switches
+            .iter()
+            .map(|s| (s.bus_from.as_str(), s.bus_to.as_str(), s.open))
+            .collect();
+        // The closed switch with an impedance is a line.
+        assert_eq!(state, [("0", "1", false), ("1", "2", true)]);
+        // A switch without impedance is ideal, so its zero `z_ohm` goes.
+        assert!(!switches[0].extras.contains_key("z_ohm"));
+        assert_eq!(switches[1].extras["z_ohm"], json!(0.5));
+        // Only the closed switch with an impedance is reported.
+        assert_eq!(codes(&module), vec!["READ.DIST.PANDAPOWER_APPROXIMATED"]);
+    }
+
+    #[test]
+    fn a_switch_rating_maps_to_its_ampacity() {
+        let switches = table(json!([
+            {"bus": 0, "element": 1, "et": "b", "closed": true, "z_ohm": 0.0, "name": "S1",
+             "type": "CB", "in_ka": 0.4}
+        ]));
+        let module = read(&net(vec![("switch", switches)]));
+        let switch = &module.value().switches()[0];
+        assert_eq!(switch.i_max, Some(vec![400.0; 3]));
+        assert!(!switch.extras.contains_key("in_ka"));
+        assert_eq!(switch.extras["name"], json!("S1"));
+        assert_eq!(switch.extras["type"], json!("CB"));
+        // A closed impedance switch and an open line switch carry it too.
+        let switches = table(json!([
+            {"bus": 0, "element": 2, "et": "b", "closed": true, "z_ohm": 0.1, "in_ka": 0.4},
+            {"bus": 0, "element": 0, "et": "l", "closed": false, "z_ohm": 0.0, "in_ka": 0.4}
+        ]));
+        let module = read(&net(vec![("switch", switches), ("line", one_line())]));
+        let network = module.value();
+        let line = network
+            .lines()
+            .iter()
+            .find(|l| l.name == "switch_0")
+            .unwrap();
+        assert_eq!(line.i_max, Some(vec![400.0; 3]));
+        assert!(!line.extras.contains_key("in_ka"));
+        assert_eq!(network.switches()[0].i_max, Some(vec![400.0; 3]));
+    }
+
+    #[test]
+    fn closed_impedance_switch_maps_to_a_line() {
+        let switches = table(json!([
+            {"bus": 0, "element": 1, "et": "b", "closed": true, "z_ohm": 0.0},
+            {"bus": 1, "element": 2, "et": "b", "closed": false, "z_ohm": 0.0},
+            {"bus": 0, "element": 2, "et": "b", "closed": true, "z_ohm": 0.1}
+        ]));
+        let module = read(&net(vec![("switch", switches)]));
+        let network = module.value();
+        assert_eq!(network.lines().len(), 1);
+        let line = &network.lines()[0];
+        assert_eq!(
+            (
+                line.name.as_str(),
+                line.bus_from.as_str(),
+                line.bus_to.as_str()
+            ),
+            ("switch_2", "0", "2")
+        );
+        assert_eq!(line.length, 1.0);
+        assert_eq!(line.extras["z_ohm"], json!(0.1));
+        assert_eq!(line.extras["pandapower_table"], json!("switch"));
+        let code = &network.line_codes()[0];
+        assert_eq!(code.name, line.linecode);
+        for i in 0..3 {
+            close(code.r_series[i][i], 0.1 / 3.0 * 2.0 / 5f64.sqrt());
+            close(code.x_series[i][i], 0.1 / 3.0 / 5f64.sqrt());
+            for j in (0..3).filter(|j| *j != i) {
+                assert_eq!((code.r_series[i][j], code.x_series[i][j]), (0.0, 0.0));
+            }
+        }
+        assert!(code.b_from.iter().flatten().all(|v| *v == 0.0));
+        assert!(code.g_to.iter().flatten().all(|v| *v == 0.0));
+        let note = &module.diagnostics()[0];
+        assert!(
+            note.message().starts_with("switch_2: "),
+            "{}",
+            note.message()
+        );
+        assert_eq!(codes(&module), vec!["READ.DIST.PANDAPOWER_APPROXIMATED"]);
+    }
+
+    #[test]
+    fn an_open_line_switch_moves_the_line_end_behind_an_open_switch() {
+        let switch = table(json!([{"bus": 0, "element": 0, "et": "l", "closed": false}]));
+        let module = read(&net(vec![("line", one_line()), ("switch", switch)]));
+        let line = &module.value().lines()[0];
+        assert_eq!(
+            (line.bus_from.as_str(), line.bus_to.as_str()),
+            ("switch_0_open", "1")
+        );
+        let switch = table(json!([{
+            "bus": 1, "element": 0, "et": "l", "closed": false, "name": "CB1", "type": "CB",
+            "in_ka": 0.4
+        }]));
+        let module = read(&net(vec![("line", one_line()), ("switch", switch)]));
+        let network = module.value();
+        assert_eq!(network.lines()[0].bus_from, "0");
+        assert_eq!(network.lines()[0].bus_to, "switch_0_open");
+        let aux = network.bus("switch_0_open").unwrap();
+        assert_eq!(aux.terminals, terminals(&WYE));
+        assert_eq!(aux.grounded, vec![EARTH.to_string()]);
+        let switch = &network.switches()[0];
+        assert_eq!(
+            (
+                switch.bus_from.as_str(),
+                switch.bus_to.as_str(),
+                switch.open
+            ),
+            ("1", "switch_0_open", true)
+        );
+        assert_eq!(switch.extras["name"], json!("CB1"));
+        assert_eq!(switch.i_max, Some(vec![400.0; 3]));
+        assert!(!switch.extras.contains_key("in_ka"));
+        assert!(!switch.extras.contains_key("closed") && !switch.extras.contains_key("element"));
+        assert!(codes(&module).is_empty(), "{:?}", codes(&module));
+    }
+
+    #[test]
+    fn a_closed_line_switch_changes_nothing() {
+        let switch = table(json!([{"bus": 1, "element": 0, "et": "l", "closed": true}]));
+        let module = read(&net(vec![("line", one_line()), ("switch", switch)]));
+        assert_eq!(module.value().switches().len(), 0);
+        assert_eq!(module.value().lines()[0].bus_to, "1");
+        assert_eq!(
+            codes(&module),
+            vec!["READ.DIST.PANDAPOWER_RETAINED_SOURCE_ONLY"]
+        );
+    }
+
+    #[test]
+    fn an_open_trafo_switch_moves_the_winding_and_its_correction() {
+        let switch = table(json!([
+            {"bus": 0, "element": 0, "et": "t", "closed": false, "name": "T1 LV"}
+        ]));
+        let module = read(&net(vec![("trafo", trafo(json!({}))), ("switch", switch)]));
+        let network = module.value();
+        let windings = &network.transformers()[0].windings;
+        assert_eq!(
+            (windings[0].bus.as_str(), windings[1].bus.as_str()),
+            ("3", "switch_0_open")
+        );
+        assert_eq!(network.shunts()[0].bus, "switch_0_open");
+        assert!(network.switches()[0].open);
+        assert_eq!(network.switches()[0].extras["name"], json!("T1 LV"));
+    }
+
+    #[test]
+    fn an_open_ynyn_switch_moves_only_the_winding_neutral() {
+        let rows = json!([
+            trafo_row(json!({"vector_group": "YNyn", "shift_degree": 0.0})),
+            trafo_row(json!({"vector_group": "YNyn", "shift_degree": 0.0}))
+        ]);
+        let switch = table(json!([{"bus": 0, "element": 0, "et": "t", "closed": false}]));
+        let module = read(&net(vec![("trafo", table(rows)), ("switch", switch)]));
+        let network = module.value();
+        let windings = &network.transformers()[0].windings;
+        assert_eq!(windings[1].bus, "switch_0_open");
+        assert_eq!(windings[1].terminal_map[3], "n0");
+        let aux = network.bus("switch_0_open").unwrap();
+        let mut moved = terminals(&WYE);
+        moved.push("n0".into());
+        assert_eq!(aux.terminals, moved);
+        assert_eq!(aux.grounded, vec![EARTH.to_string()]);
+        // The other transformer's neutral stays on the original bus.
+        let mut kept = terminals(&WYE);
+        kept.push("n1".into());
+        assert_eq!(network.bus("0").unwrap().terminals, kept);
+    }
+
+    #[test]
+    fn a_switch_off_its_element_opens_the_end_pandapower_opens() {
+        // pandapower opens the from end of a line unless the switch's bus is
+        // the to end.
+        let switch = table(json!([{"bus": 2, "element": 0, "et": "l", "closed": false}]));
+        let module = read(&net(vec![("line", one_line()), ("switch", switch)]));
+        let network = module.value();
+        assert_eq!(
+            (
+                network.lines()[0].bus_from.as_str(),
+                network.lines()[0].bus_to.as_str()
+            ),
+            ("switch_0_open", "1")
+        );
+        assert_eq!(network.switches()[0].bus_from, "2");
+        assert!(codes(&module).is_empty(), "{:?}", codes(&module));
+        // It opens the LV winding of a transformer unless the switch's bus is
+        // the HV bus. The zero-sequence correction moves with it.
+        let switch = table(json!([{"bus": 2, "element": 0, "et": "t", "closed": false}]));
+        let module = read(&net(vec![("trafo", trafo(json!({}))), ("switch", switch)]));
+        let network = module.value();
+        let windings = &network.transformers()[0].windings;
+        assert_eq!(
+            (windings[0].bus.as_str(), windings[1].bus.as_str()),
+            ("3", "switch_0_open")
+        );
+        assert_eq!(network.shunts()[0].bus, "switch_0_open");
+        assert_eq!(network.switches()[0].bus_from, "2");
+    }
+
+    #[test]
+    fn switches_to_unmapped_elements_are_reported() {
+        let switches = table(json!([
+            {"bus": 0, "element": 5, "et": "l", "closed": false},
+            {"bus": 0, "element": 0, "et": "t", "closed": false},
+            {"bus": 0, "element": 0, "et": "t3", "closed": false}
+        ]));
+        let module = read(&net(vec![("line", one_line()), ("switch", switches)]));
+        assert_eq!(module.value().switches().len(), 0);
+        assert_eq!(module.value().buses().len(), 4);
+        assert_eq!(
+            codes(&module),
+            vec!["READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED"; 3]
+        );
+    }
+
+    #[test]
     fn unmapped_tables_are_reported_once_each() {
         let two = table(json!([{"hv_bus": 3}, {"hv_bus": 3}]));
         let no_columns = json!({
@@ -2960,41 +3730,6 @@ mod tests {
     }
 
     #[test]
-    fn tables_without_a_mapping_are_reported_unsupported() {
-        let module = read(&net(vec![
-            ("shunt", table(json!([{"bus": 0}]))),
-            (
-                "shunt_characteristic_table",
-                table(json!([{"id_characteristic": 0}])),
-            ),
-            ("switch", table(json!([{"bus": 0}]))),
-        ]));
-        assert!(
-            module
-                .diagnostics()
-                .iter()
-                .all(|d| d.code() == "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED")
-        );
-        let mut messages: Vec<_> = module
-            .diagnostics()
-            .iter()
-            .map(Diagnostic::message)
-            .collect();
-        messages.sort_unstable();
-        let ignored = "table ignored (1 rows): the three-phase reading does not map it yet";
-        let mut expected = [
-            format!("`shunt` {ignored}"),
-            format!("`shunt_characteristic_table` {ignored}"),
-            format!("`switch` {ignored}. None of them changes the connectivity"),
-        ];
-        expected.sort_unstable();
-        assert_eq!(messages, expected);
-        assert_eq!(module.value().transformers().len(), 0);
-        assert_eq!(module.value().shunts().len(), 0);
-        assert_eq!(module.value().switches().len(), 0);
-    }
-
-    #[test]
     fn a_nonpositive_voltage_is_an_error() {
         let parse = |text: String| {
             parse_multiconductor(Source::from_memory("case.json", text.into_bytes()).unwrap())
@@ -3007,6 +3742,8 @@ mod tests {
                 .contains("`vn_kv` is not a positive number"),
             "{error}"
         );
+        let shunt = table(json!([{"bus": 1, "q_mvar": 0.003, "vn_kv": -0.4}]));
+        assert!(parse(net(vec![("shunt", shunt)])).is_err());
         assert!(parse(net(vec![("trafo", trafo(json!({"sn_mva": 0.0})))])).is_err());
     }
 
@@ -3035,6 +3772,14 @@ mod tests {
             (
                 "sgen",
                 json!({"bus": 0, "p_mw": 0.01, "q_mvar": 0.0, "type": "wye"}),
+            ),
+            (
+                "shunt",
+                json!({"bus": 0, "p_mw": 0.0, "q_mvar": 0.01, "vn_kv": 0.4}),
+            ),
+            (
+                "switch",
+                json!({"bus": 0, "element": 1, "et": "b", "closed": true}),
             ),
         ] {
             let columns: Vec<&str> = row

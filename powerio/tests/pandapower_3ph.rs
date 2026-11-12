@@ -35,9 +35,9 @@ fn the_fixture_reads_with_its_element_counts() {
     // the asymmetric sgen, not the sgen without a type
     assert_eq!(network.generators().len(), 1);
     assert_eq!(network.sources().len(), 1);
-    assert_eq!(network.switches().len(), 0);
-    // the transformer's zero-sequence correction
-    assert_eq!(network.shunts().len(), 1);
+    assert_eq!(network.switches().len(), 1);
+    // the shunt and the transformer's zero-sequence correction
+    assert_eq!(network.shunts().len(), 2);
     let lv = &network.transformers()[0].windings[1];
     assert_eq!(lv.terminal_map, ["3", "1", "2", "4"]);
     let mut codes: Vec<_> = module
@@ -53,20 +53,25 @@ fn the_fixture_reads_with_its_element_counts() {
             "READ.DIST.PANDAPOWER_APPROXIMATED",
             "READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED",
             "READ.DIST.PANDAPOWER_RETAINED_SOURCE_ONLY",
-            "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED",
-            "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED",
         ]
     );
-    // The shunt and switch tables have no mapping yet.
-    for table in ["shunt", "switch"] {
-        assert!(
-            module.diagnostics().iter().any(|d| {
-                d.code() == "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED"
-                    && d.message().starts_with(&format!("`{table}` table"))
-            }),
-            "{table}"
-        );
-    }
+}
+
+#[test]
+fn a_closed_bus_switch_writes_as_an_ideal_dss_switch() {
+    let module = powerio::parse(TINY).unwrap();
+    let result = powerio::emit(&module, "dss", Destination::memory("case").unwrap()).unwrap();
+    assert!(
+        result.diagnostics().iter().any(|d| {
+            d.code() == "EMIT.DSS.IDEAL_SWITCH_EQUIVALENT" && d.message().contains("switch_0")
+        }),
+        "{:?}",
+        result.diagnostics()
+    );
+    let deck = String::from_utf8(bytes(result)).unwrap();
+    // The switch's name, type and `in_ka` rating keep the ideal path.
+    assert!(deck.contains("New Line._pio_switch_switch_0"), "{deck}");
+    assert!(deck.contains("emergamps=400"), "{deck}");
 }
 
 #[test]
@@ -103,7 +108,7 @@ fn the_ir_keeps_the_source_format() {
         network.source_format().as_ref().map(|format| format.name()),
         Some("pandapower-json")
     );
-    assert_eq!(network.shunts().len(), 1);
+    assert_eq!(network.shunts().len(), 2);
 }
 
 #[test]
