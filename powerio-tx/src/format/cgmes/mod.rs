@@ -5516,7 +5516,7 @@ mod tests {
         );
         let parsed = read::read_cgmes_documents(documents, Some("orphan-voltage-limit")).unwrap();
         assert!(parsed.warnings.iter().any(|warning| {
-            warning.info.code == crate::diagnostics::codes::READ_CGMES_RECORD_UNMAPPED.code
+            warning.info.code == crate::diagnostics::codes::READ_CGMES_FIELD_UNMAPPED.code
                 && warning.contains("VoltageLimit `orphan-voltage-limit`")
                 && warning.contains("does not target equipment or a terminal in one VoltageLevel")
                 && warning.contains("was not mapped")
