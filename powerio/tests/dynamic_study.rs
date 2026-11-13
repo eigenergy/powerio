@@ -85,6 +85,7 @@ Q
 102 'SEXS' 1 0.1 10 100 0.1 0 4 /
 103 'GENCLS' 1 5.0 1.0 /
 102 'XYZ' 1 1 /
+102 'IEEET1' 1 1 /
 102 'GENCLS' 'OS' 4.0 0.0 /
 102 'SEXS' 1 0.2 10 100 0.1 0 4 /
 ";
@@ -94,7 +95,7 @@ Q
     let g2 = &linking.machines[1];
     assert_eq!(
         (g2.bus, g2.machine_id.as_str(), g2.mbase),
-        (102, "G2", 200.0)
+        (powerio::BusId(102), "G2", 200.0)
     );
     assert!(matches!(
         g2.machine.as_ref().map(|m| &m.model),
@@ -107,30 +108,44 @@ Q
         g3.exciter.as_ref().map(|m| &m.model),
         Some(powerio::DynamicModel::Sexs(_))
     ));
-    assert_eq!(linking.issues.len(), 4);
+    assert_eq!(linking.issues.len(), 5);
     assert!(matches!(
         linking.issues[0],
-        powerio::LinkIssue::NoGenerator { bus: 103, .. }
+        powerio::LinkIssue::NoGenerator {
+            bus: powerio::BusId(103),
+            ..
+        }
     ));
+    // An unknown model may key another device; a known exciter names a unit.
     assert!(matches!(
         &linking.issues[1],
-        powerio::LinkIssue::Untyped { line: 6, bus: Some(102), machine_id: Some(id), .. } if id == "1"
+        powerio::LinkIssue::Untyped {
+            line: 6,
+            bus: None,
+            machine_id: None,
+            ..
+        }
     ));
     assert!(matches!(
         &linking.issues[2],
-        powerio::LinkIssue::OutOfService { bus: 102, machine_id, .. } if machine_id == "OS"
+        powerio::LinkIssue::Untyped { line: 7, bus: Some(powerio::BusId(102)), machine_id: Some(id), .. } if id == "1"
     ));
-    // The first exciter of a unit wins; the second is reported, not linked.
     assert!(matches!(
         &linking.issues[3],
-        powerio::LinkIssue::Duplicate {
-            line: 8,
+        powerio::LinkIssue::OutOfService { bus: powerio::BusId(102), machine_id, .. } if machine_id == "OS"
+    ));
+    // As in PSS/E, the last exciter of a unit wins and the replacement is reported.
+    assert!(matches!(
+        &linking.issues[4],
+        powerio::LinkIssue::Replaced {
+            line: 9,
+            replaced_line: 4,
             role: powerio::ModelRole::Exciter,
             ..
         }
     ));
     assert!(matches!(
         g3.exciter.as_ref().map(|m| &m.model),
-        Some(powerio::DynamicModel::Sexs(s)) if (s.ta_tb - 0.1).abs() < 1e-12
+        Some(powerio::DynamicModel::Sexs(s)) if (s.ta_tb - 0.2).abs() < 1e-12
     ));
 }

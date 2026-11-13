@@ -16,7 +16,7 @@
 //! stabilizer `IEEEST`. Any other model name is reported as
 //! [`ModelError::Unsupported`] and stays available as a raw record.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::BalancedNetwork;
@@ -611,7 +611,8 @@ pub struct LinkedModel {
 pub struct MachineDynamics {
     /// Index into [`BalancedNetwork::generators`].
     pub generator: usize,
-    pub bus: usize,
+    pub bus: BusId,
+    /// The generator's PSS/E machine id, trimmed (see [`psse_machine_ids`]).
     pub machine_id: String,
     /// Machine base in MVA.
     pub mbase: f64,
@@ -623,24 +624,73 @@ pub struct MachineDynamics {
     pub stabilizer: Option<LinkedModel>,
 }
 
-/// A DYR record that did not attach to a generator as a typed model.
+/// Model names without a typed view that PSS/E attaches to a generator by
+/// `(bus, machine id)`: machines, exciters, governors, stabilizers, limiters,
+/// compensators and the renewable generator, electrical and plant controls.
+/// A record of one of these names an existing unit even though it is not
+/// linked; any other untyped record (load, dc line, relay, user model, ...)
+/// may key something else.
+#[rustfmt::skip]
+const GENERATOR_ATTACHED: &[&str] = &[
+    // Machines.
+    "GENTPJ", "GENTPF", "GENQEC", "GENDCO", "GENTRA", "CIMTR1", "CIMTR3",
+    // Exciters.
+    "IEEET1", "IEEET2", "IEEET3", "IEEET4", "IEEET5", "IEEEX1", "IEEEX2", "IEEEX3", "IEEEX4",
+    "EXAC1", "EXAC1A", "EXAC2", "EXAC3", "EXAC4", "EXDC2", "EXELI", "EXPIC1", "EXST2",
+    "EXST2A", "EXST3", "ESAC2A", "ESAC3A", "ESAC4A", "ESAC5A", "ESAC6A", "ESAC7B", "ESAC8B",
+    "ESDC1A", "ESDC2A", "ESDC3A", "ESDC4B", "ESST1A", "ESST2A", "ESST3A", "ESST4B", "ESST5B",
+    "ESST6B", "ESST7B", "SCRX", "REXS", "URST5T",
+    // Governors.
+    "IEEEG1", "IEEEG2", "IEEEG3", "IEESGO", "GGOV1", "TGOV2", "TGOV3", "TGOV5", "HYGOV2",
+    "HYGOV4", "WEHGOV", "WSIEG1", "PIDGOV", "GAST2A", "GASTWD", "DEGOV", "DEGOV1", "CRCMGV",
+    // Stabilizers.
+    "STAB1", "STAB2A", "STAB3", "STAB4", "PSS1A", "PSS2A", "PSS2B", "PSS2C", "PSS3B", "PSS4B",
+    "IEE2ST", "ST2CUT",
+    // Limiters and compensators.
+    "MAXEX1", "MAXEX2", "MNLEX1", "MNLEX2", "MNLEX3", "UEL1", "UEL2", "OEL1B", "COMP", "IEEEVC",
+];
+
+/// Name prefixes of generator-attached model families without a typed view:
+/// the WECC renewable generator/converter, electrical and plant controllers,
+/// and the generic wind models.
+const GENERATOR_ATTACHED_PREFIXES: &[&str] = &["REGC", "REEC", "REPC", "WT1", "WT2", "WT3", "WT4"];
+
+/// Whether a record of this model names a generator: every supported model
+/// does, and so do the known generator-attached models without a typed view.
+fn names_a_generator(error: &ModelError) -> bool {
+    match error {
+        ModelError::Unsupported { model_name } => {
+            GENERATOR_ATTACHED.contains(&model_name.as_str())
+                || GENERATOR_ATTACHED_PREFIXES
+                    .iter()
+                    .any(|prefix| model_name.starts_with(prefix))
+        }
+        _ => true,
+    }
+}
+
+/// A DYR record that did not attach to a generator as a typed model, or
+/// replaced one that had.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LinkIssue {
     /// The record has no typed view; it is kept raw and not linked. `bus` and
-    /// `machine_id` are the unit it names (a controller of an unsupported
-    /// model leaves that role of the unit empty).
+    /// `machine_id` are the generator it names when the model is known to
+    /// attach to one (a supported model that failed its schema, or a
+    /// generator-attached model without a typed view, whose role on that
+    /// unit stays empty); `None` for any other record, whose keys may name a
+    /// load, a dc line or another device.
     Untyped {
         line: usize,
-        bus: Option<u32>,
+        bus: Option<BusId>,
         machine_id: Option<String>,
         error: ModelError,
     },
-    /// No in-service generator of the static case has this `(bus, id)`.
+    /// No generator of the static case has this `(bus, id)`.
     NoGenerator {
         line: usize,
         model_name: String,
-        bus: u32,
+        bus: BusId,
         machine_id: String,
     },
     /// The generator exists but is out of service; its records are kept and
@@ -648,12 +698,29 @@ pub enum LinkIssue {
     OutOfService {
         line: usize,
         model_name: String,
-        bus: u32,
+        bus: BusId,
         machine_id: String,
     },
-    /// A second record of the same role for one generator. The first wins.
-    Duplicate {
+    /// No generator on the bus has this id exactly, and several match it
+    /// ignoring ASCII case; the record is not linked.
+    AmbiguousMachineId {
         line: usize,
+        model_name: String,
+        bus: BusId,
+        machine_id: String,
+        /// The ids of the generators that match, in network order.
+        candidates: Vec<String>,
+    },
+    /// A later record of the same role for one generator replaced the
+    /// earlier one, as PSS/E does when it reads the DYR file. The record at
+    /// `line` is linked; the one at `replaced_line` is not.
+    Replaced {
+        line: usize,
+        replaced_line: usize,
+        bus: BusId,
+        /// The generator's machine id.
+        machine_id: String,
+        /// The model of the record at `line`.
         model_name: String,
         role: ModelRole,
     },
@@ -671,7 +738,7 @@ impl fmt::Display for LinkIssue {
                 (Some(bus), Some(id)) => {
                     write!(f, "line {line}: {error} (generator ({bus}, '{id}'))")
                 }
-                _ => write!(f, "line {line}: {error}"),
+                _ => write!(f, "line {line}: record not linked: {error}"),
             },
             Self::NoGenerator {
                 line,
@@ -691,13 +758,26 @@ impl fmt::Display for LinkIssue {
                 f,
                 "line {line}: {model_name} names generator ({bus}, '{machine_id}'), which is out of service"
             ),
-            Self::Duplicate {
+            Self::AmbiguousMachineId {
                 line,
+                model_name,
+                bus,
+                machine_id,
+                candidates,
+            } => write!(
+                f,
+                "line {line}: {model_name} names generator ({bus}, '{machine_id}'), which matches ids {candidates:?} on that bus only ignoring case"
+            ),
+            Self::Replaced {
+                line,
+                replaced_line,
+                bus,
+                machine_id,
                 model_name,
                 role,
             } => write!(
                 f,
-                "line {line}: second {role:?} model {model_name} for one generator ignored"
+                "line {line}: {model_name} replaces the {role:?} model of line {replaced_line} for generator ({bus}, '{machine_id}')"
             ),
         }
     }
@@ -710,26 +790,57 @@ pub struct MachineLinking {
     /// One entry per in-service generator, in network order, with or without
     /// dynamic models.
     pub machines: Vec<MachineDynamics>,
+    /// In record order.
     pub issues: Vec<LinkIssue>,
+}
+
+/// One generator on a bus: its trimmed machine id, and its slot in
+/// [`MachineLinking::machines`] (`None` when out of service).
+type BusGenerators = Vec<(String, Option<usize>)>;
+
+/// The generator a record names on its bus: the exact id, else the one
+/// generator whose id matches ignoring ASCII case. `Err` holds the candidate
+/// ids when several do.
+fn find_generator<'a>(
+    on_bus: &'a [(String, Option<usize>)],
+    machine_id: &str,
+) -> Result<Option<&'a (String, Option<usize>)>, Vec<String>> {
+    if let Some(exact) = on_bus.iter().find(|(id, _)| id == machine_id) {
+        return Ok(Some(exact));
+    }
+    let folded: Vec<_> = on_bus
+        .iter()
+        .filter(|(id, _)| id.eq_ignore_ascii_case(machine_id))
+        .collect();
+    match folded.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one)),
+        many => Err(many.iter().map(|(id, _)| id.clone()).collect()),
+    }
 }
 
 /// Attach the typed DYR models to the generators they name by
 /// `(bus, machine id)`.
+///
+/// The machine id matches exactly; when no generator on the bus has it, the
+/// one generator whose id matches ignoring ASCII case is used. When several
+/// records of one role name the same generator, the last one wins and each
+/// replacement is reported as [`LinkIssue::Replaced`], as PSS/E replaces a
+/// model of the same category when it reads a DYR file.
 #[must_use]
 pub fn link_machines(net: &BalancedNetwork, dynamics: &DynamicCase) -> MachineLinking {
     let ids = psse_machine_ids(net);
     let mut machines: Vec<MachineDynamics> = Vec::new();
-    let mut by_key: BTreeMap<(usize, String), usize> = BTreeMap::new();
-    let mut out_of_service: BTreeSet<(usize, String)> = BTreeSet::new();
+    let mut by_bus: BTreeMap<BusId, BusGenerators> = BTreeMap::new();
     for (index, (g, id)) in net.generators().iter().zip(&ids).enumerate() {
+        let slot = g.in_service.then_some(machines.len());
+        by_bus.entry(g.bus).or_default().push((id.clone(), slot));
         if !g.in_service {
-            out_of_service.insert((g.bus.0, id.clone()));
             continue;
         }
-        by_key.insert((g.bus.0, id.clone()), machines.len());
         machines.push(MachineDynamics {
             generator: index,
-            bus: g.bus.0,
+            bus: g.bus,
             machine_id: id.clone(),
             mbase: g.mbase,
             zsource: generator_source_impedance(net, index).unwrap_or((0.0, 1.0)),
@@ -741,57 +852,74 @@ pub fn link_machines(net: &BalancedNetwork, dynamics: &DynamicCase) -> MachineLi
     }
     let mut issues = Vec::new();
     for record in dynamics.records() {
+        let line = record.line();
+        let machine_id = record.device_id().unwrap_or("1").trim().to_owned();
         let model = match typed_model(record) {
             Ok(model) => model,
             Err(error) => {
+                let named = record
+                    .bus_id()
+                    .filter(|_| names_a_generator(&error))
+                    .map(|bus| BusId(bus as usize));
                 issues.push(LinkIssue::Untyped {
-                    line: record.line(),
-                    bus: record.bus_id(),
-                    machine_id: record
-                        .bus_id()
-                        .map(|_| record.device_id().unwrap_or("1").trim().to_owned()),
+                    line,
+                    bus: named,
+                    machine_id: named.map(|_| machine_id),
                     error,
                 });
                 continue;
             }
         };
-        let bus = record.bus_id().unwrap_or(0);
-        let machine_id = record.device_id().unwrap_or("1").trim().to_owned();
-        let Some(&slot) = by_key.get(&(bus as usize, machine_id.clone())) else {
-            if out_of_service.contains(&(bus as usize, machine_id.clone())) {
+        let model_name = model.name().to_owned();
+        let bus = BusId(record.bus_id().unwrap_or(0) as usize);
+        let on_bus = by_bus.get(&bus).map_or(&[][..], Vec::as_slice);
+        let slot = match find_generator(on_bus, &machine_id) {
+            Ok(Some((_, Some(slot)))) => *slot,
+            Ok(Some((_, None))) => {
                 issues.push(LinkIssue::OutOfService {
-                    line: record.line(),
-                    model_name: model.name().to_owned(),
+                    line,
+                    model_name,
                     bus,
                     machine_id,
                 });
                 continue;
             }
-            issues.push(LinkIssue::NoGenerator {
-                line: record.line(),
-                model_name: model.name().to_owned(),
-                bus,
-                machine_id,
-            });
-            continue;
+            Ok(None) => {
+                issues.push(LinkIssue::NoGenerator {
+                    line,
+                    model_name,
+                    bus,
+                    machine_id,
+                });
+                continue;
+            }
+            Err(candidates) => {
+                issues.push(LinkIssue::AmbiguousMachineId {
+                    line,
+                    model_name,
+                    bus,
+                    machine_id,
+                    candidates,
+                });
+                continue;
+            }
         };
         let entry = &mut machines[slot];
-        let target = match model.role() {
+        let role = model.role();
+        let target = match role {
             ModelRole::Machine => &mut entry.machine,
             ModelRole::Exciter => &mut entry.exciter,
             ModelRole::Governor => &mut entry.governor,
             ModelRole::Stabilizer => &mut entry.stabilizer,
         };
-        if target.is_some() {
-            issues.push(LinkIssue::Duplicate {
-                line: record.line(),
-                model_name: model.name().to_owned(),
-                role: model.role(),
-            });
-        } else {
-            *target = Some(LinkedModel {
-                model,
-                line: record.line(),
+        if let Some(replaced) = target.replace(LinkedModel { model, line }) {
+            issues.push(LinkIssue::Replaced {
+                line,
+                replaced_line: replaced.line,
+                bus: entry.bus,
+                machine_id: entry.machine_id.clone(),
+                model_name,
+                role,
             });
         }
     }
@@ -1003,5 +1131,225 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    /// Buses 101 to 104; bus 102 holds 'G2', '1' and the out-of-service
+    /// 'OS', bus 103 'ab' and 'AB', bus 104 'C' and 'Gt'.
+    fn network() -> BalancedNetwork {
+        use std::fmt::Write as _;
+        let generator = |bus: u32, id: &str, status: u8| {
+            format!(
+                "{bus},'{id}', 10.0, 0.0, 100.0, -100.0, 1.0, 0, 200.0, 1.0E-3, 0.3, 0.0, 0.0, 1.0, {status}, 100.0, 100.0, 0.0, 1, 1.0\n"
+            )
+        };
+        let mut raw = String::from("0, 100.00, 33, 0, 0, 60.00 / test\nfirst\nsecond\n");
+        for bus in 101..=104 {
+            let kind = if bus == 101 { 3 } else { 2 };
+            writeln!(raw, "{bus},'B{bus}', 230.0, {kind}, 1, 1, 1, 1.0, 0.0").unwrap();
+        }
+        raw += "0 / End of Bus data\n0 / End of Load data\n0 / End of Fixed shunt data\n";
+        for (bus, id, status) in [
+            (101, "1", 1),
+            (102, "G2", 1),
+            (102, "1", 1),
+            (102, "OS", 0),
+            (103, "ab", 1),
+            (103, "AB", 1),
+            (104, "C", 1),
+            (104, "Gt", 1),
+        ] {
+            raw += &generator(bus, id, status);
+        }
+        raw += "0 / End of Generator data\n";
+        for to in 102..=104 {
+            writeln!(raw, "101, {to},'1', 0.0, 0.1, 0.0, 100.0, 100.0, 100.0, 0.0, 0.0, 0.0, 0.0, 1, 1, 0.0, 1, 1.0").unwrap();
+        }
+        raw += "0 / End of Branch data\n0 / End of Transformer data\nQ\n";
+        crate::format::psse::parse_psse_source(
+            &raw,
+            None,
+            &mut crate::diagnostics::Diagnostics::default(),
+        )
+        .unwrap()
+    }
+
+    fn link(dyr: &str) -> MachineLinking {
+        link_machines(&network(), &parse_dyr(dyr).unwrap())
+    }
+
+    fn unit<'a>(linking: &'a MachineLinking, bus: usize, id: &str) -> &'a MachineDynamics {
+        linking
+            .machines
+            .iter()
+            .find(|m| m.bus == BusId(bus) && m.machine_id == id)
+            .unwrap_or_else(|| panic!("no unit ({bus}, {id})"))
+    }
+
+    #[test]
+    fn machines_carry_static_bus_ids() {
+        let net = network();
+        assert_eq!(
+            psse_machine_ids(&net),
+            ["1", "G2", "1", "OS", "ab", "AB", "C", "Gt"]
+        );
+        let linking = link("");
+        assert_eq!(linking.machines.len(), 7);
+        let g2 = unit(&linking, 102, "G2");
+        assert_eq!((g2.generator, g2.bus, g2.mbase), (1, BusId(102), 200.0));
+        assert!(linking.issues.is_empty());
+    }
+
+    /// PSS/E replaces an earlier model of the same category for one machine
+    /// with a later one; so does the linking, and it says so.
+    #[test]
+    fn a_later_record_of_one_role_replaces_the_earlier() {
+        let linking = link(
+            "102 'GENROU' 1 8 0.03 0.4 0.05 6 0 1.8 1.7 0.3 0.55 0.25 0.2 0.1 0.8 /
+102 'SEXS' 1 0.1 10 100 0.1 0 4 /
+102 'GENCLS' 1 5.0 1.0 /
+102 'SEXS' '1 ' 0.2 10 100 0.1 0 4 /
+",
+        );
+        let g = unit(&linking, 102, "1");
+        assert!(matches!(
+            g.machine,
+            Some(LinkedModel {
+                model: DynamicModel::Gencls(_),
+                line: 3
+            })
+        ));
+        assert!(matches!(
+            &g.exciter,
+            Some(LinkedModel { model: DynamicModel::Sexs(s), line: 4 }) if (s.ta_tb - 0.2).abs() < 1e-12
+        ));
+        assert_eq!(
+            linking.issues,
+            [
+                LinkIssue::Replaced {
+                    line: 3,
+                    replaced_line: 1,
+                    bus: BusId(102),
+                    machine_id: "1".into(),
+                    model_name: "GENCLS".into(),
+                    role: ModelRole::Machine,
+                },
+                LinkIssue::Replaced {
+                    line: 4,
+                    replaced_line: 2,
+                    bus: BusId(102),
+                    machine_id: "1".into(),
+                    model_name: "SEXS".into(),
+                    role: ModelRole::Exciter,
+                },
+            ]
+        );
+        assert_eq!(
+            linking.issues[0].to_string(),
+            "line 3: GENCLS replaces the Machine model of line 1 for generator (102, '1')"
+        );
+    }
+
+    /// Unquoted alphabetic ids, as WECC 240 writes them, and ids that differ
+    /// from the static case only in ASCII case.
+    #[test]
+    fn machine_ids_match_exactly_then_ignoring_case() {
+        let linking = link(
+            "104 'GENCLS' C 3.0 0.0 /
+104 'GENCLS' GT 4.0 0.0 /
+104 'SEXS' gt 0.1 10 100 0.1 0 4 /
+103 'GENCLS' ab 1.0 0.0 /
+103 'GENCLS' AB 2.0 0.0 /
+103 'GENCLS' Ab 9.0 0.0 /
+102 'GENCLS' os 1.0 0.0 /
+102 'GENCLS' G 1.0 0.0 /
+",
+        );
+        let h = |bus, id| match &unit(&linking, bus, id).machine {
+            Some(LinkedModel {
+                model: DynamicModel::Gencls(g),
+                ..
+            }) => g.h,
+            other => panic!("({bus}, {id}): {other:?}"),
+        };
+        assert!((h(104, "C") - 3.0).abs() < 1e-12);
+        // 'GT' is no id on bus 104; the one id equal ignoring case is 'Gt'.
+        assert!((h(104, "Gt") - 4.0).abs() < 1e-12);
+        assert!(unit(&linking, 104, "Gt").exciter.is_some());
+        // Exact matches win over the case-folded ones.
+        assert!((h(103, "ab") - 1.0).abs() < 1e-12);
+        assert!((h(103, "AB") - 2.0).abs() < 1e-12);
+        assert_eq!(
+            linking.issues,
+            [
+                LinkIssue::AmbiguousMachineId {
+                    line: 6,
+                    model_name: "GENCLS".into(),
+                    bus: BusId(103),
+                    machine_id: "Ab".into(),
+                    candidates: vec!["ab".into(), "AB".into()],
+                },
+                LinkIssue::OutOfService {
+                    line: 7,
+                    model_name: "GENCLS".into(),
+                    bus: BusId(102),
+                    machine_id: "os".into(),
+                },
+                LinkIssue::NoGenerator {
+                    line: 8,
+                    model_name: "GENCLS".into(),
+                    bus: BusId(102),
+                    machine_id: "G".into(),
+                },
+            ]
+        );
+        // The stored ids are never folded.
+        assert_eq!(unit(&linking, 104, "Gt").machine_id, "Gt");
+    }
+
+    /// An untyped record names a generator only when its model is known to
+    /// attach to one.
+    #[test]
+    fn untyped_records_name_a_generator_only_for_generator_models() {
+        let linking = link(
+            "102 'IEEET1' 1 0 400 0.04 7.3 -7.3 1 0.8 0 0.03 1 0 0 0 0 /
+102 'REECA1' 'G2' 1 2 /
+102 'SEXS' 1 0.1 10 /
+102 'CLODBL' 1 1 2 /
+2 'LDS3BL' * 1 2 /
+'DC1' 'CDC4T' 1 2 /
+102 'USRMDL' 1 'X' 1 2 /
+",
+        );
+        let named: Vec<_> = linking
+            .issues
+            .iter()
+            .map(|issue| match issue {
+                LinkIssue::Untyped {
+                    bus, machine_id, ..
+                } => (*bus, machine_id.clone()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let generator = |id: &str| (Some(BusId(102)), Some(id.to_owned()));
+        assert_eq!(
+            named,
+            [
+                generator("1"),
+                generator("G2"),
+                generator("1"),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+            ]
+        );
+        assert_eq!(
+            linking.issues[0].to_string(),
+            "line 1: model IEEET1 has no typed view (generator (102, '1'))"
+        );
+        assert_eq!(
+            linking.issues[3].to_string(),
+            "line 4: record not linked: model CLODBL has no typed view"
+        );
     }
 }
