@@ -500,9 +500,22 @@ frequency other than 50 Hz are reported as dropped.
 
 `.aux` is read and written, `.pwb` binary cases are read only, and a `.pwd`
 display file parses to a `GeoLayer`
-([Geographic and display data](geo-and-display.md)). `.aux` has no system base,
-so the reader defaults to 100 MVA. No third party `.aux` reader exists, so the
-writer is validated by PowerIO's own read back plus a PowerModels JSON bridge.
+([Geographic and display data](geo-and-display.md)). The writer states the
+system base as Simulator's `SBase` solution option, which the reader reads
+back; an `.aux` that states no base reads at 100 MVA. The writer uses the
+field names Simulator defines and requires to create each object, so
+Simulator loads every bus, load, shunt, generator, and branch it writes.
+Simulator refuses a blank bus name, so an unnamed bus is written under its
+number, and both PowerWorld readers read a name equal to the bus number as no
+name. Simulator's device IDs are two characters, so loads, shunts, and
+generators are numbered per bus. A case with a near zero impedance branch
+states Simulator's lowest zero impedance threshold, so Simulator does not
+merge the voltage control of the buses it joins. Simulator substitutes 138 kV
+for a nominal voltage that is not positive and area or zone 1 for 0, and the
+writer reports both. Simulator is the writer's oracle:
+`evals/validation/validate_powerworld_simauto.py` loads each written case
+through SimAuto and checks Simulator's load log, the object counts, every
+written field, and a power flow against PowerIO's own network.
 The `.pwb` layouts are reverse engineered; the decode evidence and coverage
 matrix are maintainer notes at
 [`powerio-tx/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio-tx/src/format/powerworld/FORMAT.md).

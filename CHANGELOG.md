@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+**PowerWorld**
+
+- The `.aux` writer uses the field names PowerWorld Simulator defines and
+  requires to create each object. Simulator 24 loaded the earlier output with
+  no load, shunt, or generator (it requires `LoadSMW`/`LoadSMVR`, the
+  `SSStatus`/`SSCMode`/`SSNMVR` switched shunt fields, and
+  `GenAGCAble`/`GenAVRAble`), no transformer tap (`LineXFRatio` is not a
+  Simulator field), no bus voltage limit, and no slack bus, so the case it
+  held did not solve. The writer now states `LoadSMW`/`LoadSMVR`, fixed
+  switched shunts, generator AGC and AVR flags (AVR follows the bus type, so
+  a machine on a PQ bus holds its Mvar output as in MATPOWER), `BusSlack`,
+  bus specific voltage limits, `LineTap`, and ratings B and C as
+  `LineAMVA:1`/`LineAMVA:2`. It also states the system base as Simulator's
+  `SBase` option, which the reader now reads, and names an unnamed bus by its
+  number because Simulator refuses a blank bus name; both PowerWorld readers
+  read a name equal to the bus number as no name. The reader still accepts
+  the names earlier releases wrote (#868).
+- The `.aux` writer numbers loads, shunts, and generators per bus. Simulator's
+  device IDs are two characters and it truncates a longer one, so the
+  positional IDs of the whole table merged devices from the hundredth on:
+  ACTIVSg200 written from PSS/E loaded 139 of its 160 loads. Both readers
+  read an ID equal to its per bus position as the default (#868).
+- The `.aux` writer gives a reversed parallel branch its own circuit.
+  Simulator identifies a branch by its two buses in either order plus its
+  circuit, so the two `case2869pegase` lines written 5289 to 3113 and 3113 to
+  5289, both as circuit 1, loaded as one branch, and Simulator logged
+  nothing. Both readers count positional circuits the same way (#868).
+- A case with a branch whose resistance and reactance are both at or below
+  Simulator's default zero impedance threshold (0.0002 pu) states the
+  threshold at Simulator's floor (0.00005 pu). Simulator otherwise regulates
+  the buses such a branch joins as one group and overrides all but one
+  generator set point; `case2869pegase` solved 5.6e-5 pu away from MATPOWER.
+  A branch at or below the floor is reported, and so are the values
+  Simulator substitutes: a nominal voltage that is not positive (it loads
+  138 kV) and area or zone 0 (it loads 1) (#868).
+- `evals/validation/validate_powerworld_simauto.py` loads written cases into
+  Simulator through SimAuto and checks the load log, the object counts,
+  every written field, and a power flow against PowerIO's own network. All
+  17 MATPOWER, PGLib, PSS/E, and PowerWorld fixtures pass with Simulator 24
+  (#868).
+
 ## 0.11.12
 
 **XIIDM**

@@ -41,6 +41,13 @@ const GEN_IO_D: &str = "GenIOD";
 /// Coefficients a cubic input-output curve holds: the constant plus three
 /// powers of MW.
 const GEN_IO_COEFFICIENTS: usize = 4;
+/// Simulator's default zero impedance branch threshold, per unit. It
+/// regulates the voltage of buses joined by a branch whose resistance and
+/// reactance are at or below it as one group, overriding all but one
+/// generator set point; MATPOWER regulates each bus on its own.
+const ZBR_THRESHOLD_DEFAULT: f64 = 0.0002;
+/// The lowest `ZBRThreshold` Simulator 24 accepts; it clamps a lower value.
+const ZBR_THRESHOLD_FLOOR: f64 = 0.000_05;
 
 // ---- Reader -----------------------------------------------------------------
 
@@ -54,11 +61,13 @@ pub(in crate::format) fn parse_powerworld_source(
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let content: &str = source;
-    // PowerWorld `.aux` does not carry the system base in the case data, so we
-    // default to 100 MVA (the de-facto standard, and what our own writer records
-    // in the `// baseMVA` marker below). Reading a real base from PowerWorld's
-    // project files is tracked separately; defaulting here is deliberate, not a
-    // silent guess — erroring would reject every base-less third-party `.aux`.
+    // Simulator keeps the system base as the SBase solution option. The writer
+    // states it in a `Sim_Solution_Options` block, read below, and in the
+    // `// baseMVA` marker that releases before 0.11.13 wrote alone. A case
+    // export usually states neither, so the default is 100 MVA (the de-facto
+    // standard). Reading a real base from PowerWorld's project files is tracked
+    // separately; defaulting here is deliberate, not a silent guess — erroring
+    // would reject every base-less third-party `.aux`.
     let mut base_mva = 100.0;
     let mut name = name_hint.unwrap_or("case").to_string();
     for line in content.lines() {
@@ -115,6 +124,35 @@ pub(in crate::format) fn parse_powerworld_source(
             // fields; a transformer with no Branch record carries no impedance
             // and cannot stand alone, so unmatched rows are not created.
             "transformer" => merged_branches.absorb(blk, false),
+            // The system base, where the writer states it. A zero impedance
+            // threshold at Simulator's floor states what the typed model
+            // assumes, every branch an impedance, so it is modeled too. Any
+            // other option, or threshold, is not modeled and warns like an
+            // unmodeled block.
+            "sim_solution_options" => {
+                if let Some(at) = blk.field_index("SBase") {
+                    for row in &blk.rows {
+                        if let Some(v) = read_sbase(row.values.get(at).map(AsRef::as_ref))? {
+                            base_mva = v;
+                        }
+                    }
+                }
+                let modeled = |field: &str, at: usize| {
+                    field.eq_ignore_ascii_case("SBase")
+                        || (field.eq_ignore_ascii_case("ZBRThreshold")
+                            && blk.rows.iter().all(|row| {
+                                row.values
+                                    .get(at)
+                                    .and_then(|v| v.trim().parse::<f64>().ok())
+                                    .is_some_and(|v| v <= ZBR_THRESHOLD_FLOOR)
+                            }))
+                };
+                if !blk.rows.is_empty()
+                    && blk.fields.iter().enumerate().any(|(at, f)| !modeled(f, at))
+                {
+                    *unmodeled.entry(&blk.object_type).or_default() += blk.rows.len();
+                }
+            }
             _ => {
                 if !blk.rows.is_empty() {
                     *unmodeled.entry(&blk.object_type).or_default() += blk.rows.len();
@@ -143,12 +181,16 @@ pub(in crate::format) fn parse_powerworld_source(
     }
     let mut loads = Vec::new();
     for r in merged_loads.rows() {
-        loads.push(read_load(r, &bus_labels, loads.len())?);
+        loads.push(read_load(r, &bus_labels)?);
     }
     let mut shunts = Vec::new();
     for r in merged_shunts.rows() {
-        shunts.push(read_shunt(r, &bus_labels, shunts.len())?);
+        shunts.push(read_shunt(r, &bus_labels)?);
     }
+    // An id equal to its per bus position restates what the writer's
+    // allocator re-derives; the binary reader applies the same rule.
+    super::drop_positional_ids(&mut loads, &["LoadID", "ID"], |l| (l.bus, &mut l.extras));
+    super::drop_positional_ids(&mut shunts, &["ShuntID", "ID"], |s| (s.bus, &mut s.extras));
     let mut generators = Vec::new();
     for r in merged_gens.rows() {
         generators.push(read_gen(r, &bus_labels)?);
@@ -389,6 +431,21 @@ fn bus_ref(
     })
 }
 
+/// One `SBase` value: blank is unstated, and anything else must be a positive
+/// finite MVA, since every per unit impedance in the case is on it.
+fn read_sbase(value: Option<&str>) -> Result<Option<f64>> {
+    let Some(text) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    match text.parse::<f64>() {
+        Ok(v) if v.is_finite() && v > 0.0 => Ok(Some(v)),
+        _ => Err(Error::FormatRead {
+            format: FMT,
+            message: format!("Sim_Solution_Options SBase {text:?} is not a positive MVA base"),
+        }),
+    }
+}
+
 /// First present, non-empty field among `keys`, trimmed.
 fn first<'a>(r: &Row<'a>, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
@@ -472,7 +529,7 @@ fn read_bus(r: &Row) -> Result<Bus> {
             message: "Bus block row missing a numeric BusNum/Number".into(),
         })?;
     let id = bus_id_from_field(id_key, id_field)?;
-    let name = first(r, &["BusName", "Name"]).map(ToString::to_string);
+    let name = first(r, &["BusName", "Name"]).and_then(|v| super::bus_name(v, BusId(id)));
     let mut extras = Extras::new();
     // `SubNum` stays in extras: it is identity rather than geometry, and the
     // substation join reads it back.
@@ -499,8 +556,9 @@ fn read_bus(r: &Row) -> Result<Bus> {
         va: f_alias(r, &["BusAngle", "Vangle"], 0.0)?,
         base_kv: f_alias(r, &["BusNomVolt", "NomkV"], 0.0)?,
         // Real exports carry per rating set voltage limits; set 1 (set A in
-        // the 2022 vocabulary) is the default set. Our writer's
-        // BusVMax/BusVMin are the fallback aliases.
+        // the 2022 vocabulary) is the default set, and what the writer states.
+        // BusVMax/BusVMin, which PowerIO 0.11.12 and earlier wrote, are the
+        // fallback aliases.
         vmax: f_alias(r, &["BusVoltLimHigh:1", "LimitHighA", "BusVMax"], 1.1)?,
         vmin: f_alias(r, &["BusVoltLimLow:1", "LimitLowA", "BusVMin"], 0.9)?,
         evhi: None,
@@ -541,10 +599,11 @@ fn bus_location(r: &Row) -> Option<(crate::geo::Location, [&'static str; 2])> {
     None
 }
 
-fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result<Load> {
+fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {
     // Complete case exports write ZIP components (constant power S, constant
-    // current I, constant impedance Z, each MW/MVAr at nominal voltage); the
-    // simple LoadMW/LoadMVR pair is our own writer's form. The typed model
+    // current I, constant impedance Z, each MW/MVAr at nominal voltage), and
+    // the writer states the S pair. The LoadMW/LoadMVR total pair is the form
+    // PowerIO 0.11.12 and earlier wrote. The typed model
     // carries the total at nominal voltage; nonzero I/Z components are kept in
     // extras so nothing about the voltage dependence is lost.
     let (p, q);
@@ -572,7 +631,6 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result
         }
     }
     keep_extras(r, &["LoadID", "ID"], &mut extras);
-    super::drop_positional_id(&mut extras, &["LoadID", "ID"], index);
     Ok(Load {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         p,
@@ -584,14 +642,26 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result
     })
 }
 
-fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result<Shunt> {
+fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Shunt> {
     let mut extras = Extras::new();
     keep_extras(r, &["ShuntID", "ID", "SSCMode", "ShuntMode"], &mut extras);
-    super::drop_positional_id(&mut extras, &["ShuntID", "ID"], index);
+    // Fixed is the control mode the writer states for every shunt, so it
+    // restates nothing; any other mode is kept, and a writer that cannot state
+    // it reports the loss.
+    for key in ["SSCMode", "ShuntMode"] {
+        if extras
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|v| v.trim() == "Fixed")
+        {
+            extras.remove(key);
+        }
+    }
     Ok(Shunt {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         // Switched shunt nominal MW/MVAr in real exports (MWNom/MvarNom in
-        // the 2022 vocabulary); ShuntMW/ShuntMVR from our writer.
+        // the 2022 vocabulary); ShuntMW/ShuntMVR from PowerIO 0.11.12 and
+        // earlier.
         g: f_alias(r, &["ShuntMW", "SSNMW", "MWNom"], 0.0)?,
         b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
         in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"])?,
@@ -674,7 +744,7 @@ fn read_branch(
         &["BusName_NomVolt:1"],
         bus_labels,
     )?;
-    let nth = parallel.entry((from, to)).or_insert(0);
+    let nth = parallel.entry(super::branch_pair(from, to)).or_insert(0);
     *nth += 1;
     let mut extras = Extras::new();
     // Branch identity beyond the bus pair: circuit ID and device type. Kept
@@ -690,15 +760,15 @@ fn read_branch(
         );
     }
     keep_extras(r, &[BRANCH_DEVICE_TYPE, "LineLength"], &mut extras);
-    // The circuit counter is per bus pair, so the second parallel branch's "2"
-    // is as much a positional default as the first's "1". Dropped through the
-    // shared rule rather than by a filter on the insert, so the aux and pwb
-    // readers cannot disagree about what a default is.
+    // The circuit counter is per unordered bus pair, so the second parallel
+    // branch's "2" is as much a positional default as the first's "1".
+    // Dropped through the shared rule rather than by a filter on the insert,
+    // so the aux and pwb readers cannot disagree about what a default is.
     super::drop_positional_id(&mut extras, &[LINE_CIRCUIT], *nth as usize - 1);
     // Transformer records in complete case exports carry their impedance and
     // tap under `:1` locations (values on the system base after correction);
-    // line records use the bare names. Our writer's LineXFRatio is the tap
-    // fallback.
+    // line records use the bare names, and so does the writer. LineXFRatio,
+    // which PowerIO 0.11.12 and earlier wrote, is a fallback.
     // 2016 era exports use the bare name here like everywhere else.
     let tap = f_alias(
         r,
@@ -784,6 +854,53 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
     let _ = writeln!(s, "// baseMVA {}", net.base_mva());
     let _ = writeln!(s);
 
+    // The field names below are the ones Simulator itself defines (its
+    // GetFieldList) and its own exports write. Simulator skips a field it
+    // does not define, and refuses to create an object whose required fields
+    // are missing or blank, so an invented name loses the data in Simulator
+    // even though PowerIO's reader would accept it.
+    //
+    // Branch impedances are per unit on the case's system base, which
+    // Simulator keeps as SBase. Stating it before the Branch rows makes
+    // Simulator read them on this network's base rather than its 100 MVA
+    // default. PowerIO's reader reads it too; the `// baseMVA` comment above
+    // is what releases before 0.11.13 read.
+    //
+    // Simulator also regulates buses joined by a branch at or below its zero
+    // impedance threshold as one group, overriding all but one generator set
+    // point. When a branch is that small, the threshold drops to Simulator's
+    // floor so the case keeps each set point; a branch at or below the floor
+    // is reported below.
+    let near_zero = |limit: f64| {
+        net.branches()
+            .iter()
+            .filter(|b| b.in_service && b.r.abs() <= limit && b.x.abs() <= limit)
+            .count()
+    };
+    let lower_zbr_threshold = near_zero(ZBR_THRESHOLD_DEFAULT) > 0;
+    block(
+        &mut s,
+        "Sim_Solution_Options",
+        if lower_zbr_threshold {
+            "[SBase, ZBRThreshold]"
+        } else {
+            "[SBase]"
+        },
+        |rows| {
+            let mut row = n(net.base_mva());
+            if lower_zbr_threshold {
+                let _ = write!(row, " {}", n(ZBR_THRESHOLD_FLOOR));
+            }
+            rows.push(row);
+        },
+    );
+    let below_floor = near_zero(ZBR_THRESHOLD_FLOOR);
+    if below_floor > 0 {
+        warnings.push(&F.value_collapsed, format!(
+            "{below_floor} branch(es) at or below Simulator's lowest zero impedance threshold ({ZBR_THRESHOLD_FLOOR} pu): Simulator regulates the voltage of the buses each joins as one group, keeping one generator set point"
+        ));
+    }
+
     // The coordinate columns appear only when the case carries locations, so
     // a case without geometry writes exactly as before. A located case still
     // writes `""` for the odd bus without a point; the reader leaves those
@@ -795,23 +912,38 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         .generators()
         .iter()
         .any(|g| g.cost.as_ref().is_some_and(|cost| cost.model == 2));
+    // Simulator has no writable bus type: it derives PV and PQ from the
+    // generators' AVR flags and takes the slack from BusSlack. BusCat stays
+    // for PowerIO's reader, which reads the PV/PQ split from it; Simulator
+    // computes that field and ignores the written value.
     block(
         &mut s,
         "Bus",
         if write_locations {
-            "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat, Latitude:1, Longitude:1]"
+            "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusSlack, BusVoltLim, BusVoltLimHigh:1, BusVoltLimLow:1, BusCat, Latitude:1, Longitude:1]"
         } else {
-            "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat]"
+            "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusSlack, BusVoltLim, BusVoltLimHigh:1, BusVoltLimLow:1, BusCat]"
         },
         |rows| {
             for b in net.buses() {
                 let raw_name = b.name.as_deref().unwrap_or("");
-                let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
-                if matches!(name, std::borrow::Cow::Owned(_)) {
+                let sanitized = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
+                if matches!(sanitized, std::borrow::Cow::Owned(_)) {
                     sanitized_names += 1;
                 }
+                // Simulator refuses to create a bus with a blank BusName, so
+                // an unnamed bus is named by its number. The readers read a
+                // name equal to the bus number back as no name.
+                let name = if sanitized.trim().is_empty() {
+                    std::borrow::Cow::Owned(b.id.to_string())
+                } else {
+                    sanitized
+                };
+                // BusVoltLim YES makes the bus use its own limits; with NO,
+                // Simulator ignores the written limits in favor of the limit
+                // group's.
                 let mut row = format!(
-                    "{} \"{}\" {} {} {} {} {} {} {} \"{}\"",
+                    "{} \"{}\" {} {} {} {} {} \"{}\" \"YES\" {} {} \"{}\"",
                     b.id,
                     name,
                     n(b.base_kv),
@@ -819,6 +951,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
                     n(b.va),
                     b.area,
                     b.zone,
+                    yes_no(b.kind == BusType::Ref),
                     n(b.vmax),
                     n(b.vmin),
                     bus_cat(b.kind)
@@ -836,56 +969,75 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         },
     );
 
+    // The total load is constant power: the S components are the fields
+    // Simulator requires to create a load. LoadMW/LoadMVR are the totals it
+    // derives from the S, I, and Z components.
     block(
         &mut s,
         "Load",
-        "[BusNum, LoadID, LoadMW, LoadMVR, LoadStatus]",
+        "[BusNum, LoadID, LoadStatus, LoadSMW, LoadSMVR]",
         |rows| {
-            for (i, l) in net.loads().iter().enumerate() {
+            let mut at_bus = HashMap::new();
+            for l in net.loads() {
                 rows.push(format!(
-                    "{} \"{}\" {} {} \"{}\"",
+                    "{} \"{}\" \"{}\" {} {}",
                     l.bus,
-                    id_of(&l.extras, "LoadID", i),
+                    id_of(&l.extras, "LoadID", position_at(&mut at_bus, l.bus)),
+                    status(l.in_service),
                     n(l.p),
-                    n(l.q),
-                    status(l.in_service)
+                    n(l.q)
                 ));
             }
         },
     );
 
+    // A PowerWorld Shunt is a switched shunt; a fixed one is control mode
+    // Fixed, with its nominal MW and Mvar at 1 pu voltage.
     block(
         &mut s,
         "Shunt",
-        "[BusNum, ShuntID, ShuntMW, ShuntMVR, ShuntStatus]",
+        "[BusNum, ShuntID, SSStatus, SSCMode, SSNMW, SSNMVR]",
         |rows| {
-            for (i, sh) in net.shunts().iter().enumerate() {
+            let mut at_bus = HashMap::new();
+            for sh in net.shunts() {
                 rows.push(format!(
-                    "{} \"{}\" {} {} \"{}\"",
+                    "{} \"{}\" \"{}\" \"Fixed\" {} {}",
                     sh.bus,
-                    id_of(&sh.extras, "ShuntID", i),
+                    id_of(&sh.extras, "ShuntID", position_at(&mut at_bus, sh.bus)),
+                    status(sh.in_service),
                     n(sh.g),
-                    n(sh.b),
-                    status(sh.in_service)
+                    n(sh.b)
                 ));
             }
         },
     );
 
+    // Simulator requires GenAGCAble and GenAVRAble to create a generator. AVR
+    // is what makes a bus PV in Simulator, so it follows the bus type: a
+    // machine regulates when its regulation is on and its bus is PV or the
+    // slack, and a machine on a PQ bus holds its Mvar output, as it does in a
+    // MATPOWER power flow. AGC is YES, Simulator's own default; a written case
+    // creates its areas off AGC, so the flag does not move the dispatch.
+    let bus_kinds: HashMap<BusId, BusType> = net.buses().iter().map(|b| (b.id, b.kind)).collect();
     block(
         &mut s,
         "Gen",
         if write_gen_cost {
-            "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus, GenCostModel, GenFuelCost, GenFixedCost, GenIOB, GenIOC, GenIOD]"
+            "[BusNum, GenID, GenStatus, GenAGCAble, GenAVRAble, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenCostModel, GenFuelCost, GenFixedCost, GenIOB, GenIOC, GenIOD]"
         } else {
-            "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus]"
+            "[BusNum, GenID, GenStatus, GenAGCAble, GenAVRAble, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase]"
         },
         |rows| {
-            for (i, g) in net.generators().iter().enumerate() {
+            let mut at_bus = HashMap::new();
+            for g in net.generators() {
+                let regulates = g.voltage_regulation_on
+                    && matches!(bus_kinds.get(&g.bus), Some(BusType::Pv | BusType::Ref));
                 let mut row = format!(
-                    "{} \"{}\" {} {} {} {} {} {} {} {} \"{}\"",
+                    "{} \"{}\" \"{}\" \"YES\" \"{}\" {} {} {} {} {} {} {} {}",
                     g.bus,
-                    i + 1,
+                    position_at(&mut at_bus, g.bus) + 1,
+                    status(g.in_service),
+                    yes_no(regulates),
                     n(g.pg),
                     n(g.qg),
                     n(g.pmax),
@@ -893,8 +1045,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
                     n(g.qmax),
                     n(g.qmin),
                     n(g.vg),
-                    n(g.mbase),
-                    status(g.in_service)
+                    n(g.mbase)
                 );
                 if write_gen_cost {
                     // Highest order last in the row: the constant rides
@@ -924,14 +1075,19 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         },
     );
 
+    // Simulator reads a row's fields in order, and LineTap is enterable only
+    // on a transformer, so BranchDeviceType comes before it. Ratings B and C
+    // are LineAMVA:1 and LineAMVA:2.
     block(
         &mut s,
         "Branch",
-        "[BusNum, BusNum:1, LineCircuit, LineR, LineX, LineC, LineAMVA, LineBMVA, LineCMVA, LineXFRatio, LinePhase, LineStatus, BranchDeviceType]",
+        "[BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR, LineX, LineC, LineAMVA, LineAMVA:1, LineAMVA:2, LineTap, LinePhase]",
         |rows| {
-            // Parallel branches need distinct circuit IDs: the bus pair plus
-            // circuit is the PowerWorld branch identity, and a reader (ours
-            // included) treats equal identities as one device.
+            // Parallel branches need distinct circuit IDs: the bus pair, in
+            // either order, plus the circuit is the PowerWorld branch
+            // identity, and Simulator merges equal identities into one
+            // branch without a word. A reversed parallel counts as a
+            // parallel.
             let mut parallel: HashMap<(BusId, BusId), u32> = HashMap::new();
             for br in net.branches() {
                 let kind = match br.extras.get(BRANCH_DEVICE_TYPE).and_then(|v| v.as_str()) {
@@ -939,7 +1095,9 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
                     None if br.is_transformer() => "Transformer",
                     None => "Line",
                 };
-                let nth = parallel.entry((br.from, br.to)).or_insert(0);
+                let nth = parallel
+                    .entry(super::branch_pair(br.from, br.to))
+                    .or_insert(0);
                 *nth += 1;
                 let fallback = nth.to_string();
                 let circuit = br
@@ -948,10 +1106,12 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
                     .and_then(|v| v.as_str())
                     .unwrap_or(&fallback);
                 rows.push(format!(
-                    "{} {} \"{}\" {} {} {} {} {} {} {} {} \"{}\" \"{}\"",
+                    "{} {} \"{}\" \"{}\" \"{}\" {} {} {} {} {} {} {} {}",
                     br.from,
                     br.to,
                     circuit,
+                    kind,
+                    status(br.in_service),
                     n(br.r),
                     n(br.x),
                     n(br.calc_total_charging_b()),
@@ -959,9 +1119,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
                     n(br.rate_b),
                     n(br.rate_c),
                     n(br.calc_effective_tap()),
-                    n(br.shift),
-                    status(br.in_service),
-                    kind
+                    n(br.shift)
                 ));
             }
         },
@@ -1040,6 +1198,26 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
             net.transformers_3w().len()
         ));
     }
+    // Simulator substitutes what it cannot hold: a bus needs a positive
+    // nominal voltage (it loads 0 kV at its 138 kV default) and areas and
+    // zones number from 1 (it loads 0 as 1). Per unit values, and so the
+    // power flow, do not depend on either.
+    let unstated_kv = net.buses().iter().filter(|b| b.base_kv <= 0.0).count();
+    if unstated_kv > 0 {
+        warnings.push(&F.value_defaulted, format!(
+            "{unstated_kv} bus(es) state no positive nominal voltage: Simulator requires one and loads these at its default (138 kV in Simulator 24)"
+        ));
+    }
+    let unnumbered = net
+        .buses()
+        .iter()
+        .filter(|b| b.area == 0 || b.zone == 0)
+        .count();
+    if unnumbered > 0 {
+        warnings.push(&F.value_defaulted, format!(
+            "{unnumbered} bus(es) in area or zone 0: Simulator numbers areas and zones from 1 and loads these in area or zone 1"
+        ));
+    }
     if net
         .buses()
         .iter()
@@ -1047,7 +1225,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
     {
         warnings.push(
             &F.field_dropped,
-            "emergency voltage band(s) (EVHI/EVLO) dropped: a PowerWorld .aux Bus row states one BusVMax/BusVMin pair",
+            "emergency voltage band(s) (EVHI/EVLO) dropped: a PowerWorld .aux Bus row states one BusVoltLimHigh:1/BusVoltLimLow:1 pair",
         );
     }
     if !net.storage().is_empty() {
@@ -1092,7 +1270,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         .count();
     if current_ratings > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{current_ratings} branch current rating record(s) dropped: a PowerWorld .aux Branch row states its ratings in MVA through LineAMVA, LineBMVA, and LineCMVA"
+            "{current_ratings} branch current rating record(s) dropped: a PowerWorld .aux Branch row states its ratings in MVA through LineAMVA, LineAMVA:1, and LineAMVA:2"
         ));
     }
     warn_extra_branch_rating_sets(&F, "PowerWorld .aux", net, &mut warnings);
@@ -1150,12 +1328,23 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
 }
 
 /// Device ID for the writer: the retained PowerWorld ID from `extras` when the
-/// element came from an aux read, else the 1-based position.
-fn id_of(extras: &Extras, key: &str, index: usize) -> String {
+/// element came from an aux read, else the 1-based position among the
+/// devices of its kind at its bus, from [`position_at`].
+fn id_of(extras: &Extras, key: &str, position: usize) -> String {
     match extras.get(key).and_then(serde_json::Value::as_str) {
         Some(v) => v.to_string(),
-        None => (index + 1).to_string(),
+        None => (position + 1).to_string(),
     }
+}
+
+/// The 0-based position of the next device at `bus`. Simulator's device IDs
+/// are two characters and it truncates a longer one, so positional IDs count
+/// per bus: a table position of 100 would read as 10 and collide.
+fn position_at(at_bus: &mut HashMap<BusId, usize>, bus: BusId) -> usize {
+    let next = at_bus.entry(bus).or_insert(0);
+    let position = *next;
+    *next += 1;
+    position
 }
 
 fn block(s: &mut String, object: &str, fields: &str, fill: impl FnOnce(&mut Vec<String>)) {
@@ -1172,6 +1361,10 @@ fn block(s: &mut String, object: &str, fields: &str, fill: impl FnOnce(&mut Vec<
 
 fn status(on: bool) -> &'static str {
     if on { "Closed" } else { "Open" }
+}
+
+fn yes_no(on: bool) -> &'static str {
+    if on { "YES" } else { "NO" }
 }
 
 fn bus_cat(kind: BusType) -> &'static str {

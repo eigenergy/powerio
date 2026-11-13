@@ -710,18 +710,16 @@ fn checked_network(
     // rule the aux reader applies, so the two PowerWorld readers agree on one
     // case. Done over the final tables because a record probe does not know
     // its position.
-    for (i, l) in loads.iter_mut().enumerate() {
-        super::drop_positional_id(&mut l.extras, &["LoadID"], i);
-    }
-    for (i, s) in shunts.iter_mut().enumerate() {
-        super::drop_positional_id(&mut s.extras, &["ShuntID"], i);
-    }
+    super::drop_positional_ids(&mut loads, &["LoadID"], |l| (l.bus, &mut l.extras));
+    super::drop_positional_ids(&mut shunts, &["ShuntID"], |s| (s.bus, &mut s.extras));
     // Branch circuits use the aux reader's positional rule: the counter is per
-    // bus pair, so the second parallel branch's "2" is the default the
-    // allocator re-derives from order.
+    // unordered bus pair, so the second parallel branch's "2" is the default
+    // the allocator re-derives from order.
     let mut parallel: HashMap<(BusId, BusId), usize> = HashMap::new();
     for br in &mut branches {
-        let nth = parallel.entry((br.from, br.to)).or_insert(0);
+        let nth = parallel
+            .entry(super::branch_pair(br.from, br.to))
+            .or_insert(0);
         *nth += 1;
         super::drop_positional_id(&mut br.extras, &[LINE_CIRCUIT], *nth - 1);
     }
@@ -1339,7 +1337,7 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
         evlo: None,
         area,
         zone,
-        name: Some(String::from_utf8_lossy(name).into_owned()),
+        name: super::bus_name(&String::from_utf8_lossy(name), BusId(num)),
         uid: None,
         location: bus_tail_location(b, c.pos, unk),
         extras: Extras::new(),
