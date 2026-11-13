@@ -48,7 +48,10 @@ headers retained.
 
 ACTIVSg200 exports from the TAMU Electric Grid Test Case Repository;
 synthetic, no CEII. See `powerworld/README.md` for the full citation and
-retrieval date.
+retrieval date. `case14_v577.pwb` and `case14_v483.pwb` are PowerWorld
+Simulator 24 saves of MATPOWER's `case14.m` (BSD-3), made for this repository
+and cut before the saving installation's add-on list; `powerworld/README.md`
+records how.
 
 ## `opfdataset/`
 

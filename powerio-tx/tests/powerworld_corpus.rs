@@ -60,9 +60,10 @@ fn check(label: &str, path: &Path, expect: &Expect) {
     }
 }
 
-#[test]
-fn every_available_pwb_lands_in_its_tier() {
-    let committed = [
+/// The vendored and fetched entries with their committed expectations; a
+/// fetched path is `None` until the fetch has run.
+fn committed_entries() -> [(&'static str, Option<std::path::PathBuf>, Expect); 6] {
+    [
         (
             "ACTIVSg200 June 2018 export (vendored)",
             Some(powerworld_vendored("ACTIVSg200.pwb")),
@@ -70,6 +71,24 @@ fn every_available_pwb_lands_in_its_tier() {
                 buses: 200,
                 branches: 246,
                 generators: None,
+            },
+        ),
+        (
+            "case14 Simulator 24 save, header 577 (vendored)",
+            Some(powerworld_vendored("case14_v577.pwb")),
+            Expect::Decoded {
+                buses: 14,
+                branches: 20,
+                generators: Some(5),
+            },
+        ),
+        (
+            "case14 Simulator 24 PWB20 save, header 483 (vendored)",
+            Some(powerworld_vendored("case14_v483.pwb")),
+            Expect::Decoded {
+                buses: 14,
+                branches: 20,
+                generators: Some(5),
             },
         ),
         (
@@ -99,8 +118,12 @@ fn every_available_pwb_lands_in_its_tier() {
                 generators: None,
             },
         ),
-    ];
-    for (label, path, expect) in &committed {
+    ]
+}
+
+#[test]
+fn every_available_pwb_lands_in_its_tier() {
+    for (label, path, expect) in &committed_entries() {
         match path {
             Some(p) => check(label, p, expect),
             None => eprintln!("skipped {label}: run benchmarks/fetch_powerworld.sh"),

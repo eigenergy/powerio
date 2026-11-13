@@ -620,7 +620,7 @@ fn rejects_unrecognized_binaries() {
     // A decoded constant over a garbage body dies at the bus layout gate,
     // through the same loud vintage path; pinned for each constant the
     // header gate admits.
-    for v in [338u64, 368, 425, 483, 508, 537, 550, 551] {
+    for v in [338u64, 368, 425, 483, 508, 537, 550, 551, 554, 577] {
         let mut garbage = Vec::new();
         garbage.extend_from_slice(&15000u64.to_le_bytes());
         garbage.extend_from_slice(&v.to_le_bytes());
@@ -793,6 +793,68 @@ fn parse_file_dispatches_pwb_and_converts() {
     let back = parse_str(&conv.text, "matpower").unwrap().network;
     assert_eq!(back.buses().len(), 200);
     assert_eq!(back.branches().len(), 246);
+}
+
+/// PowerWorld Simulator 24 saves of case14: its own layout (header 577) and
+/// the PWB20 layout (header 483) it writes for Simulator 20, each cut before
+/// the record that lists the saving installation's licensed add-ons
+/// (`tests/data/powerworld/README.md`). The aux Simulator loaded states three
+/// remote regulators (the machines at 2, 6, and 8 regulate 4, 13, and 7), so
+/// the generator bus check also pins the terminal bus against the regulated
+/// one. Both decode to the MATPOWER case at its print quantum, with every
+/// machine's status located.
+#[test]
+fn simulator24_saves_of_case14_match_the_matpower_case() {
+    let mut case14 = parse_file(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m"),
+        None,
+    )
+    .unwrap()
+    .network;
+    // case14.m states no nominal voltage (0 kV); Simulator 24 gives such a
+    // bus 138 kV when it loads the aux, and that is what the save stores.
+    for bus in case14.buses_mut().iter_mut() {
+        assert_eq!(bus.base_kv.to_bits(), 0.0f64.to_bits(), "bus {}", bus.id);
+        bus.base_kv = 138.0;
+    }
+    let mut decodes = Vec::new();
+    for (file, header) in [("case14_v577.pwb", 577u64), ("case14_v483.pwb", 483)] {
+        let path = vendored(file);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            header,
+            "{file} header constant"
+        );
+        let parsed = parse_bytes(&bytes, "pwb").unwrap();
+        assert!(
+            parsed.render_diagnostics().is_empty(),
+            "{file}: {:?}",
+            parsed.render_diagnostics()
+        );
+        let pwb = parsed.network;
+        assert_eq!(
+            (
+                pwb.buses().len(),
+                pwb.generators().len(),
+                pwb.loads().len(),
+                pwb.shunts().len(),
+                pwb.branches().len()
+            ),
+            (14, 5, 11, 1, 20),
+            "{file} counts"
+        );
+        assert_decoded_shape(&pwb, &path);
+        assert_pwb_matches_text(&pwb, &case14, Quanta::MATPOWER, file);
+        decodes.push(pwb);
+    }
+    // The two layouts store the same records.
+    let (v577, v483) = (&decodes[0], &decodes[1]);
+    assert_eq!(v577.buses(), v483.buses());
+    assert_eq!(v577.generators(), v483.generators());
+    assert_eq!(v577.loads(), v483.loads());
+    assert_eq!(v577.shunts(), v483.shunts());
+    assert_eq!(v577.branches(), v483.branches());
 }
 
 /// The published ACTIVSg2000 set's current era export (bus flag bits 6/8)

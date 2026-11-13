@@ -2,7 +2,7 @@
 //!
 //! The format is undocumented. The decoder was verified against paired `.pwb`
 //! and `.aux` exports of the ACTIVSg synthetic grids; the evidence is recorded
-//! in `powerio/src/format/powerworld/FORMAT.md`. It reads buses, loads,
+//! in `powerio-tx/src/format/powerworld/FORMAT.md`. It reads buses, loads,
 //! generators, shunts, and branches. Substations, areas, contingencies, and
 //! options remain undecoded.
 //!
@@ -10,16 +10,17 @@
 //! contain finite values within the validated ranges. An unsupported layout
 //! returns an error rather than guessing a record shape.
 //!
-//! Supported header constants: 338, 368, 425, 483, 508, 537, 550, 551, and 554.
-//! These constants gate only the writer era; a recognized constant still has
-//! to pass the table walk. Constants 338/368/425 use the older generator record
-//! (`bus`, ID, f32 block), 483/550/551 use the regulated bus record, 508 and
-//! 537 have been observed with both generator families, and 554 uses the
-//! regulated record without the 2021 era presence byte. The bus, load, shunt,
-//! and branch heads are more general: their flag words are Delphi field
-//! presence bitmasks, so one decoded head model admits the observed 0x02,
-//! 0x06, 0x26, 0x66, 0x3002, and 0x3062 families as long as the later table
-//! walk still validates.
+//! Supported header constants: 338, 368, 425, 483, 508, 537, 550, 551, 554,
+//! and 577 (PowerWorld Simulator 24's own save layout). These constants gate
+//! only the writer era; a recognized constant still has to pass the table
+//! walk. Constants 338/368/425 use the older generator record (`bus`, ID, f32
+//! block), 550/551 use the regulated bus record, 508 and 537 have been
+//! observed with both generator families, and 483, 554, and 577 use the
+//! regulated record with or without the 2021 era presence byte. The bus,
+//! load, shunt, and branch heads are more general: their flag words are
+//! Delphi field presence bitmasks, so one decoded head model admits the
+//! observed 0x02, 0x06, 0x26, 0x66, 0x3002, and 0x3062 families as long as
+//! the later table walk still validates.
 //!
 //! Known limits, documented rather than guessed:
 //!
@@ -41,15 +42,25 @@
 //!   the 425 era files and 0x01 in the 2021 era ones with every load Closed
 //!   in both, so it is no status byte; the 425 era generator, the shunt,
 //!   and the branch status bytes are unlocated.
-//! - Transformer phase shift: every available case has zero phase, so the
-//!   field's offset is unknown; transformers read with `shift = 0`.
+//! - Transformer phase shift: transformers read with `shift = 0`. The
+//!   Simulator 24 saves of case2869pegase put the shift right after the tap
+//!   (FORMAT.md), but the older corpus has no nonzero phase to confirm the
+//!   slot against, so the decode waits for that check.
+//! - Remote regulation in the older generator record: the vendored 2018
+//!   ACTIVSg200 save and Simulator 24's PWB17 through PWB22 saves start each
+//!   generator record with the terminal bus and then the regulated bus, and
+//!   the older (`bus`, ID) reader keys on the second of the two. A machine
+//!   regulating a remote bus in a 338, 368, 425, 508, or 537 file therefore
+//!   reads on its regulated bus. The regulated record readers (483, 550,
+//!   551, 554, 577, and the 2021 era 508/537 files) read the terminal bus.
 //! - The slack designation is not stored in the bus record; buses read as
 //!   PQ/PV (from the generators) and no bus is marked `Ref`.
 //! - The system MVA base is not decoded; per unit values are converted with
 //!   the 100 MVA default.
-//! - The shunt record's nominal MW slot is unlocated: every available case
-//!   stores zero shunt MW, and the slot once assumed to hold it carries 0.99
-//!   in the 2016 export (a regulation target, not a power). Shunts read with
+//! - The shunt record's nominal MW slot is not decoded: the slot once
+//!   assumed to hold it carries 0.99 in the 2016 export (a regulation target,
+//!   not a power), and the one the Simulator 24 saves of case2869pegase use
+//!   (FORMAT.md) awaits a check against the older corpus. Shunts read with
 //!   `g = 0` and only the nominal MVAr is decoded.
 //! - Branch ratings beyond the inline slots (two or three, by flag bit 1)
 //!   are zero in every available case; the trailing rating block is
@@ -237,12 +248,18 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<(BalancedNet
     reject_unsupported_vintage(bytes)?;
     // The header constant pins the generator record layout wherever the
     // corpus is unambiguous: every 425 file carries the bus + ID shape and
-    // every 483/550/551 file the regulated bus shape, while 508 and 537
-    // saves exist with both (Hawaii40 against the Texas7k v21 resave, and the
-    // bit 2 clear bus record corpus against the 2021 era saves), so only they
-    // try the two in sequence. Beyond pricing, this keeps the layout a file
-    // cannot carry from ever outbidding the right one in the chain search; a
-    // file mixing eras fails loudly instead.
+    // every 550/551 file the regulated bus shape, while 508 and 537 saves
+    // exist with both (Hawaii40 against the Texas7k v21 resave, and the bit 2
+    // clear bus record corpus against the 2021 era saves), so only they try
+    // the two in sequence. 483, 554, and 577 saves carry one of the two
+    // regulated shapes: Simulator 24 writes the one without a presence byte
+    // for a case that states no further generator fields (every PowerIO aux
+    // written case it saved as PWB20, PWB23, and PWB), and the presence byte
+    // one for ACTIVSg200 and the 2021 era Texas7k export. The two cannot
+    // match the same record start (the byte after the ID is 1 in one and 0
+    // in the other). Beyond pricing, this keeps the layout a file cannot
+    // carry from ever outbidding the right one in the chain search; a file
+    // mixing eras fails loudly instead.
     let gen_variants = match header_constant {
         338 | 368 | 425 => GenVariants {
             plain: true,
@@ -254,9 +271,9 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<(BalancedNet
             reg: true,
             simple_reg: false,
         },
-        554 => GenVariants {
+        483 | 554 | 577 => GenVariants {
             plain: false,
-            reg: false,
+            reg: true,
             simple_reg: true,
         },
         _ => GenVariants {
@@ -265,7 +282,10 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<(BalancedNet
             simple_reg: false,
         },
     };
-    let branch_count_can_include_trailer = header_constant == 554;
+    // Simulator 23 and 24 share every decoded record head (the 577 bus record
+    // tail is one byte longer, which the resync skips), so 577 keeps 554's
+    // branch table rule.
+    let branch_count_can_include_trailer = matches!(header_constant, 554 | 577);
     let narrow_glue = if header_constant == 425 {
         DeviceGlue::old_425()
     } else {
@@ -338,8 +358,8 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<(BalancedNet
 
 /// Which generator record layouts the header constant admits (see
 /// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`), the 2021 era
-/// regulated bus shape (`reg`, [`read_gen_reg_record`]), and the 554 shape
-/// whose regulated bus record omits the presence byte (`simple_reg`,
+/// regulated bus shape (`reg`, [`read_gen_reg_record`]), and the 483/554/577
+/// shape whose regulated bus record omits the presence byte (`simple_reg`,
 /// [`read_gen_reg_simple_record`]). A `plain` table is walked twice, once
 /// requiring the status tail on every record ([`read_gen_record_tailed`]) and
 /// once consuming none ([`read_gen_record_plain`]), so the tail is decided for
@@ -843,7 +863,7 @@ impl<'a> Cur<'a> {
 
 /// How far a bit 4 record's tail blob may push the next record: the largest
 /// observed blob is 406 KiB (an ACTIVSg500 branch record, see
-/// `powerio/src/format/powerworld/FORMAT.md`), so four MiB
+/// `powerio-tx/src/format/powerworld/FORMAT.md`), so four MiB
 /// is an order of magnitude of headroom
 /// while bounding what a crafted file can make the scan walk per record.
 const BLOB_WINDOW: usize = 4 << 20;
@@ -919,7 +939,7 @@ fn string_at(b: &[u8], at: usize, max: usize) -> Probe<String> {
 /// Validate the file head and return the writer format constant (the u64 at
 /// offset 0x08) for the layout keying in [`parse_pwb`].
 fn expect_header(b: &[u8]) -> Result<u64> {
-    const DECODED: [u64; 9] = [338, 368, 425, 483, 508, 537, 550, 551, 554];
+    const DECODED: [u64; 10] = [338, 368, 425, 483, 508, 537, 550, 551, 554, 577];
     let bad = || Error::FormatRead {
         format: FMT,
         message: "not a recognized PowerWorld binary case (header magic mismatch); \
@@ -938,12 +958,15 @@ fn expect_header(b: &[u8]) -> Result<u64> {
     // identify the writer family: the decoded constants cover older 0x06 bus
     // records (338/368), the Simulator 19/20/current 425 family, the 2021
     // regulated generator family (483/550/551), the mixed 508 and 537 saves,
-    // and the 554 regulated generator variant. Header admission is not trust:
-    // every table still has to pass the record probes below.
+    // and the Simulator 23 and 24 saves (554, 577). Simulator 24 saves the
+    // older layouts by release: PWB17 writes 338, PWB18 368, PWB19 425, PWB20
+    // 483, PWB21 508, PWB22 537, PWB23 554, and its own PWB 577 (FORMAT.md).
+    // Header admission is not trust: every table still has to pass the record
+    // probes below.
     if c != 20 || !DECODED.contains(&v) {
         return Err(unsupported_vintage(format!(
             "header format words ({v}, {c}); the decoded eras are \
-             338/368/425/483/508/537/550/551/554 with 20"
+             338/368/425/483/508/537/550/551/554/577 with 20"
         )));
     }
     Ok(v)
@@ -981,8 +1004,8 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
         format: FMT,
         message: format!(
             "unsupported PowerWorld .pwb vintage: {detail}; only the validated \
-             338/368/425/483/508/537/550/551/554 layouts are decoded \
-             (see powerio/src/format/powerworld/FORMAT.md)"
+             338/368/425/483/508/537/550/551/554/577 layouts are decoded \
+             (see powerio-tx/src/format/powerworld/FORMAT.md)"
         ),
     }
 }
@@ -1671,6 +1694,13 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8], require_tail: bool) -> Probe<Gen
     Ok(machine)
 }
 
+/// The unlimited generator bound, in per unit: the +-1e10 MVA sentinel the
+/// aux writer states for an infinite limit, which Simulator stores as f32
+/// 1e8 per unit on the 100 MVA base. A limit slot may hold exactly this
+/// magnitude past the plausibility bound; the four case2869pegase machines
+/// with infinite MVAr limits are the evidence (FORMAT.md).
+const GEN_LIMIT_SENTINEL_PU: f64 = 1.0e8;
+
 /// The eight consecutive f32 per unit values both generator record eras
 /// share: MW setpoint, MVAr setpoint, MVRMax, MVRMin, GenVoltSet, GenMVABase,
 /// MWMax, MWMin. The voltage setpoint and MVA base ranges anchor the layout;
@@ -1682,7 +1712,13 @@ fn read_gen_f32_block(c: &mut Cur) -> Probe<[f64; 8]> {
     // always paying all eight; same predicates, same accept set.
     for (i, slot) in v.iter_mut().enumerate() {
         let x = c.f32()?;
-        if !x.is_finite() || x.abs() >= 1.0e6 {
+        // The four limit slots (MVRMax, MVRMin, MWMax, MWMin) may also hold
+        // exactly the unlimited sentinel; any other magnitude past the bound
+        // is still not a generator record.
+        // Exact by construction: 1e8 is an f32 value, widened without loss.
+        let sentinel =
+            matches!(i, 2 | 3 | 6 | 7) && x.abs().to_bits() == GEN_LIMIT_SENTINEL_PU.to_bits();
+        if !x.is_finite() || (x.abs() >= 1.0e6 && !sentinel) {
             return Err("generator record does not match the validated layouts");
         }
         if (i == 4 && !(0.5..=1.6).contains(&x)) || (i == 5 && !(0.1..=1.0e5).contains(&x)) {
@@ -1772,9 +1808,13 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
     read_gen_reg_tail(&mut c, bus, &v)
 }
 
-/// Header 554 regulated generator record: terminal bus, regulated bus,
-/// fixed capacity ID, two zero bytes, then the shared f32 block and the
-/// same status/RMPCT tail as [`read_gen_reg_record`].
+/// Regulated generator record without the presence byte (headers 483, 554,
+/// and 577): terminal bus, regulated bus, fixed capacity ID, two zero bytes,
+/// then the shared f32 block and the same status/RMPCT tail as
+/// [`read_gen_reg_record`]. Simulator 24 writes it for every case PowerIO's
+/// aux writer produced, whichever of those layouts it saves. The terminal
+/// bus comes first, so a machine regulating a remote bus reads on its own
+/// bus (three remote regulators in the case14 fixtures pin this).
 fn read_gen_reg_simple_record(
     b: &[u8],
     at: usize,
@@ -2294,6 +2334,38 @@ mod tests {
         let open = gen_record(Some(0x08));
         let (machine, _) = read_gen_record_tailed(&open, 0, &ids).unwrap();
         assert!(!machine.in_service, "status bit 0 clear is an open machine");
+    }
+
+    /// A limit slot may hold exactly the unlimited sentinel (the infinite
+    /// MVAr limits of case2869pegase, as Simulator 24 saves them); any other
+    /// magnitude past the plausibility bound, and the sentinel in a setpoint
+    /// slot, still refuse the record.
+    #[test]
+    fn generator_limit_slots_admit_only_the_exact_unlimited_sentinel() {
+        let base = [10.0f32, 0.0, 50.0, -50.0, 1.0, 100.0, 80.0, 0.0];
+        let read = |values: [f32; 8]| {
+            let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            read_gen_f32_block(&mut Cur { b: &bytes, pos: 0 })
+        };
+        for slot in [2, 3, 6, 7] {
+            for sentinel in [1.0e8f32, -1.0e8] {
+                let mut values = base;
+                values[slot] = sentinel;
+                assert_eq!(
+                    read(values).unwrap()[slot],
+                    f64::from(sentinel),
+                    "slot {slot}"
+                );
+            }
+            let mut values = base;
+            values[slot] = 1.0e7;
+            assert!(read(values).is_err(), "slot {slot} past the bound");
+        }
+        for slot in [0, 1] {
+            let mut values = base;
+            values[slot] = 1.0e8;
+            assert!(read(values).is_err(), "setpoint slot {slot}");
+        }
     }
 
     #[test]

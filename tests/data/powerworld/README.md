@@ -1,4 +1,6 @@
-# ACTIVSg200 fixtures
+# PowerWorld fixtures
+
+## ACTIVSg200
 
 Sibling exports of the same synthetic 200 bus case, all produced from one
 PowerWorld case by the creators of the ACTIVSg grids. Source: TAMU Electric
@@ -33,3 +35,30 @@ Larger ACTIVSg cases (2000 bus and up) are fetched, not vendored: see
 PowerWorld Corporation's synthetic case page,
 <https://www.powerworld.com/new-synthetic-power-flow-cases>) and
 `evals/validation/fetch_cases.sh` (MATPOWER exports of the larger grids).
+
+## Simulator 24 saves of case14
+
+`case14_v577.pwb` and `case14_v483.pwb` are PowerWorld Simulator 24 (build
+May 20, 2026) saves of MATPOWER's `case14` (`../case14.m`, BSD-3, see
+`../LICENSE-MATPOWER.txt`), made 2026-11-13 for the `.pwb` reader's header
+577 and 483 layouts. PowerIO's aux writer (the writer of eigenergy/powerio#869,
+commit `b84ebb3e`) wrote `case14.m` as aux. The Gen block was then given a
+`GenRegNum` column so that three machines regulate a remote bus (the machines
+at buses 2, 6, and 8 regulate buses 4, 13, and 7; the others their own bus).
+Simulator loaded the aux through SimAuto (`NewCase`, `ProcessAuxFile`) and
+saved it with `SaveCase` as type `PWB` (header 577) and `PWB20` (header 483).
+
+Each file is the save cut just before the record (tag `0x5529`, u32 length,
+text) that lists the saving installation's licensed Simulator add-ons. The
+cut keeps the header, the case description, and every table the reader
+decodes; the reader decodes the cut file to the same records as the whole
+save. The bytes are otherwise as Simulator wrote them.
+
+| file | bytes | sha256 |
+|---|---|---|
+| `case14_v577.pwb` | 15246 | `e90a202c835e53cbc94bf4d727f08193cf7fc0eb3719d419ed3ae5015855780c` |
+| `case14_v483.pwb` | 12504 | `926473f70b3bc5041a28c82fd8049034dc948b519170b0ab01ddf7f73885d44d` |
+
+`powerio-tx/tests/powerworld_pwb.rs` checks both against `case14.m`. Simulator
+gives a bus with no nominal voltage 138 kV, so the test expects 138 kV where
+`case14.m` states 0.
