@@ -14,7 +14,9 @@
 //! and 577 (PowerWorld Simulator 24's own save layout). These constants gate
 //! only the writer era; a recognized constant still has to pass the table
 //! walk. Every generator record starts with the terminal bus and then the
-//! regulated bus. Constants 338/368/425 use the older generator record
+//! regulated bus (`GenRegNum`); a machine reads on its terminal bus, and a
+//! remote regulator also states the bus it regulates as its `regulated_bus`.
+//! Constants 338/368/425 use the older generator record
 //! (terminal bus, regulated bus, ID, bytes whose count varies, f32 block),
 //! 550/551 use the 2021 era regulated record, 508 and 537 have been observed
 //! with both generator families, and 483, 554, and 577 use the regulated
@@ -48,10 +50,6 @@
 //!   Simulator 24 saves of case2869pegase put the shift right after the tap
 //!   (FORMAT.md), but the older corpus has no nonzero phase to confirm the
 //!   slot against, so the decode waits for that check.
-//! - Remote regulation: every generator reader places the machine on its
-//!   terminal bus and requires the regulated bus to be a known bus, but the
-//!   regulated bus is not kept; machines read with `regulated_bus = None`,
-//!   so a remote regulator reads as regulating its own bus.
 //! - The slack designation is not stored in the bus record; buses read as
 //!   PQ/PV (from the generators) and no bus is marked `Ref`.
 //! - The system MVA base is not decoded; per unit values are converted with
@@ -1659,8 +1657,8 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
 /// exports (the bytes before it vary per record) and +15 in the 2018 one;
 /// the voltage setpoint and MVA base ranges anchor the choice, and a record
 /// that puts implausible values at every offset is a loud error, not a
-/// generator. The machine reads on the terminal bus; the regulated bus only
-/// has to be a known bus.
+/// generator. The machine reads on the terminal bus, and the regulated bus,
+/// which must be a known bus, is kept (see [`regulated_bus`]).
 fn read_gen(
     b: &[u8],
     at: usize,
@@ -1704,9 +1702,9 @@ fn read_gen(
     // and the next record's resync scan starts from the previous record's
     // end, so a chance match would move the accepted table itself.
     if !require_tail {
-        return Ok((gen_from_block(BusId(bus), &v, true), end));
+        return Ok((gen_from_block(bus, reg, &v, true), end));
     }
-    read_gen_reg_tail(&mut c, bus, &v)
+    read_gen_reg_tail(&mut c, bus, reg, &v)
 }
 
 /// The unlimited generator bound, in per unit: the +-1e10 MVA sentinel the
@@ -1744,10 +1742,19 @@ fn read_gen_f32_block(c: &mut Cur) -> Probe<[f64; 8]> {
     Ok(v)
 }
 
-/// A [`Generator`] from the shared f32 block (see [`read_gen_f32_block`]).
-fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
+/// The model's regulated bus for a record's terminal bus and its stored
+/// regulated bus (`GenRegNum`): every generator record stores both, equal
+/// unless the machine regulates a remote bus, and the model states only the
+/// remote case (`None` regulates the terminal bus itself).
+fn regulated_bus(terminal: usize, regulated: usize) -> Option<BusId> {
+    (regulated != terminal).then_some(BusId(regulated))
+}
+
+/// A [`Generator`] from the shared f32 block (see [`read_gen_f32_block`]) on
+/// terminal bus `bus` regulating bus `reg`.
+fn gen_from_block(bus: usize, reg: usize, v: &[f64; 8], in_service: bool) -> Generator {
     Generator {
-        bus,
+        bus: BusId(bus),
         energy_source: GeneratorEnergySource::default(),
         pg: v[0] * MVA_BASE,
         qg: v[1] * MVA_BASE,
@@ -1762,7 +1769,7 @@ fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
         caps: Default::default(),
         voltage_regulation_on: true,
         regulating_terminal: None,
-        regulated_bus: None,
+        regulated_bus: regulated_bus(bus, reg),
         active_power_control: None,
         uid: None,
     }
@@ -1820,7 +1827,7 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
         let _ = c.u8()?;
     }
     let v = read_gen_f32_block(&mut c)?;
-    read_gen_reg_tail(&mut c, bus, &v)
+    read_gen_reg_tail(&mut c, bus, reg, &v)
 }
 
 /// Regulated generator record without the presence byte (headers 483, 554,
@@ -1829,7 +1836,8 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
 /// [`read_gen_reg_record`]. Simulator 24 writes it for every case PowerIO's
 /// aux writer produced, whichever of those layouts it saves. The terminal
 /// bus comes first, so a machine regulating a remote bus reads on its own
-/// bus (three remote regulators in the case14 fixtures pin this).
+/// bus with the remote bus as its regulated bus (three remote regulators in
+/// the case14 fixtures pin this).
 fn read_gen_reg_simple_record(
     b: &[u8],
     at: usize,
@@ -1849,11 +1857,16 @@ fn read_gen_reg_simple_record(
         return Err("generator record separator bytes not zero");
     }
     let v = read_gen_f32_block(&mut c)?;
-    read_gen_reg_tail(&mut c, bus, &v)
+    read_gen_reg_tail(&mut c, bus, reg, &v)
 }
 
 /// Read the status and RMPCT tail shared by regulated generator records.
-fn read_gen_reg_tail(c: &mut Cur<'_>, bus: usize, v: &[f64; 8]) -> Probe<(Generator, usize)> {
+fn read_gen_reg_tail(
+    c: &mut Cur<'_>,
+    bus: usize,
+    reg: usize,
+    v: &[f64; 8],
+) -> Probe<(Generator, usize)> {
     if c.u8()? != 0 {
         return Err("generator record separator byte not zero");
     }
@@ -1865,7 +1878,7 @@ fn read_gen_reg_tail(c: &mut Cur<'_>, bus: usize, v: &[f64; 8]) -> Probe<(Genera
     if !rmpct.is_finite() || !(0.0..=1000.0).contains(&rmpct) {
         return Err("implausible remote regulation percentage");
     }
-    Ok((gen_from_block(BusId(bus), v, status & 1 == 1), c.pos))
+    Ok((gen_from_block(bus, reg, v, status & 1 == 1), c.pos))
 }
 
 /// Shunt record: nominal MVAr as f32 at +24 from the record start, validated
@@ -2353,37 +2366,82 @@ mod tests {
         assert!(!machine.in_service, "status bit 0 clear is an open machine");
     }
 
-    /// Every generator record era starts with the terminal bus and then the
-    /// regulated bus, so a machine regulating a remote bus reads on its own
-    /// bus through both older record readers, and the regulated bus must be
-    /// a known bus like the terminal one.
-    #[test]
-    fn a_remote_regulator_reads_on_its_terminal_bus() {
-        let ids = BusIdSet::Bitmap(vec![0b110]);
-        for tail in [None, Some(0x09)] {
-            let remote = gen_record(1, 2, tail);
-            let (machine, end) = read_gen_record_plain(&remote, 0, &ids).unwrap();
-            assert_eq!((machine.bus, end), (BusId(1), 13 + 32), "plain, {tail:?}");
-            let reversed = gen_record(2, 1, tail);
-            let (machine, _) = read_gen_record_plain(&reversed, 0, &ids).unwrap();
-            assert_eq!(machine.bus, BusId(2), "plain, reversed, {tail:?}");
-        }
-        let remote = gen_record(1, 2, Some(0x09));
-        let (machine, _) = read_gen_record_tailed(&remote, 0, &ids).unwrap();
-        assert_eq!(machine.bus, BusId(1), "tailed");
-
-        for (terminal, regulated) in [(1, 3), (3, 1)] {
-            let unknown = gen_record(terminal, regulated, Some(0x09));
-            assert!(
-                read_gen_record_plain(&unknown, 0, &ids).is_err(),
-                "plain, {terminal} regulating {regulated}: bus 3 is not in the table"
-            );
-            assert!(
-                read_gen_record_tailed(&unknown, 0, &ids).is_err(),
-                "tailed, {terminal} regulating {regulated}: bus 3 is not in the table"
-            );
-        }
+    /// The 2021 era regulated record with the presence byte: the
+    /// [`gen_record`] head, the constant 0x01 lead byte, one undecoded byte,
+    /// and a presence byte with no bit set, then the f32 block and the
+    /// status tail.
+    fn gen_presence_record(terminal: u32, regulated: u32) -> Vec<u8> {
+        let mut bytes = gen_record(terminal, regulated, Some(0x09));
+        // Replace the two zero bytes after the ID with lead, undecoded, and
+        // presence bytes.
+        bytes.splice(11..13, [1, 7, 0]);
+        bytes
     }
+
+    /// Every generator record era starts with the terminal bus and then the
+    /// regulated bus, so every record reader puts a machine regulating a
+    /// remote bus on its own bus and states the remote bus as its regulated
+    /// bus; a machine regulating its own bus states none. The regulated bus
+    /// must be a known bus like the terminal one.
+    #[test]
+    fn a_remote_regulator_reads_on_its_terminal_bus_with_its_regulated_bus() {
+        let ids = BusIdSet::Bitmap(vec![0b110]);
+        let readers: [(&str, MakeRecord, ReadGen); 5] = [
+            (
+                "plain",
+                |t, r| gen_record(t, r, None),
+                read_gen_record_plain,
+            ),
+            (
+                "plain over a tail",
+                |t, r| gen_record(t, r, Some(0x09)),
+                read_gen_record_plain,
+            ),
+            (
+                "tailed",
+                |t, r| gen_record(t, r, Some(0x09)),
+                read_gen_record_tailed,
+            ),
+            (
+                "regulated without presence byte",
+                |t, r| gen_record(t, r, Some(0x09)),
+                read_gen_reg_simple_record,
+            ),
+            (
+                "regulated with presence byte",
+                gen_presence_record,
+                read_gen_reg_record,
+            ),
+        ];
+        for (name, record, read) in readers {
+            for (terminal, regulated, expect) in [
+                (1, 2, Some(BusId(2))),
+                (2, 1, Some(BusId(1))),
+                (1, 1, None),
+                (2, 2, None),
+            ] {
+                let (machine, _) = read(&record(terminal, regulated), 0, &ids)
+                    .unwrap_or_else(|e| panic!("{name}, {terminal} regulating {regulated}: {e}"));
+                assert_eq!(
+                    (machine.bus, machine.regulated_bus),
+                    (BusId(terminal as usize), expect),
+                    "{name}, {terminal} regulating {regulated}"
+                );
+            }
+            for (terminal, regulated) in [(1, 3), (3, 1)] {
+                assert!(
+                    read(&record(terminal, regulated), 0, &ids).is_err(),
+                    "{name}, {terminal} regulating {regulated}: bus 3 is not in the table"
+                );
+            }
+        }
+        let (_, end) = read_gen_record_plain(&gen_record(1, 2, None), 0, &ids).unwrap();
+        assert_eq!(end, 13 + 32, "the plain record ends at the f32 block");
+    }
+
+    /// A generator record builder from (terminal bus, regulated bus).
+    type MakeRecord = fn(u32, u32) -> Vec<u8>;
+    type ReadGen = fn(&[u8], usize, &BusIdSet) -> Probe<(Generator, usize)>;
 
     /// A limit slot may hold exactly the unlimited sentinel (the infinite
     /// MVAr limits of case2869pegase, as Simulator 24 saves them); any other

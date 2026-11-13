@@ -133,7 +133,18 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
   `BranchDeviceType`, `Latitude:1`, ...), so the aux writer reproduces them
   and writers for other file types report them as extras.
 - Generator has no extras map (a deliberate performance decision), so GenID
-  and regulation fields are reachable only through the generic layer.
+  and the regulation fields other than the regulated bus are reachable only
+  through the generic layer. The regulated bus (`GenRegNum`, `RegBusNum` in
+  the concise vocabulary) maps to `regulated_bus` when it differs from the
+  terminal bus; absent, empty, or zero, the machine regulates its own bus.
+  A regulated bus the case does not declare reads as the machine's own bus
+  with a `READ.POWERWORLD.REFERENCE_DROPPED` warning. The writer states
+  `GenRegNum` on every Gen row when any machine regulates a remote bus. The
+  Texas7k exports state 184 remote regulators of 731 machines (511 of 1058
+  in the 2030 build), ACTIVSg70k 1278; ACTIVSg200, Texas2000, and Hawaii40
+  state none. Every Texas7k `.pwb` (headers 483, 508, 537, 550, 551) decodes
+  the same terminal and regulated bus pairs as its aux `GenRegNum` and its
+  PSS/E `IREG`.
 - Aux exports print f32 noise in some fields (`BusNomVolt`
   13.800000190734863); parity compares are approximate accordingly.
 
@@ -390,8 +401,8 @@ Three reader changes came out of the comparison:
 
 The remote regulator variant of case14 pins the terminal bus: every layout
 stores the terminal bus first, and the decodes place the three machines on
-their terminal buses, the 508 save through the older generator record
-reader (see the generator record section).
+their terminal buses with their regulated buses, the 508 save through the
+older generator record reader (see the generator record section).
 
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
@@ -437,7 +448,9 @@ without its presence byte, and one table can mix them, so the byte after
 the ID reads as a flag whose bit 0 brings in the varying byte and the
 presence byte. The reader does not decode that byte; it keeps probing the
 anchors, now counted from the terminal bus, and requires the regulated bus
-to be a known bus as it requires the terminal one.
+to be a known bus as it requires the terminal one. A regulated bus that
+differs from the terminal bus is the machine's `regulated_bus`, in every
+generator record reader.
 
 Three sources pin the terminal bus. Simulator 24 saved three remote
 regulator cases through SimAuto as `PWB17`, `PWB18`, `PWB19`, `PWB21`, and
@@ -479,7 +492,7 @@ pins the layout to fixed offsets:
 | offset | type | field |
 |---|---|---|
 | +0 | u32 | BusNum (terminal bus) |
-| +4 | u32 | GenRegNum (equals BusNum except on the 184 remote regulating machines) |
+| +4 | u32 | GenRegNum (equals BusNum except on the 184 remote regulating machines, whose `regulated_bus` it is; equal to the aux's GenRegNum on all 731) |
 | +8 | ShortString[2] | GenID |
 | +11 | u8 | constant 1 |
 | +12 | u8 | varies per record (7 through 37 observed), undecoded |
@@ -588,8 +601,6 @@ that slot against the older corpus.
   (`00 00`, `01 xx 00`, and `01 xx 02 yy`, mixed within one table, and
   `04 00` in one file): what the flag byte's other bits mean, and whether
   the presence byte inserts here what it inserts in the 2021 era record.
-- The generator's regulated bus is read and checked against the bus table
-  but not kept (`regulated_bus` stays `None` in every era).
 - Whether load IDs are also fixed capacity (every observed load ID already
   fills two characters or parses either way).
 - Table glue blocks between count and first record (the v21 resave's bus
@@ -718,18 +729,18 @@ rejected, out of scope.
 | Texas2000_June2016.pwb | fetched (TAMU) | 425 | 0x06-0x17 | same day aux | decoded, parity on every quantity | 2007 buses, 3043 branches |
 | ACTIV_SG_2000_v19.pwb | fetched (powerworld.com) | 425 | 0x26-0x37 | published case .m, deltas pinned | decoded, parity | 2000 buses, 3202 branches |
 | RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
-| Texas7k 2021 export | local only | 483 | 0x66-0x167 | same day aux + .m | decoded, parity on every quantity including the 94 open machines and the .m topology | 6717 buses, 9140 branches |
+| Texas7k 2021 export | local only | 483 | 0x66-0x167 | same day aux + .m | decoded, parity on every quantity including the 94 open machines, the 184 remote regulators' regulated buses, and the .m topology | 6717 buses, 9140 branches |
 | Texas7k saved as v21 | local only | 508 | 0x26-0x167 | same day 2022 aux | decoded, parity (the bus bit 6 evidence) | 6717 buses, 9140 branches |
 | Texas7k saved as v22 | local only | 551 | 0x26-0x167 | same day 2022 aux | decoded, parity | 6717 buses, 9140 branches |
 | Texas7k 2030 build | local only | 550 | 0x66-0x167 | aux, offline strict alignment (name keyed export) | decoded, counts committed; 1058/1058 generators value checked offline | 7132 buses, 9555 branches |
 | Texas7k 2030 saved as v22 | local only | 537 | 0x66-0x167 | aux, offline strict alignment | decoded, counts committed | 7132 buses, 9555 branches |
 | Texas7k 2021 scenario snapshot | local only | 537 | 0x66-0x167 | same grid as the 2021 export | decoded, counts match the 2021 case | 6717 buses, 9140 branches |
 | IEEE 14 PowerWorld save | local only | 554 | 0x06/0x07 | standard IEEE 14 topology | decoded offline | 14 buses, 20 branches |
-| case14_v577.pwb | vendored (Simulator 24 save, cut) | 577 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses | 14 buses, 20 branches |
-| case14_v483.pwb | vendored (Simulator 24 `PWB20` save, cut) | 483 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses | 14 buses, 20 branches |
-| case14_v338.pwb, case14_v368.pwb, case14_v425.pwb, case14_v508.pwb, case14_v537.pwb | vendored (Simulator 24 `PWB17`, `PWB18`, `PWB19`, `PWB21`, `PWB22` saves, cut) | 338, 368, 425, 508, 537 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses (older generator reader); the same records as case14_v577.pwb | 14 buses, 20 branches |
+| case14_v577.pwb | vendored (Simulator 24 save, cut) | 577 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal and regulated buses | 14 buses, 20 branches |
+| case14_v483.pwb | vendored (Simulator 24 `PWB20` save, cut) | 483 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal and regulated buses | 14 buses, 20 branches |
+| case14_v338.pwb, case14_v368.pwb, case14_v425.pwb, case14_v508.pwb, case14_v537.pwb | vendored (Simulator 24 `PWB17`, `PWB18`, `PWB19`, `PWB21`, `PWB22` saves, cut) | 338, 368, 425, 508, 537 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal and regulated buses (older generator reader); the same records as case14_v577.pwb | 14 buses, 20 branches |
 | Simulator 24 saves of three remote regulator cases (two case14 variants, case118) | local only (generated) | 338, 368, 425, 483, 508, 537, 554, 577 | 0x06/0x07 | Simulator's own Gen field values through SimAuto | decoded; every machine on its terminal bus with its status, including open remote regulators and two character IDs; the same records in all eight layouts | 14 and 118 buses |
-| 13 bus case saved by Simulator 21 | local only | 508 | 0x3026-0x3067 | its PSS/E export from the same Simulator | decoded; generator terminal buses match the export's, including its one remote regulator | 13 buses, 19 branches |
+| 13 bus case saved by Simulator 21 | local only | 508 | 0x3026-0x3067 | its PSS/E export from the same Simulator | decoded; generator terminal and regulated buses match the export's, including its one remote regulator (bus 5 regulating 6) | 13 buses, 19 branches |
 | Simulator 24 saves of case9, case14, case30, case57, case118, case2869pegase, ACTIVSg200 | local only (generated) | 577, 554, 508, 483 | 0x06/0x07 | Simulator's own field values through SimAuto | decoded, parity on every quantity except pegase shunt G and phase shift (undecoded) and the open ACTIVSg200 machines' reported output | up to 2869 buses, 4582 branches |
 | Simulator 24 `PWB17`/`PWB18`/`PWB19`/`PWB22` saves of case2869pegase and the remote regulator case14 | local only (generated) | 338, 368, 425, 537 | 0x06/0x07 | the 554 save of the same case | decoded, same records as the 554 save | up to 2869 buses, 4582 branches |
 | Simulator 24 `PWB16` saves | local only (generated) | 305 | — | — | rejected: header constant | |

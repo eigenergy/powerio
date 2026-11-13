@@ -129,6 +129,11 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     }
     for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
+        assert_eq!(
+            p.regulated_bus, a.regulated_bus,
+            "gen at {} regulated bus",
+            p.bus
+        );
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
             (p.qg, a.qg, "qg"),
@@ -335,6 +340,11 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
     }
     for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
+        assert_eq!(
+            p.regulated_bus, a.regulated_bus,
+            "gen at {} regulated bus",
+            p.bus
+        );
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
             (p.qg, a.qg, "qg"),
@@ -774,6 +784,35 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
     assert_eq!(p_gen_buses, m_gen_buses);
 }
 
+/// The case14 saves' three remote regulators survive a write as aux and a
+/// read back: the aux writer states `GenRegNum` and the aux reader keeps it
+/// by the rule the binary reader uses.
+#[test]
+fn case14_remote_regulators_survive_pwb_to_aux() {
+    let bytes = std::fs::read(vendored("case14_v577.pwb")).unwrap();
+    let pwb = parse_bytes(&bytes, "pwb").unwrap().network;
+    let aux = emit_value(&pwb, powerio_tx::TargetFormat::PowerWorld).unwrap();
+    assert!(aux.text.contains("GenRegNum"), "{}", aux.text);
+    let back = parse_str(&aux.text, "powerworld").unwrap().network;
+    let regulated = |net: &BalancedNetwork| -> Vec<(usize, Option<usize>)> {
+        net.generators()
+            .iter()
+            .map(|g| (g.bus.0, g.regulated_bus.map(|b| b.0)))
+            .collect()
+    };
+    assert_eq!(
+        regulated(&pwb),
+        [
+            (1, None),
+            (2, Some(4)),
+            (3, None),
+            (6, Some(13)),
+            (8, Some(7))
+        ]
+    );
+    assert_eq!(regulated(&back), regulated(&pwb));
+}
+
 /// The hub surface: `parse_file` dispatches `.pwb` by extension and by the
 /// explicit `pwb` source name, and the network converts onward (the CLI's
 /// `powerio convert ACTIVSg200.pwb out.m` path).
@@ -802,10 +841,10 @@ fn parse_file_dispatches_pwb_and_converts() {
 /// record that lists the saving installation's licensed add-ons
 /// (`tests/data/powerworld/README.md`). The aux Simulator loaded states three
 /// remote regulators (the machines at 2, 6, and 8 regulate 4, 13, and 7), so
-/// the generator bus check also pins the terminal bus against the regulated
-/// one, through the older generator record reader as well as the regulated
-/// record ones. Every save decodes to the MATPOWER case at its print quantum,
-/// with every machine's status located.
+/// the generator checks pin the terminal bus and the regulated bus apart,
+/// through the older generator record reader as well as the regulated record
+/// ones. Every save decodes to the MATPOWER case at its print quantum, with
+/// every machine's status located.
 #[test]
 fn simulator24_saves_of_case14_match_the_matpower_case() {
     let mut case14 = parse_file(
@@ -861,6 +900,16 @@ fn simulator24_saves_of_case14_match_the_matpower_case() {
             terminals,
             [1, 2, 3, 6, 8],
             "{file} generator terminal buses"
+        );
+        let regulated: Vec<Option<usize>> = pwb
+            .generators()
+            .iter()
+            .map(|g| g.regulated_bus.map(|b| b.0))
+            .collect();
+        assert_eq!(
+            regulated,
+            [None, Some(4), None, Some(13), Some(7)],
+            "{file} generator regulated buses"
         );
         assert_pwb_matches_text(&pwb, &case14, Quanta::MATPOWER, file);
         decodes.push((file, pwb));
@@ -944,6 +993,11 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
     }
     for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
+        assert_eq!(
+            p.regulated_bus, a.regulated_bus,
+            "gen at {} regulated bus",
+            p.bus
+        );
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
             (p.qg, a.qg, "qg"),
@@ -1071,6 +1125,11 @@ fn activsg500_pwb_matches_its_aux_sibling() {
     }
     for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
+        assert_eq!(
+            p.regulated_bus, a.regulated_bus,
+            "gen at {} regulated bus",
+            p.bus
+        );
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
             (p.qg, a.qg, "qg"),
@@ -1195,6 +1254,11 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
     }
     for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
+        assert_eq!(
+            p.regulated_bus, a.regulated_bus,
+            "gen at {} regulated bus",
+            p.bus
+        );
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
             (p.qg, a.qg, "qg"),
@@ -1371,9 +1435,22 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
 
     // Generators against the aux, including the in service bit: this case
     // is the first with open machines, and the binary's status byte is
-    // validated here on all 637 + 94 of them.
+    // validated here on all 637 + 94 of them. The aux's GenRegNum states 184
+    // remote regulators, and the regulated bus is checked on every machine.
+    assert_eq!(
+        aux.generators()
+            .iter()
+            .filter(|g| g.regulated_bus.is_some())
+            .count(),
+        184
+    );
     for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
+        assert_eq!(
+            p.regulated_bus, a.regulated_bus,
+            "gen at {} regulated bus",
+            p.bus
+        );
         assert_eq!(p.in_service, a.in_service, "gen at {} status", p.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
@@ -1622,6 +1699,11 @@ fn texas7k_resaves_match_the_2022_aux() {
         }
         for (p, a) in pwb.generators().iter().zip(aux.generators()) {
             assert_eq!(p.bus, a.bus, "{label}");
+            assert_eq!(
+                p.regulated_bus, a.regulated_bus,
+                "{label} gen at {} regulated bus",
+                p.bus
+            );
             assert_eq!(p.in_service, a.in_service, "{label} gen at {}", p.bus);
             assert!(
                 (p.pg - a.pg).abs() < 1e-3 * a.pg.abs().max(1.0),
@@ -1638,6 +1720,14 @@ fn texas7k_resaves_match_the_2022_aux() {
             pwb.generators().iter().filter(|g| !g.in_service).count(),
             94,
             "{label}"
+        );
+        assert_eq!(
+            pwb.generators()
+                .iter()
+                .filter(|g| g.regulated_bus.is_some())
+                .count(),
+            184,
+            "{label} remote regulators"
         );
         let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> =
             BTreeMap::default();
@@ -1744,6 +1834,10 @@ struct Quanta {
     /// Whether the format keeps the case's own reactive limits, voltage
     /// setpoint, and line/transformer split (see the test's own docs).
     faithful_machine_and_device: bool,
+    /// Whether the format names the bus a machine regulates (PSS/E `IREG`);
+    /// MATPOWER has no such column, so its machines all read as regulating
+    /// their own bus whatever the case says.
+    states_regulated_bus: bool,
     vm: f64,
     va: f64,
     base_kv: f64,
@@ -1758,6 +1852,7 @@ struct Quanta {
 impl Quanta {
     const PSSE: Self = Self {
         faithful_machine_and_device: false,
+        states_regulated_bus: true,
         vm: 5.1e-6,
         va: 5.1e-5,
         base_kv: 5.1e-4,
@@ -1770,6 +1865,7 @@ impl Quanta {
     };
     const MATPOWER: Self = Self {
         faithful_machine_and_device: true,
+        states_regulated_bus: false,
         vm: 5.1e-8,
         va: 5.1e-6,
         base_kv: 5.1e-3,
@@ -1921,6 +2017,15 @@ fn assert_pwb_matches_text(pwb: &BalancedNetwork, text: &BalancedNetwork, q: Qua
         close(p.pmin, t.pmin, q.power, label, &format!("{at} pmin"));
         close(p.mbase, t.mbase, q.power, label, &format!("{at} mbase"));
         assert_eq!(p.in_service, t.in_service, "{label}: {at} status");
+        // PSS/E keeps an IREG that names the machine's own bus, which the
+        // binary does not state apart from a machine regulating its own bus.
+        if q.states_regulated_bus {
+            assert_eq!(
+                p.regulated_bus.unwrap_or(p.bus),
+                t.regulated_bus.unwrap_or(t.bus),
+                "{label}: {at} regulated bus"
+            );
+        }
         // A format may zero the dispatch of an open machine rather than keep
         // the last one, so only a running machine's output is comparable.
         if p.in_service {
