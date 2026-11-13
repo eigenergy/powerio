@@ -1004,8 +1004,9 @@ impl<'a> Reader<'a> {
 
     // ----- transformers -----------------------------------------------------------
 
-    #[allow(clippy::too_many_lines)] // one transformer folds back in one pass: windings, loss model, tests
-    #[allow(clippy::too_many_lines, clippy::many_single_char_names)] // PMD's loss model inverted in one pass, in its own names
+    // One transformer folds back in one pass: windings, loss model, and tests,
+    // with PMD's loss model inverted in its own names.
+    #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
     fn map_transformer(&mut self, entry: &MapEntry) {
         let what = format!("transformer {}", entry.from);
         let mut units: Vec<Obj<'a>> = Vec::new();

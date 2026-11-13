@@ -27,14 +27,14 @@ fn native_fbs_delta_law_keeps_independent_voltage_and_current_maps() {
         let shunt = &net.shunts()[0];
         assert_eq!(shunt.terminal_map.len(), 9);
         // Common-mode primary voltage has no term in the latent constraint.
-        for row in 6..9 {
-            assert!(shunt.g[row][..3].iter().sum::<f64>().abs() < 1e-15);
+        for row in &shunt.g[6..9] {
+            assert!(row[..3].iter().sum::<f64>().abs() < 1e-15);
         }
         // Unit common-mode output current still reaches every primary phase.
         let scale = 480.0 * 480.0 / 500_000.0;
         let ratio = 4160.0 / 480.0;
-        for row in 0..3 {
-            assert!((shunt.g[row][6..].iter().sum::<f64>() * scale - 1.0 / ratio).abs() < 1e-15);
+        for row in &shunt.g[..3] {
+            assert!((row[6..].iter().sum::<f64>() * scale - 1.0 / ratio).abs() < 1e-15);
         }
         assert!(
             net.component_locations()
