@@ -174,6 +174,13 @@ every change that needs action.
   Sienna and PowerSystems JSON state an unlimited required rating as
   PowerSystems' `INFINITE_BOUND` and read it back as unlimited. See
   [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings).
+- The PyPSA readers bound a line or transformer's flow by `s_nom * s_max_pu`,
+  as PyPSA does. 0.11 read `s_nom` alone, ignored `s_max_pu`, and read an
+  absent or zero `s_nom` as no bound; 0.12 reads it as a zero bound and
+  reports the in service branches it holds at zero with
+  `READ.PYPSA.THERMAL_BOUND_ZERO`. An extendable branch
+  (`s_nom_extendable`) is bounded by `s_nom_max * s_max_pu`, unbounded by
+  default, and reported with `READ.PYPSA.VALUE_APPROXIMATED`.
 - Python table rows state a nonfinite value as a float in every table. The
   `hvdc`, `storage`, `static_var_compensators`, `areas`, and distribution
   rows carried the IR's `"Infinity"` and `"-Infinity"` strings in 0.11, while

@@ -285,6 +285,9 @@ fn read_pypsa_csv_static(
 
     let mut branches = Vec::new();
     let mut extendable = 0;
+    // Non-extendable branches whose s_nom * s_max_pu is zero. PyPSA holds
+    // their flow at zero; 0.11 read an absent or zero s_nom as no bound.
+    let mut zero_bound = 0;
     if let Some(table) = folder.optional("lines.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             extendable += usize::from(row.bool("s_nom_extendable") == Some(true));
@@ -295,6 +298,11 @@ fn read_pypsa_csv_static(
             let zb = zbase(bus_kv(&buses, &bus_pos, from), base_mva);
             let b = row.f("b").unwrap_or(0.0) * zb;
             let g = row.f("g").unwrap_or(0.0) * zb;
+            let rate_a = thermal_limit(row)?;
+            let in_service = row.bool("active").unwrap_or(true);
+            zero_bound += usize::from(
+                rate_a == 0.0 && in_service && row.bool("s_nom_extendable") != Some(true),
+            );
             branches.push(Branch {
                 name: None,
                 from,
@@ -308,14 +316,14 @@ fn read_pypsa_csv_static(
                     g_to: g / 2.0,
                     b_to: b / 2.0,
                 }),
-                rate_a: thermal_limit(row)?,
+                rate_a,
                 rate_b: f64::INFINITY,
                 rate_c: f64::INFINITY,
                 rating_sets: Vec::new(),
                 current_ratings: None,
                 tap: 0.0,
                 shift: 0.0,
-                in_service: row.bool("active").unwrap_or(true),
+                in_service,
                 angmin: row.f("v_ang_min").unwrap_or(-360.0),
                 angmax: row.f("v_ang_max").unwrap_or(360.0),
                 control: None,
@@ -344,6 +352,11 @@ fn read_pypsa_csv_static(
             let k = base_mva / s_nom;
             let b = row.f("b").unwrap_or(0.0) * s_nom / base_mva;
             let g = row.f("g").unwrap_or(0.0) * s_nom / base_mva;
+            let rate_a = thermal_limit(row)?;
+            let in_service = row.bool("active").unwrap_or(true);
+            zero_bound += usize::from(
+                rate_a == 0.0 && in_service && row.bool("s_nom_extendable") != Some(true),
+            );
             branches.push(Branch {
                 name: None,
                 from,
@@ -357,14 +370,14 @@ fn read_pypsa_csv_static(
                     g_to: 0.0,
                     b_to: 0.0,
                 }),
-                rate_a: thermal_limit(row)?,
+                rate_a,
                 rate_b: f64::INFINITY,
                 rate_c: f64::INFINITY,
                 rating_sets: Vec::new(),
                 current_ratings: None,
                 tap: row.f("tap_ratio").unwrap_or(1.0),
                 shift: row.f("phase_shift").unwrap_or(0.0),
-                in_service: row.bool("active").unwrap_or(true),
+                in_service,
                 angmin: -360.0,
                 angmax: 360.0,
                 control: None,
@@ -376,6 +389,11 @@ fn read_pypsa_csv_static(
         }
     }
 
+    if zero_bound > 0 {
+        warnings.push(&codes::READ_PYPSA_THERMAL_BOUND_ZERO, format!(
+            "{zero_bound} in service non-extendable line(s) or transformer(s) have s_nom * s_max_pu = 0 (an absent s_nom is 0), so their flow is bounded at zero as PyPSA bounds it; state a positive s_nom, with s_max_pu = inf for no bound"
+        ));
+    }
     if extendable > 0 {
         warnings.push(&codes::READ_PYPSA_VALUE_APPROXIMATED, format!(
             "{extendable} extendable line(s) or transformer(s) read with s_nom_max * s_max_pu as the thermal bound: capacity expansion has no source neutral field"
@@ -1902,6 +1920,42 @@ mod tests {
                 .any(|d| d.message().contains("3 extendable line(s)")),
             "{:?}",
             parsed.render_diagnostics()
+        );
+    }
+
+    #[test]
+    fn a_zero_fixed_thermal_bound_is_kept_and_reported() {
+        // PyPSA bounds a non-extendable branch by s_nom * s_max_pu, and an
+        // absent s_nom is 0, so the flow is held at zero. 0.11 read it as no
+        // bound; 0.12 keeps PyPSA's bound and says so.
+        let dir = folder(
+            "zero-bound",
+            &[
+                ("buses.csv", "name,v_nom\na,110\nb,110\n"),
+                (
+                    "lines.csv",
+                    "name,bus0,bus1,x,s_nom,s_max_pu,active\n\
+                     absent,a,b,1,,,True\n\
+                     zero,a,b,1,0,1,True\n\
+                     scaled,a,b,1,100,0,True\n\
+                     idle,a,b,1,0,1,False\n\
+                     open,a,b,1,100,inf,True\n",
+                ),
+            ],
+        );
+        let parsed = read_pypsa_csv_folder(&dir).unwrap();
+        let rates: Vec<f64> = parsed.network.branches().iter().map(|b| b.rate_a).collect();
+        assert_eq!(rates, [0.0, 0.0, 0.0, 0.0, f64::INFINITY]);
+        let zero: Vec<_> = parsed
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == codes::READ_PYPSA_THERMAL_BOUND_ZERO.code)
+            .collect();
+        assert_eq!(zero.len(), 1, "{:?}", parsed.render_diagnostics());
+        assert!(
+            zero[0].message().starts_with("3 in service"),
+            "{}",
+            zero[0].message()
         );
     }
 
