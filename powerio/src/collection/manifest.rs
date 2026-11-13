@@ -8,6 +8,7 @@ use std::{collections::BTreeSet, sync::Arc};
 /// Structured transport origin, separate from network values and display names.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CollectionOrigin {
     pub collection: String,
     /// One relative member name per explicitly opened ZIP boundary.
@@ -15,6 +16,7 @@ pub struct CollectionOrigin {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct SelectionOrigin {
     pub origin: CollectionOrigin,
     pub selection: CollectionSelection,
@@ -23,6 +25,7 @@ pub struct SelectionOrigin {
 /// Native options recorded with a selection, without host acquisition or code.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CollectionReaderOptions {
     pub variant: Option<i64>,
     pub snapshot_hours: Option<f64>,
@@ -32,6 +35,7 @@ pub struct CollectionReaderOptions {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CollectionCase {
     pub id: String,
     #[serde(default)]
@@ -45,6 +49,7 @@ pub struct CollectionCase {
 /// Optional untrusted selection catalog. It cannot change host limits or features.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CollectionManifest {
     pub schema: String,
     pub version: u32,
@@ -133,6 +138,18 @@ impl CollectionManifest {
     }
 }
 impl CollectionCase {
+    /// A case with no containers, attachments, or reader options. The other
+    /// public fields can be set on the returned value.
+    #[must_use]
+    pub fn new(id: impl Into<String>, selection: CollectionSelection) -> Self {
+        Self {
+            id: id.into(),
+            containers: Vec::new(),
+            selection,
+            attachments: Vec::new(),
+            reader_options: None,
+        }
+    }
     fn options(&self) -> Result<ParseOptions> {
         #[cfg(feature = "sincal")]
         let mut options = ParseOptions::default();
@@ -189,6 +206,7 @@ impl CollectionCase {
 /// Explicit export policy. No policy infers editable-project completeness from
 /// dependency observations; use ExplicitMembers to export an observed subset.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum SourceBundleScope {
     /// Only the primary or explicit group. Directory roots need another scope.
     SelectedMembers,

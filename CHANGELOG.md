@@ -199,6 +199,10 @@ every change that needs action.
   explicit directory selections preserve internal time/scenario values.
 - Inspect bounded ZIP/folder collections and explicitly select independent
   standalone inputs or OpenDSS masters over shared immutable companions.
+- The public `powerio::collection` structs and enums, and the
+  `powerio-archive` `EndRecordRefusal` and `DeclaredSizeFailure` enums, are
+  `#[non_exhaustive]`, so 0.12.x can add fields and variants. Build options
+  from `Default` (or `CollectionCase::new`) and set fields.
 - Add shared `SourceTree` file and directory views with explicit admission limits
   and independent successful-read dependency tracking for each selection (#774).
 - CGMES and SINCAL share bounded ZIP acquisition primitives while preserving

@@ -391,6 +391,7 @@ fn open_archive<'a>(
             EndRecordRefusal::TooMany => format!(
                 "archive {archive_name} is refused as malformed: it holds more than {MAX_END_RECORDS} end of central directory records"
             ),
+            _ => format!("archive {archive_name} is refused as malformed: its end records are invalid"),
         })
     })?;
     let largest = declared.first.max(declared.largest_zip64);
@@ -476,6 +477,9 @@ fn declared_size_error(
         ),
         DeclaredSizeFailure::Long => format!(
             "archive {archive_name} is refused as malformed: entry {raw_name} inflates past the {size} bytes its header declares"
+        ),
+        _ => format!(
+            "archive {archive_name} is refused as malformed: entry {raw_name} cannot be read"
         ),
     })
 }
