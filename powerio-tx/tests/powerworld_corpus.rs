@@ -62,7 +62,7 @@ fn check(label: &str, path: &Path, expect: &Expect) {
 
 /// The vendored and fetched entries with their committed expectations; a
 /// fetched path is `None` until the fetch has run.
-fn committed_entries() -> [(&'static str, Option<std::path::PathBuf>, Expect); 6] {
+fn committed_entries() -> [(&'static str, Option<std::path::PathBuf>, Expect); 9] {
     [
         (
             "ACTIVSg200 June 2018 export (vendored)",
@@ -85,6 +85,33 @@ fn committed_entries() -> [(&'static str, Option<std::path::PathBuf>, Expect); 6
         (
             "case14 Simulator 24 PWB20 save, header 483 (vendored)",
             Some(powerworld_vendored("case14_v483.pwb")),
+            Expect::Decoded {
+                buses: 14,
+                branches: 20,
+                generators: Some(5),
+            },
+        ),
+        (
+            "edited case14 Simulator 24 save, header 577 (vendored)",
+            Some(powerworld_vendored("case14_edits_v577.pwb")),
+            Expect::Decoded {
+                buses: 14,
+                branches: 20,
+                generators: Some(5),
+            },
+        ),
+        (
+            "edited case14 Simulator 24 PWB19 save, header 425 (vendored)",
+            Some(powerworld_vendored("case14_edits_v425.pwb")),
+            Expect::Decoded {
+                buses: 14,
+                branches: 20,
+                generators: Some(5),
+            },
+        ),
+        (
+            "edited case14 Simulator 24 PWB17 save, header 338 (vendored)",
+            Some(powerworld_vendored("case14_edits_v338.pwb")),
             Expect::Decoded {
                 buses: 14,
                 branches: 20,

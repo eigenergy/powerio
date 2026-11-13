@@ -7,6 +7,10 @@
 - The `.pwb` reader reads PowerWorld Simulator 24's default save layout
   (header word 577), Simulator 20 layout (`PWB20`) saves of small cases, and
   generator limits saved as unlimited. These files used to fail to parse (#868).
+- The `.pwb` reader reads switched shunt nominal MW and transformer phase
+  shift, which it used to read as zero, and per bus voltage limits where the
+  record layout is validated (Simulator 24 saves and older files whose bus
+  records share that layout). Other buses keep the 0.9/1.1 defaults (#868).
 
 ## 0.11.12
 

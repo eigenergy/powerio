@@ -42,10 +42,9 @@
 //!   the 425 era files and 0x01 in the 2021 era ones with every load Closed
 //!   in both, so it is no status byte; the 425 era generator, the shunt,
 //!   and the branch status bytes are unlocated.
-//! - Transformer phase shift: transformers read with `shift = 0`. The
-//!   Simulator 24 saves of case2869pegase put the shift right after the tap
-//!   (FORMAT.md), but the older corpus has no nonzero phase to confirm the
-//!   slot against, so the decode waits for that check.
+//! - Transformer phase shift is read from the f32 after the tap in the
+//!   modern branch tail (tag 12); the short legacy tail (tag 5) has no
+//!   located phase and reads `shift = 0`.
 //! - Remote regulation in the older generator record: the vendored 2018
 //!   ACTIVSg200 save and Simulator 24's PWB17 through PWB22 saves start each
 //!   generator record with the terminal bus and then the regulated bus, and
@@ -57,17 +56,17 @@
 //!   PQ/PV (from the generators) and no bus is marked `Ref`.
 //! - The system MVA base is not decoded; per unit values are converted with
 //!   the 100 MVA default.
-//! - The shunt record's nominal MW slot is not decoded: the slot once
-//!   assumed to hold it carries 0.99 in the 2016 export (a regulation target,
-//!   not a power), and the one the Simulator 24 saves of case2869pegase use
-//!   (FORMAT.md) awaits a check against the older corpus. Shunts read with
-//!   `g = 0` and only the nominal MVAr is decoded.
 //! - Branch ratings beyond the inline slots (two or three, by flag bit 1)
 //!   are zero in every available case; the trailing rating block is
 //!   validated as zero filled f32s and read as zero ratings.
-//! - Bus voltage limits are not decoded; buses read with the 1.1/0.9
-//!   defaults the aux reader also falls back to when the per rating set
-//!   fields are absent.
+//! - Bus voltage limits are read from the limit lists in the bus record
+//!   tail (limit set A, the aux `BusVoltLimLow:1`/`BusVoltLimHigh:1`) only
+//!   for flag words with bits 5, 6, 8, 12, and 13 clear under header
+//!   constants 338 through 577 except 550 and 551, the layouts Simulator 24
+//!   saves with lists in them. Any other record, and a record that stores no
+//!   lists, reads with the 1.1/0.9 defaults the aux reader also falls back to
+//!   when the per rating set fields are absent. The limit group a bus with
+//!   `BusVoltLim` NO is monitored against is not decoded.
 //! - Branch angle limits have no PowerWorld field at all; branches read
 //!   with the +-360 degree placeholder every reader uses for absence.
 
@@ -1350,14 +1349,17 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
     {
         return Err("implausible voltage solution");
     }
+    // The limit lists never decide whether this is a record: an unvalidated
+    // tail keeps the defaults the aux reader also falls back to.
+    let (vmin, vmax) = bus_tail_voltage_limits(b, c.pos, unk).unwrap_or((0.9, 1.1));
     let bus = Bus {
         id: BusId(num),
         kind: BusType::Pq,
         vm,
         va: va_rad.to_degrees(),
         base_kv: kv,
-        vmax: 1.1,
-        vmin: 0.9,
+        vmax,
+        vmin,
         evhi: None,
         evlo: None,
         area,
@@ -1431,6 +1433,103 @@ fn bus_tail_location(bytes: &[u8], after_head: usize, flags: u32) -> Option<crat
         y: lat,
         kind: Some(crate::geo::CoordsKind::Source),
     })
+}
+
+/// The per bus voltage limits in a bus record tail, as `(vmin, vmax)`: the
+/// first entry (limit set A, the aux `BusVoltLimLow:1`/`BusVoltLimHigh:1`)
+/// of the stored low and high lists. `None` when the record stores no lists
+/// or its tail is not one the evidence covers; the caller then keeps the
+/// 0.9/1.1 defaults.
+///
+/// Validated (FORMAT.md) against PowerWorld Simulator 24's own field values
+/// on every bus of its saves in each layout from header 338 to 577, and on
+/// the June 2016 Texas2000 and RTS-GMLC exports, whose buses store no lists.
+/// The tail runs: a bus shunt presence byte (0 inserts the shunt's G and B
+/// as two f32), an f32, the byte 5, a positive f32, a zero byte (two from
+/// header 483 on), the bytes 1 and 0, the bit 4 list (a zero byte, a u32
+/// count, nine byte entries) when the flag word sets bit 4, the marker
+/// bytes 0x40 and 0, then the `BusVoltLim` byte (1 YES, 0 NO), a u8 count
+/// and that many f32 low limits, a u8 count and as many f32 high limits,
+/// and five zero bytes. The lists hold one entry per limit set A to D, so
+/// the count is 0 or 4. Simulator keeps them when `BusVoltLim` is NO and
+/// then monitors with the limit group instead; set A is read either way,
+/// as the aux reader reads `BusVoltLimLow:1` whatever `BusVoltLim` says.
+///
+/// Only flag words with bits 5, 6, 8, 12, and 13 clear are decoded: those
+/// bits insert tail fields before the lists, and no save with lists in such
+/// a record is available (the vendored 2018 ACTIVSg200 and the 2017 v19
+/// exports set bit 5 and store no per bus limits).
+fn bus_tail_voltage_limits(bytes: &[u8], after_head: usize, flags: u32) -> Option<(f64, f64)> {
+    if flags & 0x3160 != 0 {
+        return None;
+    }
+    let version = u64::from_le_bytes(bytes.get(8..16)?.try_into().ok()?);
+    let second_zero = match version {
+        338 | 368 | 425 => false,
+        483 | 508 | 537 | 554 | 577 => true,
+        _ => return None,
+    };
+    let mut c = Cur {
+        b: bytes,
+        pos: after_head,
+    };
+    match c.u8().ok()? {
+        0 => {
+            if !c.f32().ok()?.is_finite() || !c.f32().ok()?.is_finite() {
+                return None;
+            }
+        }
+        1 => {}
+        _ => return None,
+    }
+    if !c.f32().ok()?.is_finite() || c.u8().ok()? != 5 {
+        return None;
+    }
+    let scale = c.f32().ok()?;
+    if !scale.is_finite() || scale <= 0.0 || c.u8().ok()? != 0 {
+        return None;
+    }
+    if second_zero && c.u8().ok()? != 0 {
+        return None;
+    }
+    if c.u8().ok()? != 1 || c.u8().ok()? != 0 {
+        return None;
+    }
+    if flags & 0x10 != 0 {
+        if c.u8().ok()? != 0 {
+            return None;
+        }
+        let entries = c.u32().ok()? as usize;
+        c.take(entries.checked_mul(9)?).ok()?;
+    }
+    if c.u8().ok()? != 0x40 || c.u8().ok()? != 0 || c.u8().ok()? > 1 {
+        return None;
+    }
+    let count = c.u8().ok()?;
+    if count != 0 && count != 4 {
+        return None;
+    }
+    // One list: every entry checked, the first (limit set A) kept.
+    let list = |c: &mut Cur<'_>| -> Option<Option<f64>> {
+        let mut first = None;
+        for _ in 0..count {
+            let v = c.f32().ok()?;
+            if !v.is_finite() || !(0.0..=10.0).contains(&v) {
+                return None;
+            }
+            first.get_or_insert(v);
+        }
+        Some(first)
+    };
+    let low = list(&mut c)?;
+    if c.u8().ok()? != count {
+        return None;
+    }
+    let high = list(&mut c)?;
+    if c.take(5).ok()?.iter().any(|&x| x != 0) {
+        return None;
+    }
+    Some((low?, high?))
 }
 
 /// Decode the optional fixed shunt stored in some bus record tails.
@@ -1853,12 +1952,24 @@ fn read_gen_reg_tail(c: &mut Cur<'_>, bus: usize, v: &[f64; 8]) -> Probe<(Genera
     Ok((gen_from_block(BusId(bus), v, status & 1 == 1), c.pos))
 }
 
-/// Shunt record: nominal MVAr as f32 at +24 from the record start, validated
-/// on all 199 shunts across the three sibling cases. The slot at +20 is 0.0
-/// in the Simulator 20 era files but 0.99 in the 2016 export, so it is not
-/// the nominal MW (see the module docs); shunts read with `g = 0`.
+/// Shunt record: the ID as a fixed capacity `string[2]`, then the nominal MW
+/// (`SSNMW`) as an f32 per unit at +7 and the nominal MVAr (`SSNMVR`) at +24
+/// from the record start. The MVAr slot is validated on all 199 shunts of
+/// the three sibling cases; the MW slot against Simulator 24's own values on
+/// every shunt of its saves of case2869pegase (46 with nonzero MW) in each
+/// layout from header 305 to 577, and on the 202 shunts of the vendored and
+/// fetched exports, all of which store zero there and state zero MW.
 fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
+    // The MW slot follows the ID's fixed two byte text area, so a longer ID
+    // (never observed) would not be this record.
+    if id.len() > 2 {
+        return Err("shunt ID longer than its two character field");
+    }
     let record_start = c.pos - (4 + 1) - id.len(); // u32 bus + the ID length byte
+    let g_mw = f32_at(c.b, checked_offset(record_start, 7)?)? * MVA_BASE;
+    if !g_mw.is_finite() || g_mw.abs() > 1.0e6 {
+        return Err("implausible shunt MW");
+    }
     let mut probe = Cur {
         b: c.b,
         pos: checked_offset(record_start, 24)?,
@@ -1875,9 +1986,7 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
     );
     Ok(Shunt {
         bus,
-        // The nominal MW slot is unlocated (every available case stores
-        // zero); see the module docs.
-        g: 0.0,
+        g: g_mw,
         b: b_mvar,
         in_service: true,
         section_count: None,
@@ -2081,7 +2190,7 @@ fn read_standard_branch_head(
     }
     let tail_start = c.pos;
     let tag = c.u32()?;
-    let (device, tap) = match tag {
+    let (device, tap, shift) = match tag {
         12 => read_modern_branch_tail(&mut c)?,
         5 => read_legacy_branch_tail(&mut c, tail_start)?,
         _ => return Err("branch tail tag not in the validated set"),
@@ -2124,9 +2233,7 @@ fn read_standard_branch_head(
         rating_sets: Vec::new(),
         current_ratings: None,
         tap,
-        // Phase shift is undecoded: every available case has zero phase, so
-        // the field's location is unknown (see the module docs).
-        shift: 0.0,
+        shift,
         // The branch status byte is unlocated (the byte once assumed to be
         // it was the circuit ID's unused capacity byte); every available
         // record is Closed. See the module docs.
@@ -2233,8 +2340,15 @@ fn read_step_up_transformer_head(
 
 /// Read the modern branch tail after the common electrical head. The tail is
 /// a rating block, separator byte, and kind marker; kind 1 is a line, kind 0
-/// is a transformer followed by the tap.
-fn read_modern_branch_tail(c: &mut Cur<'_>) -> Probe<(&'static str, f64)> {
+/// is a transformer followed by the tap and the phase shift (`LinePhase`,
+/// degrees), both f32. Returns the device kind, tap, and shift.
+///
+/// The phase slot is validated against Simulator 24's own values on every
+/// transformer of its saves of case2869pegase (505, 12 of them phase
+/// shifting) in each layout from header 305 to 577, and on the 1504
+/// transformers of the vendored and fetched exports, which store zero there
+/// and state zero phase.
+fn read_modern_branch_tail(c: &mut Cur<'_>) -> Probe<(&'static str, f64, f64)> {
     for _ in 0..11 {
         let v = c.f32()?;
         if !v.is_finite() || v.abs() > 1.0e6 {
@@ -2245,13 +2359,17 @@ fn read_modern_branch_tail(c: &mut Cur<'_>) -> Probe<(&'static str, f64)> {
         return Err("branch record separator byte not zero");
     }
     match c.u8()? {
-        0x01 => Ok(("Line", 0.0)),
+        0x01 => Ok(("Line", 0.0, 0.0)),
         0x00 => {
             let tap = c.f32()?;
             if !tap.is_finite() || !(0.2..=5.0).contains(&tap) {
                 return Err("implausible transformer tap");
             }
-            Ok(("Transformer", tap))
+            let shift = c.f32()?;
+            if !shift.is_finite() || shift.abs() > 360.0 {
+                return Err("implausible transformer phase shift");
+            }
+            Ok(("Transformer", tap, shift))
         }
         _ => Err("branch kind marker not in the validated set"),
     }
@@ -2259,8 +2377,9 @@ fn read_modern_branch_tail(c: &mut Cur<'_>) -> Probe<(&'static str, f64)> {
 
 /// Read the older short branch tail. These saves do not carry the modern kind
 /// marker, so transformer detection uses the validated zero marker block plus
-/// a plausible non-unit tap at the observed tail offset.
-fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'static str, f64)> {
+/// a plausible non-unit tap at the observed tail offset. The phase shift is
+/// not located in this tail and reads as zero.
+fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'static str, f64, f64)> {
     for _ in 0..4 {
         if c.u32()? != 0 {
             return Err("legacy branch tail marker is not zero filled");
@@ -2272,9 +2391,9 @@ fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'stati
         .and_then(|s| <[u8; 4]>::try_from(s).ok())
         .map_or(0.0, |raw| f64::from(f32::from_le_bytes(raw)));
     if tap.is_finite() && (0.2..=5.0).contains(&tap) && (tap - 1.0).abs() > 1e-6 {
-        Ok(("Transformer", tap))
+        Ok(("Transformer", tap, 0.0))
     } else {
-        Ok(("Line", 0.0))
+        Ok(("Line", 0.0, 0.0))
     }
 }
 
@@ -2445,6 +2564,209 @@ mod tests {
         assert!((load.p - 50.0).abs() < 1e-9);
         assert!((load.q - 25.0).abs() < 1e-9);
         assert_eq!(c.pos, 41);
+    }
+
+    /// One shunt record as Simulator 24 writes it: bus, a one character
+    /// `string[2]` ID with its unused capacity byte, the nominal MW at +7,
+    /// then zeros up to the nominal MVAr at +24.
+    fn shunt_record(id: &[u8], g_pu: f32, b_pu: f32) -> Vec<u8> {
+        let mut bytes = 9u32.to_le_bytes().to_vec();
+        bytes.push(u8::try_from(id.len()).unwrap());
+        bytes.extend_from_slice(id);
+        bytes.resize(7, b'1');
+        bytes.extend_from_slice(&g_pu.to_le_bytes());
+        bytes.resize(24, 0);
+        bytes.extend_from_slice(&b_pu.to_le_bytes());
+        bytes.extend_from_slice(&[0xff; 8]);
+        bytes
+    }
+
+    #[test]
+    fn shunt_record_reads_nominal_mw_and_mvar() {
+        let ids = BusIdSet::Bitmap(vec![1 << 9]);
+        for id in [&b"1"[..], b"12"] {
+            let (shunt, end) = read_shunt_record(&shunt_record(id, 0.125, 0.19), 0, &ids).unwrap();
+            assert_eq!(shunt.g, 12.5, "f32 0.125 is exact");
+            assert!((shunt.b - 19.0).abs() < 1e-5);
+            assert_eq!(end, 28);
+        }
+        assert!(read_shunt_record(&shunt_record(b"1", f32::NAN, 0.19), 0, &ids).is_err());
+        assert!(read_shunt_record(&shunt_record(b"1", 1.0e5, 0.19), 0, &ids).is_err());
+        // A longer ID would overlap the MW slot: not this record.
+        let mut long = 9u32.to_le_bytes().to_vec();
+        long.push(3);
+        long.extend_from_slice(b"123");
+        long.resize(24, 0);
+        long.extend_from_slice(&0.19f32.to_le_bytes());
+        long.extend_from_slice(&[0xff; 8]);
+        assert_eq!(
+            read_shunt_record(&long, 0, &ids).err(),
+            Some("shunt ID longer than its two character field")
+        );
+    }
+
+    /// The modern branch tail from the rating block on: eleven f32 slots,
+    /// the zero separator, the kind byte, then for a transformer the tap and
+    /// the phase shift in degrees.
+    fn branch_tail(kind: u8, tap: f32, shift: f32) -> Vec<u8> {
+        let mut bytes = vec![0; 44];
+        bytes.extend_from_slice(&[0, kind]);
+        if kind == 0 {
+            bytes.extend_from_slice(&tap.to_le_bytes());
+            bytes.extend_from_slice(&shift.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn transformer_tail_reads_the_phase_shift_after_the_tap() {
+        let bytes = branch_tail(0, 0.932, -3.5);
+        let mut c = Cur { b: &bytes, pos: 0 };
+        let (kind, tap, shift) = read_modern_branch_tail(&mut c).unwrap();
+        assert_eq!(kind, "Transformer");
+        assert_eq!(tap, f64::from(0.932f32));
+        assert_eq!(shift, -3.5);
+        assert_eq!(c.pos, bytes.len());
+
+        let bytes = branch_tail(1, 0.0, 0.0);
+        let mut c = Cur { b: &bytes, pos: 0 };
+        assert_eq!(read_modern_branch_tail(&mut c).unwrap(), ("Line", 0.0, 0.0));
+        assert_eq!(c.pos, bytes.len());
+
+        for shift in [f32::NAN, f32::INFINITY, 361.0, -361.0] {
+            let bytes = branch_tail(0, 1.0, shift);
+            let mut c = Cur { b: &bytes, pos: 0 };
+            assert!(read_modern_branch_tail(&mut c).is_err(), "shift {shift}");
+        }
+        // A transformer whose record stops after the tap is truncated.
+        let bytes = branch_tail(0, 1.0, 0.0);
+        let mut c = Cur {
+            b: &bytes[..bytes.len() - 4],
+            pos: 0,
+        };
+        assert!(read_modern_branch_tail(&mut c).is_err());
+    }
+}
+
+#[cfg(test)]
+mod bus_voltage_limit_tests {
+    use super::*;
+
+    const LOWS: [f32; 4] = [0.91, 0.92, 0.93, 0.94];
+    const HIGHS: [f32; 4] = [1.01, 1.02, 1.03, 1.04];
+
+    /// A bus record tail as Simulator 24 writes it in the bit 5 clear family,
+    /// after a 32 byte stand-in head whose header word is `version`.
+    fn tail(version: u64, flags: u32, bus_shunt: bool, lists: bool) -> Vec<u8> {
+        let mut b = vec![0; 32];
+        b[8..16].copy_from_slice(&version.to_le_bytes());
+        if bus_shunt {
+            b.push(0);
+            b.extend(0.025f32.to_le_bytes());
+            b.extend(0.1f32.to_le_bytes());
+        } else {
+            b.push(1);
+        }
+        b.extend(0f32.to_le_bytes());
+        b.push(5);
+        b.extend(1f32.to_le_bytes());
+        b.push(0);
+        if version >= 483 {
+            b.push(0);
+        }
+        b.extend([1, 0]);
+        if flags & 0x10 != 0 {
+            b.push(0);
+            b.extend(2u32.to_le_bytes());
+            b.extend([3, 0xfa, 0, 0, 0, 2, 0, 0, 0]);
+            b.extend([3, 0x4a, 8, 0, 0, 11, 0, 0, 0]);
+        }
+        b.extend([0x40, 0, u8::from(lists)]);
+        if lists {
+            for list in [LOWS, HIGHS] {
+                b.push(4);
+                for v in list {
+                    b.extend(v.to_le_bytes());
+                }
+            }
+        } else {
+            b.extend([0, 0]);
+        }
+        b.extend([0; 5]);
+        b.extend([0x10, 0x2c]);
+        b
+    }
+
+    /// The offset of the `BusVoltLim` byte in a [`tail`] record: before the
+    /// two counts and the lists, the five zero bytes, and two trailing bytes.
+    fn flag_at(b: &[u8], lists: bool) -> usize {
+        b.len() - 7 - 1 - if lists { 2 + 32 } else { 2 }
+    }
+
+    #[test]
+    fn limit_lists_give_set_a_in_every_validated_layout() {
+        for version in [338, 368, 425, 483, 508, 537, 554, 577] {
+            for flags in [0x06, 0x07, 0x16, 0x17] {
+                for bus_shunt in [false, true] {
+                    let b = tail(version, flags, bus_shunt, true);
+                    assert_eq!(
+                        bus_tail_voltage_limits(&b, 32, flags),
+                        Some((f64::from(LOWS[0]), f64::from(HIGHS[0]))),
+                        "{version} {flags:#x} {bus_shunt}"
+                    );
+                    // BusVoltLim NO keeps the lists, and set A is read anyway.
+                    let mut no = b.clone();
+                    no[flag_at(&b, true)] = 0;
+                    assert!(bus_tail_voltage_limits(&no, 32, flags).is_some());
+                    for length in 32..b.len() - 2 {
+                        assert!(bus_tail_voltage_limits(&b[..length], 32, flags).is_none());
+                    }
+                    let empty = tail(version, flags, bus_shunt, false);
+                    assert!(bus_tail_voltage_limits(&empty, 32, flags).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unvalidated_families_and_layouts_keep_the_defaults() {
+        // Bits 5, 6, 8, 12, and 13 insert tail fields before the lists.
+        for flags in [0x26, 0x27, 0x66, 0x106, 0x3002, 0x3163] {
+            assert!(bus_tail_voltage_limits(&tail(577, flags, false, true), 32, flags).is_none());
+        }
+        // Header constants without a save carrying lists.
+        for version in [305, 550, 551] {
+            assert!(bus_tail_voltage_limits(&tail(version, 6, false, true), 32, 6).is_none());
+        }
+        // A 425 tail read as a 483+ one (and the reverse) misses its anchors.
+        let mut b = tail(425, 6, false, true);
+        b[8..16].copy_from_slice(&577u64.to_le_bytes());
+        assert!(bus_tail_voltage_limits(&b, 32, 6).is_none());
+        let mut b = tail(577, 6, false, true);
+        b[8..16].copy_from_slice(&425u64.to_le_bytes());
+        assert!(bus_tail_voltage_limits(&b, 32, 6).is_none());
+    }
+
+    #[test]
+    fn malformed_limit_lists_keep_the_defaults() {
+        let good = tail(577, 6, false, true);
+        let flag = flag_at(&good, true);
+        let corrupt = |at: usize, value: u8| {
+            let mut b = good.clone();
+            b[at] = value;
+            bus_tail_voltage_limits(&b, 32, 6)
+        };
+        assert!(corrupt(flag, 2).is_none(), "BusVoltLim byte");
+        assert!(corrupt(flag + 1, 3).is_none(), "low count");
+        assert!(corrupt(flag + 18, 3).is_none(), "high count");
+        assert!(corrupt(flag + 35, 1).is_none(), "trailing zero bytes");
+        assert!(corrupt(flag - 2, 0x43).is_none(), "marker");
+        let mut b = good.clone();
+        b[flag + 2..flag + 6].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(bus_tail_voltage_limits(&b, 32, 6).is_none());
+        let mut b = good.clone();
+        b[flag + 19..flag + 23].copy_from_slice(&11f32.to_le_bytes());
+        assert!(bus_tail_voltage_limits(&b, 32, 6).is_none());
     }
 }
 

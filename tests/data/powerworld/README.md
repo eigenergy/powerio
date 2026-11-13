@@ -62,3 +62,38 @@ save. The bytes are otherwise as Simulator wrote them.
 `powerio-tx/tests/powerworld_pwb.rs` checks both against `case14.m`. Simulator
 gives a bus with no nominal voltage 138 kV, so the test expects 138 kV where
 `case14.m` states 0.
+
+## Simulator 24 saves of an edited case14
+
+`case14_edits_v577.pwb`, `case14_edits_v425.pwb`, and `case14_edits_v338.pwb`
+are PowerWorld Simulator 24 (build May 20, 2026) saves of MATPOWER's `case14`
+(`../case14.m`, BSD-3, see `../LICENSE-MATPOWER.txt`), made 2026-11-13 for the
+`.pwb` reader's shunt MW, phase shift, and per bus voltage limit decodes. The
+aux was PowerIO's aux writer output for `case14.m` (the writer of
+eigenergy/powerio#869, commit `b84ebb3e`) with these edits, each a later DATA
+section or a split of the Bus section:
+
+- buses 13 and 14 written without the `BusVoltLim`, `BusVoltLimHigh:1`, and
+  `BusVoltLimLow:1` fields, then bus 14 given `BusVoltLim` YES alone;
+- bus 1 given limit sets A to D of 0.91/1.01, 0.92/1.02, 0.93/1.03, and
+  0.94/1.04, and bus 2 `BusVoltLim` NO with set A 0.95/1.05 and B to D
+  0.9/1.1; bus 3 `BusVoltLim` NO;
+- the bus 9 shunt's `SSNMW` set to 12.5;
+- the 5-6 transformer's `LinePhase` set to -3.5;
+- bus shunts (`BusG:1`, `BusB:1`) of 2.5/10 on bus 1, 0/-5 on bus 3, and
+  1.5/0 on bus 13.
+
+Simulator loaded it through SimAuto (`NewCase`, `ProcessAuxFile`) and saved it
+with `SaveCase` as type `PWB` (header 577), `PWB19` (425), and `PWB17` (338).
+Each file is cut before the add-on record exactly as the case14 saves above;
+the bytes are otherwise as Simulator wrote them.
+
+| file | bytes | sha256 |
+|---|---|---|
+| `case14_edits_v577.pwb` | 15238 | `4336fe94a539ff72ea477ee551eb4d0b694a5df443ea70337ac624d08416244b` |
+| `case14_edits_v425.pwb` | 12215 | `1a1600b53c0b45ac9ab45e5f56c3c7188e992cb6952df6ff6eb6271c2f99d2c9` |
+| `case14_edits_v338.pwb` | 11100 | `3ce1a213d0cb85c9f9c1dd2f5e3ebaed9de1857be6033feb6a8c64c31c5e837e` |
+
+`powerio-tx/tests/powerworld_pwb.rs` checks all three against `case14.m` with
+the edits applied and against the voltage limits Simulator reported for the
+loaded case.

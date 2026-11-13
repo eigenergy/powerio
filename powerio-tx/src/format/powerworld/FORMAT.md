@@ -210,7 +210,7 @@ table specific glue block.
 | label | u32 string | "newbus 138" in the ACTIVSg cases |
 | BusPUVolt | f64 | exact match with the aux |
 | BusAngle | f64 | radians; aux prints degrees |
-| tail | 85 bytes (2018) / shorter (2016) | constant across plain records within a file; contains DCLossMultiplier as f32 1.0 and flag bytes; undecoded. Records with flag bit 4 set insert a count prefixed list into the tail (u32 count, then 9 byte entries observed as u8 = 3, u32 number, u32 = 1; meaning undecoded) |
+| tail | 85 bytes (2018) / shorter (2016) | constant across plain records within a file; contains DCLossMultiplier as f32 1.0 and flag bytes. Records with flag bit 4 set insert a count prefixed list into the tail (u32 count, then 9 byte entries observed as u8 = 3, u32 number, u32 = 1; meaning undecoded). The bus shunt and the per bus voltage limits are decoded from it; see the tail section below |
 
 Substation coordinates are not in the bus record; they live with the
 substation objects.
@@ -254,6 +254,63 @@ entries (1341 bytes) on one record, past the bounded resync window, so a
 bit 4 bus record extends the scan to the buffer end exactly as a bit 4
 branch record does. The 39 bus sample case (header 425) shows no
 recognized bus record layout at all in a 44 KiB file.
+
+#### Bus record tail: bus shunt and voltage limit lists
+
+PowerWorld keeps four per bus voltage limit sets, A to D (`BusVoltLimLow:1`
+to `:4` and `BusVoltLimHigh:1` to `:4`, also named `LimitLowA` and so on),
+plus `BusVoltLim`, a YES/NO switch between those limits and the bus's limit
+group. In records with flag bits 5, 6, 8, 12, and 13 clear the tail runs,
+from the end of the decoded head:
+
+| field | notes |
+|---|---|
+| u8 | bus shunt presence: 1 none, 0 the bus shunt's nominal G and B (`BusG:1`, `BusB:1`) follow as two per unit f32 |
+| f32 | finite; undecoded |
+| u8 | 5 |
+| f32 | positive; 1.0 in the records inspected (the DCLossMultiplier of the bus table) |
+| u8 | 0 |
+| u8 | 0, from header 483 on only |
+| u8, u8 | 1, 0 |
+| bit 4 list | flag bit 4 only: a zero byte, a u32 count, 9 byte entries |
+| u8, u8 | 0x40 (0x43 when bit 5 is set), 0 |
+| u8 | `BusVoltLim`: 1 YES, 0 NO |
+| u8, f32 × n | n low limits, sets A to D in order (n is 0 or 4) |
+| u8, f32 × n | n high limits, the same count |
+| 5 bytes | zero |
+| u8 | 0x10 (0x00 under header 338), then fields not decoded |
+
+Header 577 inserts its one extra byte right after that 0x10. Simulator keeps
+the lists when `BusVoltLim` is NO (it then monitors with the limit group), and
+writes none for a bus that never had limits. Setting `BusVoltLim` to YES
+without values fills them with its 0.9/1.1 defaults.
+
+The reader takes the first entries (set A) as `vmin`/`vmax` whatever
+`BusVoltLim` says, as the aux reader reads `BusVoltLimLow:1` and
+`BusVoltLimHigh:1`. A record without lists, with any other flag word or
+header constant, or whose tail misses an anchor above keeps the 0.9/1.1
+defaults. The decode never decides whether a record is accepted.
+
+Evidence: Simulator 24 opened or saved each file and reported its own values
+of all nine fields, and every bus in the decoded family matches them:
+
+| files | headers | buses | with lists |
+|---|---|---|---|
+| Simulator 24 saves of the edited case14 fixture (bus shunts on three buses, set A to D distinct on one, `BusVoltLim` NO with lists on two, no lists on one) | 338, 368, 425, 483, 508, 537, 554, 577 | 14 each | 13 |
+| Simulator 24 saves of case14 with three remote regulators | 338, 368, 425, 537, 554, 577 | 14 each | 14 |
+| Simulator 24 saves of case118 | 483, 508, 554, 577 | 118 each | 118 |
+| Simulator 24 saves of case2869pegase | 425, 577 | 2869 each | 2869 |
+| Simulator 24 saves of ACTIVSg200 | 483, 508, 554, 577 | 200 each | 0 |
+| Texas2000 June 2016 (190 of its records with bit 4 lists), RTS-GMLC | 425 | 2007, 73 | 0 |
+
+The bit 5 set family (vendored 2018 ACTIVSg200, ACTIV_SG_2000_v19) has 12 more
+bytes between the marker and the `BusVoltLim` byte, zero there in both files,
+whose buses store no per bus limits; Simulator 24 clears bit 5 when it saves
+them, so no file with lists in such a record is available and the reader
+leaves that family undecoded. The same holds for bits 6 and 8, which
+`bus_tail_location` counts into the same stretch of the tail, and for the bit
+12 and 13 family, whose coordinate decode requires three zero bytes exactly
+where the `BusVoltLim` byte and the two counts would sit.
 
 ### Bus record flag words with bit 2 clear (header 425 and 537)
 
@@ -359,17 +416,17 @@ its vendored aux, and case14 with three machines given a remote regulated bus.
 577 changes no decoded record head. The bus, load, generator, shunt, and
 branch heads and table glues are the 554 ones byte for byte; the one change
 in the decoded tables is one byte inserted in every undecoded bus record
-tail, which the record resync skips. Where it goes depends on the record:
+tail, which the record resync skips. It sits right after the 0x10 byte
+that follows the voltage limit lists (see the bus record tail section):
 25 bytes into the tail in ACTIVSg200 (tails of 106 bytes become 107), 57 in
-the PowerIO written cases, whose tails carry the voltage limit lists noted
-under the open questions. Every case decodes in all four layouts to the
-same records, and every decoded value equals Simulator's own at f32
-precision, with three
-exceptions that are not layout dependent: Simulator reports zero output
-(`GenMW`, `GenMVR`) for the nine open ACTIVSg200 machines whose records
-store their setpoints (the decode reads the setpoint and the open status,
-as the vendored aux states them), and pegase's shunt G and transformer
-phase shift read zero (see the shunt and branch sections).
+the PowerIO written cases, whose tails carry the lists. Every case decodes
+in all four layouts to the same records, and every decoded value equals
+Simulator's own at f32 precision, with one exception that is not layout
+dependent: Simulator reports zero output (`GenMW`, `GenMVR`) for the nine
+open ACTIVSg200 machines whose records store their setpoints (the decode
+reads the setpoint and the open status, as the vendored aux states them).
+pegase's shunt MW and transformer phase shift, which this comparison first
+exposed, are decoded since (see the shunt and branch sections).
 
 Three reader changes came out of the comparison:
 
@@ -507,11 +564,22 @@ byte before the kind byte for the kind, which made every 2018 line read as
 a zero tap transformer in extras until the v19 parallel circuits exposed
 both.
 
-case2869pegase is the first case with a nonzero phase shift. In its
-Simulator 24 saves (483, 508, 554, 577) each of the 12 phase shifting
-transformers stores `LinePhase` in degrees as the f32 right after the tap.
-The reader still reads `shift = 0`; decoding the slot waits for a check
-against the older corpus, whose transformers all store zero phase.
+The transformer's phase shift (`LinePhase`, degrees) is the f32 right after
+the tap, and the reader reads it as `shift`. case2869pegase is the first
+case with a nonzero phase. Simulator 24 opened or saved each file below and
+reported its own `LinePhase` through `GetParametersMultipleElement`, and the
+slot equals it on every transformer:
+
+| files | headers | transformers | nonzero phase |
+|---|---|---|---|
+| Simulator 24 saves of case2869pegase (`PWB16` through `PWB24`) | 305, 338, 368, 425, 483, 508, 537, 554, 577 | 505 each | 12 |
+| Simulator 24 saves of the edited case14 fixture (`PWB17` through `PWB24`) | 338 through 577 | 3 each | 1 |
+| ACTIVSg200 (vendored, 2018), Texas2000 June 2016, ACTIV_SG_2000_v19, RTS-GMLC | 425 | 66, 562, 861, 15 | 0 |
+
+The older exports store 0.0 in the slot on every transformer, as their phase
+states. The reader rejects a record whose phase is not finite or exceeds 360
+degrees in magnitude, the same plausibility gate the other branch slots
+pass. The legacy tail (tag 5) has no located phase and reads zero.
 
 Paired export precision matters for transformer parity: the aux transformer
 Branch section prints impedances at 6 decimals while the line section prints
@@ -524,15 +592,29 @@ RAW at full precision.
 
 ### Shunt record (validated on all 4 + 41 + 154 shunts of three files)
 
-u32 BusNum, ShortString ShuntID, with the nominal MVAr as f32 in per unit
-at +24 from the record start in every vintage. The slot at +20 is 0.0 in
-the Simulator 20 era files but 0.99 in the 2016 export (a regulation
-target, not a power), so the nominal MW slot is unlocated in that corpus,
-and the reader sets G = 0. case2869pegase is the first case with shunt MW:
-in its Simulator 24 saves (483, 508, 554, 577) every one of the 46 shunts
-with nonzero `SSNMW` stores it per unit as an f32 at +7, after a one
-character ID and its unused capacity byte. The decode waits for a check of
-that slot against the older corpus.
+| offset | type | field |
+|---|---|---|
+| +0 | u32 | BusNum |
+| +4 | ShortString[2] | ShuntID (a one character ID leaves the capacity byte unused) |
+| +7 | f32 | nominal MW (`SSNMW`) per unit |
+| +11 | u32 | equals BusNum in every observed record; undecoded |
+| +16, +20 | f32 | 1.0/0.99 in the TAMU exports, 1.05/0.95 in RTS-GMLC, zero in some v19 records; consistent with a regulation voltage range, undecoded |
+| +24 | f32 | nominal MVAr (`SSNMVR`) per unit, every vintage |
+
+An earlier draft read +20 as the nominal MW candidate and set G = 0 when it
+held 0.99. The MW slot is +7: Simulator 24 opened or saved each file below
+and reported its own `SSNMW`, and the slot equals it on every shunt:
+
+| files | headers | shunts | nonzero MW |
+|---|---|---|---|
+| Simulator 24 saves of case2869pegase (`PWB16` through `PWB24`) | 305 through 577 | 2197 each | 46 |
+| Simulator 24 saves of the edited case14 fixture | 338 through 577 | 1 each | 1 |
+| ACTIVSg200 (vendored, 2018), Texas2000 June 2016, ACTIV_SG_2000_v19, RTS-GMLC | 425 | 4, 41, 154, 3 | 0 |
+
+The fixed capacity of the ID is what puts the MW at +7, so the reader
+rejects a shunt record whose ID is longer than two characters (none is
+observed), and one whose MW is not finite or exceeds 1e6 MW, as for the
+MVAr slot.
 
 ### Open questions (inventoried, not guessed)
 
@@ -558,20 +640,17 @@ that slot against the older corpus.
   fills two characters or parses either way).
 - Table glue blocks between count and first record (the v21 resave's bus
   and generator glues carry 52 and 86 bytes including string metadata).
-- Per bus voltage limits: still undecoded. The bit 2 clear corpus is the
-  first one holding two saves of one case that differ only in the limits
-  (0.92/1.06 on load buses and 0.98/1.10 on generator buses in one,
-  0.95/1.04 and 1.00/1.06 in the other), and no f32 at any fixed offset from
-  either the bus record start or the decoded head end tracks them across
-  both saves, so they are not stored in the bus record at a constant offset.
-  Buses keep the 1.1/0.9 defaults. The Simulator 24 saves of PowerIO
-  written cases do carry them in the bus tail: 16 bytes past the decoded
-  head sit a byte 1, a count 4, four f32 low limits, a count 4, and four
-  f32 high limits, and the first entry of each list equals the MATPOWER
-  `VMIN`/`VMAX` on all 3001 buses of case14, case118, and case2869pegase
-  (the 577 saves; the 554 tails are identical up to that point).
-  ACTIVSg200's tails hold a 0 byte there instead, consistent with the
-  empty per rating set limits of its aux. Decoding the lists is open.
+- Per bus voltage limits outside the decoded tail family (see the bus
+  record tail section). The bit 2 clear corpus holds two saves of one case
+  that differ only in the limits (0.92/1.06 on load buses and 0.98/1.10 on
+  generator buses in one, 0.95/1.04 and 1.00/1.06 in the other), and no f32
+  at any fixed offset from either the bus record start or the decoded head
+  end tracks them across both saves. That corpus's coordinate decode
+  requires zero bytes where the `BusVoltLim` byte and the list counts sit,
+  and it decodes every bus, so those saves likely keep their limits in the
+  limit groups (`BusVoltLim` NO) rather than per bus. The limit group
+  objects are undecoded; probing that corpus's tails for the `BusVoltLim`
+  byte and the list counts would settle it.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 
@@ -691,7 +770,8 @@ rejected, out of scope.
 | IEEE 14 PowerWorld save | local only | 554 | 0x06/0x07 | standard IEEE 14 topology | decoded offline | 14 buses, 20 branches |
 | case14_v577.pwb | vendored (Simulator 24 save, cut) | 577 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses | 14 buses, 20 branches |
 | case14_v483.pwb | vendored (Simulator 24 `PWB20` save, cut) | 483 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses | 14 buses, 20 branches |
-| Simulator 24 saves of case9, case14, case30, case57, case118, case2869pegase, ACTIVSg200 | local only (generated) | 577, 554, 508, 483 | 0x06/0x07 | Simulator's own field values through SimAuto | decoded, parity on every quantity except pegase shunt G and phase shift (undecoded) and the open ACTIVSg200 machines' reported output | up to 2869 buses, 4582 branches |
+| case14_edits_v577.pwb, case14_edits_v425.pwb, case14_edits_v338.pwb | vendored (Simulator 24 `PWB`, `PWB19`, `PWB17` saves of an edited case14, cut) | 577, 425, 338 | 0x06/0x07 | case14.m with the edits; Simulator's own field values | decoded, parity on every quantity including bus voltage limits, shunt MW, bus shunts, and phase shift | 14 buses, 20 branches |
+| Simulator 24 saves of case9, case14, case30, case57, case118, case2869pegase, ACTIVSg200 | local only (generated) | 577, 554, 508, 483 | 0x06/0x07 | Simulator's own field values through SimAuto | decoded, parity on every quantity except the open ACTIVSg200 machines' reported output; shunt MW, phase shift, and bus voltage limits checked separately (see their sections) | up to 2869 buses, 4582 branches |
 | Simulator 24 `PWB17`/`PWB18`/`PWB19`/`PWB22` saves of case2869pegase and the remote regulator case14 | local only (generated) | 338, 368, 425, 537 | 0x06/0x07 | the 554 save of the same case | decoded, same records as the 554 save except remote regulators (older generator reader) | up to 2869 buses, 4582 branches |
 | Simulator 24 `PWB16` saves | local only (generated) | 305 | — | — | rejected: header constant | |
 | 39 bus sample case | local only | 425 | 0x06/0x07 | paired RAW/EPC exports | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
