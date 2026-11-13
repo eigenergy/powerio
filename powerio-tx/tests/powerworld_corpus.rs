@@ -62,8 +62,8 @@ fn check(label: &str, path: &Path, expect: &Expect) {
 
 /// The vendored and fetched entries with their committed expectations; a
 /// fetched path is `None` until the fetch has run.
-fn committed_entries() -> [(&'static str, Option<std::path::PathBuf>, Expect); 6] {
-    [
+fn committed_entries() -> Vec<(&'static str, Option<std::path::PathBuf>, Expect)> {
+    let mut entries = vec![
         (
             "ACTIVSg200 June 2018 export (vendored)",
             Some(powerworld_vendored("ACTIVSg200.pwb")),
@@ -118,7 +118,42 @@ fn committed_entries() -> [(&'static str, Option<std::path::PathBuf>, Expect); 6
                 generators: None,
             },
         ),
-    ]
+    ];
+    // The older layouts Simulator 24 writes (PWB17, PWB18, PWB19, PWB21,
+    // PWB22) of the same remote regulator case14.
+    for (label, file) in [
+        (
+            "case14 Simulator 24 PWB17 save, header 338 (vendored)",
+            "case14_v338.pwb",
+        ),
+        (
+            "case14 Simulator 24 PWB18 save, header 368 (vendored)",
+            "case14_v368.pwb",
+        ),
+        (
+            "case14 Simulator 24 PWB19 save, header 425 (vendored)",
+            "case14_v425.pwb",
+        ),
+        (
+            "case14 Simulator 24 PWB21 save, header 508 (vendored)",
+            "case14_v508.pwb",
+        ),
+        (
+            "case14 Simulator 24 PWB22 save, header 537 (vendored)",
+            "case14_v537.pwb",
+        ),
+    ] {
+        entries.push((
+            label,
+            Some(powerworld_vendored(file)),
+            Expect::Decoded {
+                buses: 14,
+                branches: 20,
+                generators: Some(5),
+            },
+        ));
+    }
+    entries
 }
 
 #[test]

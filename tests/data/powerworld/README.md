@@ -38,15 +38,18 @@ PowerWorld Corporation's synthetic case page,
 
 ## Simulator 24 saves of case14
 
-`case14_v577.pwb` and `case14_v483.pwb` are PowerWorld Simulator 24 (build
-May 20, 2026) saves of MATPOWER's `case14` (`../case14.m`, BSD-3, see
-`../LICENSE-MATPOWER.txt`), made 2026-11-13 for the `.pwb` reader's header
-577 and 483 layouts. PowerIO's aux writer (the writer of eigenergy/powerio#869,
-commit `b84ebb3e`) wrote `case14.m` as aux. The Gen block was then given a
-`GenRegNum` column so that three machines regulate a remote bus (the machines
-at buses 2, 6, and 8 regulate buses 4, 13, and 7; the others their own bus).
-Simulator loaded the aux through SimAuto (`NewCase`, `ProcessAuxFile`) and
-saved it with `SaveCase` as type `PWB` (header 577) and `PWB20` (header 483).
+The `case14_v*.pwb` files are PowerWorld Simulator 24 (build May 20, 2026)
+saves of MATPOWER's `case14` (`../case14.m`, BSD-3, see
+`../LICENSE-MATPOWER.txt`), made 2026-11-13 for the `.pwb` reader's layouts,
+one file per header word. PowerIO's aux writer (the writer of
+eigenergy/powerio#869, commit `b84ebb3e`) wrote `case14.m` as aux. The Gen
+block was then given a `GenRegNum` column so that three machines regulate a
+remote bus (the machines at buses 2, 6, and 8 regulate buses 4, 13, and 7;
+the others their own bus). Simulator loaded the aux through SimAuto
+(`NewCase`, `ProcessAuxFile`) and saved it with `SaveCase` as type `PWB`
+(header 577), `PWB20` (483), `PWB17` (338), `PWB18` (368), `PWB19` (425),
+`PWB21` (508), and `PWB22` (537). The `PWB20` save of a second SimAuto
+session reproduces `case14_v483.pwb` byte for byte.
 
 Each file is the save cut just before the record (tag `0x5529`, u32 length,
 text) that lists the saving installation's licensed Simulator add-ons. The
@@ -58,7 +61,12 @@ save. The bytes are otherwise as Simulator wrote them.
 |---|---|---|
 | `case14_v577.pwb` | 15246 | `e90a202c835e53cbc94bf4d727f08193cf7fc0eb3719d419ed3ae5015855780c` |
 | `case14_v483.pwb` | 12504 | `926473f70b3bc5041a28c82fd8049034dc948b519170b0ab01ddf7f73885d44d` |
+| `case14_v338.pwb` | 11108 | `74e5bc4d556de0ba289b394f1e607d691cb054980ecbd1a621a6860a991ad74a` |
+| `case14_v368.pwb` | 11119 | `005717480c4cd5db7e6abf89fec154fa4bccad2cfb819a3bef034180be5a87fc` |
+| `case14_v425.pwb` | 12223 | `e89bac6f3d78a1592a98b6adc3ef935f65b00aaf54b06a29ed008c14f14f3a37` |
+| `case14_v508.pwb` | 12602 | `4dd66db5a2e59be4128866b14859fe5daf7c007515fb87d141448db8322f1939` |
+| `case14_v537.pwb` | 13017 | `270260f6d41a0e3a0fef21da4c27ad91f7cb4e97e40c11fa844f1622045dcb87` |
 
-`powerio-tx/tests/powerworld_pwb.rs` checks both against `case14.m`. Simulator
+`powerio-tx/tests/powerworld_pwb.rs` checks every file against `case14.m`. Simulator
 gives a bus with no nominal voltage 138 kV, so the test expects 138 kV where
 `case14.m` states 0.

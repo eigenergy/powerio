@@ -795,14 +795,17 @@ fn parse_file_dispatches_pwb_and_converts() {
     assert_eq!(back.branches().len(), 246);
 }
 
-/// PowerWorld Simulator 24 saves of case14: its own layout (header 577) and
-/// the PWB20 layout (header 483) it writes for Simulator 20, each cut before
-/// the record that lists the saving installation's licensed add-ons
+/// PowerWorld Simulator 24 saves of case14 in every layout the reader
+/// decodes: its own (header 577) and the ones it writes for Simulator 17
+/// through 23 (`PWB17` 338, `PWB18` 368, `PWB19` 425, `PWB20` 483, `PWB21`
+/// 508, `PWB22` 537; `PWB23` 554 stores the 577 records), each cut before the
+/// record that lists the saving installation's licensed add-ons
 /// (`tests/data/powerworld/README.md`). The aux Simulator loaded states three
 /// remote regulators (the machines at 2, 6, and 8 regulate 4, 13, and 7), so
 /// the generator bus check also pins the terminal bus against the regulated
-/// one. Both decode to the MATPOWER case at its print quantum, with every
-/// machine's status located.
+/// one, through the older generator record reader as well as the regulated
+/// record ones. Every save decodes to the MATPOWER case at its print quantum,
+/// with every machine's status located.
 #[test]
 fn simulator24_saves_of_case14_match_the_matpower_case() {
     let mut case14 = parse_file(
@@ -818,7 +821,15 @@ fn simulator24_saves_of_case14_match_the_matpower_case() {
         bus.base_kv = 138.0;
     }
     let mut decodes = Vec::new();
-    for (file, header) in [("case14_v577.pwb", 577u64), ("case14_v483.pwb", 483)] {
+    for (file, header) in [
+        ("case14_v577.pwb", 577u64),
+        ("case14_v483.pwb", 483),
+        ("case14_v338.pwb", 338),
+        ("case14_v368.pwb", 368),
+        ("case14_v425.pwb", 425),
+        ("case14_v508.pwb", 508),
+        ("case14_v537.pwb", 537),
+    ] {
         let path = vendored(file);
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(
@@ -845,16 +856,24 @@ fn simulator24_saves_of_case14_match_the_matpower_case() {
             "{file} counts"
         );
         assert_decoded_shape(&pwb, &path);
+        let terminals: Vec<usize> = pwb.generators().iter().map(|g| g.bus.0).collect();
+        assert_eq!(
+            terminals,
+            [1, 2, 3, 6, 8],
+            "{file} generator terminal buses"
+        );
         assert_pwb_matches_text(&pwb, &case14, Quanta::MATPOWER, file);
-        decodes.push(pwb);
+        decodes.push((file, pwb));
     }
-    // The two layouts store the same records.
-    let (v577, v483) = (&decodes[0], &decodes[1]);
-    assert_eq!(v577.buses(), v483.buses());
-    assert_eq!(v577.generators(), v483.generators());
-    assert_eq!(v577.loads(), v483.loads());
-    assert_eq!(v577.shunts(), v483.shunts());
-    assert_eq!(v577.branches(), v483.branches());
+    // Every layout stores the same records.
+    let (_, v577) = &decodes[0];
+    for (file, other) in &decodes[1..] {
+        assert_eq!(v577.buses(), other.buses(), "{file} buses");
+        assert_eq!(v577.generators(), other.generators(), "{file} generators");
+        assert_eq!(v577.loads(), other.loads(), "{file} loads");
+        assert_eq!(v577.shunts(), other.shunts(), "{file} shunts");
+        assert_eq!(v577.branches(), other.branches(), "{file} branches");
+    }
 }
 
 /// The published ACTIVSg2000 set's current era export (bus flag bits 6/8)
