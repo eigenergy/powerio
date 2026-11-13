@@ -605,7 +605,9 @@ Cargo's conventions:
   does not start PowerIO.jl's Release workflow. Publishing a prerelease to
   crates.io or PyPI is a deliberate maintainer decision for that prerelease,
   not a side effect of the tag; a published version cannot be withdrawn, only
-  yanked.
+  yanked. The workflows' manual-dispatch recovery paths also refuse a
+  prerelease, so publishing one is a manual step outside the workflows,
+  crate by crate in the crates.yml order.
 - The final release is a new version and tag. Drop the suffix, return the
   intra-workspace requirements to caret, fold the prerelease's changelog
   section into the release's, and follow the release steps above. Never move a
