@@ -37,8 +37,8 @@ pub(crate) struct ThermalLimits {
 impl ThermalLimits {
     /// The bound for one branch.
     ///
-    /// A branch the source left unrated (`rate_a == 0`, which reads as
-    /// unlimited) gets a synthesized bound. That bound is per unit power
+    /// A branch the source left unlimited may get a synthesized bound. A
+    /// stated finite zero is never synthesized. That bound is per unit power
     /// already, so it takes `admittance_scale` where a stated `rate_a` takes
     /// `power_scale`.
     pub(crate) fn of(
@@ -48,14 +48,30 @@ impl ThermalLimits {
         angle_max_rad: f64,
         from: &powerio_tx::Bus,
         to: &powerio_tx::Bus,
-    ) -> f64 {
-        if self.synthesize_unrated && branch.rate_a <= 0.0 {
-            let window = angle_window(angle_min_rad, angle_max_rad);
-            branch.synthesize_rate_a(window, (from.vmin, from.vmax), (to.vmin, to.vmax))
-                * self.admittance_scale
-        } else {
-            branch.rate_a * self.power_scale
+    ) -> crate::Result<f64> {
+        let limit = branch.rate_a;
+        if limit.is_nan() || limit < 0.0 {
+            return Err(powerio_tx::Error::InvalidThermalLimit { magnitude: limit }.into());
         }
+        let (value, scale) = if self.synthesize_unrated && limit == f64::INFINITY {
+            let window = angle_window(angle_min_rad, angle_max_rad);
+            let value =
+                branch.synthesize_rate_a(window, (from.vmin, from.vmax), (to.vmin, to.vmax));
+            (value, self.admittance_scale)
+        } else {
+            (limit, self.power_scale)
+        };
+        let result = value * scale;
+        if !scale.is_finite()
+            || scale <= 0.0
+            || result.is_nan()
+            || result < 0.0
+            || (value.is_finite() && !result.is_finite())
+            || (value > 0.0 && result == 0.0)
+        {
+            return Err(powerio_tx::Error::InvalidThermalLimit { magnitude: result }.into());
+        }
+        Ok(result)
     }
 }
 

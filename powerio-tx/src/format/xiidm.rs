@@ -25,7 +25,6 @@ use quick_xml::name::ResolveResult;
 
 use crate::diagnostics::{Diagnostics, codes};
 use crate::format::TextEmission;
-use crate::format::union_find::UnionFind;
 use crate::network::{
     AcDcConverterControlMode, ActivePowerControl, Area, BalancedNetwork, BoundaryLine,
     BoundaryLineGeneration, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
@@ -44,6 +43,7 @@ use crate::network::{
     TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W, TransformerControlMode,
     VoltageLevel, VoltageSourceConverter, Winding,
 };
+use crate::union_find::UnionFind;
 use crate::{Error, Generator, Result};
 
 const FORMAT: &str = "XIIDM XML";
@@ -3771,30 +3771,36 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
             EquipmentKind::Battery => {
                 let mut item = Storage::new(bus1);
                 item.uid = Some(equipment.id.clone());
-                item.ps = assigned_power_or_zero(
+                // An IIDM battery states its targets and reactive limits as
+                // generation, positive into the network; PowerIO storage
+                // states power withdrawn from the network, positive when
+                // charging (#700).
+                let target_p = assigned_power_or_zero(
                     parsed,
                     equipment,
                     "targetP",
                     &missing_assignments,
                     diagnostics,
                 )?;
-                item.qs = assigned_power_or_zero(
+                let target_q = assigned_power_or_zero(
                     parsed,
                     equipment,
                     "targetQ",
                     &missing_assignments,
                     diagnostics,
                 )?;
+                item.ps = -target_p;
+                item.qs = -target_q;
                 item.charge_rating = (-required_f64(&equipment.attrs, "minP")?).max(0.0);
                 item.discharge_rating = required_f64(&equipment.attrs, "maxP")?.max(0.0);
                 if let Some(limits) = &equipment.reactive_limits {
-                    let (qmin, qmax) = reactive_limits_at_active_power(
+                    let (min_q, max_q) = reactive_limits_at_active_power(
                         &format!("battery `{}`", equipment.id),
                         limits,
-                        item.ps,
+                        target_p,
                     )?;
-                    item.qmin = qmin;
-                    item.qmax = qmax;
+                    item.qmin = -max_q;
+                    item.qmax = -min_q;
                 }
                 item.in_service = connected1;
                 item.active_power_control
@@ -5769,7 +5775,7 @@ fn read_transformer(
 
 #[derive(Default)]
 struct LoadingLimitProjection {
-    permanent: f64,
+    permanent: Option<f64>,
     temporary: Vec<(i32, String, f64)>,
 }
 
@@ -5934,7 +5940,7 @@ fn calc_loading_limit_projection(
         .collect::<Vec<_>>();
     temporary.sort_by_key(|(duration, _, _)| std::cmp::Reverse(*duration));
     Ok(LoadingLimitProjection {
-        permanent: permanent.into_iter().reduce(f64::min).unwrap_or(0.0),
+        permanent: permanent.into_iter().reduce(f64::min),
         temporary,
     })
 }
@@ -5968,10 +5974,10 @@ fn apply_branch_operational_limits(
             calc_loading_limit_projection(equipment, side, |group| group.apparent_power.as_ref())?;
         let current =
             calc_loading_limit_projection(equipment, side, |group| group.current.as_ref())?;
-        if apparent.permanent > 0.0 || !apparent.temporary.is_empty() {
+        if apparent.permanent.is_some() || !apparent.temporary.is_empty() {
             apparent_by_side.push(apparent);
         }
-        if current.permanent > 0.0 || !current.temporary.is_empty() {
+        if current.permanent.is_some() || !current.temporary.is_empty() {
             current_by_side.push(current);
         }
         if selected_operational_limits_groups(equipment, side)?
@@ -5988,25 +5994,28 @@ fn apply_branch_operational_limits(
         }
         add_unselected_apparent_ratings(equipment, side, &mut named_apparent_ratings)?;
     }
-    branch.rating_sets.extend(
-        named_apparent_ratings
-            .into_iter()
-            .map(|(name, value)| BranchRatingSet::new(name, value)),
-    );
-    branch.rate_a = apparent_by_side
-        .iter()
-        .map(|limits| limits.permanent)
-        .filter(|value| *value > 0.0)
-        .reduce(f64::min)
-        .unwrap_or(0.0);
+    for (name, value) in named_apparent_ratings {
+        branch.rating_sets.push(BranchRatingSet::new(
+            name,
+            crate::thermal_limit::finite(value)?,
+        ));
+    }
+    branch.rate_a = crate::thermal_limit::from_option(
+        apparent_by_side
+            .iter()
+            .filter_map(|limits| limits.permanent)
+            .reduce(f64::min),
+    )?;
     let apparent_temporary = combined_temporary_limits(&apparent_by_side);
-    branch.rate_b = apparent_temporary.first().map_or(0.0, |(_, value)| *value);
-    branch.rate_c = apparent_temporary.get(1).map_or(0.0, |(_, value)| *value);
+    branch.rate_b =
+        crate::thermal_limit::from_option(apparent_temporary.first().map(|(_, value)| *value))?;
+    branch.rate_c =
+        crate::thermal_limit::from_option(apparent_temporary.get(1).map(|(_, value)| *value))?;
 
     if !current_by_side.is_empty() {
         let permanent = current_by_side
             .iter()
-            .map(|limits| limits.permanent)
+            .filter_map(|limits| limits.permanent)
             .filter(|value| *value > 0.0)
             .reduce(f64::min)
             .unwrap_or(0.0);
@@ -6147,7 +6156,7 @@ fn read_three_winding_transformer(
         let apparent = calc_loading_limit_projection(equipment, suffix as u8, |group| {
             group.apparent_power.as_ref()
         })?;
-        let states_apparent = apparent.permanent > 0.0 || !apparent.temporary.is_empty();
+        let states_apparent = apparent.permanent.is_some() || !apparent.temporary.is_empty();
         // A leg that states current limits and no apparent power limits is
         // rated in MVA at its terminal's nominal voltage, as PowSybl's PSS/E
         // exporter rates it (psse-converter `TransformerConverter.createRates(Leg)`
@@ -6162,23 +6171,25 @@ fn read_three_winding_transformer(
             let factor = super::powsybl_psse::current_limit_mva(1.0, level.nominal_v);
             (current, factor)
         };
-        windings[side].rate_a = ratings.permanent * factor;
-        windings[side].rate_b = ratings
-            .temporary
-            .first()
-            .map_or(0.0, |(_, _, value)| *value * factor);
-        windings[side].rate_c = ratings
-            .temporary
-            .get(1)
-            .map_or(0.0, |(_, _, value)| *value * factor);
+        let stated = |value: Option<f64>| {
+            crate::thermal_limit::scaled(crate::thermal_limit::from_option(value)?, factor)
+        };
+        windings[side].rate_a = stated(ratings.permanent)?;
+        windings[side].rate_b = stated(ratings.temporary.first().map(|(_, _, value)| *value))?;
+        windings[side].rate_c = stated(ratings.temporary.get(1).map(|(_, _, value)| *value))?;
         // Unselected groups are the winding's further rating sets, as they
         // are a branch's.
         let mut named = BTreeMap::new();
         add_unselected_apparent_ratings(equipment, suffix as u8, &mut named)?;
         winding_rating_sets[side] = named
             .into_iter()
-            .map(|(name, value)| BranchRatingSet::new(name, value))
-            .collect();
+            .map(|(name, value)| {
+                Ok(BranchRatingSet::new(
+                    name,
+                    crate::thermal_limit::finite(value)?,
+                ))
+            })
+            .collect::<Result<_>>()?;
         let selected = selected_operational_limits_groups(equipment, suffix as u8)?;
         let unmapped_current =
             states_apparent && selected.iter().any(|group| group.current.is_some());
@@ -6243,6 +6254,7 @@ fn read_three_winding_transformer(
         star_va: 0.0,
         mag_g: star_g.iter().sum::<f64>() * zbase,
         mag_b: star_b.iter().sum::<f64>() * zbase,
+        magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
         in_service: connected >= 2,
         name: equipment.attrs.get("name").cloned(),
         uid: Some(equipment.id.clone()),
@@ -6348,8 +6360,12 @@ fn read_hvdc_line(
             }),
         )
     };
+    // `Hvdc::qf` and `qt` are injected into the bus. A terminal `q` is the
+    // flow from the bus into the station, and a `reactivePowerSetpoint` is
+    // already an injection (#700).
     let converter_q = |equipment: &RawEquipment| -> Result<(f64, f64, f64)> {
         let q = optional_f64(&equipment.attrs, "q")?
+            .map(|terminal| -terminal)
             .or(optional_f64(&equipment.attrs, "reactivePowerSetpoint")?)
             .unwrap_or(0.0);
         let (qmin, qmax) = equipment
@@ -8109,10 +8125,16 @@ struct XiidmWriteIndex<'a> {
     // Track only connectables named by extensions. A terminal in the input
     // is insufficient: its equipment or containing hierarchy may be omitted.
     extension_targets: HashMap<ComponentId, Cell<bool>>,
+    /// The SlackTerminal candidates, computed once per write.
+    slack_terminal: Vec<TerminalReference>,
 }
 
 impl<'a> XiidmWriteIndex<'a> {
-    fn new(network: &'a BalancedNetwork, detailed: &'a DetailedConnectivity) -> Result<Self> {
+    fn new(
+        network: &'a BalancedNetwork,
+        detailed: &'a DetailedConnectivity,
+        slack_terminal: &[TerminalReference],
+    ) -> Result<Self> {
         let metadata = detailed
             .component_metadata
             .iter()
@@ -8245,6 +8267,7 @@ impl<'a> XiidmWriteIndex<'a> {
             boundary_calculation_loads: HashSet::new(),
             boundary_calculation_generators: HashSet::new(),
             extension_targets: HashMap::new(),
+            slack_terminal: slack_terminal.to_vec(),
         };
 
         for generator in network.generators() {
@@ -8263,10 +8286,10 @@ impl<'a> XiidmWriteIndex<'a> {
                     .insert(component_id("storage", id)?, Cell::new(false));
             }
         }
-        if let Some(reference) = slack_terminal_equipment(network) {
+        for reference in slack_terminal {
             index
                 .extension_targets
-                .insert(reference.equipment, Cell::new(false));
+                .insert(reference.equipment.clone(), Cell::new(false));
         }
 
         for value in &detailed.bus_breaker_buses {
@@ -8793,9 +8816,8 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     let active_power_control_namespace = active_power_control_namespace.then_some(format!(
         " xmlns:apc=\"{ACTIVE_POWER_CONTROL_NAMESPACE_V1_2}\""
     ));
-    let slack_terminal = slack_terminal_equipment(network);
-    let slack_terminal_namespace = slack_terminal
-        .is_some()
+    let slack_terminal = slack_terminal_candidates(network);
+    let slack_terminal_namespace = (!slack_terminal.is_empty())
         .then_some(format!(" xmlns:slt=\"{SLACK_TERMINAL_NAMESPACE}\""));
     let mut output = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<iidm:network xmlns:iidm=\"{namespace}\"{}{} id=\"{}\" caseDate=\"{}\" forecastDistance=\"{forecast_distance}\" sourceFormat=\"{}\" minimumValidationLevel=\"{}\">\n",
@@ -8819,7 +8841,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         validate_xiidm_tap_changers(detailed)?;
         validate_xiidm_reactive_limits(detailed)?;
         validate_xiidm_dc_emission(detailed)?;
-        let index = XiidmWriteIndex::new(network, detailed)?;
+        let index = XiidmWriteIndex::new(network, detailed, &slack_terminal)?;
         let network_component = component_id("balanced_network", network.name())?;
         write_identifiable_children_at(index.metadata(&network_component), 2, &mut output);
         let mut contained = HashSet::new();
@@ -8870,7 +8892,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
             &mut diagnostics,
         )?;
         write_slack_terminal_extension(
-            slack_terminal.as_ref(),
+            &slack_terminal,
             &index,
             &root_components,
             2,
@@ -8905,7 +8927,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     validate_xiidm_tap_changers(&detailed)?;
     validate_xiidm_reactive_limits(&detailed)?;
     validate_xiidm_dc_emission(&detailed)?;
-    let index = XiidmWriteIndex::new(network, &detailed)?;
+    let index = XiidmWriteIndex::new(network, &detailed, &slack_terminal)?;
     write_detailed_body(
         network,
         &detailed,
@@ -8923,7 +8945,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         &mut diagnostics,
     )?;
     write_slack_terminal_extension(
-        slack_terminal.as_ref(),
+        &slack_terminal,
         &index,
         &|_| true,
         2,
@@ -9980,7 +10002,7 @@ fn write_subnetwork(
         diagnostics,
     )?;
     write_slack_terminal_extension(
-        slack_terminal_equipment(network).as_ref(),
+        &index.slack_terminal,
         index,
         &|component| members.contains(component),
         4,
@@ -10054,38 +10076,57 @@ fn write_active_power_control_extensions(
     Ok(())
 }
 
-/// The equipment whose terminal XIIDM states as the network's power flow
-/// reference.
+/// Every equipment terminal at the reference bus, in the order the
+/// SlackTerminal extension prefers them. The writer references the first one
+/// it actually wrote.
 ///
 /// IIDM has no bus type, so `BusType::Ref` rides PowSybl's SlackTerminal
-/// extension, which names one terminal per voltage level. PowSybl's load flow
-/// resolves that terminal's bus, so any connectable at the reference bus states
-/// the same fact; an in-service injection is preferred, and generators come
-/// first because a reference bus regulates through one.
-/// The terminal that states the network's reference bus as a SlackTerminal.
-///
-/// An injection at the reference bus is preferred, then a branch or three
-/// winding transformer terminal there, in service before out of service. A
-/// reference bus that hosts only branches still names one of their terminals,
-/// as PowSybl's PSS/E importer attaches the slack terminal to any terminal
-/// connected at the swing bus (psse-converter `SlackConverter.create`), so the
-/// reference does not move to another bus on readback.
-fn slack_terminal_equipment(network: &BalancedNetwork) -> Option<TerminalReference> {
-    let reference = network
+/// extension. PowSybl's load flow resolves that terminal's bus, so any
+/// connectable at the reference bus states the same fact. An injection is
+/// preferred (generators first, because a reference bus regulates through
+/// one), then a branch or three winding transformer terminal, in service
+/// before out of service. A reference bus that hosts only branches still names
+/// one of their terminals, as PowSybl's PSS/E importer attaches the slack
+/// terminal to any terminal connected at the swing bus (psse-converter
+/// `SlackConverter.create`), so the reference does not move on readback.
+fn slack_terminal_candidates(network: &BalancedNetwork) -> Vec<TerminalReference> {
+    let Some(reference) = network
         .buses()
         .iter()
-        .find(|bus| bus.kind == BusType::Ref)?
-        .id;
-    terminal_at_bus(network, reference)
+        .find(|bus| bus.kind == BusType::Ref)
+        .map(|bus| bus.id)
+    else {
+        return Vec::new();
+    };
+    let mut terminals: Vec<_> = terminals_at_bus(network, reference).collect();
+    // A stable sort keeps the equipment order within each service state.
+    terminals.sort_by_key(|(_, in_service)| !*in_service);
+    terminals
+        .into_iter()
+        .map(|(terminal, _)| terminal)
+        .collect()
 }
 
 /// An equipment terminal at `reference`: an injection before a branch or
 /// three winding transformer terminal, in service before out of service.
 fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<TerminalReference> {
-    let one = |kind: &'static str, uid: Option<&str>, bus: BusId, in_service: bool| {
-        (kind, uid.map(str::to_owned), 1_u8, bus, in_service)
+    // `min_by_key` keeps the first of equal keys, so this is the first in
+    // service terminal, else the first out of service one.
+    terminals_at_bus(network, reference)
+        .min_by_key(|(_, in_service)| !*in_service)
+        .map(|(terminal, _)| terminal)
+}
+
+/// The equipment terminals at `reference`, injections before branch and
+/// three winding transformer terminals, each with its service status.
+fn terminals_at_bus<'a>(
+    network: &'a BalancedNetwork,
+    reference: BusId,
+) -> impl Iterator<Item = (TerminalReference, bool)> + 'a {
+    let one = |kind: &'static str, uid: Option<&'a str>, bus: BusId, in_service: bool| {
+        (kind, uid, 1_u8, bus, in_service)
     };
-    let generators = network.generators().iter().map(|value| {
+    let generators = network.generators().iter().map(move |value| {
         one(
             "generator",
             value.uid.as_deref(),
@@ -10096,18 +10137,18 @@ fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<Termin
     let storage = network
         .storage()
         .iter()
-        .map(|value| one("storage", value.uid.as_deref(), value.bus, value.in_service));
+        .map(move |value| one("storage", value.uid.as_deref(), value.bus, value.in_service));
     let loads = network
         .loads()
         .iter()
-        .map(|value| one("load", value.uid.as_deref(), value.bus, value.in_service));
+        .map(move |value| one("load", value.uid.as_deref(), value.bus, value.in_service));
     let shunts = network
         .shunts()
         .iter()
-        .map(|value| one("shunt", value.uid.as_deref(), value.bus, value.in_service));
+        .map(move |value| one("shunt", value.uid.as_deref(), value.bus, value.in_service));
     let branches = network.branches().iter().flat_map(|value| {
         [(1, value.from), (2, value.to)]
-            .map(|(side, bus)| ("branch", value.uid.clone(), side, bus, value.in_service))
+            .map(|(side, bus)| ("branch", value.uid.as_deref(), side, bus, value.in_service))
     });
     let transformers = network.transformers_3w().iter().flat_map(|value| {
         let in_service = value.in_service;
@@ -10117,48 +10158,61 @@ fn terminal_at_bus(network: &BalancedNetwork, reference: BusId) -> Option<Termin
             .map(|winding| winding.bus)
             .into_iter()
             .zip(1_u8..)
-            .map(move |(bus, side)| ("transformer_3w", value.uid.clone(), side, bus, in_service))
+            .map(move |(bus, side)| {
+                (
+                    "transformer_3w",
+                    value.uid.as_deref(),
+                    side,
+                    bus,
+                    in_service,
+                )
+            })
     });
-    let mut out_of_service = None;
-    for (kind, uid, terminal, bus, in_service) in generators
+    generators
         .chain(storage)
         .chain(loads)
         .chain(shunts)
         .chain(branches)
         .chain(transformers)
-    {
-        let Some(uid) = uid.filter(|_| bus == reference) else {
-            continue;
-        };
-        let reference = TerminalReference {
-            equipment: component_id(kind, &uid).ok()?,
-            terminal,
-        };
-        if in_service {
-            return Some(reference);
-        }
-        out_of_service = out_of_service.or(Some(reference));
-    }
-    out_of_service
+        .filter_map(move |(kind, uid, terminal, bus, in_service)| {
+            // Filter by bus before the identifier is allocated.
+            let uid = uid.filter(|_| bus == reference)?;
+            let equipment = component_id(kind, uid).ok()?;
+            Some((
+                TerminalReference {
+                    equipment,
+                    terminal,
+                },
+                in_service,
+            ))
+        })
 }
 
 /// Write the SlackTerminal extension for the network's reference bus. Nothing
 /// is written when the reference bus hosts no emitted connectable, because the
 /// extension states a terminal.
 fn write_slack_terminal_extension(
-    slack_terminal: Option<&TerminalReference>,
+    candidates: &[TerminalReference],
     index: &XiidmWriteIndex<'_>,
     included: &dyn Fn(&ComponentId) -> bool,
     indent: usize,
     output: &mut String,
     diagnostics: &mut Diagnostics,
 ) {
-    let Some(reference) = slack_terminal.filter(|reference| included(&reference.equipment)) else {
+    let mut included_candidates = candidates
+        .iter()
+        .filter(|reference| included(&reference.equipment));
+    let Some(preferred) = included_candidates.clone().next() else {
         return;
     };
-    if !extension_target_is_emitted(index, &reference.equipment, "slackTerminal", diagnostics) {
+    // Equipment the writer omitted cannot carry the extension; another
+    // written terminal at the reference bus can.
+    let Some(reference) = included_candidates
+        .find(|reference| index.extension_target_was_emitted(&reference.equipment))
+    else {
+        extension_target_is_emitted(index, &preferred.equipment, "slackTerminal", diagnostics);
         return;
-    }
+    };
     let Some(terminal) = index.terminal(&reference.equipment, reference.terminal) else {
         return;
     };
@@ -12358,19 +12412,21 @@ fn write_storage(
     }
     let terminal = terminal_attributes(index, &component, 1, false, storage.in_service);
     let metadata = index.metadata(&component);
+    // The battery targets and reactive limits are generation, the negated
+    // storage withdrawal (#700).
     let target_active_power = assignment_attribute(
         index,
         &component,
         OmittedFieldName::ActivePower,
         "targetP",
-        storage.ps,
+        -storage.ps,
     );
     let target_reactive_power = assignment_attribute(
         index,
         &component,
         OmittedFieldName::ReactivePower,
         "targetQ",
-        storage.qs,
+        -storage.qs,
     );
     output.push_str(&format!(
         "      <iidm:battery id=\"{}\"{}{target_active_power}{target_reactive_power} minP=\"{}\" maxP=\"{}\"{terminal}>\n",
@@ -12383,8 +12439,8 @@ fn write_storage(
     } else {
         output.push_str(&format!(
             "        <iidm:minMaxReactiveLimits minQ=\"{}\" maxQ=\"{}\"/>\n",
-            number(storage.qmin),
-            number(storage.qmax),
+            number(-storage.qmax),
+            number(-storage.qmin),
         ));
     }
     output.push_str("      </iidm:battery>\n");
@@ -12764,6 +12820,16 @@ fn write_three_winding_transformer(
     diagnostics: &mut Diagnostics,
 ) {
     let id = transformer.uid.as_deref().unwrap_or("transformer");
+    if transformer.magnetizing_differs_from(crate::network::MagnetizingConnection::StarPoint) {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_substituted,
+            format!(
+                "three winding transformer `{id}` magnetizing admittance stated at winding 1's \
+                 bus was written as leg 1's g1/b1, which IIDM connects at the star bus: the \
+                 two placements are different circuits"
+            ),
+        );
+    }
     let component = component_id("transformer_3w", id).expect("valid stored identity");
     if !equipment_terminals_connect(index, &component, 3, diagnostics) {
         return;
@@ -12833,7 +12899,7 @@ fn write_three_winding_transformer(
     });
     let limits_attributes = selected_operational_limits_attributes(index, &component, 3, |side| {
         let winding = &transformer.windings[usize::from(side - 1)];
-        winding.rate_a != 0.0 || winding.rate_b != 0.0 || winding.rate_c != 0.0
+        states_a_limit([winding.rate_a, winding.rate_b, winding.rate_c])
     });
     output.push_str(&format!(
         "    <iidm:threeWindingsTransformer id=\"{}\"{} ratedU0=\"{}\" r1=\"{}\" x1=\"{}\" g1=\"{}\" b1=\"{}\" ratedU1=\"{}\" r2=\"{}\" x2=\"{}\" g2=\"0\" b2=\"0\" ratedU2=\"{}\" r3=\"{}\" x3=\"{}\" g3=\"0\" b3=\"0\" ratedU3=\"{}\"{}{}{}{}>\n",
@@ -12905,16 +12971,16 @@ fn write_three_winding_transformer(
         write_exact_operational_limit_groups(index, &component, output, diagnostics);
     } else {
         for (side, winding) in transformer.windings.iter().enumerate() {
-            if winding.rate_a != 0.0 || winding.rate_b != 0.0 || winding.rate_c != 0.0 {
+            if states_a_limit([winding.rate_a, winding.rate_b, winding.rate_c]) {
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{} id=\"powerio\">\n",
                     side + 1
                 ));
                 write_loading_limits(
                     "apparentPowerLimits",
-                    winding.rate_a,
-                    winding.rate_b,
-                    winding.rate_c,
+                    crate::thermal_limit::as_option(winding.rate_a),
+                    crate::thermal_limit::as_option(winding.rate_b),
+                    crate::thermal_limit::as_option(winding.rate_c),
                     output,
                 );
                 output.push_str(&format!(
@@ -12924,7 +12990,18 @@ fn write_three_winding_transformer(
             }
             // Further rating sets (PSS/E RATE4 to RATE12) as unselected
             // groups, as a two winding branch writes them.
-            for (index, rating) in transformer.winding_rating_sets(side).iter().enumerate() {
+            let (unlimited, limited): (Vec<_>, Vec<_>) = transformer
+                .winding_rating_sets(side)
+                .into_iter()
+                .partition(|rating| rating.rate_mva.is_infinite());
+            for rating in unlimited {
+                report_unlimited_rating_set(
+                    &format!("three winding transformer `{id}` winding {}", side + 1),
+                    &rating.name,
+                    diagnostics,
+                );
+            }
+            for (index, rating) in limited.into_iter().enumerate() {
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
                     index + 1,
@@ -13061,6 +13138,8 @@ fn write_hvdc_converter_stations(
         }
         let metadata = index.metadata(&component);
         let loss_factor = converter.loss_factor_percent;
+        // The terminal p and q are flows from the bus into the station: `pf`
+        // already is one, while `pt`, `qf`, and `qt` are injections (#700).
         let p = if is_from { line.pf } else { -line.pt };
         let (q, qmin, qmax) = if is_from {
             (line.qf, line.qminf, line.qmaxf)
@@ -13076,7 +13155,7 @@ fn write_hvdc_converter_stations(
             {
                 String::new()
             } else {
-                injection_solution_attributes(index, &component, p, q)
+                injection_solution_attributes(index, &component, p, -q)
             };
             output.push_str(&format!(
                     "      <iidm:lccConverterStation id=\"{}\"{} lossFactor=\"{}\" powerFactor=\"{}\"{terminal}{solution}/>\n",
@@ -13100,7 +13179,7 @@ fn write_hvdc_converter_stations(
             {
                 String::new()
             } else {
-                injection_solution_attributes(index, &component, p, q)
+                injection_solution_attributes(index, &component, p, -q)
             };
             // A station that stated a reactive capability curve keeps it: the
             // curve states a reactive minimum and maximum per active power
@@ -13441,12 +13520,29 @@ fn tap_changer_from_control(
     })
 }
 
+/// Whether any of a, b, and c ratings bounds the flow.
+fn states_a_limit(ratings: [f64; 3]) -> bool {
+    ratings.iter().any(|rating| !rating.is_infinite())
+}
+
+/// An XIIDM limits group needs a finite permanent limit, so a rating set that
+/// imposes no bound is reported rather than written.
+fn report_unlimited_rating_set(owner: &str, name: &str, diagnostics: &mut Diagnostics) {
+    diagnostics.push(
+        &codes::EMIT_XIIDM.rating_set_dropped,
+        format!(
+            "{owner} rating set {name} states no limit and was not written: an XIIDM limits group needs a finite permanent limit"
+        ),
+    );
+}
+
 fn has_branch_operational_limits(branch: &Branch) -> bool {
-    branch.rate_a != 0.0
-        || branch.rate_b != 0.0
-        || branch.rate_c != 0.0
+    states_a_limit([branch.rate_a, branch.rate_b, branch.rate_c])
         || branch.current_ratings.is_some()
-        || !branch.rating_sets.is_empty()
+        || branch
+            .rating_sets
+            .iter()
+            .any(|rating| !rating.rate_mva.is_infinite())
 }
 
 fn has_exact_operational_limit_groups(
@@ -13535,6 +13631,13 @@ fn write_branch_operational_limits(
         write_exact_operational_limit_groups(index, equipment, output, diagnostics);
         return;
     }
+    for rating in branch
+        .rating_sets
+        .iter()
+        .filter(|rating| rating.rate_mva.is_infinite())
+    {
+        report_unlimited_rating_set(&format!("branch `{equipment}`"), &rating.name, diagnostics);
+    }
     if !has_branch_operational_limits(branch) {
         return;
     }
@@ -13544,23 +13647,28 @@ fn write_branch_operational_limits(
         ));
         write_loading_limits(
             "apparentPowerLimits",
-            branch.rate_a,
-            branch.rate_b,
-            branch.rate_c,
+            crate::thermal_limit::as_option(branch.rate_a),
+            crate::thermal_limit::as_option(branch.rate_b),
+            crate::thermal_limit::as_option(branch.rate_c),
             output,
         );
         if let Some(current) = branch.current_ratings {
             write_loading_limits(
                 "currentLimits",
-                current.c_rating_a,
-                current.c_rating_b,
-                current.c_rating_c,
+                (current.c_rating_a != 0.0).then_some(current.c_rating_a),
+                (current.c_rating_b != 0.0).then_some(current.c_rating_b),
+                (current.c_rating_c != 0.0).then_some(current.c_rating_c),
                 output,
             );
         }
         output.push_str(&format!("      </iidm:operationalLimitsGroup{side}>\n"));
         if side == 1 {
-            for (index, rating) in branch.rating_sets.iter().enumerate() {
+            for (index, rating) in branch
+                .rating_sets
+                .iter()
+                .filter(|rating| !rating.rate_mva.is_infinite())
+                .enumerate()
+            {
                 output.push_str(&format!(
                     "      <iidm:operationalLimitsGroup{side} id=\"rating-set-{}\">\n        <iidm:apparentPowerLimits permanentLimit=\"{}\" permanentLimitName=\"{}\"/>\n      </iidm:operationalLimitsGroup{side}>\n",
                     index + 1,
@@ -13733,29 +13841,28 @@ fn write_exact_loading_limits(
 
 fn write_loading_limits(
     element: &str,
-    permanent: f64,
-    long_term: f64,
-    short_term: f64,
+    permanent: Option<f64>,
+    long_term: Option<f64>,
+    short_term: Option<f64>,
     output: &mut String,
 ) {
-    if permanent == 0.0 && long_term == 0.0 && short_term == 0.0 {
+    if permanent.is_none() && long_term.is_none() && short_term.is_none() {
         return;
     }
     output.push_str(&format!(
         "        <iidm:{element}{}>\n",
-        if permanent == 0.0 {
-            String::new()
-        } else {
-            format!(" permanentLimit=\"{}\"", number(permanent))
-        },
+        permanent.map_or_else(String::new, |value| format!(
+            " permanentLimit=\"{}\"",
+            number(value)
+        )),
     ));
-    if long_term != 0.0 {
+    if let Some(long_term) = long_term {
         output.push_str(&format!(
             "          <iidm:temporaryLimit name=\"rate_b\" acceptableDuration=\"1200\" value=\"{}\"/>\n",
             number(long_term)
         ));
     }
-    if short_term != 0.0 {
+    if let Some(short_term) = short_term {
         output.push_str(&format!(
             "          <iidm:temporaryLimit name=\"rate_c\" acceptableDuration=\"60\" value=\"{}\"/>\n",
             number(short_term)
@@ -14473,6 +14580,53 @@ mod tests {
         assert_eq!(reparsed.generators()[0].regulated_bus, Some(BusId(2)));
         assert!(!reparsed.generators()[0].voltage_regulation_on);
         assert_f64_close(reparsed.generators()[0].vg, generator.vg);
+    }
+
+    /// #700: an IIDM battery states generation, positive into the network;
+    /// PowerIO storage states withdrawal, positive when charging. A
+    /// discharging battery is a negative `ps` and `qs`, and its reactive
+    /// limits mirror.
+    #[test]
+    fn a_battery_target_is_generation_and_storage_power_is_withdrawal() {
+        let source = POWSYBL_ACTIVE_POWER_CONTROL.replace(
+            r#"<iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>"#,
+            r#"<iidm:minMaxReactiveLimits minQ="-4" maxQ="6"/>"#,
+        );
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(&source, &mut diagnostics).unwrap();
+        let storage = &network.storage()[0];
+        assert_f64_close(storage.ps, -100.0);
+        assert_f64_close(storage.qs, -20.0);
+        assert_f64_close(storage.qmin, -6.0);
+        assert_f64_close(storage.qmax, 4.0);
+        let written = write_xiidm(&network).unwrap().text;
+        let battery = written
+            .lines()
+            .find(|line| line.contains("<iidm:battery "))
+            .unwrap();
+        assert!(battery.contains(r#"targetP="100""#), "{battery}");
+        assert!(battery.contains(r#"targetQ="20""#), "{battery}");
+        let reread = parse_xiidm_source(&written, &mut Diagnostics::new()).unwrap();
+        assert_f64_close(reread.storage()[0].ps, -100.0);
+        assert_f64_close(reread.storage()[0].qs, -20.0);
+        assert_f64_close(reread.storage()[0].qmin, storage.qmin);
+        assert_f64_close(reread.storage()[0].qmax, storage.qmax);
+    }
+
+    /// #700: a converter station's terminal `q` flows from the bus into the
+    /// station, its `reactivePowerSetpoint` is injected into the bus, and
+    /// `Hvdc::qf` and `qt` are injected into the bus.
+    #[test]
+    fn a_converter_terminal_q_is_the_negated_hvdc_injection() {
+        let mut diagnostics = Diagnostics::new();
+        let network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut diagnostics).unwrap();
+        let hvdc = &network.hvdc()[0];
+        assert_f64_close(hvdc.qf, -5.0);
+        assert_f64_close(hvdc.qt, 3.0);
+        let written = write_xiidm(&network).unwrap().text;
+        let reread = parse_xiidm_source(&written, &mut Diagnostics::new()).unwrap();
+        assert_f64_close(reread.hvdc()[0].qf, -5.0);
+        assert_f64_close(reread.hvdc()[0].qt, 3.0);
     }
 
     #[test]
@@ -16467,7 +16621,7 @@ mod tests {
             "",
         );
         let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
-        assert_f64_close(network.branches()[0].rate_a, 0.0);
+        assert_eq!(network.branches()[0].rate_a, f64::INFINITY);
         let groups = &network
             .detailed_connectivity()
             .as_ref()
@@ -16664,6 +16818,113 @@ mod tests {
         let error = write_xiidm(&missing_reactive_limits).unwrap_err();
         assert!(matches!(error, Error::Emit { .. }));
         assert!(error.to_string().contains("reactive limits"));
+    }
+
+    /// The reduced-model station states its reactive setpoint as an
+    /// injection into the AC bus (PowSybl `vscConverterStation`), and its
+    /// limits bound that injection: a negative setpoint and asymmetric limits
+    /// read and write back with their signs.
+    #[test]
+    fn a_converter_station_reactive_setpoint_and_limits_keep_the_injection_sign() {
+        let station = r#"<iidm:vscConverterStation id="C2" lossFactor="1" voltageRegulatorOn="false" reactivePowerSetpoint="3" bus="B2" connectableBus="B2"><iidm:minMaxReactiveLimits minQ="-10" maxQ="10"/></iidm:vscConverterStation>"#;
+        let signed = station
+            .replace(
+                r#"reactivePowerSetpoint="3""#,
+                r#"reactivePowerSetpoint="-7""#,
+            )
+            .replace(r#"minQ="-10" maxQ="10""#, r#"minQ="-30" maxQ="12""#);
+        assert_eq!(EQUIPMENT_COVERAGE.matches(station).count(), 1);
+        let source = EQUIPMENT_COVERAGE.replacen(station, &signed, 1);
+        let network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let hvdc = &network.hvdc()[0];
+        let converter = hvdc.converter2.as_ref().unwrap();
+        assert_eq!(
+            converter.component,
+            component_id("hvdc_converter", "C2").unwrap()
+        );
+        assert_eq!(converter.reactive_power_setpoint_mvar, Some(-7.0));
+        assert_f64_close(hvdc.qt, -7.0);
+        assert_f64_close(hvdc.qmint, -30.0);
+        assert_f64_close(hvdc.qmaxt, 12.0);
+
+        let emission = write_xiidm(&network).unwrap();
+        let written = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:vscConverterStation id=\"C2\""))
+            .unwrap();
+        assert!(
+            written.contains("reactivePowerSetpoint=\"-7\""),
+            "{written}"
+        );
+        assert!(emission.text.contains("minQ=\"-30\" maxQ=\"12\""));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(reparsed.hvdc()[0].converter2, hvdc.converter2);
+        assert_f64_close(reparsed.hvdc()[0].qt, -7.0);
+    }
+
+    /// The detailed converter states its reactive setpoint in load
+    /// convention at the point of common coupling (PowSybl
+    /// `voltageSourceConverter`, as CGMES `VsConverter.targetQpcc`), and its
+    /// capability curve bounds that withdrawal: a negative setpoint and an
+    /// asymmetric curve read and write back with their signs.
+    #[test]
+    fn a_detailed_converter_reactive_setpoint_and_curve_keep_the_load_sign() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="converters" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:dcNode id="N1" nominalV="500"/>
+  <iidm:dcNode id="N2" nominalV="500"/>
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL" nominalV="400" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1"/><iidm:bus id="B2"/></iidm:busBreakerTopology>
+      <iidm:voltageSourceConverter id="VSC" dcNode1="N1" dcConnected1="true" dcNode2="N2" dcConnected2="false" idleLoss="2" switchingLoss="0.2" resistiveLoss="0.000002" controlMode="P_PCC" targetP="301" bus1="B1" connectableBus1="B1" bus2="B2" connectableBus2="B2" voltageRegulatorOn="false" reactivePowerSetpoint="-7">
+        <iidm:pccTerminal id="VSC" number="ONE"/>
+        <iidm:reactiveCapabilityCurve><iidm:point p="-200" minQ="-190" maxQ="12"/><iidm:point p="200" minQ="-189" maxQ="11"/></iidm:reactiveCapabilityCurve>
+      </iidm:voltageSourceConverter>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+        let network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        let detailed = network.detailed_connectivity().as_ref().unwrap();
+        let vsc = &detailed.voltage_source_converters[0];
+        assert_eq!(vsc.voltage_regulator_on, Some(false));
+        assert_eq!(vsc.reactive_power_setpoint_mvar, Some(-7.0));
+        let Some(ReactiveLimits::CapabilityCurve(curve)) = &vsc.reactive_limits else {
+            panic!("expected reactive capability curve");
+        };
+        assert_eq!(
+            curve
+                .points
+                .iter()
+                .map(|point| (
+                    point.active_power_mw,
+                    point.minimum_reactive_power_mvar,
+                    point.maximum_reactive_power_mvar,
+                ))
+                .collect::<Vec<_>>(),
+            vec![(-200.0, -190.0, 12.0), (200.0, -189.0, 11.0)]
+        );
+
+        let emission = write_xiidm(&network).unwrap();
+        let written = emission
+            .text
+            .lines()
+            .find(|line| line.contains("<iidm:voltageSourceConverter id=\"VSC\""))
+            .unwrap();
+        assert!(
+            written.contains("reactivePowerSetpoint=\"-7\""),
+            "{written}"
+        );
+        assert!(emission.text.contains("minQ=\"-190\" maxQ=\"12\""));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_eq!(
+            reparsed
+                .detailed_connectivity()
+                .as_ref()
+                .unwrap()
+                .voltage_source_converters,
+            detailed.voltage_source_converters
+        );
     }
 
     #[test]
@@ -16959,6 +17220,50 @@ mod tests {
         assert_eq!(
             reparsed_detail.operational_limit_groups,
             detailed.operational_limit_groups
+        );
+    }
+
+    #[test]
+    fn the_slack_terminal_skips_equipment_the_writer_omits() {
+        // A boundary line's calculation load and generator are not written.
+        // When one came first at the reference bus, the extension was dropped
+        // even though an ordinary generator there was written.
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="slack" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="100" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1"/></iidm:busBreakerTopology>
+      <iidm:generator id="G" energySource="OTHER" minP="0" maxP="200" voltageRegulatorOn="true" targetP="100" targetQ="10" targetV="100" bus="B1" connectableBus="B1">
+        <iidm:minMaxReactiveLimits minQ="-50" maxQ="50"/>
+      </iidm:generator>
+      <iidm:boundaryLine id="U" p0="5" q0="6" r="7" x="8" generationVoltageRegulationOn="true" generationMinP="0" generationMaxP="20" generationTargetP="10" generationTargetV="100" bus="B1" connectableBus="B1"/>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+        let mut network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        for bus in network.buses_mut() {
+            bus.kind = BusType::Ref;
+        }
+        // The calculation generator precedes the ordinary one.
+        let calculation = network
+            .generators()
+            .iter()
+            .position(|generator| generator.uid.as_deref() == Some("U"))
+            .unwrap();
+        network.generators_mut().swap(0, calculation);
+        let emission = write_xiidm(&network).unwrap();
+        assert!(
+            emission.text.contains("<slt:slackTerminal id=\"G\"/>"),
+            "{}",
+            emission.text
+        );
+        assert!(
+            !emission
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("slackTerminal extension")),
+            "{:?}",
+            emission.render_diagnostics()
         );
     }
 

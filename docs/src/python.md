@@ -95,6 +95,21 @@ dictionaries, and `powerio.diagnostic_record` turns one. Each record keeps
 `suggested_action`, `related`, `details`, and `spans` when the diagnostic
 carries them.
 
+A module also carries extensions: JSON values under namespaced keys such as
+`org.eigenergy.powerio.sienna`, which PowerIO IR serializes alongside the
+value. `module.extension_keys` lists the namespaces, `module.extension(key)`
+decodes one value (or returns `None`), and `module.with_extension(key, value)`
+returns a copy carrying `value` under `key`. None of the three serializes the
+typed value, so adding a companion record to a large network costs the record,
+not the network.
+
+```python
+tagged = module.with_extension("org.example.audit", {"reviewed": True})
+assert "org.example.audit" in tagged.extension_keys
+assert tagged.extension("org.example.audit") == {"reviewed": True}
+assert module.extension("org.example.audit") is None   # the original is unchanged
+```
+
 The value classes are `BalancedNetwork`, `dist.MulticonductorNetwork`,
 `OperatingPoint`, `TimeSeries`, `ScenarioSet`, `GeoLayer`, `ContingencySet`,
 `SubsystemSet`, `MonitoredSet`, the PF, OPF, and SCUC instances and solutions,
@@ -127,10 +142,12 @@ powerio.serialize(module, "case.pio.json")
 same_module = powerio.deserialize(ir.artifacts[0].data)
 ```
 
-The IR header is `"schema": "pio-ir"` with the integer `"version": 2`, and
-`powerio.versions()["powerio_ir"]` reports both. The producer record gives
-`powerio.__version__` separately. `deserialize` refuses a document whose schema
-or version it does not support and reports what it found. PowerIO IR is not a
+The IR header is `"schema": "pio-ir"` with a `"version"` that names the
+release whose schema the document follows, such as `"0.12.0"`, and
+`powerio.versions()["powerio_ir"]` reports both. The producer record names the
+software that wrote the document separately. `deserialize` reads the documents
+of its own release series and the `"version": 2` documents 0.11 wrote; it
+refuses any other schema or version and reports what it found. PowerIO IR is not a
 grid exchange format, so it does not appear in format discovery.
 
 ### PowerWorld binary cases
@@ -366,7 +383,6 @@ emit `solved_network()` to write the solved case.
 | `features()` | which build features the installed extension carries |
 | `versions()` | the release, the PowerIO IR identity, and the BMOPF schema version |
 | `parse_geo(text, name_hint=None)` | a geographic layer in canonical form with its diagnostics |
-| `parse_display(path, format=None)` | the raw PowerWorld `.pwd` display record as `DisplayData`; kept only for 0.11 compatibility and removed in 0.12, so use `parse`, which returns a `GeoLayer` |
 | `from_ppc(ppc)` | a `BalancedNetwork` from a pandapower or PYPOWER case dictionary |
 | `PioModule.from_value(value)` | a module around a value built in Python |
 | `diagnostic_record(diagnostic)` | one diagnostic as a JSON-ready dictionary |

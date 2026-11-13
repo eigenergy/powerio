@@ -469,7 +469,12 @@ fn validate_snapshot_inputs(net: &BalancedNetwork, scenario: i64) -> Result<()> 
         finite(scenario, "branch", row, "shift", br.shift)?;
         not_nan(scenario, "branch", row, "angmin", br.angmin)?;
         not_nan(scenario, "branch", row, "angmax", br.angmax)?;
-        not_nan(scenario, "branch", row, "rate_a", br.rate_a)?;
+        if br.rate_a.is_nan() || br.rate_a < 0.0 {
+            return Err(powerio_tx::Error::InvalidThermalLimit {
+                magnitude: br.rate_a,
+            }
+            .into());
+        }
         if let Some(solution) = br.solution {
             finite(scenario, "branch", row, "pf", solution.pf)?;
             finite(scenario, "branch", row, "qf", solution.qf)?;
@@ -802,6 +807,7 @@ struct ProjectionCounts {
     shunt_metadata: usize,
     branch_metadata: usize,
     branch_extra_ratings: usize,
+    branch_zero_limits: usize,
     branch_charging: usize,
     unit_transformers: usize,
     derived_branch_flows: usize,
@@ -895,6 +901,12 @@ fn projection_diagnostics(
         &crate::diagnostics::codes::EMIT_GRIDFM_FIELD_DROPPED,
         counts.branch_extra_ratings,
         "branch row(s) carry rate_b, rate_c, named MVA ratings, or current ratings while GridFM stores only rate_a",
+    );
+    push_count(
+        &mut diagnostics,
+        &crate::diagnostics::codes::EMIT_GRIDFM_FIELD_DROPPED,
+        counts.branch_zero_limits,
+        "branch row(s) have a finite zero rate_a constraint that the GridFM writer's legacy zero-as-unlimited column cannot preserve",
     );
     push_count(
         &mut diagnostics,
@@ -1085,11 +1097,12 @@ fn collect_projection_counts(
                 || !branch.extras.is_empty(),
         );
         counts.branch_extra_ratings += usize::from(
-            branch.rate_b != 0.0
-                || branch.rate_c != 0.0
+            branch.rate_b.is_finite()
+                || branch.rate_c.is_finite()
                 || !branch.rating_sets.is_empty()
                 || branch.current_ratings.is_some(),
         );
+        counts.branch_zero_limits += usize::from(branch.rate_a == 0.0);
         counts.branch_charging += usize::from(branch.has_non_matpower_charging());
         counts.unit_transformers +=
             usize::from(is_exact_unit_transformer(branch.tap, branch.shift));
@@ -1400,7 +1413,11 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
             shift.push(br.shift);
             ang_min.push(br.angmin);
             ang_max.push(br.angmax);
-            rate_a.push(br.rate_a);
+            rate_a.push(if br.rate_a.is_finite() {
+                br.rate_a
+            } else {
+                0.0
+            });
             br_status.push(i64::from(br.in_service));
         }
     }

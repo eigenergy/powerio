@@ -63,7 +63,7 @@ pub(in crate::format) fn parse_powerworld_source(
     let content: &str = source;
     // Simulator keeps the system base as the SBase solution option. The writer
     // states it in a `Sim_Solution_Options` block, read below, and in the
-    // `// baseMVA` marker that releases before 0.11.13 wrote alone. A case
+    // `// baseMVA` marker that PowerIO 0.12.0 and earlier wrote alone. A case
     // export usually states neither, so the default is 100 MVA (the de-facto
     // standard). Reading a real base from PowerWorld's project files is tracked
     // separately; defaulting here is deliberate, not a silent guess — erroring
@@ -557,7 +557,7 @@ fn read_bus(r: &Row) -> Result<Bus> {
         base_kv: f_alias(r, &["BusNomVolt", "NomkV"], 0.0)?,
         // Real exports carry per rating set voltage limits; set 1 (set A in
         // the 2022 vocabulary) is the default set, and what the writer states.
-        // BusVMax/BusVMin, which PowerIO 0.11.12 and earlier wrote, are the
+        // BusVMax/BusVMin, which PowerIO 0.12.0 and earlier wrote, are the
         // fallback aliases.
         vmax: f_alias(r, &["BusVoltLimHigh:1", "LimitHighA", "BusVMax"], 1.1)?,
         vmin: f_alias(r, &["BusVoltLimLow:1", "LimitLowA", "BusVMin"], 0.9)?,
@@ -603,7 +603,7 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {
     // Complete case exports write ZIP components (constant power S, constant
     // current I, constant impedance Z, each MW/MVAr at nominal voltage), and
     // the writer states the S pair. The LoadMW/LoadMVR total pair is the form
-    // PowerIO 0.11.12 and earlier wrote. The typed model
+    // PowerIO 0.12.0 and earlier wrote. The typed model
     // carries the total at nominal voltage; nonzero I/Z components are kept in
     // extras so nothing about the voltage dependence is lost.
     let (p, q);
@@ -660,7 +660,7 @@ fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Shunt> {
     Ok(Shunt {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         // Switched shunt nominal MW/MVAr in real exports (MWNom/MvarNom in
-        // the 2022 vocabulary); ShuntMW/ShuntMVR from PowerIO 0.11.12 and
+        // the 2022 vocabulary); ShuntMW/ShuntMVR from PowerIO 0.12.0 and
         // earlier.
         g: f_alias(r, &["ShuntMW", "SSNMW", "MWNom"], 0.0)?,
         b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
@@ -768,7 +768,7 @@ fn read_branch(
     // Transformer records in complete case exports carry their impedance and
     // tap under `:1` locations (values on the system base after correction);
     // line records use the bare names, and so does the writer. LineXFRatio,
-    // which PowerIO 0.11.12 and earlier wrote, is a fallback.
+    // which PowerIO 0.12.0 and earlier wrote, is a fallback.
     // 2016 era exports use the bare name here like everywhere else.
     let tap = f_alias(
         r,
@@ -798,9 +798,21 @@ fn read_branch(
         x: f_alias(r, &["LineX", "LineX:1", "X", "Xxfbase"], 0.0)?,
         b: f_alias(r, &["LineC", "LineC:1", "B", "Bxfbase"], 0.0)?,
         charging: None,
-        rate_a: f_alias(r, &["LineAMVA", "LimitMVAA"], 0.0)?,
-        rate_b: f_alias(r, &["LineAMVA:1", "LineBMVA", "LimitMVAB"], 0.0)?,
-        rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA", "LimitMVAC"], 0.0)?,
+        rate_a: crate::thermal_limit::from_zero_unlimited(f_alias(
+            r,
+            &["LineAMVA", "LimitMVAA"],
+            0.0,
+        )?)?,
+        rate_b: crate::thermal_limit::from_zero_unlimited(f_alias(
+            r,
+            &["LineAMVA:1", "LineBMVA", "LimitMVAB"],
+            0.0,
+        )?)?,
+        rate_c: crate::thermal_limit::from_zero_unlimited(f_alias(
+            r,
+            &["LineAMVA:2", "LineCMVA", "LimitMVAC"],
+            0.0,
+        )?)?,
         rating_sets: Vec::new(),
         current_ratings: None,
         tap: stored_tap,
@@ -864,7 +876,7 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
     // Simulator keeps as SBase. Stating it before the Branch rows makes
     // Simulator read them on this network's base rather than its 100 MVA
     // default. PowerIO's reader reads it too; the `// baseMVA` comment above
-    // is what releases before 0.11.13 read.
+    // is what PowerIO 0.12.0 and earlier read.
     //
     // Simulator also regulates buses joined by a branch at or below its zero
     // impedance threshold as one group, overriding all but one generator set
@@ -1115,9 +1127,9 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
                     n(br.r),
                     n(br.x),
                     n(br.calc_total_charging_b()),
-                    n(br.rate_a),
-                    n(br.rate_b),
-                    n(br.rate_c),
+                    n(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                    n(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                    n(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
                     n(br.calc_effective_tap()),
                     n(br.shift)
                 ));

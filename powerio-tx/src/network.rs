@@ -755,8 +755,17 @@ pub struct VoltageSourceConverter {
     pub voltage_regulator_on: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voltage_setpoint_kv: Option<f64>,
+    /// Reactive power target at the point of common coupling, using load
+    /// sign convention: a positive value is withdrawn from the AC bus. This
+    /// is how PowSybl's detailed `voltageSourceConverter` states its
+    /// `reactivePowerSetpoint` and how CGMES states `VsConverter.targetQpcc`,
+    /// so both readers keep the value. The reduced-model station setpoint on
+    /// [`HvdcConverter`] uses the opposite, injection, convention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactive_power_setpoint_mvar: Option<f64>,
+    /// Reactive capability at the point of common coupling, in the same load
+    /// sign convention as [`Self::reactive_power_setpoint_mvar`]: `min_q` and
+    /// `max_q` bound the withdrawal from the AC bus.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactive_limits: Option<ReactiveLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1438,6 +1447,12 @@ pub enum SourceFormat {
     /// schema), balanced subset.
     #[serde(rename = "ravens-json")]
     RavensJson,
+    /// SiennaSchemas SystemDocument.
+    #[serde(rename = "sienna-json")]
+    SiennaJson,
+    /// Serialized PowerSystems.jl System.
+    #[serde(rename = "powersystems-json")]
+    PowerSystemsJson,
 }
 
 impl SourceFormat {
@@ -1464,6 +1479,8 @@ impl SourceFormat {
             SourceFormat::PypsaCsv => "pypsa-csv",
             SourceFormat::Goc3Json => "goc3-json",
             SourceFormat::SurgeJson => "surge-json",
+            SourceFormat::SiennaJson => "sienna-json",
+            SourceFormat::PowerSystemsJson => "powersystems-json",
             SourceFormat::RavensJson => "ravens-json",
             SourceFormat::DeepMindOpfDataJson => "opfdata-json",
             SourceFormat::Xiidm => "xiidm",
@@ -2304,11 +2321,11 @@ impl Shunt {
 
 /// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
 //
-// The IR 2 schema catalogs are published byte for byte, and
+// The 0.11 schema files are published byte for byte, and
 // `powerio/tests/frozen_schemas.rs` holds every record to its published text.
 // The schema descriptions of the two adjusting variants therefore keep their
-// 0.11 wording, which swaps `MODSW` 1 and 2, until a new catalog snapshot
-// takes the code mapping the rustdoc states.
+// 0.11 wording, which swaps `MODSW` 1 and 2, until a release series that no
+// longer reads 0.11 documents takes the code mapping the rustdoc states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -2473,6 +2490,8 @@ pub struct Branch {
     /// susceptance from [`b`](Branch::b).
     #[serde(default)]
     pub charging: Option<BranchCharging>,
+    /// Apparent-power limit: zero is a zero bound; positive infinity is unbounded.
+    /// MVA in a physical network, per unit after normalization.
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
@@ -2763,9 +2782,9 @@ impl Branch {
             x,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
@@ -2827,7 +2846,7 @@ impl Branch {
     }
 
     /// Apparent power bound, per unit, for a branch the source left unrated
-    /// (`rate_a == 0`, which reads as unlimited). `angle_window_rad` is the
+    /// (`rate_a == f64::INFINITY`). `angle_window_rad` is the
     /// widest angle difference the branch may hold, in radians. That window and
     /// the two terminal voltage bands give the widest voltage phasor difference
     /// the branch can hold. The difference over `|Z|` bounds the current, and
@@ -3397,6 +3416,12 @@ pub struct HvdcConverter {
     pub voltage_regulator_on: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voltage_setpoint_kv: Option<f64>,
+    /// Reactive power setpoint of the reduced-model station, using generator
+    /// sign convention: a positive value is injected into the AC bus, as
+    /// PowSybl states a `vscConverterStation` `reactivePowerSetpoint`. The
+    /// station's reactive limits and [`Hvdc::qf`] and [`Hvdc::qt`] share this
+    /// injection sign (#700). The detailed [`VoltageSourceConverter`] uses
+    /// the opposite, load, convention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reactive_power_setpoint_mvar: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3414,7 +3439,11 @@ pub struct Hvdc {
     pub in_service: bool,
     pub pf: f64,
     pub pt: f64,
+    /// Reactive power injected into the from bus (#700); `qminf` and `qmaxf`
+    /// bound it in the same sign.
     pub qf: f64,
+    /// Reactive power injected into the to bus (#700); `qmint` and `qmaxt`
+    /// bound it in the same sign.
     pub qt: f64,
     pub vf: f64,
     pub vt: f64,
@@ -3633,6 +3662,7 @@ pub struct Winding {
     pub shift: f64,
     /// Winding nominal voltage (kV); 0 defers to the terminal bus base kV.
     pub nominal_kv: f64,
+    /// Apparent-power limit: zero is a zero bound; positive infinity is unbounded.
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
@@ -3649,12 +3679,31 @@ impl Winding {
             tap: 1.0,
             shift: 0.0,
             nominal_kv: 0.0,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         }
     }
+}
+
+/// Where the magnetizing admittance of a [`Transformer3W`] connects.
+///
+/// PSS/E connects `MAG1 + jMAG2` from winding 1's bus to ground, outside that
+/// winding's ratio. IIDM and CGMES state each leg's shunt admittance at the
+/// star point. The two are different circuits: no single admittance at one
+/// place reproduces the other, so a writer whose format has only the other
+/// placement reports an approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum MagnetizingConnection {
+    /// Between the star point and ground.
+    #[default]
+    StarPoint,
+    /// Between winding 1's terminal bus and ground, outside winding 1's ratio.
+    Winding1Terminal,
 }
 
 /// A three winding transformer with three terminal buses joined at a star point.
@@ -3678,9 +3727,14 @@ pub struct Transformer3W {
     /// Star-point voltage magnitude (p.u.) and angle (degrees), as solved.
     pub star_vm: f64,
     pub star_va: f64,
-    /// Magnetizing shunt referred to the star point (p.u. on the system base).
+    /// Magnetizing shunt conductance and susceptance (p.u. on the system
+    /// base), connected where [`Self::magnetizing_connection`] says.
     pub mag_g: f64,
     pub mag_b: f64,
+    /// Where [`Self::mag_g`] and [`Self::mag_b`] connect: the star point
+    /// (the default, and the meaning every 0.11 document has) or winding 1's
+    /// terminal bus.
+    pub magnetizing_connection: MagnetizingConnection,
     pub in_service: bool,
     pub name: Option<String>,
     /// Stable row identity; see [`Bus::uid`].
@@ -3698,11 +3752,29 @@ impl Transformer3W {
             star_va: 0.0,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: MagnetizingConnection::StarPoint,
             in_service: true,
             name: None,
             uid: None,
             extras: Extras::new(),
         }
+    }
+
+    /// True when the lowering adds a magnetizing shunt at the star bus: a
+    /// nonzero admittance that connects at the star point.
+    pub(crate) fn has_star_magnetizing_shunt(&self) -> bool {
+        self.magnetizing_at(MagnetizingConnection::StarPoint)
+    }
+
+    /// True when a nonzero magnetizing admittance connects at `place`.
+    fn magnetizing_at(&self, place: MagnetizingConnection) -> bool {
+        self.magnetizing_connection == place && (self.mag_g != 0.0 || self.mag_b != 0.0)
+    }
+
+    /// True when a nonzero magnetizing admittance connects somewhere other
+    /// than `native`, the one placement a target format can state.
+    pub(crate) fn magnetizing_differs_from(&self, native: MagnetizingConnection) -> bool {
+        self.magnetizing_connection != native && (self.mag_g != 0.0 || self.mag_b != 0.0)
     }
 
     /// The per-winding star impedances `(r, x)` — winding *k* to the star point —
@@ -3776,17 +3848,44 @@ impl Transformer3W {
         if sets.iter().all(Vec::is_empty) {
             self.extras.remove(WINDING_RATING_SETS_EXTRA);
         } else {
-            let value = serde_json::to_value(sets).expect("rating sets serialize to JSON");
+            let value = sets
+                .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
+                    serde_json::value::Serializer,
+                ))
+                .expect("rating sets serialize to JSON");
             self.extras
                 .insert(WINDING_RATING_SETS_EXTRA.to_owned(), value);
         }
     }
 
+    fn decode_winding_rating_sets(
+        &self,
+    ) -> Option<std::result::Result<[Vec<BranchRatingSet>; 3], serde_json::Error>> {
+        self.extras.get(WINDING_RATING_SETS_EXTRA).map(|value| {
+            <[Vec<BranchRatingSet>; 3]>::deserialize(
+                powerio_core::__implementation::nonfinite::NonFiniteDe(value),
+            )
+        })
+    }
+
     fn stored_winding_rating_sets(&self) -> [Vec<BranchRatingSet>; 3] {
-        self.extras
-            .get(WINDING_RATING_SETS_EXTRA)
-            .and_then(|value| <[Vec<BranchRatingSet>; 3]>::deserialize(value).ok())
+        self.decode_winding_rating_sets()
+            .and_then(std::result::Result::ok)
             .unwrap_or_default()
+    }
+
+    fn checked_winding_rating_sets(&self) -> Result<[Vec<BranchRatingSet>; 3]> {
+        let Some(decoded) = self.decode_winding_rating_sets() else {
+            return Ok(Default::default());
+        };
+        let sets = decoded.map_err(|error| Error::FormatRead {
+            format: "network",
+            message: format!("invalid winding rating sets: {error}"),
+        })?;
+        for rating in sets.iter().flatten() {
+            crate::thermal_limit::validate(rating.rate_mva)?;
+        }
+        Ok(sets)
     }
 
     /// The sole adjustable winding for PSS/E bus-to-bus correction. The
@@ -3858,9 +3957,12 @@ impl Transformer3W {
     /// one per winding, for a consumer that works in the bus-branch model.
     /// [`IndexedNetwork`](crate::IndexedNetwork) calls this via
     /// `BalancedNetwork::expand_transformers_3w` when assembling matrix inputs. The star
-    /// bus carries the stored star voltage and the magnetizing shunt is left to the
-    /// caller; each branch takes its winding's tap, phase shift, ratings, and
-    /// status, so a winding out of service gives an out of service branch.
+    /// bus carries the stored star voltage. A magnetizing admittance at the star
+    /// point is left to the caller as a shunt at the star bus; one at winding 1's
+    /// terminal rides on winding 1's branch as from side charging
+    /// `Ym * tap1²`, which bus 1 sees as `Ym` through the branch ratio. Each
+    /// branch takes its winding's tap, phase shift, ratings, and status, so a
+    /// winding out of service gives an out of service branch.
     /// A winding's own impedance correction table follows its branch, so
     /// [`BalancedNetwork::apply_impedance_correction`] on the expanded network
     /// scales each star impedance as it scales the native transformer's. Once
@@ -3918,6 +4020,13 @@ impl Transformer3W {
             branch(&self.windings[1], zs[1]),
             branch(&self.windings[2], zs[2]),
         ];
+        if self.magnetizing_at(MagnetizingConnection::Winding1Terminal) {
+            let tap = branches[0].calc_effective_tap();
+            let referral = tap * tap;
+            let (g, b) = (self.mag_g * referral, self.mag_b * referral);
+            branches[0].b = b;
+            branches[0].charging = Some(BranchCharging::new(g, b, 0.0, 0.0));
+        }
         let windings_in_service = self.winding_in_service();
         let independent = self.extras.get("psse_zcod").and_then(Value::as_i64) != Some(1);
         let pairwise = self.z.map(|z| [z.r, z.x]);
@@ -4279,7 +4388,7 @@ impl BalancedNetwork {
         for t in self.transformers_3w().iter().filter(|t| t.in_service) {
             lengths.buses += 1;
             lengths.branches += 3;
-            if t.mag_g != 0.0 || t.mag_b != 0.0 {
+            if t.has_star_magnetizing_shunt() {
                 lengths.shunts += 1;
             }
         }
@@ -4345,7 +4454,7 @@ impl BalancedNetwork {
             }
             net.buses_mut().push(star);
             net.branches_mut().extend(branches);
-            if t.mag_g != 0.0 || t.mag_b != 0.0 {
+            if t.has_star_magnetizing_shunt() {
                 net.shunts_mut().push(Shunt {
                     bus: star_id,
                     g: t.mag_g * scale,
@@ -4369,6 +4478,28 @@ impl BalancedNetwork {
     /// [`IndexedNetwork`](crate::IndexedNetwork), whose dense indexing assumes it.
     pub fn validate(&self) -> crate::Result<()> {
         self.check_references("network")
+    }
+
+    /// Validate the explicit limit magnitudes before a calculation or output
+    /// path that does not need to rebuild the bus-reference index.
+    pub(crate) fn check_thermal_limits(&self) -> crate::Result<()> {
+        for branch in self.branches() {
+            for limit in [branch.rate_a, branch.rate_b, branch.rate_c]
+                .into_iter()
+                .chain(branch.rating_sets.iter().map(|rating| rating.rate_mva))
+            {
+                crate::thermal_limit::validate(limit)?;
+            }
+        }
+        for transformer in self.transformers_3w() {
+            for winding in &transformer.windings {
+                for limit in [winding.rate_a, winding.rate_b, winding.rate_c] {
+                    crate::thermal_limit::validate(limit)?;
+                }
+            }
+            transformer.checked_winding_rating_sets()?;
+        }
+        Ok(())
     }
 
     /// Error if two buses share an id, or if any element references a bus that
@@ -4410,6 +4541,7 @@ impl BalancedNetwork {
                 })
             }
         };
+        self.check_thermal_limits()?;
         // Format the context only on the error path, not once per branch.
         for (i, br) in self.branches().iter().enumerate() {
             for bus in [br.from, br.to] {
@@ -5399,7 +5531,11 @@ impl BalancedNetwork {
 /// that checks a field survives that trip.
 #[cfg(test)]
 pub(crate) fn serde_round_trip(network: &BalancedNetwork) -> BalancedNetwork {
-    serde_json::from_str(&serde_json::to_string(network).unwrap()).unwrap()
+    use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
+    let value = network
+        .serialize(NonFiniteSer(serde_json::value::Serializer))
+        .unwrap();
+    BalancedNetwork::deserialize(NonFiniteDe(value)).unwrap()
 }
 
 #[cfg(test)]
@@ -6074,6 +6210,8 @@ mod tests {
                 | SourceFormat::PypsaCsv
                 | SourceFormat::Goc3Json
                 | SourceFormat::SurgeJson
+                | SourceFormat::SiennaJson
+                | SourceFormat::PowerSystemsJson
                 | SourceFormat::RavensJson
                 | SourceFormat::DeepMindOpfDataJson
                 | SourceFormat::Xiidm
@@ -6270,8 +6408,8 @@ mod tests {
             shift: 0.0,
             nominal_kv: 230.0,
             rate_a: 100.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         }
     }
@@ -6289,6 +6427,7 @@ mod tests {
             star_va: -1.5,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
             in_service: true,
             name: Some("T1".into()),
             uid: None,
@@ -6570,9 +6709,9 @@ mod tests {
             x: 0.1,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.0,
@@ -6706,9 +6845,9 @@ mod tests {
             x: f64::INFINITY,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,

@@ -62,7 +62,8 @@ pub struct McOpfTransformer {
     pub tap_bounds: Option<[f64; 2]>,
     /// Physical nominal tap used to recover a physical tap from the multiplier.
     pub tap_nominal: f64,
-    /// True for the inverse multiplier convention of type-B regulators.
+    /// True for regulators, of either ANSI type, whose tap is the regulated
+    /// over source voltage ratio.
     pub tap_inverse: bool,
     /// Rows multiplied by the tap multiplier, aligned with equations; empty for fixed taps.
     pub tap_equations: Vec<McOpfComplexRow>,
@@ -336,12 +337,9 @@ fn prepare_tap(
         } else {
             t.windings[0].tap
         };
-        tx.tap_inverse = regulator
-            && t.extras
-                .get("regulator_type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("B")
-                == "B";
+        // A regulator's `tap_ratio` is the regulated over source voltage ratio
+        // for both ANSI types; `regulator_type` records the hardware only.
+        tx.tap_inverse = regulator;
         tx.tap_bounds = Some(if tx.tap_inverse {
             [tx.tap_nominal / hi, tx.tap_nominal / lo]
         } else {
@@ -535,16 +533,18 @@ fn prepare_regulator(
         return Err(invalid(&t.name, "regulator must have two single coils"));
     }
     let tap = t.windings[1].tap;
-    let ratio = match t
-        .extras
-        .get("regulator_type")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("B")
-    {
-        "A" => tap,
-        "B" => 1.0 / tap,
-        _ => return Err(invalid(&t.name, "unknown regulator type")),
-    };
+    // `tap_ratio` is V_to/V_from for both ANSI types (BMOPF);
+    // `regulator_type` records the A/B hardware and does not change it.
+    if !matches!(
+        t.extras
+            .get("regulator_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("B"),
+        "A" | "B"
+    ) {
+        return Err(invalid(&t.name, "unknown regulator type"));
+    }
+    let ratio = 1.0 / tap;
     if ratio <= 0.0 {
         return Err(invalid(&t.name, "nonpositive effective regulator ratio"));
     }

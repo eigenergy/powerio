@@ -272,7 +272,7 @@ pub struct RemovedBranch {
     /// Total line charging susceptance, per unit. [`MergedCharging`] decides
     /// whether it moves to the survivor or goes with the branch.
     pub b: f64,
-    /// Thermal ratings in MVA; `0` means unlimited.
+    /// Explicit thermal ratings in MVA, including finite zero bounds.
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
@@ -1131,7 +1131,9 @@ impl BalancedNetwork {
             } else {
                 charged += usize::from(removed.b != 0.0);
                 rated += usize::from(
-                    removed.rate_a > 0.0 || removed.rate_b > 0.0 || removed.rate_c > 0.0,
+                    removed.rate_a.is_finite()
+                        || removed.rate_b.is_finite()
+                        || removed.rate_c.is_finite(),
                 );
             }
             removed_branches.push(removed);

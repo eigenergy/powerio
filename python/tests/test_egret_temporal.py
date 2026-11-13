@@ -116,11 +116,13 @@ def test_canonical_ratings_build_the_intended_native_egret_thermal_constraints()
 
 
 @pytest.mark.parametrize("ratings", [(0, 150), (150, 0)])
-def test_native_egret_zero_limit_still_reads_as_unlimited(ratings):
-    # 0.11.x keeps reading a native numeric zero as unlimited, as 0.11.10 did;
-    # refusing it is planned for 0.12 (#828).
+def test_native_egret_zero_limit_cannot_become_an_unlimited_powerio_branch(ratings):
     data = document()
     data["elements"]["branch"]["1"]["rating_long_term"]["values"] = list(ratings)
     module = powerio.parse(io.StringIO(json.dumps(data)), format="egret-json")
-    series = module.value
-    assert [series[index].branches[0]["rate_a"] for index in range(len(series))] == list(ratings)
+    restored = powerio.deserialize(powerio.serialize(module).text.encode())
+    for index, rating in enumerate(ratings):
+        assert restored.value[index].branches[0]["rate_a"] == rating
+        assert restored.value[index].branches[0]["in_service"] is True
+    output = json.loads(powerio.emit(restored, "egret-json").text)
+    assert output["elements"]["branch"]["1"]["rating_long_term"]["values"] == list(ratings)

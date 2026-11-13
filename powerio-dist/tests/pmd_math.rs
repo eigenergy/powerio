@@ -889,7 +889,7 @@ fn single_phase_bus_bounds_exclude_the_grounded_neutral() {
     let net = helpers::parse_str(&doc.to_string(), "pmd-math-json").unwrap();
     let output = net.emit_value(DistTargetFormat::BmopfJson);
     let doc = json(&output.text);
-    assert_eq!(doc["bus"]["hi"]["v_min"], serde_json::json!([10800.0]));
+    assert_eq!(doc["bus"]["hi"]["vpg_min"], serde_json::json!([10800.0]));
     let back = helpers::parse_str(&output.text, "bmopf-json").unwrap();
     assert!(
         !back.warnings.iter().any(|w| w.contains("SEMANTIC_INVALID")),

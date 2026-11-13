@@ -14,16 +14,91 @@ use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
+use std::rc::Rc;
 
 use crate::{Error, Result};
 
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const MD_NS: &str = "http://iec.ch/TC57/61970-552/ModelDescription/1#";
 
+/// An owned vocabulary name shared within one parsed document. It does not
+/// borrow the XML input, so merged objects do not keep whole documents alive.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub(crate) struct CimName(Rc<str>);
+
+impl CimName {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for CimName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CimName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl From<&str> for CimName {
+    fn from(value: &str) -> Self {
+        Self(Rc::from(value))
+    }
+}
+
+impl From<String> for CimName {
+    fn from(value: String) -> Self {
+        Self(Rc::from(value))
+    }
+}
+
+impl PartialEq<str> for CimName {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for CimName {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+/// Bounded cache only: names beyond either bound remain accepted and owned.
+/// This prevents many distinct extension names from growing an extra cache.
+#[derive(Default)]
+struct NamePool {
+    names: HashSet<Rc<str>>,
+    bytes: usize,
+    // A document usually repeats one CIM URI on every class and property.
+    // Cache its raw bytes only after classification and namespace recording.
+    // At most 512 bytes; longer URIs keep the ordinary acceptance path.
+    cim_namespace: Option<Box<[u8]>>,
+}
+
+impl NamePool {
+    fn intern(&mut self, text: &str) -> CimName {
+        if let Some(name) = self.names.get(text) {
+            return CimName(Rc::clone(name));
+        }
+        let name: Rc<str> = Rc::from(text);
+        if self.names.len() < 4096 && text.len() <= 512 && self.bytes + text.len() <= 1 << 20 {
+            self.bytes += text.len();
+            self.names.insert(Rc::clone(&name));
+        }
+        CimName(name)
+    }
+}
+
 /// A property value: literal text, or the normalized target of an
 /// `rdf:resource` (an object id, or an `EnumClass.value` fragment).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PropValue {
     Text(String),
     Ref(String),
@@ -42,10 +117,10 @@ impl PropValue {
 /// and its properties in document order.
 #[derive(Debug)]
 pub(crate) struct CimObject {
-    pub class: String,
+    pub class: CimName,
     pub id: String,
     pub definition: bool,
-    pub props: Vec<(String, PropValue)>,
+    pub props: Vec<(CimName, PropValue)>,
 }
 
 /// The `md:FullModel` header: the model uuid and its profile URIs (the file's
@@ -89,34 +164,41 @@ fn prefixed_name(
     resolve: &ResolveResult,
     local: &[u8],
     cim_namespaces: &mut BTreeSet<String>,
-) -> String {
-    let local = String::from_utf8_lossy(local).into_owned();
+    names: &mut NamePool,
+) -> CimName {
+    let local = String::from_utf8_lossy(local);
     match resolve {
         ResolveResult::Bound(ns) => {
+            if names.cim_namespace.as_deref() == Some(ns.as_ref()) {
+                return names.intern(&local);
+            }
             let uri = String::from_utf8_lossy(ns.as_ref());
             if uri.contains("CIM-schema-cim") || uri.contains("CIM100#") {
                 if !cim_namespaces.contains(uri.as_ref()) {
                     cim_namespaces.insert(uri.into_owned());
                 }
-                local
+                if ns.as_ref().len() <= 512 {
+                    names.cim_namespace = Some(ns.as_ref().into());
+                }
+                names.intern(&local)
             } else if uri == MD_NS {
-                format!("md:{local}")
+                names.intern(&format!("md:{local}"))
             } else if uri.contains("entsoe.eu") {
-                format!("entsoe:{local}")
+                names.intern(&format!("entsoe:{local}"))
             } else if uri.contains("CIM100-European") {
-                format!("eu:{local}")
+                names.intern(&format!("eu:{local}"))
             } else if uri == RDF_NS {
-                format!("rdf:{local}")
+                names.intern(&format!("rdf:{local}"))
             } else {
                 let tag = uri
                     .trim_end_matches(['#', '/'])
                     .rsplit(['/', '#'])
                     .next()
                     .unwrap_or("x");
-                format!("{tag}:{local}")
+                names.intern(&format!("{tag}:{local}"))
             }
         }
-        _ => local,
+        _ => names.intern(&local),
     }
 }
 
@@ -133,13 +215,14 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
     let mut reader = NsReader::from_str(text);
 
     let mut cim_namespaces = BTreeSet::new();
+    let mut names = NamePool::default();
     let mut header: Option<ModelHeader> = None;
     let mut objects: Vec<CimObject> = Vec::new();
 
     // Depth-1 = object elements, depth-2 = property elements. Deeper nesting
     // (rare vendor extensions) is skipped wholesale.
     let mut current: Option<CimObject> = None;
-    let mut current_prop: Option<String> = None;
+    let mut current_prop: Option<CimName> = None;
     let mut prop_text = String::new();
     let mut in_header = false;
     let mut current_prop_nested = false;
@@ -149,8 +232,12 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
         match reader.read_resolved_event().map_err(xml_err)? {
             (resolve, Event::Start(start)) => {
                 depth += 1;
-                let name =
-                    prefixed_name(&resolve, start.local_name().as_ref(), &mut cim_namespaces);
+                let name = prefixed_name(
+                    &resolve,
+                    start.local_name().as_ref(),
+                    &mut cim_namespaces,
+                    &mut names,
+                );
                 if depth == 1 && name != "rdf:RDF" {
                     return Err(xml_err(format!(
                         "top level element is `{name}`, not rdf:RDF"
@@ -181,7 +268,6 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
                                 current_prop.take().unwrap_or_default(),
                                 PropValue::Ref(value),
                             );
-                            current_prop = Some(String::new());
                         }
                     }
                     _ => {
@@ -192,8 +278,12 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
                 }
             }
             (resolve, Event::Empty(start)) => {
-                let name =
-                    prefixed_name(&resolve, start.local_name().as_ref(), &mut cim_namespaces);
+                let name = prefixed_name(
+                    &resolve,
+                    start.local_name().as_ref(),
+                    &mut cim_namespaces,
+                    &mut names,
+                );
                 if depth == 1 {
                     if name == "md:FullModel" {
                         let header = header.get_or_insert_with(ModelHeader::default);
@@ -254,7 +344,7 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
                         {
                             if current_prop_nested && in_header {
                                 if let Some(header) = header.as_mut() {
-                                    header.nested_properties.push(prop);
+                                    header.nested_properties.push(prop.to_string());
                                 }
                                 prop_text.clear();
                             } else {
@@ -329,7 +419,7 @@ fn rdf_identity_attr<R>(
 fn read_object<R>(
     reader: &NsReader<R>,
     start: &quick_xml::events::BytesStart<'_>,
-    class: String,
+    class: CimName,
 ) -> Result<CimObject> {
     let mut id = String::new();
     let mut definition = false;
@@ -377,7 +467,7 @@ fn push_prop(
     in_header: bool,
     header: &mut Option<ModelHeader>,
     current: &mut Option<CimObject>,
-    prop: String,
+    prop: CimName,
     value: PropValue,
 ) {
     if in_header {
@@ -396,7 +486,7 @@ fn push_prop(
                 "md:Model.DependentOn" => {
                     header.dependent_on.push(value.as_str().to_string());
                 }
-                _ => header.unmapped_properties.push((prop, value)),
+                _ => header.unmapped_properties.push((prop.to_string(), value)),
             }
         }
     } else if let Some(obj) = current.as_mut() {
@@ -407,6 +497,117 @@ fn push_prop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_names_share_ownership_after_namespace_resolution() {
+        let document = parse_cimxml(r#"<rdf:RDF
+            xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:a="http://iec.ch/TC57/CIM100#"
+            xmlns:b="http://iec.ch/TC57/CIM100#"
+            xmlns:e="http://entsoe.eu/CIM/SchemaExtension/3/1#">
+            <a:BaseVoltage rdf:ID="_one"><a:IdentifiedObject.name>one</a:IdentifiedObject.name></a:BaseVoltage>
+            <b:BaseVoltage rdf:ID="_two"><b:IdentifiedObject.name>two</b:IdentifiedObject.name><e:IdentifiedObject.name>extension</e:IdentifiedObject.name></b:BaseVoltage>
+        </rdf:RDF>"#).unwrap();
+        let first = &document.objects[0];
+        let second = &document.objects[1];
+        assert!(Rc::ptr_eq(&first.class.0, &second.class.0));
+        assert!(Rc::ptr_eq(&first.props[0].0.0, &second.props[0].0.0));
+        assert_eq!(first.props[0].1.as_str(), "one");
+        assert_eq!(second.props[0].1.as_str(), "two");
+        assert_eq!(second.props[1].0, "entsoe:IdentifiedObject.name");
+        assert!(!Rc::ptr_eq(&second.props[0].0.0, &second.props[1].0.0));
+    }
+
+    #[test]
+    fn repeated_cim_uris_preserve_rebinding_and_unicode_names() {
+        let doc = parse_cimxml(r#"<rdf:RDF
+            xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:c="http://iec.ch/TC57/CIM100#">
+            <c:BaseVoltage rdf:ID="_one">
+                <c:IdentifiedObject.name>one</c:IdentifiedObject.name>
+                <c:étiquette>énergie</c:étiquette>
+                <c:IdentifiedObject.name xmlns:c="https://example.test/vendor#">vendor</c:IdentifiedObject.name>
+                <c:BaseVoltage.nominalVoltage>110</c:BaseVoltage.nominalVoltage>
+            </c:BaseVoltage>
+            <c:BaseVoltage xmlns:c="https://example.test/CIM100#" rdf:ID="_two"/>
+            <c:BaseVoltage rdf:ID="_three"/>
+        </rdf:RDF>"#).unwrap();
+        assert_eq!(doc.objects.len(), 3);
+        assert!(doc.objects.iter().all(|o| o.class == "BaseVoltage"));
+        assert_eq!(doc.objects[0].props[1].0, "étiquette");
+        assert_eq!(doc.objects[0].props[1].1.as_str(), "énergie");
+        assert_eq!(doc.objects[0].props[2].0, "vendor:IdentifiedObject.name");
+        assert_eq!(doc.objects[0].props[3].0, "BaseVoltage.nominalVoltage");
+        assert_eq!(
+            doc.cim_namespaces,
+            BTreeSet::from([
+                "http://iec.ch/TC57/CIM100#".to_owned(),
+                "https://example.test/CIM100#".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn long_cim_namespace_is_recorded_without_growing_the_cache() {
+        let mut names = NamePool::default();
+        let mut namespaces = BTreeSet::new();
+        let short = b"http://iec.ch/TC57/CIM100#";
+        let long = format!("https://example.test/{}/CIM100#", "x".repeat(513));
+        for uri in [short.as_slice(), long.as_bytes(), short.as_slice()] {
+            assert_eq!(
+                prefixed_name(
+                    &ResolveResult::Bound(quick_xml::name::Namespace(uri)),
+                    b"BaseVoltage",
+                    &mut namespaces,
+                    &mut names,
+                ),
+                "BaseVoltage"
+            );
+            assert_eq!(names.cim_namespace.as_deref(), Some(short.as_slice()));
+        }
+        assert!(namespaces.contains(long.as_str()));
+        assert_eq!(namespaces.len(), 2);
+    }
+
+    #[test]
+    fn cache_limits_do_not_reject_or_change_uncached_names() {
+        let mut pool = NamePool::default();
+        let original = pool.intern("original");
+        for index in 0..5000 {
+            pool.intern(&format!("field{index}"));
+        }
+        assert_eq!(pool.names.len(), 4096);
+        assert!(Rc::ptr_eq(&original.0, &pool.intern("original").0));
+        let first = pool.intern("beyond-the-cache");
+        let second = pool.intern("beyond-the-cache");
+        assert_eq!(first, second);
+        assert!(!Rc::ptr_eq(&first.0, &second.0));
+    }
+
+    #[test]
+    fn oversized_names_are_accepted_without_entering_a_fresh_cache() {
+        let mut pool = NamePool::default();
+        let long_name = "x".repeat(513);
+        let first = pool.intern(&long_name);
+        let second = pool.intern(&long_name);
+        assert_eq!(first.as_str(), long_name);
+        assert_eq!(first, second);
+        assert!(!Rc::ptr_eq(&first.0, &second.0));
+        assert!(pool.names.is_empty());
+        assert_eq!(pool.bytes, 0);
+    }
+
+    #[test]
+    fn name_cache_has_an_independent_byte_budget() {
+        let mut pool = NamePool::default();
+        for index in 0..3000 {
+            pool.intern(&format!("{index:0512}"));
+        }
+        assert_eq!(pool.bytes, 1 << 20);
+        assert!(pool.names.len() < 4096);
+        assert_eq!(pool.intern("new-name").as_str(), "new-name");
+        assert_eq!(pool.bytes, 1 << 20);
+    }
 
     const SAMPLE: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"

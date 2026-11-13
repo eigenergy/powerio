@@ -132,6 +132,8 @@ After deserialization, `emit` writes fresh output from the stored value.
 | Egret JSON | `egret-json` | yes | yes |
 | pandapower JSON | `pandapower-json` | yes | yes |
 | PyPSA CSV directory | `pypsa-csv` | yes | yes |
+| SiennaSchemas SystemDocument | `sienna-json`, `sienna-0-{1,2,3,4}-json` | 0.1.0 through 0.4.0 | 0.1.0 through 0.4.0 |
+| PowerSystems.jl serialized System | `powersystems-json` | data formats 4, 5 | data format 5 |
 | Surge JSON | `surge-json` | yes | yes |
 | MG-RAVENS JSON, balanced and multiconductor profiles | `ravens-json` | yes | yes |
 | GridFM Parquet directory, `gridfm` feature | `gridfm` | yes | yes |
@@ -140,10 +142,13 @@ After deserialization, `emit` writes fresh output from the stored value.
 | OpenDSS `.dss` | `dss` | yes | yes |
 | PowerModelsDistribution ENGINEERING JSON | `pmd-json` | yes | yes |
 | PowerModelsDistribution MATHEMATICAL JSON | `pmd-math-json` | yes | yes |
-| BMOPF JSON | `bmopf-json`, `bmopf-json@0.1.0`, `bmopf-json@0.2.0` | 0.1.0, 0.2.0 | 0.1.0, 0.2.0 (default) |
+| BMOPF JSON | `bmopf-json` | yes; older drafts, PowerIO 0.11 output among them, read as BMOPF | the Task Force's proposed schema |
 | Distribution CIM, CIM100 RDF/XML | `cim-dist` | cim17v40, one document or a directory | cim17v40, one document |
 | PSS SINCAL project, `sincal` feature | `sincal-balanced`, `sincal-multiconductor` | yes, with an explicit profile | an unchanged source byte for byte; an experimental fresh writer in Rust |
 | Geographic layer `.geo.json` | `geo-json` | yes | yes |
+
+Python also provides optional Sienna JSON/HDF5 bundles and PyPSA NetCDF/HDF5
+transports. See [Sienna exchange and pipeline integration](docs/src/sienna.md).
 
 The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
 PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. SINCAL
@@ -176,13 +181,16 @@ depend on just the layer they use.
 |---|---|
 | `powerio` | `PioValue`, `parse`, `emit`, `serialize`, `deserialize` |
 | `powerio-core` | `Source`, `PioModule`, diagnostics, collections, destinations |
+| `powerio-archive` | Bounded ZIP indexing and verified member reads |
 | `powerio-tx` | `BalancedNetwork` and balanced format readers and writers |
 | `powerio-dist` | `MulticonductorNetwork` and OpenDSS, PMD, BMOPF, CIM converters |
+| `powerio-tnd` | Integrated transmission/distribution models, cross-model transforms, SINCAL and MG-RAVENS dispatch |
 | `powerio-prob` | Operating points, updates, calculation instances and solutions |
 | `powerio-matrix` | Sparse matrices, sensitivities, DC OPF bundles and graph data |
+| `powerio-synth` | Synthetic network generators for tests and benchmarks |
 | `powerio-cli` | The `powerio` command and its terminal interface |
 | `powerio-py` | The native extension used by the Python package |
-| `powerio-capi` | C ABI 7, used by Julia and other FFI bindings |
+| `powerio-capi` | The C ABI, used by Julia and other FFI bindings |
 
 `powerio-tx` and `powerio-dist` share `powerio-core` and nothing else, so a
 distribution consumer pulls in no transmission code. `powerio-prob` is matrix
@@ -199,7 +207,8 @@ backend, and `default-features = false` leaves it out.
 - [Formats and fidelity](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
 - [Matrices and graphs](https://eigenergy.github.io/powerio/guide/matrices.html)
 - [Rust, Python, Julia, and C](https://eigenergy.github.io/powerio/guide/languages.html)
-- [Migrating from 0.10](https://eigenergy.github.io/powerio/guide/migration-0.11.html)
+- [Migrating from 0.11](https://eigenergy.github.io/powerio/guide/migration-0.12.html)
+- [Known limits and versions](https://eigenergy.github.io/powerio/guide/known-limits.html)
 - [Rust API reference](https://eigenergy.github.io/powerio/powerio/)
 - [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl)
 - [Contributing](https://github.com/eigenergy/powerio/blob/main/CONTRIBUTING.md)

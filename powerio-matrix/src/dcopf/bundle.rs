@@ -159,6 +159,15 @@ fn emit_prepared(
         .as_ref()
         .join(format!("{}_dcopf", crate::sanitize_stem(&instance.name)));
 
+    // Numeric solver bounds: zero constrains flow; infinity is unbounded.
+    let limits: Vec<_> = instance
+        .branches
+        .f_max
+        .iter()
+        .zip(&instance.branches.thermal_limit_active)
+        .map(|(&limit, &active)| if active { limit } else { f64::INFINITY })
+        .collect();
+    let limit_file = "fmax.mtx";
     let mut inventory: Vec<(&'static str, Vec<u8>)> = Vec::new();
     put_mat(&mut inventory, "A.mtx", &matrices.bus_branch_incidence)?;
     put_mat(&mut inventory, "L.mtx", &matrices.laplacian)?;
@@ -185,7 +194,7 @@ fn emit_prepared(
     put_vec(&mut inventory, "c0.mtx", &nodal.c0)?;
     put_vec(&mut inventory, "pmax.mtx", &nodal.pmax)?;
     put_vec(&mut inventory, "pmin.mtx", &nodal.pmin)?;
-    put_vec(&mut inventory, "fmax.mtx", &instance.branches.f_max)?;
+    put_vec(&mut inventory, limit_file, &limits)?;
     put_vec(&mut inventory, "pd.mtx", &instance.p_d)?;
     put_vec(&mut inventory, "gs.mtx", &instance.g_s)?;
     put_vec(&mut inventory, "p_hvdc.mtx", &instance.p_hvdc)?;
@@ -257,6 +266,7 @@ fn emit_prepared(
             instance.reference_buses.len(),
             instance.n_generators(),
             power_units,
+            limit_file,
         ),
         units: instance.units,
         cost_policy: options.metadata.cost_policy,
@@ -311,6 +321,7 @@ fn operator_meta(
     n_ref: usize,
     n_gen: usize,
     power_units: &'static str,
+    limit_file: &'static str,
 ) -> Vec<OperatorMeta> {
     let n_grounded = n - n_ref;
     vec![
@@ -460,7 +471,7 @@ fn operator_meta(
         ),
         op(
             "branch_flow_limit",
-            "fmax.mtx",
+            limit_file,
             "vector",
             m,
             1,

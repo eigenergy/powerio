@@ -3,15 +3,25 @@ mod helpers;
 
 use helpers::{deserialize_module_text as deserialize, serialize_module_text as serialize};
 use powerio::{BalancedNetwork, PioModule, PioValue};
+use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
 use powerio_core::{
     HistoryEntry, HistoryId, HistoryKind, Scenario, ScenarioId, ScenarioSet, TimePoint, TimeSeries,
 };
 use powerio_matrix::{BuildOptions, IndexedNetwork, calc_admittance_matrix};
 use powerio_tx::{Bus, BusId, BusType, Generator, Impedance, Transformer3W, Winding};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const PARTIAL: &str = "powerio.PartialTransformer3W";
 const RAW: &str = include_str!("../../tests/data/psse/partial_3w_status.raw");
+
+fn nonfinite_text(value: &impl Serialize) -> String {
+    let mut bytes = Vec::new();
+    value
+        .serialize(NonFiniteSer(&mut serde_json::Serializer::new(&mut bytes)))
+        .unwrap();
+    String::from_utf8(bytes).unwrap()
+}
 
 fn network(flags: [bool; 3], in_service: bool) -> BalancedNetwork {
     let ids = [BusId(10), BusId(20), BusId(30)];
@@ -91,7 +101,8 @@ fn all_winding_and_whole_transformer_states_preserve_physics_units_and_rows() {
         for in_service in [false, true] {
             let net = network(flags, in_service);
             let back = roundtrip(&net);
-            let row = serde_json::to_value(&net.transformers_3w()[0]).unwrap();
+            let row: Value =
+                serde_json::from_str(&nonfinite_text(&net.transformers_3w()[0])).unwrap();
             assert_eq!(row.get("type").is_some(), flags != [true; 3]);
             if flags != [true; 3] {
                 assert_eq!(row["type"], PARTIAL);
@@ -177,7 +188,7 @@ fn legacy_default_bodies_keep_exact_field_order_and_bytes() {
         for uid in [None, Some("stable".to_owned())] {
             let mut t = net.transformers_3w()[0].clone();
             t.uid = uid;
-            let legacy = serde_json::to_string(&Legacy {
+            let legacy = nonfinite_text(&Legacy {
                 windings: &t.windings,
                 z: &t.z,
                 star_vm: t.star_vm,
@@ -188,15 +199,18 @@ fn legacy_default_bodies_keep_exact_field_order_and_bytes() {
                 name: &t.name,
                 uid: &t.uid,
                 extras: &t.extras,
-            })
-            .unwrap();
-            assert_eq!(serde_json::to_string(&t).unwrap(), legacy);
-            assert_eq!(serde_json::from_str::<Transformer3W>(&legacy).unwrap(), t);
+            });
+            assert_eq!(nonfinite_text(&t), legacy);
+            let mut decoder = serde_json::Deserializer::from_str(&legacy);
+            assert_eq!(
+                Transformer3W::deserialize(NonFiniteDe(&mut decoder)).unwrap(),
+                t
+            );
             // Historical readers ignored unrelated unknown fields; preserve this.
             let mut extended: Value = serde_json::from_str(&legacy).unwrap();
             extended["unrecognized_source_hint"] = json!(123);
             assert_eq!(
-                serde_json::from_value::<Transformer3W>(extended).unwrap(),
+                Transformer3W::deserialize(NonFiniteDe(extended)).unwrap(),
                 t
             );
         }
@@ -286,7 +300,7 @@ fn raw_status_and_source_records_survive_ir_without_changing_format_writers() {
 #[test]
 fn malformed_or_untagged_partial_records_fail_closed() {
     let net = network([true, false, true], true);
-    let record = serde_json::to_value(&net.transformers_3w()[0]).unwrap();
+    let record: Value = serde_json::from_str(&nonfinite_text(&net.transformers_3w()[0])).unwrap();
     let body = record["value"].clone();
     let mut cases = vec![
         body.clone(),
@@ -322,7 +336,7 @@ fn malformed_or_untagged_partial_records_fail_closed() {
     cases.push(nested_tag);
     for case in cases {
         assert!(
-            serde_json::from_value::<Transformer3W>(case.clone()).is_err(),
+            Transformer3W::deserialize(NonFiniteDe(case.clone())).is_err(),
             "accepted {case}"
         );
         let mut doc: Value =
@@ -332,13 +346,14 @@ fn malformed_or_untagged_partial_records_fail_closed() {
         assert!(deserialize(&doc.to_string()).is_err());
     }
     let duplicate = format!(r#"{{"type":"{PARTIAL}","type":"{PARTIAL}","value":{body}}}"#);
+    let mut decoder = serde_json::Deserializer::from_str(&duplicate);
     assert!(
-        serde_json::from_str::<Transformer3W>(&duplicate)
+        Transformer3W::deserialize(NonFiniteDe(&mut decoder))
             .unwrap_err()
             .to_string()
             .contains("duplicate field")
     );
-    let error = serde_json::from_value::<Transformer3W>(body)
+    let error = Transformer3W::deserialize(NonFiniteDe(body))
         .unwrap_err()
         .to_string();
     assert!(error.contains("require a powerio.PartialTransformer3W record"));
@@ -347,7 +362,8 @@ fn malformed_or_untagged_partial_records_fail_closed() {
 #[test]
 fn partial_transformer_keeps_typed_nonfinite_spelling() {
     let mut net = network([true, false, true], true);
-    net.transformers_3w_mut()[0].windings[1].rate_a = f64::INFINITY;
+    // Nonfinite values in the other fields keep the same encoding as ratings.
+    net.transformers_3w_mut()[0].star_va = f64::INFINITY;
     let text = serialize(&PioModule::new(PioValue::from(net))).unwrap();
     assert!(text.contains("Infinity"));
     let restored = deserialize(&text).unwrap();

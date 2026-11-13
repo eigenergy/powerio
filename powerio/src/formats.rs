@@ -71,6 +71,12 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
         ("jiidm", "PowSybl JIIDM", Transmission, true),
         ("cgmes", "CIM CGMES", Transmission, true),
         ("ucte", "UCTE-DEF", Transmission, true),
+        ("powersystems-json", "PowerSystems JSON", Transmission, true),
+        ("sienna-json", "SiennaSchemas JSON", Transmission, true),
+        ("sienna-0-1-json", "SiennaSchemas 0.1", Transmission, true),
+        ("sienna-0-2-json", "SiennaSchemas 0.2", Transmission, true),
+        ("sienna-0-3-json", "SiennaSchemas 0.3", Transmission, true),
+        ("sienna-0-4-json", "SiennaSchemas 0.4", Transmission, true),
         ("surge-json", "Surge JSON", Transmission, true),
         ("ieee-cdf", "IEEE CDF (read only)", Transmission, true),
         ("pwb", "PowerWorld PWB (read only)", Transmission, true),
@@ -117,19 +123,8 @@ pub fn grid_formats() -> impl Iterator<Item = GridFormatInfo> {
             Distribution,
             true,
         ),
-        (
-            "bmopf-json",
-            "BMOPF JSON (detect version)",
-            Distribution,
-            true,
-        ),
-        ("bmopf-json@0.1.0", "BMOPF 0.1.0", Distribution, false),
-        (
-            "bmopf-json@0.2.0",
-            "BMOPF 0.2.0 proposal",
-            Distribution,
-            false,
-        ),
+        // PowerIO reads and writes one BMOPF; older drafts read as it.
+        ("bmopf-json", "BMOPF JSON", Distribution, true),
         #[cfg(feature = "gridfm")]
         ("gridfm", "GridFM Parquet", Transmission, true),
     ];
@@ -196,11 +191,6 @@ pub fn resolve_format(name: &str) -> Option<FormatInfo> {
         == Some(powerio_tx::format::routing::DistributionFormat::SincalMulticonductor)
     {
         return Some(info("sincal-multiconductor", Some("sinx"), false, false));
-    }
-    match name {
-        "bmopf-json@0.1.0" => return Some(info("bmopf-json@0.1.0", Some("json"), false, true)),
-        "bmopf-json@0.2.0" => return Some(info("bmopf-json@0.2.0", Some("json"), false, true)),
-        _ => {}
     }
 
     if crate::is_geo_layer_token(name) {

@@ -1,13 +1,14 @@
 //! Windows-authored DSS decks in portable, case-sensitive memory inventories.
 use std::sync::Arc;
 
-use powerio_core::{ArtifactPath, Source};
+use powerio_core::{ArtifactPath, Source, SourceTree, SourceTreeLimits};
 
 fn parse(
     primary: &str,
     files: &[(&str, &str)],
 ) -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
-    let source = Source::from_memory_tree(
+    let limits = SourceTreeLimits::default();
+    let tree = SourceTree::new(
         "deck",
         files.iter().map(|(name, bytes)| {
             (
@@ -15,10 +16,11 @@ fn parse(
                 Arc::<[u8]>::from(bytes.as_bytes()),
             )
         }),
-        Some(ArtifactPath::new(primary).unwrap()),
+        limits,
     )
     .unwrap();
-    powerio_dist::parse(source).unwrap()
+    let primary = ArtifactPath::new(primary).unwrap();
+    powerio_dist::parse(tree.source(None, Some(&primary), limits).unwrap()).unwrap()
 }
 
 #[test]
@@ -76,6 +78,46 @@ fn exact_names_win_and_ambiguous_fallback_never_selects_a_file() {
             expected == 0
         );
     }
+}
+
+#[test]
+fn case_fallback_cannot_read_outside_selected_tree_root() {
+    let limits = SourceTreeLimits::default();
+    let tree = SourceTree::new(
+        "deck",
+        [
+            ("case/Master.DSS", "new circuit.c\nredirect OUTSIDE.DSS\n"),
+            (
+                "Outside.DSS",
+                "new load.a bus1=sourcebus.1 phases=1 kv=1 kw=1\n",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, bytes)| {
+            (
+                ArtifactPath::new(name).unwrap(),
+                Arc::<[u8]>::from(bytes.as_bytes()),
+            )
+        }),
+        limits,
+    )
+    .unwrap();
+    let source = tree
+        .source(
+            Some(&ArtifactPath::new("case").unwrap()),
+            Some(&ArtifactPath::new("Master.DSS").unwrap()),
+            limits,
+        )
+        .unwrap();
+    let module = powerio_dist::parse(source.clone()).unwrap();
+    assert_eq!(module.value().loads().len(), 0);
+    assert!(source.dependencies().is_empty());
+    assert!(
+        module
+            .diagnostics()
+            .iter()
+            .any(|d| d.code() == "READ.DSS.INCLUDE_LOAD_FAILED")
+    );
 }
 
 #[test]

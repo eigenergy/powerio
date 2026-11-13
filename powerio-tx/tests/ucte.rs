@@ -423,13 +423,23 @@ fn fresh_output_reads_back_to_the_same_network() {
             (x.from, x.to, x.in_service, &x.name),
             (y.from, y.to, y.in_service, &y.name)
         );
+        if x.rate_a.is_finite() && y.rate_a.is_finite() {
+            let (p, q) = (x.rate_a, y.rate_a);
+            assert!(
+                (p - q).abs() <= 1e-6 * q.abs().max(1.0),
+                "branch {}-{} rate_a: {p} vs {q}",
+                x.from,
+                x.to
+            );
+        } else {
+            assert_eq!(x.rate_a, y.rate_a);
+        }
         for (label, p, q) in [
             ("r", x.r, y.r),
             ("x", x.x, y.x),
             ("b", x.b, y.b),
             ("tap", x.tap, y.tap),
             ("shift", x.shift, y.shift),
-            ("rate_a", x.rate_a, y.rate_a),
         ] {
             assert!(
                 (p - q).abs() <= 1e-6 * q.abs().max(1.0),

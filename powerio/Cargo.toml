@@ -37,6 +37,7 @@ gridfm = [
 schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema", "powerio-prob/schema", "powerio-tnd/schema"]
 
 [dependencies]
+powerio-archive.workspace = true
 num-complex = { workspace = true }
 powerio-core = { workspace = true }
 powerio-tnd.workspace = true

@@ -1,4 +1,4 @@
-//! PowerIO C ABI, version 7.
+//! PowerIO C ABI.
 //!
 //! The ABI exposes the same four representation operations as Rust:
 //! [`pio_parse`], [`pio_emit`], [`pio_module_serialize`], and
@@ -56,8 +56,20 @@ pub mod diagnostics;
 #[cfg(test)]
 mod parse_options_tests;
 
-/// C ABI version.
-pub const PIO_ABI_VERSION: u32 = 7;
+/// Major number of the PowerIO release this header was generated from.
+///
+/// A program compiled against this header works with a library from the same
+/// release series, as Cargo defines it (the same major and minor numbers
+/// before 1.0, the same major number from 1.0 on), at this release or a newer
+/// one. Compare the three numbers with `pio_version_numbers` before you use
+/// the library.
+pub const PIO_VERSION_MAJOR: u32 = 0;
+
+/// Minor number of the PowerIO release this header was generated from.
+pub const PIO_VERSION_MINOR: u32 = 12;
+
+/// Patch number of the PowerIO release this header was generated from.
+pub const PIO_VERSION_PATCH: u32 = 0;
 
 // ---- views -----------------------------------------------------------------
 
@@ -81,6 +93,15 @@ impl PioStringView {
             len: text.len(),
         }
     }
+}
+
+/// The three numbers of a PowerIO release, such as 0.12.0.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioVersionView {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
 }
 
 /// One borrowed source byte range from a diagnostic.
@@ -728,6 +749,10 @@ pub struct PioBalancedThreeWindingTransformerView {
     pub magnetizing_conductance_pu: f64,
     pub magnetizing_susceptance_pu: f64,
     pub in_service: bool,
+    /// Where the magnetizing admittance connects: `star_point` (between the
+    /// star point and ground) or `winding1_terminal` (between winding 1's bus
+    /// and ground, outside its ratio, as PSS/E states it).
+    pub magnetizing_connection: PioStringView,
 }
 
 /// One balanced control area.
@@ -1373,7 +1398,7 @@ pub struct PioMulticonductorGeoView {
 
 /// Exact table lengths in a multiconductor network.
 ///
-/// Source extension `extras` maps are not exposed through ABI 7. They are
+/// Source extension `extras` maps are not exposed through the C ABI. They are
 /// retained by PowerIO for same format emission but are not PowerIO domain data.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -2508,6 +2533,14 @@ macro_rules! opaque_handle {
     };
 }
 
+opaque_handle!(
+    /// Shared bounded file inventory; parsed modules own their selected source bytes.
+    PioCollection,
+    powerio::Collection
+);
+mod collection;
+pub use collection::*;
+
 // ---- errors and diagnostics ------------------------------------------------
 
 struct ErrorInner {
@@ -2689,16 +2722,24 @@ unsafe fn optional_str<'a>(
     unsafe { input_str(data, len, argument) }.map(Some)
 }
 
-/// Return the ABI number compiled into this library.
-#[unsafe(no_mangle)]
-pub extern "C" fn pio_abi_version() -> u32 {
-    PIO_ABI_VERSION
-}
-
 /// Return the PowerIO crate version.
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_version() -> PioStringView {
     PioStringView::new(powerio::VERSION)
+}
+
+/// Return the release of this library as numbers.
+///
+/// The library works with a program compiled against a header from the same
+/// release series at the library's release or an older one; see
+/// `PIO_VERSION_MAJOR`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_version_numbers() -> PioVersionView {
+    PioVersionView {
+        major: PIO_VERSION_MAJOR,
+        minor: PIO_VERSION_MINOR,
+        patch: PIO_VERSION_PATCH,
+    }
 }
 
 /// The failure's stable diagnostic code.
@@ -4877,43 +4918,7 @@ pub unsafe extern "C" fn pio_parse_with_options(
                     .format(format)
                     .map_err(|failure| error_from_core(&failure))?;
             }
-            if let Some(selections) = selections.as_ref() {
-                options.acquisition_root = optional_str(
-                    selections.acquisition_root.data,
-                    selections.acquisition_root.len,
-                    "acquisition_root",
-                )?
-                .map(PathBuf::from);
-                if let Some(sincal) = selections.sincal_multiconductor.as_ref() {
-                    let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
-                    selection.variant = sincal.has_variant.then_some(sincal.variant);
-                    selection.snapshot_hours =
-                        sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
-                    selection.acquired_tables = optional_str(
-                        sincal.acquired_tables.data,
-                        sincal.acquired_tables.len,
-                        "acquired_tables",
-                    )?
-                    .map(str::to_owned);
-                    selection.assume_inactive_source_controls =
-                        sincal.assume_inactive_source_controls;
-                    options.sincal_multiconductor = Some(selection);
-                }
-                if let Some(sincal) = selections.sincal_balanced.as_ref() {
-                    let mut selection =
-                        powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
-                    selection.variant = sincal.has_variant.then_some(sincal.variant);
-                    selection.snapshot_hours =
-                        sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
-                    selection.acquired_tables = optional_str(
-                        sincal.acquired_tables.data,
-                        sincal.acquired_tables.len,
-                        "acquired_tables",
-                    )?
-                    .map(str::to_owned);
-                    options.sincal_balanced = Some(selection);
-                }
-            }
+            apply_parse_selections(&mut options, selections)?;
             powerio::parse_with_options(source.clone(), &options)
                 .map(module_handle)
                 .map_err(|failure| error_from_core(&failure))
@@ -4921,11 +4926,56 @@ pub unsafe extern "C" fn pio_parse_with_options(
     }
 }
 
+unsafe fn apply_parse_selections(
+    options: &mut powerio::ParseOptions,
+    selections: *const PioParseOptions,
+) -> Result<(), *mut PioError> {
+    unsafe {
+        if let Some(selections) = selections.as_ref() {
+            options.acquisition_root = optional_str(
+                selections.acquisition_root.data,
+                selections.acquisition_root.len,
+                "acquisition_root",
+            )?
+            .map(PathBuf::from);
+            if let Some(sincal) = selections.sincal_multiconductor.as_ref() {
+                let mut selection = powerio_tnd::formats::sincal::SincalReadOptions::default();
+                selection.variant = sincal.has_variant.then_some(sincal.variant);
+                selection.snapshot_hours =
+                    sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
+                selection.acquired_tables = optional_str(
+                    sincal.acquired_tables.data,
+                    sincal.acquired_tables.len,
+                    "acquired_tables",
+                )?
+                .map(str::to_owned);
+                selection.assume_inactive_source_controls = sincal.assume_inactive_source_controls;
+                options.sincal_multiconductor = Some(selection);
+            }
+            if let Some(sincal) = selections.sincal_balanced.as_ref() {
+                let mut selection =
+                    powerio_tnd::formats::sincal::SincalBalancedReadOptions::default();
+                selection.variant = sincal.has_variant.then_some(sincal.variant);
+                selection.snapshot_hours =
+                    sincal.has_snapshot_hours.then_some(sincal.snapshot_hours);
+                selection.acquired_tables = optional_str(
+                    sincal.acquired_tables.data,
+                    sincal.acquired_tables.len,
+                    "acquired_tables",
+                )?
+                .map(str::to_owned);
+                options.sincal_balanced = Some(selection);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Deserialize one PowerIO IR source.
 ///
-/// A document carries the independent PowerIO IR version reported by
-/// `pio_schema_report`. This library refuses any unsupported identity or
-/// version through `error`, naming what it found.
+/// A document carries the PowerIO IR schema name and version that
+/// `pio_schema_report` reports. This library refuses any unsupported identity
+/// or version through `error`, naming what it found.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -6982,7 +7032,7 @@ fn opf_analysis_branch_source(
         _ => Err(boundary_error(
             &codes::REQUEST_CAPI_TYPE_MISMATCH,
             format!(
-                "the {preparation} OPF preparation has an analysis branch source unsupported by ABI 7"
+                "the {preparation} OPF preparation has an analysis branch source unsupported by the C ABI"
             ),
         )),
     }
@@ -7052,13 +7102,13 @@ pub unsafe extern "C" fn pio_dc_opf_preparation_summary(
             let units = opf_preparation_units_name(preparation.units).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the DC OPF preparation uses units unsupported by ABI 7",
+                    "the DC OPF preparation uses units unsupported by the C ABI",
                 )
             })?;
             let objective = prepared_objective_name(preparation.objective).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the DC OPF preparation uses an objective unsupported by ABI 7",
+                    "the DC OPF preparation uses an objective unsupported by the C ABI",
                 )
             })?;
             *require_output(output, "output")? = PioDcOpfPreparationView {
@@ -7308,13 +7358,13 @@ pub unsafe extern "C" fn pio_ac_opf_preparation_summary(
             let units = opf_preparation_units_name(preparation.units).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the AC OPF preparation uses units unsupported by ABI 7",
+                    "the AC OPF preparation uses units unsupported by the C ABI",
                 )
             })?;
             let objective = prepared_objective_name(preparation.objective).ok_or_else(|| {
                 boundary_error(
                     &codes::REQUEST_CAPI_TYPE_MISMATCH,
-                    "the AC OPF preparation uses an objective unsupported by ABI 7",
+                    "the AC OPF preparation uses an objective unsupported by the C ABI",
                 )
             })?;
             *require_output(output, "output")? = PioAcOpfPreparationView {
@@ -14605,9 +14655,20 @@ pub unsafe extern "C" fn pio_balanced_network_three_winding_transformer_at(
                 magnetizing_conductance_pu: transformer.mag_g,
                 magnetizing_susceptance_pu: transformer.mag_b,
                 in_service: transformer.in_service,
+                magnetizing_connection: PioStringView::new(magnetizing_connection_name(
+                    transformer.magnetizing_connection,
+                )),
             };
             Ok(true)
         })
+    }
+}
+
+/// The stable name of a three winding transformer's magnetizing connection.
+fn magnetizing_connection_name(connection: powerio::MagnetizingConnection) -> &'static str {
+    match connection {
+        powerio::MagnetizingConnection::Winding1Terminal => "winding1_terminal",
+        _ => "star_point",
     }
 }
 
@@ -18750,10 +18811,10 @@ fn collect_solution_values(solution: &PioValue, quantity: &str) -> Result<Vec<f6
                 }
                 "generator_active_power" => values.generator_active_power.clone(),
                 "generator_reactive_power" => values.generator_reactive_power.clone(),
-                "branch_from_active_power" => values.branch_from_active_power.clone(),
-                "branch_from_reactive_power" => values.branch_from_reactive_power.clone(),
-                "branch_to_active_power" => values.branch_to_active_power.clone(),
-                "branch_to_reactive_power" => values.branch_to_reactive_power.clone(),
+                "branch_from_active_flow" => values.branch_from_active_flow.clone(),
+                "branch_from_reactive_flow" => values.branch_from_reactive_flow.clone(),
+                "branch_to_active_flow" => values.branch_to_active_flow.clone(),
+                "branch_to_reactive_flow" => values.branch_to_reactive_flow.clone(),
                 _ => return Err(unknown()),
             }
         }
@@ -20153,7 +20214,7 @@ opaque_handle!(
     StringInner
 );
 
-/// Return version information for this ABI and the PowerIO IR serializer/deserializer.
+/// Return version information for this library and the PowerIO IR serializer/deserializer.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -20163,13 +20224,12 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
         entry(error, std::ptr::null_mut(), || {
             serde_json::to_string(&serde_json::json!({
                 "powerio_version": powerio::VERSION,
-                "abi": PIO_ABI_VERSION,
                 "powerio_ir": {
                     "schema": powerio::IR_SCHEMA_NAME,
                     "version": powerio::IR_VERSION
                 },
-                "bmopf_schema": powerio_dist::BMOPF_SCHEMA_VERSION,
-                // ABI 7 exports one fixed symbol set. Matrices, the
+                "bmopf_schema": powerio_dist::BMOPF_SCHEMA_ID,
+                // The C ABI exports one fixed symbol set. Matrices, the
                 // multiconductor model, and calculation types are always
                 // present; only GridFM Parquet support is a build option.
                 "features": {
@@ -20179,7 +20239,7 @@ pub unsafe extern "C" fn pio_schema_report(error: *mut *mut PioError) -> *mut Pi
                     "prob": true
                 },
                 "foreign_schemas": {
-                    "bmopf": powerio_dist::BMOPF_SCHEMA_VERSION
+                    "bmopf": powerio_dist::BMOPF_SCHEMA_ID
                 },
                 "error_categories": powerio_core::ErrorCategory::TOKENS,
                 "diagnostic_namespaces": powerio_core::DiagnosticStage::NAMESPACES,
@@ -21277,21 +21337,45 @@ mod tests {
     }
 
     #[test]
-    fn reports_abi_seven() {
-        assert_eq!(pio_abi_version(), 7);
-        assert_eq!(PIO_ABI_VERSION, 7);
+    fn header_version_is_the_crate_version() {
+        let numbers = [
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH"),
+        ]
+        .map(|number| number.parse::<u32>().unwrap());
+        assert_eq!(
+            [PIO_VERSION_MAJOR, PIO_VERSION_MINOR, PIO_VERSION_PATCH],
+            numbers,
+            "update PIO_VERSION_* with the workspace version and regenerate powerio.h"
+        );
+        let version = pio_version_numbers();
+        assert_eq!([version.major, version.minor, version.patch], numbers);
+        // A prerelease (1.0.0-rc.1) states its core release in the numbers
+        // and the whole version in the string.
+        let text = unsafe { view_text(pio_version()) };
+        assert_eq!(text, powerio::VERSION);
+        assert_eq!(
+            text.split_once('-').map_or(text.as_str(), |(core, _)| core),
+            format!("{}.{}.{}", version.major, version.minor, version.patch)
+        );
+    }
+
+    #[test]
+    fn reports_schema_versions() {
         unsafe {
             let mut error = std::ptr::null_mut();
             let report = pio_schema_report(&mut error);
             assert!(!report.is_null(), "{}", error_text(error));
             let parsed: serde_json::Value =
                 serde_json::from_str(&view_text(pio_string_view(report))).unwrap();
-            assert_eq!(parsed["abi"], 7);
+            assert!(parsed.get("abi").is_none());
+            assert_eq!(parsed["powerio_version"], powerio::VERSION);
             assert_eq!(parsed["powerio_ir"]["schema"], powerio::IR_SCHEMA_NAME);
             assert_eq!(parsed["powerio_ir"]["version"], powerio::IR_VERSION);
             assert_eq!(
                 parsed["bmopf_schema"],
-                serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)
+                serde_json::json!(powerio_dist::BMOPF_SCHEMA_ID)
             );
             assert_eq!(parsed["foreign_schemas"]["bmopf"], parsed["bmopf_schema"]);
             assert_eq!(
@@ -22618,10 +22702,10 @@ mod tests {
             socwr_values.branch_voltage_product_imaginary = vec![0.0; branches];
             socwr_values.generator_active_power = vec![0.0; generators];
             socwr_values.generator_reactive_power = vec![0.0; generators];
-            socwr_values.branch_from_active_power = vec![0.0; branches];
-            socwr_values.branch_from_reactive_power = vec![0.0; branches];
-            socwr_values.branch_to_active_power = vec![0.0; branches];
-            socwr_values.branch_to_reactive_power = vec![0.0; branches];
+            socwr_values.branch_from_active_flow = vec![0.0; branches];
+            socwr_values.branch_from_reactive_flow = vec![0.0; branches];
+            socwr_values.branch_to_active_flow = vec![0.0; branches];
+            socwr_values.branch_to_reactive_flow = vec![0.0; branches];
             socwr_values.three_winding_transformer_terminal_powers =
                 vec![Default::default(); three_winding];
             let socwr = powerio_prob::solution::SocwrOpfSolution::new(

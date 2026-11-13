@@ -73,8 +73,8 @@ pub struct DcOpfOptions {
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
-    /// states. If false, `rate_a <= 0` reaches `f_max` as zero, which reads as
-    /// unlimited. `#[serde(default)]`: documents serialized before the field
+    /// states. If false, positive infinity is preserved in `f_max`.
+    /// A stated finite zero is always kept. `#[serde(default)]`: documents serialized before the field
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
@@ -153,12 +153,14 @@ pub struct DcBranchParameters {
     /// Phase shift in radians. Zero unless the formula carries phase shift
     /// injections.
     pub shift: Vec<f64>,
-    /// Thermal limit in the selected power unit. Zero means unlimited.
+    /// Thermal limit in the selected power unit. Zero is a finite bound;
+    /// positive infinity is unlimited. Check `thermal_limit_active`.
+    #[serde(with = "crate::opf::nonfinite_vec")]
     pub f_max: Vec<f64>,
     /// Selected branch angle bounds in radians; absent sides are infinities.
-    #[serde(with = "crate::opf::angle_bounds_serde")]
+    #[serde(with = "crate::opf::nonfinite_vec")]
     pub angle_min: Vec<f64>,
-    #[serde(with = "crate::opf::angle_bounds_serde")]
+    #[serde(with = "crate::opf::nonfinite_vec")]
     pub angle_max: Vec<f64>,
     /// Branch column to row in the star-lowered analysis network.
     pub analysis_rows: Vec<usize>,
@@ -510,7 +512,7 @@ pub(crate) fn preparation_from_view(
             source_amax,
             &buses[from_analysis],
             &buses[to_analysis],
-        ));
+        )?);
         angle_min.push(amin);
         angle_max.push(amax);
         branch_rows.push(source_row);
@@ -518,6 +520,7 @@ pub(crate) fn preparation_from_view(
 
     let n_active_generators = q.len();
     let n_active_branches = b.len();
+    let thermal_limit_active = f_max.iter().map(|limit| limit.is_finite()).collect();
     let bus_analysis_rows = active_buses.analysis_rows;
     let p_d = bus_analysis_rows
         .iter()
@@ -588,7 +591,7 @@ pub(crate) fn preparation_from_view(
                 .map(|row| AnalysisBranchSource::Branch { row })
                 .collect(),
             skipped_zero_impedance,
-            thermal_limit_active: vec![true; n_active_branches],
+            thermal_limit_active,
             angle_bound_active: vec![true; n_active_branches],
         },
     })
@@ -663,7 +666,7 @@ pub(crate) fn apply_instance_semantics(
         .iter_mut()
         .zip(&preparation.branches.f_max)
     {
-        *active &= *limit > 0.0;
+        *active &= limit.is_finite();
     }
     preparation.branches.angle_bound_active = crate::opf::constraint_mask(
         "branch angle bounds",
