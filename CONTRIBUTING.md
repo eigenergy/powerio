@@ -557,66 +557,49 @@ tag. Then:
 A breaking C ABI change starts a new release series; see
 [C ABI changes](#c-abi-changes) above.
 
-### Release candidates
+### Starting a release series
 
-A candidate carries a prerelease suffix in the workspace version
-(`0.12.0-rc.1`) and states its core release (`0.12.0`) wherever a release
-number is observable: the PowerIO IR schema directory and `IR_VERSION`, the
-`PIO_VERSION_*` constants and the C header, and the migration guide.
-`bash scripts/release-preflight.sh` accepts the suffix, and
-`scripts/check-release-versions.sh --release` compares by the core release.
+A release that starts a new series (0.12.0 after 0.11.x) has three more
+steps around the ones above:
 
-Before advancing either repository to a new release series, finish any pending
-patch release in the previous series, including its PowerIO.jl artifact tests
-and registration. For a 0.11 patch release followed by 0.12, merge the
-ABI-7-compatible Julia patch companion first, release the 0.11 patch, and wait
-for its Julia follow-up. Only then merge PowerIO.jl #201 and advance to the
-candidate. Merge the updated patch branch into the RC before its final CI run
-so compatible fixes are shared. Preserve folded PR ancestry with merge commits
-so GitHub records indirect merges and individual attribution.
+- Finish any pending patch release of the previous series first, including
+  its PowerIO.jl artifact tests and registration, so that patch's Julia
+  follow-up is not built against the new C ABI.
+- Merge the PowerIO.jl companion branch with a merge commit before the tag.
+  Its `main` must read the new C ABI before the tag workflow tests it against
+  the tagged library.
+- Merge the release pull request into `main` with a merge commit, so the pull
+  requests whose heads are its ancestors are recorded as merged with their
+  authors. Wait for checks on both resulting `main` commits; if Julia's source
+  check ran against the older Rust `main`, rerun it after the Rust merge.
 
-1. Merge the PowerIO.jl companion (PowerIO.jl#201 for 0.12) with a merge
-   commit. Its `main` must read the candidate's C ABI before the tag workflow
-   tests it against the tagged library.
-2. Merge the Rust candidate into `main` with a merge commit, so the pull
-   requests whose heads are its ancestors are recorded as merged. Its
-   `CHANGELOG.md` section is headed exactly `## 0.12.0-rc.1` and its release
-   notes are `docs/release-notes/0.12.0-rc.1.md`. Wait for checks on both final
-   `main` commits, including the recorded Rust/Julia pair. If Julia's first
-   source check used the older Rust `main`, rerun it after the Rust merge.
-3. Create the annotated tag `v0.12.0-rc.1` on the merged main commit and push
-   it. The release-binaries workflow builds and tests the tarballs and stages
-   a draft release exactly as for a release.
-4. Publish the draft with **Set as a pre-release** checked. A prerelease
-   uses the same release-ID, tag and commit readback checks described above;
-   preserve the complete `v0.12.0-rc.1` tag when editing its metadata. It
-   publishes nothing beyond GitHub: python.yml builds the wheels and sdist as
-   run artifacts but skips PyPI, crates.yml skips crates.io, and
-   notify-powerio-jl.yml does not start PowerIO.jl's Release workflow. The
-   candidate exists as the tag, the draft's five tarballs, and the schema
-   under `docs/schema/pio-ir/0.12.0/`.
+### Prereleases
 
-To promote the candidate once it has been exercised:
+PowerIO releases final versions. When a prerelease is ever wanted, it follows
+Cargo's conventions:
 
-1. On a branch from main, drop the suffix wherever the candidate states it
-   (`grep -rn "0.12.0-rc.1" --exclude-dir=target .`): `[workspace.package]`
-   and the workspace dependency pins in `Cargo.toml`, then
-   `cargo update --workspace` for `Cargo.lock`; the `## 0.12.0-rc.1`
-   CHANGELOG heading (keep the section, it becomes the release body, and fold
-   anything that landed as a later `rc.N` into it); the release notes file
-   name and title; the producer versions in
-   `powerio-dist/examples/bmopf/*.json`
-   (`cargo run -p powerio-dist --example regen_bmopf_examples`) and in
-   `tests/data/capi_matrix/*.json`; and the pages that mention the candidate.
-   The IR schema directory, `IR_VERSION`, `PIO_VERSION_*`, and the C header
-   already state the core release and do not change.
-2. Run `bash scripts/release-preflight.sh`, merge the bump as
-   `release: PowerIO 0.12.0`, and continue from step 2 of the release steps
-   above with the tag `v0.12.0`. Publishing that release, not as a
-   pre-release, is what reaches PyPI, crates.io, and PowerIO.jl.
-
-A further candidate (`0.12.0-rc.2`) repeats the candidate steps with its own
-CHANGELOG section and release notes. Keep the previous tag and assets immutable,
-and mark that prerelease as superseded. Never move an existing candidate tag or
-turn its release into a stable release: the package version still has the old
-candidate suffix. Promotion always creates a new stable version and tag.
+- The workspace version carries the suffix (`1.0.0-rc.1`), and every
+  intra-workspace requirement in `[workspace.dependencies]` pins it exactly
+  (`version = "=1.0.0-rc.1"`). A caret requirement on a prerelease also
+  matches later prereleases and the final release, so a published prerelease
+  could resolve to sibling crates from another build.
+  `scripts/check-release-versions.sh` requires the exact pin for a prerelease
+  and the caret requirement otherwise.
+- The numbers a consumer compares state the core release (`1.0.0`): the
+  PowerIO IR schema directory and `IR_VERSION`, `PIO_VERSION_*`, and the C
+  header. The crate versions, `pio_version()`, and the Python version (which
+  maturin writes in its PEP 440 form, `1.0.0rc1`) carry the suffix.
+- Its `CHANGELOG.md` section, release notes, and tag name the prerelease
+  (`## 1.0.0-rc.1`, `docs/release-notes/1.0.0-rc.1.md`, `v1.0.0-rc.1`), and
+  its GitHub release is published with **Set as a pre-release** checked.
+- The release event does not publish a GitHub prerelease anywhere else:
+  crates.yml and python.yml skip crates.io and PyPI, and notify-powerio-jl.yml
+  does not start PowerIO.jl's Release workflow. Publishing a prerelease to
+  crates.io or PyPI is a deliberate maintainer decision for that prerelease,
+  not a side effect of the tag; a published version cannot be withdrawn, only
+  yanked.
+- The final release is a new version and tag. Drop the suffix, return the
+  intra-workspace requirements to caret, fold the prerelease's changelog
+  section into the release's, and follow the release steps above. Never move a
+  prerelease tag or turn its GitHub release into a stable one. A further
+  prerelease takes the next number (`1.0.0-rc.2`).

@@ -128,15 +128,28 @@ for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-archive/Cargo
         || { echo "$manifest does not take the workspace version" >&2; exit 1; }
 done
 
-# The internal dependency pins publish with the crates, so each must state the
-# workspace version it resolves to.
-while read -r pinned; do
-    if [ "$pinned" != "$workspace_version" ]; then
-        echo "an internal dependency pin says $pinned, the workspace says $workspace_version" >&2
+# The internal dependency requirements publish with the crates, so each must
+# state the workspace version it resolves to. A release states it as an
+# ordinary caret requirement ("0.12.0"); a prerelease pins it exactly
+# ("=1.0.0-rc.1"), so the crates of one prerelease only resolve to each other.
+case "$workspace_version" in
+    *-*) expected_requirement="=$workspace_version" ;;
+    *) expected_requirement="$workspace_version" ;;
+esac
+internal=$(grep -cE '^powerio[a-z-]* = \{ path = ' Cargo.toml || true)
+checked=0
+while read -r requirement; do
+    checked=$((checked + 1))
+    if [ "$requirement" != "$expected_requirement" ]; then
+        echo "an internal dependency requires \"$requirement\", the workspace version $workspace_version needs \"$expected_requirement\"" >&2
         exit 1
     fi
-done < <(grep -E "^powerio[a-z-]* = \{ path = \"[^\"]+\", version = \"$semver\"" Cargo.toml \
-    | grep -oE "version = \"$semver\"" | grep -oE "$semver")
+done < <(grep -E "^powerio[a-z-]* = \{ path = \"[^\"]+\", version = \"=?$semver\"" Cargo.toml \
+    | grep -oE "version = \"=?$semver\"" | cut -d'"' -f2)
+if [ "$checked" -ne "$internal" ]; then
+    echo "$((internal - checked)) internal dependencies in Cargo.toml state no version requirement this check reads" >&2
+    exit 1
+fi
 
 # The changelog and release notes state the workspace version.
 # Final release notes take precedence over a draft for the same version.
