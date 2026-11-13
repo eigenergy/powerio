@@ -559,12 +559,18 @@ A breaking C ABI change starts a new release series; see
 
 ### Starting a release series
 
-A release that starts a new series (0.12.0 after 0.11.x) has three more
+A release that starts a new series (0.12.0 after 0.11.x) has four more
 steps around the ones above:
 
 - Finish any pending patch release of the previous series first, including
   its PowerIO.jl artifact tests and registration, so that patch's Julia
   follow-up is not built against the new C ABI.
+- Check that the `CHANGELOG.md` breaking list and the migration guide name
+  every Rust API break. On a new series `scripts/check-semver.sh` runs a
+  second, non-failing pass with the minor rules that lists the breaks against
+  the previous series, since cargo-semver-checks skips every lint for what it
+  sees as a major change. It does not see every break, such as a return type
+  that changed from `impl Iterator` to `Vec`, so read the public diff too.
 - Merge the PowerIO.jl companion branch with a merge commit before the tag.
   Its `main` must read the new C ABI before the tag workflow tests it against
   the tagged library.

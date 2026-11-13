@@ -80,3 +80,27 @@ cd "$current_root"
 cargo semver-checks check-release --workspace \
     "${excluded[@]}" \
     --baseline-root "$baseline_root" "$@"
+
+# A new series (0.11.x -> 0.12.0) is a major change to cargo-semver-checks,
+# which then skips every lint, so the run above passes without listing the
+# breaks. List them with the minor rules, for comparison with the CHANGELOG
+# breaking list and the migration guide. This pass does not fail the script.
+series() { printf '%s\n' "$1" | cut -d. -f1-2; }
+explicit_type=false
+for arg in "$@"; do
+    case "$arg" in --release-type|--release-type=*) explicit_type=true ;; esac
+done
+if [ "$explicit_type" = false ] && [ "$(series "${baseline#v}")" != "$(series "$version")" ]; then
+    echo
+    echo "$version starts a new series after $baseline; listing its Rust API breaks"
+    echo "(each must be in the CHANGELOG breaking list and the migration guide):"
+    status=0
+    cargo semver-checks check-release --workspace \
+        "${excluded[@]}" \
+        --baseline-root "$baseline_root" --release-type minor "$@" || status=$?
+    if [ "$status" -eq 0 ]; then
+        echo "no Rust API breaks found against $baseline"
+    else
+        echo "the breaks above are expected in a new series (exit $status ignored)"
+    fi
+fi
