@@ -5592,7 +5592,8 @@ mod tests {
                     parsed.warnings.iter().any(|warning| warning.info.code
                         == crate::diagnostics::codes::READ_CGMES_FIELD_UNMAPPED.code
                         && warning.contains(expected)),
-                    "{version:?}: {expected}"
+                    "{version:?}: {expected}; diagnostics: {:?}",
+                    parsed.warnings
                 );
             }
         }
