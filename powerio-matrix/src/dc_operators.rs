@@ -234,7 +234,7 @@ impl DcOperators {
             // formally nonzero impedance below it yields a finite weight big
             // enough to annihilate every real branch sharing a bus.
             let degenerate = match formula {
-                BranchSusceptanceFormula::SeriesSusceptance => {
+                formula if formula.reads_resistance() => {
                     branch.r.hypot(branch.x) < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE
                 }
                 // Any formula that reads a reactance is bounded by it.

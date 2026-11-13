@@ -33,7 +33,10 @@ pub use prep::{
 pub struct DcOpfAssemblyOptions {
     /// Power and cost scaling of the derived arrays.
     pub units: Units,
-    /// Skip non-self-loop branches with zero reactance. Off by default:
+    /// Skip non-self-loop branches with an unusable formula denominator.
+    /// Series-admittance formulas bound `hypot(r, x)`; reciprocal-reactance
+    /// formulas bound `abs(x)`. Purely resistive branches remain as zero-weight
+    /// rows for series-admittance formulas. Off by default:
     /// zero impedance branches are preserved in networks and instances, so
     /// assembly refuses them until the caller resolves them explicitly
     /// ([`powerio_prob::merge_zero_impedance_buses`]) or opts into skipping.
