@@ -2299,7 +2299,7 @@ fn write_source_loading_limits(
         format!("{}.value", context.class)
     };
     if let Some(value) = context.limits.permanent_limit {
-        if value.is_finite() && value > 0.0 {
+        if value.is_finite() && value >= 0.0 {
             let type_id = source_limit_type(types, "patl", 0, true);
             let id = det_mrid(
                 "source_limit",
@@ -2320,15 +2320,15 @@ fn write_source_loading_limits(
             body.close(context.class);
         } else {
             warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
-                "operational limit set `{}` {} permanent limit `{value}` was not emitted because a CGMES limit must be positive and finite",
+                "operational limit set `{}` {} permanent limit `{value}` was not emitted because a CGMES limit must be nonnegative and finite",
                 context.group_id, context.class
             ));
         }
     }
     for (index, limit) in context.limits.temporary_limits.iter().enumerate() {
-        if !limit.value.is_finite() || limit.value <= 0.0 {
+        if !limit.value.is_finite() || limit.value < 0.0 {
             warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
-                "operational limit set `{}` {} temporary limit `{}` with value `{}` and duration {} seconds was not emitted because a CGMES limit must be positive and finite",
+                "operational limit set `{}` {} temporary limit `{}` with value `{}` and duration {} seconds was not emitted because a CGMES limit must be nonnegative and finite",
                 context.group_id,
                 context.class,
                 limit.name,
@@ -7676,4 +7676,85 @@ fn rdf_object_reference_id(value: &str) -> Option<&str> {
         .or_else(|| value.strip_prefix('#'))
         .or_else(|| value.strip_prefix("urn:uuid:"))
         .filter(|id| !id.is_empty())
+}
+
+#[cfg(test)]
+mod operational_limit_tests {
+    use super::*;
+
+    #[test]
+    fn zero_loading_limits_are_emitted_for_both_cgmes_versions() {
+        for (version, value_property) in [
+            (CgmesVersion::V2_4_15, "ApparentPowerLimit.value"),
+            (CgmesVersion::V3_0, "ApparentPowerLimit.normalValue"),
+        ] {
+            let limits = LoadingLimits {
+                permanent_limit: Some(0.0),
+                permanent_limit_name: Some("zero permanent".into()),
+                temporary_limits: vec![crate::network::TemporaryLimit {
+                    name: "zero temporary".into(),
+                    value: 0.0,
+                    acceptable_duration_seconds: 30,
+                    fictitious: false,
+                }],
+            };
+            let mut body = Doc::new(Arc::new(HashMap::new()));
+            let mut types = Vec::new();
+            let mut warnings = CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped);
+
+            write_source_loading_limits(
+                &mut body,
+                &mut types,
+                LimitWriteContext {
+                    version,
+                    group_id: "group",
+                    class: "ApparentPowerLimit",
+                    limits: &limits,
+                },
+                &mut warnings,
+            );
+
+            assert_eq!(body.body.matches("<cim:ApparentPowerLimit ").count(), 2);
+            assert!(
+                body.body
+                    .contains(&format!("<cim:{value_property}>0</cim:{value_property}>")),
+                "{version:?}: {}",
+                body.body
+            );
+            assert!(
+                warnings.is_empty(),
+                "{version:?} unexpectedly emitted warnings"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_and_nonfinite_loading_limits_are_not_emitted() {
+        let limits = LoadingLimits {
+            permanent_limit: Some(-1.0),
+            permanent_limit_name: Some("negative".into()),
+            temporary_limits: vec![crate::network::TemporaryLimit {
+                name: "nonfinite".into(),
+                value: f64::INFINITY,
+                acceptable_duration_seconds: 30,
+                fictitious: false,
+            }],
+        };
+        let mut body = Doc::new(Arc::new(HashMap::new()));
+        let mut types = Vec::new();
+        let mut warnings = CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped);
+        write_source_loading_limits(
+            &mut body,
+            &mut types,
+            LimitWriteContext {
+                version: CgmesVersion::V3_0,
+                group_id: "group",
+                class: "ApparentPowerLimit",
+                limits: &limits,
+            },
+            &mut warnings,
+        );
+        assert_eq!(body.body, "");
+        assert_eq!(warnings.len(), 2);
+    }
 }

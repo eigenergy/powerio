@@ -5585,14 +5585,15 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{version:?}: {error}"));
             assert_eq!(parsed.network.branches()[0].rate_a, 80.0, "{version:?}");
             for expected in [
-                "ActivePowerLimit `flow-floor` is a low limit",
-                "ActivePowerLimit `flow-cap` value -30 is negative",
+                "ActivePowerLimit `flow-floor` is a low-direction limit",
+                "ActivePowerLimit `flow-cap` has a nonfinite or negative value",
             ] {
                 assert!(
                     parsed.warnings.iter().any(|warning| warning.info.code
                         == crate::diagnostics::codes::READ_CGMES_FIELD_UNMAPPED.code
                         && warning.contains(expected)),
-                    "{version:?}: {expected}"
+                    "{version:?}: {expected}; diagnostics: {:?}",
+                    parsed.warnings
                 );
             }
         }
@@ -5851,11 +5852,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(dropped.iter().any(|warning| {
             warning.contains("permanent limit `-1`")
-                && warning.contains("must be positive and finite")
+                && warning.contains("must be nonnegative and finite")
         }));
         assert!(dropped.iter().any(|warning| {
             warning.contains("temporary limit `invalid temporary`")
-                && warning.contains("must be positive and finite")
+                && warning.contains("must be nonnegative and finite")
         }));
         let all_xml = output
             .files
