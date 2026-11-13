@@ -205,7 +205,7 @@ fn a_grounded_wye_bank_neutral_is_reduced_with_the_network() {
     assert_eq!(shunt.b.len(), 3);
     for (row, values) in shunt.b.iter().enumerate() {
         assert_eq!(values.len(), 3);
-        for (column, value) in values.iter().enumerate() {
+        for (column, &value) in values.iter().enumerate() {
             let expected = if row == column { phase } else { 0.0 };
             assert!((value - expected).abs() < 1e-9);
         }
