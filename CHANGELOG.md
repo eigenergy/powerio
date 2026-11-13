@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add explicit tap-adjusted series-susceptance and PowerModels DCP conventions
+  across DC matrices, instances and bindings; preserve the existing default.
+
+- Behaviour change: DC OPF preparation with the default `series_susceptance`
+  formula (and the other series-admittance formulas) keeps a purely resistive
+  branch (r > 0, x = 0) as a zero-weight row, matching the DC operator
+  builders; it is no longer reported as `ZeroImpedance` or skipped by
+  `skip_zero_impedance`.
+
 - Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter, governor and
   stabilizer models, linked to generators by `(bus, machine id)` with `DynamicStudy::machines()`;
   as in PSS/E, a later record of one role for a unit replaces the earlier one.
