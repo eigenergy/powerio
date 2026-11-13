@@ -71,8 +71,9 @@ all zero under `--hvdc ignore`), and `fixed_withdrawal`, equal to
 `pd + gs + p_shift - p_hvdc`.
 
 The branch indexed vectors, of length \\(m\\), are `b` (susceptances), `shift`
-(radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal
-limits; \\(0\\) means unlimited per MATPOWER), and the radian limits
+(radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (per unit
+thermal limits: \\(0\\) is a zero flow bound and `inf` is no bound, see the
+0.12 note below), and the radian limits
 `angle_min` and `angle_max` on \\(\theta_{\mathrm{from}} - \theta_{\mathrm{to}}\\), the
 MATPOWER and PowerModels convention, which is not net of the branch's phase
 shift. By default they carry PowerModels' ±60 degree pad
