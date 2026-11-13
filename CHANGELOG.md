@@ -43,6 +43,17 @@
   17 MATPOWER, PGLib, PSS/E, and PowerWorld fixtures pass with Simulator 24
   (#868).
 
+**Python**
+
+- `powerio.powerworld.write_pwb` writes a PowerWorld `.pwb` case through
+  PowerWorld Simulator's SimAuto server on Windows: it emits the module as
+  `.aux`, has Simulator load it, and has Simulator save the binary case, in
+  the running Simulator's layout or an older one (`version=23`, which
+  `powerio.parse` reads back). A field or object that Simulator's load log
+  reports lost raises `powerworld.SimAutoError` with code
+  `BIND.PY.SIMAUTO`, and nothing is written. The new `simauto` extra
+  installs pywin32; `import powerio` imports nothing new (#868).
+
 ## 0.11.12
 
 **XIIDM**
