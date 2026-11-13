@@ -1432,7 +1432,7 @@ Schema definition: `DcPfInstance`.
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
-| `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only` | | | the DC branch susceptance formula | required |
+| `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only`, `tap_adjusted_series_susceptance`, `series_susceptance_no_phase_shift` | | | the DC branch susceptance formula | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
 | `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how the specifications treat HVDC lines; written only when not `ignore` | `ignore` |
 

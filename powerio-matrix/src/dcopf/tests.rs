@@ -1284,3 +1284,82 @@ mod matrix_tests {
             .expect("the merged network projects without skipping");
     }
 }
+
+#[test]
+fn purely_resistive_branches_follow_the_selected_formula_denominator() {
+    use crate::DcOperators;
+    use crate::matrix::sensitivity::calc_ptdf;
+    use powerio_prob::DcPfInstance;
+    for formula in [
+        BranchSusceptanceFormula::SeriesSusceptance,
+        BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+        BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+        BranchSusceptanceFormula::TapAdjustedReactance,
+        BranchSusceptanceFormula::ReactanceOnly,
+    ] {
+        for alternate_path in [false, true] {
+            let mut net = small_network();
+            let edge = &mut net.branches_mut()[0];
+            edge.r = 0.1;
+            edge.x = 0.0;
+            edge.tap = 1.2;
+            edge.shift = 5.0;
+            if alternate_path {
+                net.branches_mut().push(branch(10, 30, 0.2));
+            }
+            for net in [net.clone(), net.to_normalized().unwrap()] {
+                let view = IndexedNetwork::new(&net);
+                let options = DcOpfOptions {
+                    formula,
+                    ..DcOpfOptions::default()
+                };
+                let instance = DcPfInstance::from_network(net.clone())
+                    .unwrap()
+                    .with_branch_susceptance_formula(formula);
+                if formula.reads_resistance() {
+                    let prep = preparation_from_view(&view, options).unwrap();
+                    let op = DcOperators::build(&instance).unwrap();
+                    assert_eq!(prep.n_branches(), net.branches().len());
+                    assert_eq!(prep.branches.skipped_zero_impedance, [] as [usize; 0]);
+                    assert_close(prep.branches.susceptance_magnitude[0], 0.0);
+                    assert_close(op.calc_branch_susceptances()[0], 0.0);
+                    assert_eq!(op.branch_rows()[0], 0);
+                    for p in &prep.p_shift {
+                        assert_close(*p, 0.0);
+                    }
+                    let flows = op.calc_branch_flow_dc(&[0.0, -0.1]).unwrap();
+                    assert_close(flows[0], 0.0);
+                    let ptdf = calc_ptdf(&view, formula);
+                    if alternate_path {
+                        let ptdf = ptdf.unwrap();
+                        assert_eq!(ptdf.rows(), 2);
+                        for (_, value) in ptdf.outer_view(0).unwrap().iter() {
+                            assert_close(*value, 0.0);
+                        }
+                        assert_close(flows[1], 0.5);
+                    } else {
+                        assert!(matches!(ptdf, Err(Error::SingularNetwork)), "{ptdf:?}");
+                    }
+                } else {
+                    assert!(matches!(
+                        preparation_from_view(&view, options),
+                        Err(Error::Transmission(powerio_tx::Error::ZeroImpedance {
+                            row: 0
+                        }))
+                    ));
+                    assert!(DcOperators::build(&instance).is_err());
+                    let skipped = preparation_from_view(
+                        &view,
+                        DcOpfOptions {
+                            skip_zero_impedance: true,
+                            ..options
+                        },
+                    )
+                    .unwrap();
+                    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+                    assert_eq!(skipped.n_branches(), usize::from(alternate_path));
+                }
+            }
+        }
+    }
+}
