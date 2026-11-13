@@ -7,6 +7,10 @@
 - The `.pwb` reader reads PowerWorld Simulator 24's default save layout
   (header word 577), Simulator 20 layout (`PWB20`) saves of small cases, and
   generator limits saved as unlimited. These files used to fail to parse (#868).
+- The `.pwb` reader places a generator that regulates a remote bus on its own
+  terminal bus in files with header words 338, 368, 425, 508, and 537
+  (Simulator 17 through 22 layouts). It used to place such a machine on the
+  bus it regulates (#868).
 
 ## 0.11.12
 
