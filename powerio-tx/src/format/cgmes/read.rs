@@ -4162,6 +4162,16 @@ fn classify_operational_limit<'a>(
             "has no OperationalLimitType",
         ));
     };
+    // Direction determines whether this is an upper rating at all. Check it
+    // before the numeric value so a lower-flow constraint is diagnosed as
+    // such even when its value is negative (which is independently invalid
+    // for an upper thermal rating, but is not the reason this record is
+    // excluded from the branch-rating projection).
+    if store.enum_value(limit_type, "OperationalLimitType.direction") == Some("low") {
+        return Ok(OperationalLimitClassification::Rejected(
+            "is a low-direction limit",
+        ));
+    }
     let Some(value) = operational_limit_value(store, id, class)? else {
         return Ok(OperationalLimitClassification::Rejected(
             "has no numeric value",
@@ -4170,11 +4180,6 @@ fn classify_operational_limit<'a>(
     if !value.is_finite() || value < 0.0 {
         return Ok(OperationalLimitClassification::Rejected(
             "has a nonfinite or negative value",
-        ));
-    }
-    if store.enum_value(limit_type, "OperationalLimitType.direction") == Some("low") {
-        return Ok(OperationalLimitClassification::Rejected(
-            "is a low-direction limit",
         ));
     }
     Ok(OperationalLimitClassification::Accepted {
