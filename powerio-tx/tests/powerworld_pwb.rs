@@ -196,13 +196,15 @@ fn activsg200_pwb_matches_its_aux_sibling() {
             a.b
         );
         assert!(
-            (p.rate_a - a.rate_a).abs() < 1e-4 * a.rate_a.abs().max(1.0),
+            thermal_compare(p.rate_a, a.rate_a, |x, y| (x - y).abs()
+                < 1e-4 * y.abs().max(1.0)),
             "{key:?} rate_a {} vs {}",
             p.rate_a,
             a.rate_a
         );
         assert!(
-            (p.rate_b - a.rate_b).abs() < 1e-4 * a.rate_b.abs().max(1.0),
+            thermal_compare(p.rate_b, a.rate_b, |x, y| (x - y).abs()
+                < 1e-4 * y.abs().max(1.0)),
             "{key:?} rate_b {} vs {}",
             p.rate_b,
             a.rate_b
@@ -381,7 +383,7 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
             (p.rate_c, a.rate_c, "rate_c"),
         ] {
             assert!(
-                (x - y).abs() <= 1e-3 + 1e-6 * y.abs(),
+                thermal_compare(x, y, |x, y| (x - y).abs() <= 1e-3 + 1e-6 * y.abs()),
                 "{key:?} {what} {x} vs {y}"
             );
         }
@@ -747,7 +749,8 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
                 a.b
             );
             assert!(
-                (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+                thermal_compare(p.rate_a, a.rate_a, |x, y| (x - y).abs()
+                    <= 1e-3 + 1e-6 * y.abs()),
                 "{k:?} rate_a {} vs {}",
                 p.rate_a,
                 a.rate_a
@@ -902,13 +905,15 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
         assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
         assert!((p.b - a.b).abs() <= 5e-7, "{key:?} B {} vs {}", p.b, a.b);
         assert!(
-            (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+            thermal_compare(p.rate_a, a.rate_a, |x, y| (x - y).abs()
+                <= 1e-3 + 1e-6 * y.abs()),
             "{key:?} rate_a {} vs {}",
             p.rate_a,
             a.rate_a
         );
         assert!(
-            (p.rate_b - a.rate_b).abs() <= 1e-3 + 1e-6 * a.rate_b.abs(),
+            thermal_compare(p.rate_b, a.rate_b, |x, y| (x - y).abs()
+                <= 1e-3 + 1e-6 * y.abs()),
             "{key:?} rate_b {} vs {}",
             p.rate_b,
             a.rate_b
@@ -1029,13 +1034,15 @@ fn activsg500_pwb_matches_its_aux_sibling() {
         assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
         assert!((p.b - a.b).abs() <= 5e-7, "{key:?} B {} vs {}", p.b, a.b);
         assert!(
-            (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+            thermal_compare(p.rate_a, a.rate_a, |x, y| (x - y).abs()
+                <= 1e-3 + 1e-6 * y.abs()),
             "{key:?} rate_a {} vs {}",
             p.rate_a,
             a.rate_a
         );
         assert!(
-            (p.rate_b - a.rate_b).abs() <= 1e-3 + 1e-6 * a.rate_b.abs(),
+            thermal_compare(p.rate_b, a.rate_b, |x, y| (x - y).abs()
+                <= 1e-3 + 1e-6 * y.abs()),
             "{key:?} rate_b {} vs {}",
             p.rate_b,
             a.rate_b
@@ -1153,13 +1160,15 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
         assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
         assert!((p.b - a.b).abs() <= 5e-7, "{key:?} B {} vs {}", p.b, a.b);
         assert!(
-            (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+            thermal_compare(p.rate_a, a.rate_a, |x, y| (x - y).abs()
+                <= 1e-3 + 1e-6 * y.abs()),
             "{key:?} rate_a {} vs {}",
             p.rate_a,
             a.rate_a
         );
         assert!(
-            (p.rate_b - a.rate_b).abs() <= 1e-3 + 1e-6 * a.rate_b.abs(),
+            thermal_compare(p.rate_b, a.rate_b, |x, y| (x - y).abs()
+                <= 1e-3 + 1e-6 * y.abs()),
             "{key:?} rate_b {} vs {}",
             p.rate_b,
             a.rate_b
@@ -1418,7 +1427,8 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
             a.b
         );
         assert!(
-            (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+            thermal_compare(p.rate_a, a.rate_a, |x, y| (x - y).abs()
+                <= 1e-3 + 1e-6 * y.abs()),
             "{key:?} rate_a {} vs {}",
             p.rate_a,
             a.rate_a
@@ -1480,7 +1490,8 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
                 a.b
             );
             assert!(
-                (p.rate_a - a.rate_a).abs() <= 5.1e-3 + 1e-5 * a.rate_a.abs(),
+                thermal_compare(p.rate_a, a.rate_a, |x, y| (x - y).abs()
+                    <= 5.1e-3 + 1e-5 * y.abs()),
                 "{k:?} rate_a {} vs .m {}",
                 p.rate_a,
                 a.rate_a
@@ -1870,9 +1881,9 @@ fn assert_pwb_matches_text(pwb: &BalancedNetwork, text: &BalancedNetwork, q: Qua
         close(p.r, t.r, q.impedance, label, &format!("{at} R"));
         close(p.x, t.x, q.impedance, label, &format!("{at} X"));
         close(p.b, t.b, q.charging, label, &format!("{at} B"));
-        close(p.rate_a, t.rate_a, q.rating, label, &format!("{at} rate A"));
-        close(p.rate_b, t.rate_b, q.rating, label, &format!("{at} rate B"));
-        close(p.rate_c, t.rate_c, q.rating, label, &format!("{at} rate C"));
+        close_thermal(p.rate_a, t.rate_a, q.rating, label, &format!("{at} rate A"));
+        close_thermal(p.rate_b, t.rate_b, q.rating, label, &format!("{at} rate B"));
+        close_thermal(p.rate_c, t.rate_c, q.rating, label, &format!("{at} rate C"));
         close(p.shift, t.shift, q.va, label, &format!("{at} shift"));
         // The effective ratio compares across the two spellings of an
         // untapped branch (a stored zero and a stored one both mean one).
@@ -1939,5 +1950,19 @@ fn assert_power_by_bus(
         );
         close(a.0, b.0, quantum, label, &format!("{kind} {bus} {first}"));
         close(a.1, b.1, quantum, label, &format!("{kind} {bus} {second}"));
+    }
+}
+
+// Unlimited and finite zero are different even when their historical spelling
+// was the same. Apply each source precision tolerance only to finite pairs.
+fn thermal_compare(a: f64, b: f64, finite: impl FnOnce(f64, f64) -> bool) -> bool {
+    (a == f64::INFINITY && b == f64::INFINITY) || (a.is_finite() && b.is_finite() && finite(a, b))
+}
+
+fn close_thermal(a: f64, b: f64, quantum: f64, label: &str, at: &str) {
+    if a.is_finite() && b.is_finite() {
+        close(a, b, quantum, label, at);
+    } else {
+        assert_eq!(a, b, "{label}: {at}");
     }
 }

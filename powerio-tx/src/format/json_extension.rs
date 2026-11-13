@@ -7,8 +7,8 @@
 //! extras, as any other unknown key does, so a document another tool wrote
 //! with a key of the same name still reads.
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 use crate::network::{
@@ -148,9 +148,25 @@ pub(super) fn read_branch(branch: &mut Branch) {
     branch.route = take(&mut branch.extras, "route").or(branch.route.take());
     // Rating sets beyond rate_a, rate_b, and rate_c, each `{name, rate_mva}`
     // in MVA; a set without a rate keeps the whole value an extra.
-    if let Some(sets) = take::<Vec<BranchRatingSet>>(&mut branch.extras, "rating_sets") {
-        branch.rating_sets = sets;
+    if let Some(sets) = take::<Vec<StatedRatingSet>>(&mut branch.extras, "rating_sets") {
+        branch.rating_sets = sets
+            .into_iter()
+            .map(|set| BranchRatingSet::new(set.name, set.rate_mva))
+            .collect();
     }
+}
+
+/// One `rating_sets` entry. JSON has no infinity, so the writer states an
+/// unlimited set's `rate_mva` as null; the rate itself must be present.
+#[derive(Deserialize)]
+struct StatedRatingSet {
+    name: String,
+    #[serde(deserialize_with = "unlimited_when_null")]
+    rate_mva: f64,
+}
+
+fn unlimited_when_null<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::INFINITY))
 }
 
 pub(super) fn write_generator(generator: &Generator, row: &mut Map<String, Value>) {

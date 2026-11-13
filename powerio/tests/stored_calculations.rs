@@ -113,6 +113,30 @@ fn round_trip(value: PioValue, label: &str) -> String {
         text,
         "{label} is not byte stable"
     );
+    // These cases exercise each balanced instance and solution envelope. The
+    // three-winding-only fixture has no branch for this migration control.
+    let path = match type_name.as_str() {
+        "powerio.DcPfInstance"
+        | "powerio.AcPfInstance"
+        | "powerio.DcOpfInstance"
+        | "powerio.AcOpfInstance"
+        | "powerio.AcScucInstance" => Some("/value/data/network"),
+        "powerio.DcPfSolution"
+        | "powerio.AcPfSolution"
+        | "powerio.DcOpfSolution"
+        | "powerio.AcOpfSolution"
+        | "powerio.SocwrOpfSolution"
+        | "powerio.AcScucSolution" => Some("/value/data/instance/network"),
+        _ => None,
+    };
+    if let Some(path) = path
+        && !raw.pointer(path).unwrap()["branches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    {
+        helpers::thermal_migration::check(&text, &[path]);
+    }
     text
 }
 
@@ -568,6 +592,29 @@ fn three_winding_network() -> BalancedNetwork {
     generator.cost = Some(GenCost::new(2, 0.0, 0.0, vec![0.01, 10.0, 0.0]));
     net.generators_mut().push(generator);
     net
+}
+
+#[test]
+fn socwr_solution_keeps_legacy_network_rating_meanings() {
+    let instance = Arc::new(AcOpfInstance::from_network(network()).unwrap());
+    let mut values = powerio_prob::solution::SocwrOpfValues::default();
+    values.bus_voltage_magnitude_squared = vec![1.0; 2];
+    values.branch_voltage_product_real = vec![1.0];
+    values.branch_voltage_product_imaginary = vec![0.0];
+    values.generator_active_power = vec![40.0];
+    values.generator_reactive_power = vec![10.0];
+    values.branch_from_active_flow = vec![40.0];
+    values.branch_from_reactive_flow = vec![10.0];
+    values.branch_to_active_flow = vec![-40.0];
+    values.branch_to_reactive_flow = vec![-10.0];
+    let solution = powerio_prob::solution::SocwrOpfSolution::new(
+        instance,
+        Termination::Converged,
+        values,
+        400.0,
+    )
+    .unwrap();
+    round_trip(PioValue::SocwrOpfSolution(solution), "socwr legacy ratings");
 }
 
 #[test]
@@ -1360,7 +1407,7 @@ fn every_multiconductor_quantity_round_trips() {
 }
 
 #[test]
-fn existing_and_additive_values_keep_generation_two() {
+fn existing_and_added_values_name_the_release() {
     for value in [
         PioValue::BalancedNetwork(network()),
         PioValue::McAcOpfInstance(McAcOpfInstance::from_network(mc_network()).unwrap()),
@@ -1374,7 +1421,7 @@ fn existing_and_additive_values_keep_generation_two() {
     ] {
         let text = serialize(&PioModule::new(value)).unwrap();
         let document: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(document["version"], 2);
+        assert_eq!(document["version"], powerio::IR_VERSION);
         assert!(deserialize(&document.to_string()).is_ok());
     }
 }

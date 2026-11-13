@@ -23,7 +23,7 @@ use std::fmt::Write as _;
 
 use powerio_core::ComponentId;
 
-use super::xml::{CimDocument, CimObject, ModelHeader, PropValue, parse_cimxml};
+use super::xml::{CimDocument, CimName, CimObject, ModelHeader, PropValue, parse_cimxml};
 use super::{CGMES_CLASS_PROPERTY, CgmesDiagnostics, CgmesVersion};
 use crate::diagnostics::codes;
 use crate::network::{
@@ -306,7 +306,7 @@ fn typed_literal(property: &str) -> Option<TypedLiteral> {
     number.then_some(TypedLiteral::FiniteNumber)
 }
 
-fn validate_typed_literals(class: &str, id: &str, props: &[(String, PropValue)]) -> Result<()> {
+fn validate_typed_literals(class: &str, id: &str, props: &[(CimName, PropValue)]) -> Result<()> {
     for (property, value) in props {
         let Some(kind) = typed_literal(property) else {
             continue;
@@ -535,10 +535,10 @@ fn skipped_part_summary(document_name: &str, doc: &CimDocument) -> String {
 /// One object merged across the profile files.
 struct Merged {
     id: String,
-    class: String,
+    class: CimName,
     defined: bool,
     modeling_authority_set: Option<String>,
-    props: Vec<(String, PropValue)>,
+    props: Vec<(CimName, PropValue)>,
 }
 
 /// The merged object store plus the id and class indexes the mapping reads.
@@ -619,7 +619,7 @@ impl Store {
             class,
             id,
             definition,
-            props,
+            mut props,
         } in doc.objects
         {
             if id.is_empty() {
@@ -664,8 +664,7 @@ impl Store {
                 merge_properties(&id, &mut self.objects[at].props, props)?;
             } else {
                 self.by_id.insert(id.clone(), self.objects.len());
-                let mut merged_props = Vec::new();
-                merge_properties(&id, &mut merged_props, props)?;
+                deduplicate_properties(&id, &mut props)?;
                 self.objects.push(Merged {
                     id,
                     class,
@@ -675,7 +674,7 @@ impl Store {
                     } else {
                         None
                     },
-                    props: merged_props,
+                    props,
                 });
             }
         }
@@ -715,7 +714,7 @@ impl Store {
                 if let Some(positions) = by_class.get_mut(object.class.as_str()) {
                     positions.push(at);
                 } else {
-                    by_class.insert(object.class.clone(), vec![at]);
+                    by_class.insert(object.class.to_string(), vec![at]);
                 }
             }
             by_class
@@ -864,30 +863,110 @@ impl Store {
     }
 }
 
+/// Retain the first occurrence of each scalar property and each distinct
+/// repeatable value in their original order, reusing the XML parser's
+/// allocation for a newly encountered object.
+fn deduplicate_properties(object: &str, props: &mut Vec<(CimName, PropValue)>) -> Result<()> {
+    let mut repeated = RepeatedStatements::default();
+    let mut retained = 0;
+    for incoming in 0..props.len() {
+        let (property, value) = &props[incoming];
+        if property_is_new(object, &props[..retained], &mut repeated, property, value)? {
+            repeated.record(property, value);
+            props.swap(retained, incoming);
+            retained += 1;
+        }
+    }
+    props.truncate(retained);
+    Ok(())
+}
+
 fn merge_properties(
     object: &str,
-    merged: &mut Vec<(String, PropValue)>,
-    incoming: Vec<(String, PropValue)>,
+    merged: &mut Vec<(CimName, PropValue)>,
+    incoming: Vec<(CimName, PropValue)>,
 ) -> Result<()> {
+    let mut repeated = RepeatedStatements::default();
     for (property, value) in incoming {
-        if let Some((_, existing)) = merged.iter().find(|(name, _)| name == &property) {
-            if existing != &value && repeatable_property(&property) {
-                merged.push((property, value));
-            } else if existing != &value {
-                return Err(Error::FormatRead {
-                    format: FMT,
-                    message: format!(
-                        "RDF object `{object}` assigns conflicting `{property}` values: {} and {}",
-                        describe_property_value(existing),
-                        describe_property_value(&value),
-                    ),
-                });
-            }
-        } else {
+        if property_is_new(object, merged, &mut repeated, &property, &value)? {
+            repeated.record(&property, &value);
             merged.push((property, value));
         }
     }
     Ok(())
+}
+
+/// The distinct statements of each repeatable property an object already
+/// holds. It is built on the object's first repeated statement, so a long
+/// membership list (an island's nodes) is checked in constant time per value
+/// while an ordinary object allocates nothing.
+#[derive(Default)]
+struct RepeatedStatements(Option<HashMap<CimName, HashSet<PropValue>>>);
+
+impl RepeatedStatements {
+    fn contains(
+        &mut self,
+        retained: &[(CimName, PropValue)],
+        property: &CimName,
+        value: &PropValue,
+    ) -> bool {
+        self.0
+            .get_or_insert_with(|| {
+                let mut statements: HashMap<CimName, HashSet<PropValue>> = HashMap::new();
+                for (name, value) in retained {
+                    if repeatable_property(name) {
+                        statements
+                            .entry(name.clone())
+                            .or_default()
+                            .insert(value.clone());
+                    }
+                }
+                statements
+            })
+            .get(property)
+            .is_some_and(|values| values.contains(value))
+    }
+
+    /// Note a newly retained statement once the index exists; before then,
+    /// building the index reads it from the retained properties.
+    fn record(&mut self, property: &CimName, value: &PropValue) {
+        if let Some(statements) = &mut self.0
+            && repeatable_property(property)
+        {
+            statements
+                .entry(property.clone())
+                .or_default()
+                .insert(value.clone());
+        }
+    }
+}
+
+fn property_is_new(
+    object: &str,
+    merged: &[(CimName, PropValue)],
+    repeated: &mut RepeatedStatements,
+    property: &CimName,
+    value: &PropValue,
+) -> Result<bool> {
+    let Some((_, existing)) = merged.iter().find(|(name, _)| name == property) else {
+        return Ok(true);
+    };
+    if existing == value {
+        return Ok(false);
+    }
+    if repeatable_property(property) {
+        // A repeatable property is a set of RDF statements: an identical
+        // statement collapses wherever it appeared before.
+        return Ok(!repeated.contains(merged, property, value));
+    }
+    Err(Error::FormatRead {
+        format: FMT,
+        message: format!(
+            "RDF object `{object}` assigns conflicting `{property}` values: {} and {}",
+            describe_property_value(existing),
+            describe_property_value(value),
+        ),
+    })
 }
 
 fn repeatable_property(property: &str) -> bool {
@@ -1178,6 +1257,7 @@ pub(crate) fn read_cgmes_documents_into(
 
     for (name, text) in documents {
         let doc = parse_cimxml(&text)?;
+        drop(text);
         for ns in &doc.cim_namespaces {
             if let Some(version) = CgmesVersion::from_namespace(ns)
                 && !versions.contains(&version)
@@ -1233,6 +1313,13 @@ pub(crate) fn read_cgmes_documents_into(
         }
         store.merge(doc)?;
     }
+
+    // The store is complete: release growth capacity before the typed network
+    // and its detailed connectivity are constructed alongside it.
+    for object in &mut store.objects {
+        object.props.shrink_to_fit();
+    }
+    store.objects.shrink_to_fit();
 
     let version = match versions.as_slice() {
         [] => {
@@ -1687,7 +1774,7 @@ fn calculate_buses(
         .enumerate()
         .map(|(position, node)| (*node, position))
         .collect();
-    let mut union = crate::format::union_find::UnionFind::new(nodes.len());
+    let mut union = crate::union_find::UnionFind::new(nodes.len());
     let mut closed = 0usize;
     let mut open = 0usize;
     let mut out_of_service = 0usize;
@@ -2940,13 +3027,13 @@ fn build_detailed_connectivity(
                     || SWITCH_CLASSES.contains(&object.class.as_str())
                     || object.class == "ExternalNetworkInjection"
                 {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                 }
                 if object.class == "PowerTransformer" {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                 }
                 if object.class == "SeriesCompensator" {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                     for property in [
                         "SeriesCompensator.r0",
                         "SeriesCompensator.x0",
@@ -2967,7 +3054,7 @@ fn build_detailed_connectivity(
                     }
                 }
                 if object.class == "PowerTransformerEnd" {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                     if let Some(transformer) =
                         store.refv(&object.id, "PowerTransformerEnd.PowerTransformer")
                     {
@@ -3009,7 +3096,7 @@ fn build_detailed_connectivity(
                 }
                 retain_regulating_control_properties(store, &object.id, &mut properties);
                 if object.class.ends_with("GeneratingUnit") {
-                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.clone());
+                    properties.insert(CGMES_CLASS_PROPERTY.into(), object.class.to_string());
                     for property in [
                         "IdentifiedObject.description",
                         "GeneratingUnit.initialP",
@@ -5571,12 +5658,26 @@ fn read_two_winding_transformer(
         let ends_connected = end_connected(end1) && end_connected(end2);
         branch.in_service = mapper.in_service(transformer_id)? && ends_connected;
         branch.uid = Some(transformer_id.to_string());
-        apply_limits_to_targets(store, &[transformer_id], &mut branch, kv1, version)?;
+        apply_limits_to_targets(
+            store,
+            &[transformer_id],
+            &mut branch,
+            kv1,
+            version,
+            mapper.warnings,
+        )?;
         for (end, kv) in [(end1, kv1), (end2, kv2)] {
             // A current limit constrains its own terminal. Transformer ends
             // need not share a voltage or follow Terminal.sequenceNumber.
             if let Some(terminal) = store.refv(end, "TransformerEnd.Terminal") {
-                apply_limits_to_targets(store, &[terminal, end], &mut branch, kv, version)?;
+                apply_limits_to_targets(
+                    store,
+                    &[terminal, end],
+                    &mut branch,
+                    kv,
+                    version,
+                    mapper.warnings,
+                )?;
             }
         }
         Some(branch)
@@ -5674,12 +5775,14 @@ fn read_three_winding_transformer(
                 .try_map_or(0.0, |phase_tap| phase_shift_deg(mapper, &phase_tap, false))?;
 
             let mut limits = Branch::new(bus, bus, 0.0, 1.0);
+            let kv = mapper.kv(bus);
             apply_limits_to_targets(
                 mapper.store,
                 &[terminals[index].as_str(), end.as_str()],
                 &mut limits,
-                mapper.kv(bus),
+                kv,
                 version,
+                mapper.warnings,
             )?;
             windings[index] = Winding {
                 bus,
@@ -5983,7 +6086,14 @@ fn apply_limits(
         .map(String::as_str)
         .collect();
     terminals.push(equipment);
-    apply_limits_to_targets(mapper.store, &terminals, branch, kv, version)?;
+    apply_limits_to_targets(
+        mapper.store,
+        &terminals,
+        branch,
+        kv,
+        version,
+        mapper.warnings,
+    )?;
     Ok(())
 }
 
@@ -5997,6 +6107,7 @@ fn apply_limits_to_targets(
     branch: &mut Branch,
     kv: f64,
     version: CgmesVersion,
+    warnings: &mut CgmesDiagnostics,
 ) -> Result<()> {
     // Limit sets point at their terminal or equipment, and limits point at
     // their set; both are reverse indexed.
@@ -6022,14 +6133,26 @@ fn apply_limits_to_targets(
             else {
                 continue;
             };
-            let kind = match version {
-                CgmesVersion::V2_4_15 => {
-                    store.enum_value(limit_type, "entsoe:OperationalLimitType.limitType")
-                }
-                CgmesVersion::V3_0 => store.enum_value(limit_type, "eu:OperationalLimitType.kind"),
-            };
+            let kind = limit_kind(store, limit_type, version);
             let class = store.class_of(limit).unwrap_or_default();
-            let value = operational_limit_value(store, limit, class)?.unwrap_or(0.0);
+            let Some(value) = operational_limit_value(store, limit, class)? else {
+                continue;
+            };
+            // A low limit is a floor on the flow, not a thermal rating.
+            if store.enum_value(limit_type, "OperationalLimitType.direction") == Some("low") {
+                warnings.push_as(
+                    &codes::READ_CGMES_FIELD_UNMAPPED,
+                    format!("{class} `{limit}` is a low limit; a branch has no source neutral field for a lower flow bound"),
+                );
+                continue;
+            }
+            if value < 0.0 {
+                warnings.push_as(
+                    &codes::READ_CGMES_FIELD_UNMAPPED,
+                    format!("{class} `{limit}` value {value} is negative and is not read as a thermal rating"),
+                );
+                continue;
+            }
             let mva = if class == "CurrentLimit" {
                 3f64.sqrt() * kv * value / 1000.0
             } else {
@@ -6052,10 +6175,8 @@ fn apply_limits_to_targets(
             };
             if let Some(slot) = slot {
                 // Several sets can constrain one branch; the binding limit
-                // is the smallest.
-                if *slot == 0.0 || mva < *slot {
-                    *slot = mva;
-                }
+                // is the smallest, and an unset slot is infinite.
+                *slot = slot.min(crate::thermal_limit::finite(mva)?);
             }
         }
     }
@@ -6509,6 +6630,102 @@ mod tests {
         )
         .unwrap();
         assert_eq!(island.len(), 2);
+    }
+
+    #[test]
+    fn first_profile_duplicate_properties_preserve_order_and_distinct_repeatable_values() {
+        let mut document = document_with_property(true, PropValue::Text("10".into()));
+        let props = &mut document.objects[0].props;
+        for (name, value) in [
+            ("Extension.first", PropValue::Text("one".into())),
+            ("EnergyConsumer.p", PropValue::Text("10".into())),
+            ("Extension.second", PropValue::Text("two".into())),
+            ("Extension.first", PropValue::Text("one".into())),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("a".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("a".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("b".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("b".into()),
+            ),
+            (
+                "TopologicalIsland.TopologicalNodes",
+                PropValue::Ref("a".into()),
+            ),
+        ] {
+            props.push((name.into(), value));
+        }
+        let mut store = Store::default();
+        store.merge(document).unwrap();
+        let values = store.objects[0]
+            .props
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                ("EnergyConsumer.p", "10"),
+                ("Extension.first", "one"),
+                ("Extension.second", "two"),
+                ("TopologicalIsland.TopologicalNodes", "a"),
+                ("TopologicalIsland.TopologicalNodes", "b"),
+            ]
+        );
+        // A later profile restating a member adds nothing; a new member is
+        // appended. Identical RDF statements collapse whatever their position.
+        let mut later = document_with_property(false, PropValue::Text("10".into()));
+        for node in ["b", "c"] {
+            later.objects[0].props.push((
+                "TopologicalIsland.TopologicalNodes".into(),
+                PropValue::Ref(node.into()),
+            ));
+        }
+        store.merge(later).unwrap();
+        let nodes = store.objects[0]
+            .props
+            .iter()
+            .filter(|(name, _)| name.as_str() == "TopologicalIsland.TopologicalNodes")
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(nodes, ["a", "b", "c"]);
+        assert_eq!(store.objects[0].props.len(), 6);
+    }
+
+    #[test]
+    fn first_profile_conflicts_keep_first_value_and_kind_in_error() {
+        for conflicting in [
+            PropValue::Text("changed".into()),
+            PropValue::Ref("first".into()),
+        ] {
+            let mut document = document_with_property(true, PropValue::Text("10".into()));
+            document.objects[0].props.extend([
+                ("Extension.value".into(), PropValue::Text("first".into())),
+                ("EnergyConsumer.p".into(), PropValue::Text("10".into())),
+                (
+                    "Extension.other".into(),
+                    PropValue::Text("untouched".into()),
+                ),
+                ("Extension.value".into(), conflicting.clone()),
+            ]);
+            let error = Store::default().merge(document).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "CGMES read error: RDF object `load` assigns conflicting `Extension.value` values: text `first` and {}",
+                    describe_property_value(&conflicting),
+                )
+            );
+        }
     }
 
     #[test]

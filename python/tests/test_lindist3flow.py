@@ -46,15 +46,16 @@ def test_lindist3flow_solution_access_and_lifetimes():
     assert metadata["preparation_actions"] == []
     assert network.n_buses == 2
     document = json.loads(powerio.serialize(instance.module).text)
-    assert document["version"] == 2
+    assert document["version"] == powerio.versions()["powerio_ir"]["version"]
     assert document["value"]["type"] == "powerio.LinDist3FlowOpfInstance"
 
 
-def test_lindist3flow_construction_and_ir_generation():
+def test_lindist3flow_construction_and_ir_round_trip():
     document = json.loads(FIXTURE.read_text())
     base = document["value"]["data"]["instance"]["base"]
     document["value"] = {"type": "powerio.MulticonductorNetwork", "data": base["network"]}
-    document["version"] = 2
+    # The fixture is a 0.11 document, which states the integer version 2.
+    assert document["version"] == 2
     network_module = powerio.deserialize(io.StringIO(json.dumps(document)))
     instance = network_module.to_lindist3flow_opf_instance()
     assert isinstance(instance.value, powerio.LinDist3FlowOpfInstance)
@@ -62,12 +63,13 @@ def test_lindist3flow_construction_and_ir_generation():
     fixed = network_module.to_lindist3flow_pf_instance()
     assert isinstance(fixed.value, powerio.LinDist3FlowPfInstance)
     assert fixed.value.metadata["roots"] == [("source", "a")]
-    for document in [
-        json.loads(FIXTURE.read_text()),
-        json.loads(powerio.serialize(instance).text),
-        json.loads(powerio.serialize(fixed).text),
+    current = powerio.versions()["powerio_ir"]["version"]
+    for document, version in [
+        (json.loads(FIXTURE.read_text()), 2),
+        (json.loads(powerio.serialize(instance).text), current),
+        (json.loads(powerio.serialize(fixed).text), current),
     ]:
-        assert document["version"] == 2
+        assert document["version"] == version
         assert isinstance(
             powerio.deserialize(io.StringIO(json.dumps(document))).value,
             (

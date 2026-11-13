@@ -49,7 +49,7 @@ there, and reads them back, for data the standard fields cannot hold:
 
 | Data | PowerModels JSON | egret JSON |
 |---|---|---|
-| area records | top-level `areas` table: `area_i`, `price_ref_bus`, and `name`, `net_interchange_mw`, `tolerance_mw`, `area_type`, `uid` | one `elements.area` entry per area number: `slack_bus`, `net_interchange_mw`, `tolerance_mw`, `name`, `area_type`, `uid` |
+| area records | top-level `areas` table: `area_i`, `price_ref_bus`, and `name`, `net_interchange_mw`, `tolerance_mw`, `area_type`, `uid`; the reader also takes the `col_1`/`col_2` rows PowerModels.jl writes for `mpc.areas` | one `elements.area` entry per area number: `slack_bus`, `net_interchange_mw`, `tolerance_mw`, `name`, `area_type`, `uid`; egret's own name-keyed areas are skipped |
 | case metadata from a grid exchange format | top-level `case_metadata` | `system.case_metadata` |
 | system frequency | top-level `base_frequency` | `system.base_frequency` |
 | a source-assigned element identity | `uid` in the element row | `uid` in the element entry |
@@ -562,15 +562,18 @@ the original literals and conversion statements. Edited/canonical MATPOWER
 output and cross-format writers use the interpreted network values and do not
 append the original conversions, so the conversions are not applied twice.
 
-Canonical MATPOWER output, for a case that did not start as MATPOWER, omits
-dcline; the byte exact echo path keeps it when the case was read from MATPOWER.
-Storage is written as an `mpc.storage` block.
+Canonical MATPOWER output writes aggregate HVDC terminal data as
+`mpc.dcline`, including powers, voltage setpoints, limits, and affine loss
+coefficients. When any line carries a cost, `mpc.dclinecost` covers every
+line, with zero-cost rows for lines without a stated cost. Storage is written
+as an `mpc.storage` block. These aggregate terminal records do not represent
+a physical DC network or the PowerModelsACDC extension's converter model.
 
 ### egret
 
 egret output writes HVDC as `dc_branch`, the element its reader already reads,
-so the power, voltage, and loss fields survive a round trip; a dcline cost
-curve and storage are the only things dropped. The reader takes the power flow
+so the power, voltage, and loss fields survive a round trip, and a dcline cost
+travels as the `p_cost` extension above; storage is dropped. The reader takes the power flow
 ModelData subset (numeric bus ids, scalar values). A document whose
 `system.time_keys` vary the scalar profile parses to
 `TimeSeries<BalancedNetwork>` through `powerio::parse`, whereas the component
@@ -585,17 +588,27 @@ set to \\(1\\) (warned) so the per unit impedances survive. A branch with a
 tap, a shift, or terminals on two voltage levels becomes a `trafo` row with
 `tap_changer_type = "Ratio"`; because pandapower's magnetizing model is
 inductive only, its MATPOWER charging b goes out as one bus shunt per terminal
-(warned, \\(Y_{\mathrm{bus}}\\) exact). The file is labeled with `f_hz` set to
-\\(50\\) and `c_nf_per_km` compensated, so a 60 Hz source keeps its exact
-\\(Y_{\mathrm{bus}}\\). A reference bus without a generator gets an `ext_grid`
+(warned, \\(Y_{\mathrm{bus}}\\) exact). The file states the network's
+`base_frequency` as `f_hz`, and computes `c_nf_per_km` at that frequency.
+A reference bus without a generator gets an `ext_grid`
 row, which reads back as a Ref generator. The writer also warns on dropped
-HVDC, storage, capability columns, angle limits, rate B/C, nonfinite values
-(written as JSON null), and costs `poly_cost` cannot carry. The reader models
-ratio, ideal, and pandapower 2.x tap changers, off nominal
-`vn_hv_kv`/`vn_lv_kv`, lv side taps, and shunt `vn_kv` scaling; ZIP load
-composition, line shunt conductance, magnetizing branches, tabular tap
-changers, reactive cost coefficients, and any other table with rows warn with
-row counts.
+storage, capability columns, angle limits, rate B/C, nonfinite values
+(written as JSON null), and costs outside the supported polynomial and
+piecewise-linear mappings. The reader maps ZIP load composition, line shunt
+conductance, transformer magnetizing parameters, ratio/ideal and pandapower
+2.x tap changers, off-nominal `vn_hv_kv`/`vn_lv_kv`, lv-side taps, and shunt
+`vn_kv` scaling. Tabular or unrecognized tap changers, reactive cost
+coefficients, and unsupported nonempty tables are diagnosed with row counts.
+
+The writer emits aggregate HVDC links in a `dcline` table. It reports
+unmapped sending-power floors, reactive flows, received powers that disagree
+with the affine loss model, and DC-line costs; conflicting terminal voltage
+targets are aligned with the bus controller and diagnosed. This is not full
+AC/DC support: native DC buses, lines, and converter-station tables are not
+mapped. Reverse and zero-transfer terminal errors, and the difference between
+native pandapower PF and OPF loss equations, remain tracked in
+[#843](https://github.com/eigenergy/powerio/issues/843); successful self-round
+trips do not establish native equivalence for those cases.
 
 ### PyPSA CSV folders
 

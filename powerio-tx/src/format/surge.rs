@@ -250,9 +250,18 @@ fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
     obj.insert("b_shunt_to".into(), jnum(charging.b_to));
     obj.insert("tap".into(), jnum(branch.calc_effective_tap()));
     obj.insert("phase_shift_rad".into(), jnum(branch.shift.to_radians()));
-    obj.insert("rating_a_mva".into(), jnum(branch.rate_a));
-    obj.insert("rating_b_mva".into(), jnum(branch.rate_b));
-    obj.insert("rating_c_mva".into(), jnum(branch.rate_c));
+    obj.insert(
+        "rating_a_mva".into(),
+        jnum(crate::thermal_limit::to_zero_unlimited(branch.rate_a)),
+    );
+    obj.insert(
+        "rating_b_mva".into(),
+        jnum(crate::thermal_limit::to_zero_unlimited(branch.rate_b)),
+    );
+    obj.insert(
+        "rating_c_mva".into(),
+        jnum(crate::thermal_limit::to_zero_unlimited(branch.rate_c)),
+    );
     if let Some(ratings) = branch.current_ratings {
         obj.insert("current_rating_a".into(), jnum(ratings.c_rating_a));
         obj.insert("current_rating_b".into(), jnum(ratings.c_rating_b));
@@ -805,9 +814,9 @@ fn read_branch(value: &Value) -> Result<Branch> {
         x: f_map_or(obj, "x", 0.0)?,
         b,
         charging: read_branch_charging(obj, b)?,
-        rate_a: f_map_or(obj, "rating_a_mva", 0.0)?,
-        rate_b: f_map_or(obj, "rating_b_mva", 0.0)?,
-        rate_c: f_map_or(obj, "rating_c_mva", 0.0)?,
+        rate_a: crate::thermal_limit::from_zero_unlimited(f_map_or(obj, "rating_a_mva", 0.0)?)?,
+        rate_b: crate::thermal_limit::from_zero_unlimited(f_map_or(obj, "rating_b_mva", 0.0)?)?,
+        rate_c: crate::thermal_limit::from_zero_unlimited(f_map_or(obj, "rating_c_mva", 0.0)?)?,
         rating_sets: Vec::new(),
         current_ratings: read_current_ratings(obj)?,
         tap,

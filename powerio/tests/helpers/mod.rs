@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+pub mod thermal_migration;
+
 use std::path::Path;
 
 use powerio::BalancedNetwork;

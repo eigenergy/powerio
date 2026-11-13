@@ -72,7 +72,7 @@ pub struct DistBus {
     pub grounded: Vec<String>,
     /// Voltage magnitude bounds, volts: the scalar pair plus the phase to
     /// neutral and phase to phase families, and the per-sequence scalars
-    /// (BMOPF schema 0.1.0: positive sequence has both bounds, negative and
+    /// (as in BMOPF: positive sequence has both bounds, negative and
     /// zero sequence and neutral to ground are magnitude caps whose lower
     /// bound is always 0).
     pub v_min: Option<f64>,
@@ -229,7 +229,7 @@ pub struct DistLine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Vec<DistLocation>>,
     /// Per-conductor ampacity and apparent power limits, amps and VA
-    /// (BMOPF schema 0.1.0 line fields, alongside the linecode's own).
+    /// (BMOPF line fields, alongside the linecode's own).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub i_max: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,7 +264,7 @@ impl DistLine {
     }
 }
 
-/// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`): `q_rated` vars
+/// A rated capacitor bank (the BMOPF `capacitor`): `q_rated` vars
 /// delivered at `v_nom` volts across the element terminals, distinct from the
 /// raw admittance [`DistShunt`]. The DSS converter still lowers OpenDSS
 /// capacitors to shunt B matrices; this element carries capacitors that arrive

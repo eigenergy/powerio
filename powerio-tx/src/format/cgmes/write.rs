@@ -6815,10 +6815,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             .is_some_and(|value| value.equipment_with_limits.contains(&("branch", local_id)));
         if !has_source_limits {
             // PATL and TATL current limits at terminal 1 through √3·kV.
-            let mut rate = |mva: f64, limit_type: RateLimitType| {
-                if mva <= 0.0 {
+            let mut rate = |limit: f64, limit_type: RateLimitType| {
+                let Some(mva) = crate::thermal_limit::as_option(limit) else {
                     return;
-                }
+                };
                 let kind = limit_type.label;
                 if !limit_types_used.contains(&limit_type) {
                     limit_types_used.push(limit_type);
@@ -6883,6 +6883,17 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
     for (i, transformer) in net.transformers_3w().iter().enumerate() {
         let fallback = format!("transformer3w-{i}");
         let local_id = transformer.uid.as_deref().unwrap_or(&fallback);
+        if transformer.magnetizing_differs_from(crate::network::MagnetizingConnection::StarPoint) {
+            w.warnings.push_as(
+                &codes::EMIT_CGMES.value_substituted,
+                format!(
+                    "three winding transformer `{local_id}` magnetizing admittance stated at \
+                     winding 1's bus was written as end 1's g and b, which a CGMES star \
+                     model connects at the star point: the two placements are different \
+                     circuits"
+                ),
+            );
+        }
         let id = mrid_or("transformer_3w", &fallback, transformer.uid.as_deref());
         eq.named(
             "PowerTransformer",
@@ -7084,9 +7095,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     (winding.rate_b, RATE_B_LIMIT),
                     (winding.rate_c, RATE_C_LIMIT),
                 ] {
-                    if mva <= 0.0 {
+                    let Some(mva) = crate::thermal_limit::as_option(mva) else {
                         continue;
-                    }
+                    };
                     let kind = limit_type.label;
                     if !limit_types_used.contains(&limit_type) {
                         limit_types_used.push(limit_type);

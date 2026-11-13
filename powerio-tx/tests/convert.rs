@@ -601,7 +601,7 @@ fn pandapower_line_rating_sentinel_reads_as_unlimited() {
     let net = parse_str(&text, "pandapower-json").unwrap().network;
     assert_eq!(
         net.branches()[0].rate_a,
-        0.0,
+        f64::INFINITY,
         ">= 99999 kA is the unlimited sentinel"
     );
     let want = 110.0 * 3.0_f64.sqrt();
@@ -612,10 +612,10 @@ fn pandapower_line_rating_sentinel_reads_as_unlimited() {
 #[allow(clippy::float_cmp)]
 fn pandapower_writer_keeps_zero_rating_zero() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    net.branches_mut()[0].rate_a = 0.0;
+    net.branches_mut()[0].rate_a = f64::INFINITY;
     let conv = emit_value(&net, TargetFormat::PandapowerJson).unwrap();
     let back = parse_str(&conv.text, "pandapower-json").unwrap().network;
-    assert_eq!(back.branches()[0].rate_a, 0.0);
+    assert_eq!(back.branches()[0].rate_a, f64::INFINITY);
     assert!(back.branches()[1].rate_a > 0.0, "other ratings survive");
 }
 
@@ -1847,7 +1847,7 @@ fn pandapower_genuine_fixture_reads() {
     let z = 12.0 * 1.0 / (25.0 * 100.0);
     close(xf.r, r);
     close(xf.x, (z * z - r * r).sqrt());
-    assert_eq!(xf.rate_a, 25.0);
+    assert_eq!(xf.rate_a, (25.0));
     assert_eq!(xf.shift, 150.0);
     // tap_pos == tap_neutral (0) on the hv side -> tap exactly 1.0, kept.
     assert_eq!(xf.tap, 1.0);
@@ -1949,13 +1949,13 @@ fn pypsa_genuine_export_reads() {
     close(line.r, 0.5 / zb);
     close(line.x, 2.0 / zb);
     close(line.b, 1e-5 * zb);
-    assert_eq!(line.rate_a, 100.0);
+    assert_eq!(line.rate_a, (100.0));
     let xf = &net.branches()[1];
     assert!(xf.is_transformer());
     assert_eq!((xf.from, xf.to), (BusId(2), BusId(3)));
     close(xf.r, 0.01 * 1.0 / 60.0);
     close(xf.x, 0.1 * 1.0 / 60.0);
-    assert_eq!(xf.rate_a, 60.0);
+    assert_eq!(xf.rate_a, (60.0));
     assert_eq!(xf.tap, 1.05);
 
     assert_eq!(net.loads().len(), 1);

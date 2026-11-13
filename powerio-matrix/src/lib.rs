@@ -1,7 +1,7 @@
 //! Sparse matrix and graph projections from PowerIO networks.
 //!
 //! Outputs include signed incidence, weighted bus Laplacian, MATPOWER Bp/Bpp,
-//! Y bus, PTDF, LODF, adjacency, LACPF, and petgraph views. Calculations take the
+//! Y bus, PTDF, LODF, adjacency, and LACPF views. Calculations take the
 //! dense [`IndexedNetwork`] view of a [`BalancedNetwork`]. Parsing and emitting
 //! belong to the top level `powerio` facade; this crate owns derived matrix and
 //! graph calculations.

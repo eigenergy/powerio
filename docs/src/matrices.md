@@ -36,7 +36,7 @@ API is documented in the
 | AC power flow Jacobian | \\(2n \times 2n\\) | `calc_power_flow_jacobian` | polar or rectangular voltage coordinates |
 | multiconductor admittance | conductor by conductor | `calc_multiconductor_admittance_matrix` | from a `MulticonductorNetwork`; Rust only in 0.11 |
 | adjacency | \\(n \times n\\) | `calc_adjacency_matrix` | sparse graph adjacency |
-| petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<usize, usize>` |
+| graph edges | one per in-service branch | `IndexedNetwork::branch_edges` | `(branch, from, to)` over dense bus indices |
 
 PTDF and LODF need a linear solve, and `calc_ptdf`, `calc_lodf`,
 `calc_ptdf_lodf`, and the option based `calc_ptdf_lodf_with_options` all go
@@ -288,9 +288,14 @@ The standard case solver property fixture lives at
 margin, zero impedance skips, row sum checks, SPD checks, and a condition
 estimate when the solver input is SPD.
 
-`IndexedNetwork::to_petgraph` returns the network as an undirected
-[petgraph](https://docs.rs/petgraph) graph, one node per bus and one edge per
-in service branch. The connectivity report and the radial check are built on
-it, and you can hand the returned graph straight to other petgraph algorithms.
+`IndexedNetwork::branch_edges` yields in-service branches as undirected
+edges `(branch, from, to)`, with `branch` an index into the branch table and
+`from` and `to` dense bus indices. Parallel branches stay separate edges.
+Build a graph by adding `view.n()` nodes, including buses with no in-service
+branch, then one edge per item. The iterator does not include closed switches. The connectivity report and
+radial check also account for closed switches from
+`IndexedNetwork::closed_switches`. To build an equivalent graph, add those
+switch edges after mapping their bus IDs through `bus_index`, or merge closed
+switches before building the graph.
 
 `calc_ptdf_by_island` returns one sparse PTDF per connected component. It uses the same single factorization and global solve as the ordinary PTDF builder, then scatters stored entries into component-local matrices in one pass. Each result carries dense source bus indices and source branch indices so callers can relate local matrix rows and columns back to the network. Closed switches must be merged before this call; the DC incidence matrix models branches, not unmerged switch connections.

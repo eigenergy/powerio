@@ -1,5 +1,5 @@
 //! Disjoint set forest over dense indices, used to join topology nodes into
-//! calculated buses.
+//! calculated buses and buses into islands.
 
 pub(crate) struct UnionFind {
     parent: Vec<usize>,
@@ -42,6 +42,14 @@ impl UnionFind {
         if first != second {
             self.parent[second] = first;
         }
+    }
+
+    /// Each index's representative: two indices share a label iff they are in
+    /// one set, and a representative labels itself.
+    pub(crate) fn into_labeling(mut self) -> Vec<usize> {
+        (0..self.parent.len())
+            .map(|value| self.find(value))
+            .collect()
     }
 }
 

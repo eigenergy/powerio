@@ -223,8 +223,11 @@ fn ieee30_matches_case30_up_to_its_documented_edits() {
             );
         }
         assert_eq!(expected.tap, 0.0, "{key}");
-        assert_eq!(branch.rate_a, 0.0, "{key}");
-        assert!(expected.rate_a > 0.0, "{key}");
+        assert_eq!(branch.rate_a, f64::INFINITY, "{key}");
+        assert!(
+            expected.rate_a.is_finite() && expected.rate_a > 0.0,
+            "{key}"
+        );
     }
     let cdf_taps: Vec<_> = cdf
         .branches()

@@ -105,15 +105,10 @@ fn read_entry(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Resul
 }
 
 pub(crate) fn read_bounded(reader: &mut impl Read) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader
-        .take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(format_error)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(format_error("expanded payload exceeds 64 MiB limit"));
-    }
-    Ok(bytes)
+    powerio_archive::stream::read_bounded(reader, MAX_BYTES).map_err(|failure| match failure {
+        powerio_archive::stream::DeclaredSizeFailure::Read(error) => format_error(error),
+        _ => format_error("expanded payload exceeds 64 MiB limit"),
+    })
 }
 
 fn validate_marker(bytes: &[u8]) -> Result<()> {

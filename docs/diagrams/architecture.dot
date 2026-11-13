@@ -20,7 +20,7 @@ digraph powerio_architecture {
     }
 
     "powerio-cli" [label = "powerio-cli\nCLI + TUI"];
-    "powerio-capi" [label = "powerio-capi\nC ABI 7 (Julia, C, C++)"];
+    "powerio-capi" [label = "powerio-capi\nC ABI (Julia, C, C++)"];
     "powerio-py" [label = "powerio-py\nPython package + MCP"];
     "powerio-wasm" [label = "powerio-wasm\nbrowser conversion"];
 
@@ -36,6 +36,11 @@ digraph powerio_architecture {
     "powerio-core" [label = "powerio-core\nSource, Diagnostic, Error,\nPioModule<T>, series, output"];
     "powerio-tnd" [label = "powerio-tnd\nIntegratedNetwork + transforms\nSINCAL adapters"];
 
+    "powerio-archive" [label = "powerio-archive\nbounded ZIP transport"];
+    "powerio-archive" -> "powerio-core";
+"powerio" -> "powerio-archive";
+"powerio-tx" -> "powerio-archive";
+"powerio-tnd" -> "powerio-archive" [style=dashed];
     "powerio-synth" -> "powerio-tx";
     "powerio-tx" -> "powerio-core";
     "powerio-tnd" -> "powerio-tx";

@@ -21,10 +21,7 @@ pub fn capabilities() -> String {
                 // for it, so the bulk targets stay as they were. The catalog
                 // still lists both profiles for reading and family detection.
                 "canEmit": entry.format.can_emit
-                    && !matches!(
-                        entry.format.token,
-                        "bmopf-json" | "gridlabd" | "gridlabd-arras"
-                    ),
+                    && !matches!(entry.format.token, "gridlabd" | "gridlabd-arras"),
                 "isDirectory": entry.format.is_directory,
                 "extension": entry.format.extension,
                 "requiresValueType": (entry.format.token == "goc3-json")
@@ -65,6 +62,7 @@ pub struct Conversion {
     name: String,
     files: BTreeMap<String, Arc<[u8]>>,
     module: Option<PioModule<PioValue>>,
+    collection: Option<powerio::Collection>,
     artifacts: Vec<powerio::MemoryArtifact>,
 }
 
@@ -76,6 +74,7 @@ impl Conversion {
             name,
             files: BTreeMap::new(),
             module: None,
+            collection: None,
             artifacts: Vec::new(),
         }
     }
@@ -100,40 +99,57 @@ impl Conversion {
                 "message": "This project exceeds 4096 files or 64 MiB. Choose a smaller project or use PowerIO in the terminal."
             }]}).to_string();
         }
+        self.release_result();
+        self.collection = None;
         self.files.insert(name, Arc::from(bytes));
         json!({"ok": true}).to_string()
     }
 
     #[allow(clippy::needless_pass_by_value)] // wasm-bindgen receives optional JavaScript strings as owned strings.
     pub fn inspect(&mut self, primary: Option<String>, format: Option<String>) -> String {
-        self.module = None;
-        self.artifacts.clear();
+        self.release_result();
         let source = self.source(primary.as_deref(), format.as_deref());
         let module = match source.and_then(powerio::parse) {
             Ok(module) => module,
             Err(error) => return failure(&error),
         };
-        let detected =
-            module
-                .source()
-                .and_then(Source::format)
-                .map(|format| match format.as_str() {
-                    "powerworld-pwb" => "pwb".to_owned(),
-                    token => powerio::resolve_format(token)
-                        .map_or(token, |resolved| resolved.token)
-                        .to_owned(),
-                });
-        let family = detected.as_ref().and_then(|token| {
-            powerio::grid_formats()
-                .find(|entry| entry.format.token == token)
-                .map(|entry| entry.family)
-        });
-        let response = json!({
-            "ok": true, "format": detected, "family": family,
-            "valueType": module.value().type_name(), "diagnostics": diagnostics(module.diagnostics()),
-        }).to_string();
-        self.module = Some(module);
-        response
+        self.retain_module(module)
+    }
+
+    /// Discover overlapping inputs without parsing electrical values.
+    pub fn discover(&mut self) -> String {
+        match self
+            .ensure_collection()
+            .and_then(powerio::Collection::inspect)
+        {
+            Ok(candidates) => json!({"ok": true, "candidates": candidates}).to_string(),
+            Err(error) => failure(&error),
+        }
+    }
+
+    /// Parse one explicit selection over the cached shared inventory.
+    pub fn inspect_selection(&mut self, selection: &str) -> String {
+        self.release_result();
+        if selection.len() > 1 << 20 {
+            return json!({"ok":false,"diagnostics":[{"code":"WEB.INPUT.SELECTION","severity":"error","message":"Selection metadata exceeds 1 MiB."}]}).to_string();
+        }
+        let selection = match serde_json::from_str::<powerio::CollectionSelection>(selection) {
+            Ok(selection) => selection,
+            Err(error) => return json!({"ok":false,"diagnostics":[{"code":"WEB.INPUT.SELECTION","severity":"error","message":error.to_string()}]}).to_string(),
+        };
+        match self
+            .ensure_collection()
+            .and_then(|c| c.parse(&selection, &powerio::ParseOptions::default()))
+        {
+            Ok(result) => self.retain_module(result.module),
+            Err(error) => failure(&error),
+        }
+    }
+
+    /// Release the parsed result while keeping a bounded shared inventory.
+    pub fn release_result(&mut self) {
+        self.module = None;
+        self.artifacts.clear();
     }
 
     /// Emit one target and retain its artifacts for transfer to JavaScript.
@@ -186,6 +202,48 @@ impl Conversion {
                 let empty = powerio::MemoryArtifact::new(artifact.name().clone(), Vec::new());
                 std::mem::replace(artifact, empty).into_bytes()
             })
+    }
+}
+
+impl Conversion {
+    fn ensure_collection(&mut self) -> Result<&powerio::Collection, powerio::Error> {
+        if self.collection.is_none() {
+            let files = self
+                .files
+                .iter()
+                .map(|(name, bytes)| ArtifactPath::new(name).map(|path| (path, Arc::clone(bytes))))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.collection = Some(powerio::Collection::from_files(
+                &self.name,
+                files,
+                powerio::CollectionLimits::default(),
+            )?);
+        }
+        Ok(self.collection.as_ref().expect("initialized collection"))
+    }
+
+    fn retain_module(&mut self, module: PioModule<PioValue>) -> String {
+        let detected =
+            module
+                .source()
+                .and_then(Source::format)
+                .map(|format| match format.as_str() {
+                    "powerworld-pwb" => "pwb".to_owned(),
+                    token => powerio::resolve_format(token)
+                        .map_or(token, |resolved| resolved.token)
+                        .to_owned(),
+                });
+        let family = detected.as_ref().and_then(|token| {
+            powerio::grid_formats()
+                .find(|entry| entry.format.token == token)
+                .map(|entry| entry.family)
+        });
+        let response = json!({
+            "ok": true, "format": detected, "family": family,
+            "valueType": module.value().type_name(), "diagnostics": diagnostics(module.diagnostics()),
+        }).to_string();
+        self.module = Some(module);
+        response
     }
 }
 
@@ -436,5 +494,61 @@ mod tests {
         assert_eq!(emitted["ok"], true, "{emitted}");
         assert_eq!(converter.artifact_count(), 1);
         assert_eq!(converter.take_artifact(0), source.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::*;
+    #[test]
+    fn changing_inventory_invalidates_a_previously_parsed_result() {
+        let mut conversion = Conversion::new("study".into());
+        conversion.add_file("master.dss".into(), b"New Circuit.case basekv=12.47\n");
+        let selection = r#"{"primary":"master.dss","format":"dss"}"#;
+        let result: Value = serde_json::from_str(&conversion.inspect_selection(selection)).unwrap();
+        assert_eq!(result["ok"], true);
+        conversion.add_file("notes.txt".into(), b"new companion");
+        let stale: Value = serde_json::from_str(&conversion.emit("dss", "out".into())).unwrap();
+        assert_eq!(stale["ok"], false);
+        let result: Value = serde_json::from_str(&conversion.inspect_selection(selection)).unwrap();
+        assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn discovery_does_not_parse_and_masters_share_one_inventory() {
+        let mut conversion = Conversion::new("study".into());
+        for name in ["day", "night"] {
+            let bytes = format!(
+                "New Circuit.{name} basekv=12.47 bus1=source\nRedirect ../shared/topology.inc\n"
+            );
+            assert!(
+                serde_json::from_str::<Value>(
+                    &conversion.add_file(format!("masters/{name}.dss"), bytes.as_bytes())
+                )
+                .unwrap()["ok"]
+                    .as_bool()
+                    .unwrap()
+            );
+        }
+        conversion.add_file(
+            "shared/topology.inc".into(),
+            b"New Line.l bus1=source bus2=load phases=3 r1=0.1 x1=0.2 r0=0.3 x0=0.4 length=1\n",
+        );
+        let discovered: Value = serde_json::from_str(&conversion.discover()).unwrap();
+        assert_eq!(discovered["candidates"].as_array().unwrap().len(), 2);
+        assert!(conversion.module.is_none());
+        for index in [0, 1, 1, 0] {
+            let selected = conversion
+                .inspect_selection(&discovered["candidates"][index]["selection"].to_string());
+            assert!(
+                serde_json::from_str::<Value>(&selected).unwrap()["ok"]
+                    .as_bool()
+                    .unwrap(),
+                "{selected}"
+            );
+            conversion.release_result();
+            assert!(conversion.module.is_none());
+            assert!(conversion.collection.is_some());
+        }
     }
 }

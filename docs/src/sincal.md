@@ -147,7 +147,7 @@ presence flags distinguish an omitted snapshot from explicit midnight. The
 existing `pio_parse` remains unchanged. For memory inputs,
 `pio_source_from_memory_with_buffers` copies the primary and named companions
 before returning; caller buffers may then be released. These additions require
-the matching development library and Julia companion. Existing ABI 7 layouts
+the matching development library and Julia companion. Existing C ABI layouts
 and typed network accessors are unchanged.
 
 Legacy UI-manipulator references on loads retain their IDs as provenance. Their

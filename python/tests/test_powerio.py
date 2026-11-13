@@ -5,6 +5,7 @@ tests need the optional extras: `pip install '.[all]'`.
 """
 
 import ast
+import copy
 import importlib
 import io
 import json
@@ -189,11 +190,16 @@ def test_preferred_balanced_names_and_complete_tables():
 def test_hvdc_table_preserves_nonfinite_limits_and_independent_rows():
     module = powerio.parse(DATA / "t_case9_dcline.m")
     stored = json.loads(_emit_module(module))
-    expected = stored["value"]["data"]["hvdc"]
-    expected[0]["qminf"] = "-Infinity"
-    expected[0]["qmaxf"] = "Infinity"
+    row = stored["value"]["data"]["hvdc"][0]
+    row.update(qminf="-Infinity", qmaxf="Infinity", uid="Infinity")
+    # A text field that reads "Infinity" stays text.
+    row["extras"]["note"] = "Infinity"
+    expected = copy.deepcopy(stored["value"]["data"]["hvdc"])
+    expected[0]["qminf"] = float("-inf")
+    expected[0]["qmaxf"] = float("inf")
     value = _parse_module(json.dumps(stored)).value
     assert value.hvdc == expected
+    assert value.hvdc[0]["uid"] == value.hvdc[0]["extras"]["note"] == "Infinity"
     rows = value.hvdc
     rows[0]["qminf"] = 0
     assert value.hvdc == expected
@@ -852,26 +858,15 @@ def test_goc3_solution_requires_the_matching_problem():
         )
 
 
-def test_parse_powerworld_display_file():
+def test_parse_reads_a_powerworld_display_to_a_geo_layer():
     path = DATA / "powerworld" / "ACTIVSg200.pwd"
-    parsed = powerio.parse_display(path)
+    layer = powerio.parse(path).value
 
-    assert not hasattr(powerio, "parse_display_file")
-    assert not hasattr(powerio, "parse_display_bytes")
-    assert not hasattr(powerio, "parse_display_text")
-    assert parsed.kind == "powerworld"
-    assert isinstance(parsed.data, powerio.PwdDisplay)
-    assert parsed.data.canvas_width == 200
-    assert parsed.data.canvas_height == 200
-    assert parsed.data.stamp == 43068
-    assert len(parsed.data.substations) == 111
-
-    first = parsed.data.substations[0]
-    assert isinstance(first, powerio.PwdSubstation)
-    assert first.number == 50
-    assert first.name == "CHAMPAIGN 3"
-    assert first.x == pytest.approx(-47299.112519818635)
-    assert first.y == pytest.approx(23498.080802557866)
+    # 0.12 removed parse_display and its raw record (#612); parse is the one
+    # way to read a display.
+    for removed in ("parse_display", "DisplayData", "PwdDisplay", "PwdSubstation"):
+        assert not hasattr(powerio, removed), removed
+    assert isinstance(layer, powerio.GeoLayer)
 
 
 def test_case_tables(case9):
@@ -1145,6 +1140,25 @@ def test_pio_module_from_value_keeps_records_and_wraps_generated_networks():
         powerio.PioModule.from_value(object())
 
 
+def test_pio_module_extensions_are_read_and_added_without_serializing():
+    parsed = powerio.parse(DATA / "case9.m")
+    key = "org.example.audit"
+    assert parsed.extension(key) is None
+    tagged = parsed.with_extension(key, {"reviewed": True, "count": 2})
+    assert key in tagged.extension_keys
+    assert tagged.extension(key) == {"reviewed": True, "count": 2}
+    assert key not in parsed.extension_keys
+    assert tagged.value.n_buses == parsed.value.n_buses
+    assert tagged.diagnostics == parsed.diagnostics
+    assert powerio.emit(tagged, "matpower").text == powerio.emit(parsed, "matpower").text
+    replaced = tagged.with_extension(key, [1, 2])
+    assert replaced.extension(key) == [1, 2]
+    recovered = powerio.deserialize(io.StringIO(powerio.serialize(tagged).text))
+    assert recovered.extension(key) == {"reviewed": True, "count": 2}
+    with pytest.raises(Exception, match="namespaced"):
+        parsed.with_extension("no-dots", {})
+
+
 def test_pio_module_emit_uses_dynamic_writer(tmp_path):
     source = DATA / "api_conformance.m"
     module = powerio.parse(source)
@@ -1178,14 +1192,31 @@ def test_pio_module_emit_uses_dynamic_writer(tmp_path):
     assert json.loads(solved_text)["value"]["type"] == "powerio.AcOpfSolution"
 
 
-def test_deserialize_rejects_a_newer_powerio_ir_generation():
+def test_deserialize_reads_its_release_series_and_0_11_documents():
     document = json.loads(powerio.serialize(powerio.parse(DATA / "case9.m")).text)
-    document["version"] += 1
+    current = powerio.versions()["powerio_ir"]["version"]
+    assert document["version"] == current
+    major, minor, patch = (int(part) for part in current.split("."))
+    for version in (f"{major}.{minor}.{patch + 1}", 2):
+        document["version"] = version
+        module = powerio.deserialize(io.StringIO(json.dumps(document)))
+        assert isinstance(module.value, powerio.BalancedNetwork)
 
-    with pytest.raises(powerio.PowerIOError) as failure:
-        powerio.deserialize(io.StringIO(json.dumps(document)))
-
-    assert failure.value.code == "READ.MODULE.UNSUPPORTED"
+    # The first release of the next series: a minor release before 1.0, a
+    # major release after.
+    next_series = f"0.{minor + 1}.0" if major == 0 else f"{major + 1}.0.0"
+    for version, remedy in (
+        (next_series, "upgrade PowerIO"),
+        (f"{major + 1}.0.0", "upgrade PowerIO"),
+        ("0.11.0", "regenerate this document"),
+        (1, "regenerate this document"),
+        (f"{major}.{minor}", "regenerate this document"),
+    ):
+        document["version"] = version
+        with pytest.raises(powerio.PowerIOError) as failure:
+            powerio.deserialize(io.StringIO(json.dumps(document)))
+        assert failure.value.code == "READ.MODULE.UNSUPPORTED"
+        assert remedy in str(failure.value)
 
 
 def test_pio_module_emit_covers_memory_and_file_destinations(tmp_path):
@@ -2964,3 +2995,44 @@ def test_operating_point_network_applies_the_point(time_series_powerio_ir):
     assert network.loads[0]["p"] == pytest.approx(91.5)
     assert base.loads[0]["p"] != pytest.approx(91.5)
     assert series[0].network.loads[0]["p"] == pytest.approx(base.loads[0]["p"])
+
+
+def test_numeric_thermal_limits_distinguish_zero_and_infinity():
+    module = powerio.parse(DATA / "case9.m")
+    branch_id = powerio.ComponentId("branch", "1-4")
+    before = module.value.branches[0]
+    for quantity, expected in [(powerio.ApparentPower.megavolt_amperes(0.0), 0.0),
+                               (powerio.ApparentPower.megavolt_amperes(float("inf")), float("inf")),
+                               (powerio.ApparentPower.volt_amperes(100_000_000.0), 100.0)]:
+        update = powerio.NetworkUpdate.set_branch_thermal_rating(branch_id, quantity)
+        assert update.field == "branch_thermal_rating"
+        report = powerio.apply_updates(module, [update])
+        assert not report.connectivity_changed
+        row = module.value.branches[0]
+        assert row["rate_a"] == expected
+        for key in ("r", "x", "b", "in_service"):
+            assert row[key] == before[key]
+        restored = powerio.deserialize(powerio.serialize(module).text.encode())
+        assert restored.value.branches[0] == row
+        assert "WithThermalLimits" not in powerio.serialize(module).text
+
+
+def test_ppc_ratings_translate_infinity_and_refuse_real_zero():
+    pytest.importorskip("numpy")
+    module = powerio.parse(DATA / "case9.m")
+    original = module.value.to_ppc()
+    branch_id = powerio.ComponentId("branch", "1-4")
+    powerio.apply_updates(module, [powerio.NetworkUpdate.set_branch_thermal_rating(
+        branch_id, powerio.ApparentPower.megavolt_amperes(float("inf")))])
+    ppc = module.value.to_ppc()
+    assert ppc["branch"][0, 5] == 0.0
+    assert powerio.from_ppc(ppc).branches[0]["rate_a"] == float("inf")
+    assert (ppc["branch"][:, :5] == original["branch"][:, :5]).all()
+    assert (ppc["branch"][:, 8:] == original["branch"][:, 8:]).all()
+    document = json.loads(powerio.serialize(module).text)
+    for field in ("rate_a", "rate_b", "rate_c"):
+        changed = json.loads(json.dumps(document))
+        changed["value"]["data"]["branches"][0][field] = 0.0
+        zero = powerio.deserialize(json.dumps(changed).encode())
+        with pytest.raises(ValueError, match="cannot represent a zero branch rating"):
+            zero.value.to_ppc()

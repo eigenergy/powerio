@@ -1,6 +1,7 @@
 """Native pandapower imports must accept canonical output with default options."""
 
 import io
+import json
 
 import pytest
 
@@ -45,6 +46,25 @@ def test_native_default_import_preserves_split_zip_load_columns():
     assert "const_i_percent" not in native.load
     pp.runpp(native, init="flat", calculate_voltage_angles=True, numba=False)
     assert native.converged
+
+
+def test_native_bus_voltages_survive_ir_without_a_convergence_claim():
+    pp = pytest.importorskip("pandapower")
+    source = native_network(pp)
+    pp.runpp(source, calculate_voltage_angles=True, numba=False)
+    output = canonical(pp, source)
+    raw = json.loads(output)["_object"]
+    assert "converged" not in raw
+    assert json.loads(raw["res_bus"]["_object"])["columns"] == ["vm_pu", "va_degree"]
+    native = pp.from_json_string(output)
+    assert not native.get("converged", False)
+    assert native.bus.index.tolist() == source.bus.index.tolist()
+    assert native.bus.in_service.tolist() == source.bus.in_service.tolist()
+    for index in (42, 7):
+        for column in ("vm_pu", "va_degree"):
+            assert native.res_bus.at[index, column] == pytest.approx(
+                source.res_bus.at[index, column], abs=1e-12
+            )
 
 
 @pytest.mark.parametrize("start", [-10.0, 0.0, 10.0])

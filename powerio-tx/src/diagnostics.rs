@@ -177,6 +177,7 @@ pub mod codes {
     emit_family!(EMIT_POWERWORLD, "POWERWORLD", "PowerWorld .aux");
     emit_family!(EMIT_POWERMODELS, "POWERMODELS", "PowerModels JSON");
     emit_family!(EMIT_EGRET, "EGRET", "egret JSON");
+    emit_family!(EMIT_SIENNA, "SIENNA", "SiennaSchemas JSON");
     emit_family!(EMIT_SURGE, "SURGE", "Surge JSON");
     emit_family!(EMIT_RAVENS, "RAVENS", "MG-RAVENS JSON");
     emit_family!(EMIT_XIIDM, "XIIDM", "XIIDM 1.17 XML");
@@ -277,6 +278,8 @@ pub mod codes {
             "a PyPSA element was read through the nearest canonical element";
         READ_PYPSA_NAME_REMAPPED = "READ.PYPSA.NAME_REMAPPED", Warning,
             "a PyPSA bus name collides with another and was keyed by its numeric id";
+        READ_PYPSA_THERMAL_BOUND_ZERO = "READ.PYPSA.THERMAL_BOUND_ZERO", Warning,
+            "a non-extendable PyPSA line or transformer states s_nom * s_max_pu = 0, a zero flow bound";
 
         READ_POWERWORLD_VALUE_DEFAULTED = "READ.POWERWORLD.VALUE_DEFAULTED", Warning,
             "a PowerWorld field this binary vintage does not locate was defaulted";
@@ -325,6 +328,10 @@ pub mod codes {
         READ_XIIDM_VERSION_COMPATIBILITY = "READ.XIIDM.VERSION_COMPATIBILITY", Remark,
             "an older XIIDM input version was read; fresh XIIDM output uses 1.17";
 
+        READ_SIENNA_VALUE_DEFAULTED = "READ.SIENNA.VALUE_DEFAULTED", Warning,
+            "a missing Sienna electrical value was assigned a documented default";
+        READ_SIENNA_RETAINED_SOURCE_ONLY = "READ.SIENNA.RETAINED_SOURCE_ONLY", Warning,
+            "Sienna data is retained in a module extension but has no typed electrical interpretation";
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
 
@@ -519,6 +526,8 @@ pub mod codes {
             "a balanced payload's uid identity does not hold";
         VALIDATE_GEN_COST_MISSING = "VALIDATE.GEN_COST.MISSING", Error,
             "a generator carries no cost data under a policy that requires one", category = Data;
+        VALIDATE_THERMAL_LIMIT_INVALID = "VALIDATE.THERMAL_LIMIT.INVALID", Error,
+            "a finite thermal limit must be finite and nonnegative", category = Data;
         VALIDATE_GEN_COST_NOT_A_NUMBER = "VALIDATE.GEN_COST.NOT_A_NUMBER", Error,
             "a default generator cost field is not finite", category = Data;
         VALIDATE_GEN_COST_PATCH_INVALID = "VALIDATE.GEN_COST.PATCH_INVALID", Error,
@@ -552,7 +561,7 @@ pub mod codes {
 
     /// Every write target's family, in the order [`super::registry`] reports
     /// them.
-    pub const EMIT_FAMILIES: [&EmitFamily; 15] = [
+    pub const EMIT_FAMILIES: [&EmitFamily; 16] = [
         &EMIT_MATPOWER,
         &EMIT_PSSE,
         &EMIT_PSLF,
@@ -562,6 +571,7 @@ pub mod codes {
         &EMIT_POWERMODELS,
         &EMIT_EGRET,
         &EMIT_SURGE,
+        &EMIT_SIENNA,
         &EMIT_RAVENS,
         &EMIT_XIIDM,
         &EMIT_JIIDM,
@@ -594,6 +604,7 @@ impl TargetFormat {
             TargetFormat::PowerModelsJson => &codes::EMIT_POWERMODELS,
             TargetFormat::EgretJson => &codes::EMIT_EGRET,
             TargetFormat::SurgeJson => &codes::EMIT_SURGE,
+            TargetFormat::SiennaJson { .. } | TargetFormat::PowerSystemsJson => &codes::EMIT_SIENNA,
             TargetFormat::RavensJson => &codes::EMIT_RAVENS,
             TargetFormat::Xiidm => &codes::EMIT_XIIDM,
             TargetFormat::Jiidm => &codes::EMIT_JIIDM,

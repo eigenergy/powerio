@@ -364,16 +364,20 @@ this repository (`git fetch --tags`, or from `upstream` on a fork) before
 
 ### PowerIO IR changes
 
-The DTOs in `powerio/src/stored/dto.rs` define the IR document layout. A new
-type, field, or allowed name keeps IR version 2, and changing the meaning or
-layout of an existing type waits for a new IR version. A published schema
-snapshot under `docs/schema/pio-ir/2/` never changes. If `IR_SCHEMA_ID` in
-`powerio/src/lib.rs` still names a published snapshot, the first layout
-change after a release points it at the next release's directory and adds the
-published one to the history in `powerio/tests/frozen_schemas.rs`; commit
-71d3ed2 shows every file that moves with it. Regenerate the snapshot with
-`cargo run -p powerio --example generate_schemas --features schema -- docs/schema`.
-The [schema README](docs/schema/README.md) covers the rest.
+The DTOs in `powerio/src/stored/dto.rs` define the IR document layout. Follow
+the [schema compatibility rules](docs/schema/README.md#compatibility): the
+document version and schema catalog identify the release, and published
+snapshots keep their exact bytes. Within a release series, new structural
+types, allowed names, and distinctly tagged alternatives can be added;
+existing record layouts cannot gain arbitrary fields. Older readers refuse
+types or names they do not implement.
+
+The [schema update procedure](docs/schema/README.md#regenerating-the-current-schema)
+lists the version constants and test paths to update. Regenerate the current
+snapshot with
+`cargo run -p powerio --example generate_schemas --features schema -- docs/schema`,
+then run the frozen-schema and IR compatibility checks. Integer-version-2
+documents from 0.11 remain readable; new 0.12 documents use a release string.
 
 ### C ABI changes
 
@@ -388,13 +392,18 @@ CI runs two header checks plus a C smoke test against the built library.
 `scripts/capi-header-parity.sh` compares symbol names and runs in every feature
 job. `scripts/capi-header-regen.sh` regenerates the header with cbindgen and
 diffs it, which is what catches a reordered argument, a changed type, or a
-changed struct field; it runs once. A breaking change to an existing `pio_*`
-signature bumps `PIO_ABI_VERSION` (in `powerio-capi/src/lib.rs`; the header
-`#define` follows from regeneration) and updates `scripts/check-capi-v7.sh`,
-which pins the ABI number. The PowerIO.jl change that targets the new version
-merges to PowerIO.jl `main` before the release tag, because the release
-workflow tests PowerIO.jl `main` against the tagged library. Adding symbols
-does not bump it. Each ABI generation gets a changelog entry.
+changed struct field; it runs once.
+
+Within a release series the C ABI only gains symbols: a program compiled
+against the header of release X.Y.Z works with any library from the same
+series at X.Y.Z or newer. `scripts/check-capi-header.py` compares the header
+with the header of the newest release tag at or below the workspace version
+and fails when a function, struct, opaque type, or `#define` of that header
+is missing or declared differently. Add a new entry point or struct beside the
+old one instead. A break that belongs in the next release series carries the
+`semver-major` label, which turns the failure into a warning that still lists
+every break, and needs a PowerIO.jl companion branch of the same name.
+
 
 ### Tandem changes with PowerIO.jl
 
@@ -486,11 +495,19 @@ published draft. PowerIO.jl releases itself after each published release.
 
 The release version lives in `[workspace.package]` and the workspace dependency
 pins in `[workspace.dependencies]`. Update them together; the next Cargo command
-updates `Cargo.lock`. Then:
+updates `Cargo.lock`. Set `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and
+`PIO_VERSION_PATCH` in `powerio-capi/src/lib.rs` to the same release and
+regenerate `powerio.h`; `scripts/check-release-versions.sh` checks both.
+PowerIO.jl refuses a library from another release series, so a bump that
+starts a new series also needs a PowerIO.jl companion branch of the same name
+that regenerates `src/LibPowerIO.jl` from the new header; merge it before the
+tag. Then:
 
 1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`
    and release notes at `docs/release-notes/X.Y.Z.md` titled
-   `# PowerIO X.Y.Z release notes`, and wait for main CI.
+   `# PowerIO X.Y.Z release notes`, and wait for main CI. Move every entry
+   under `## Unreleased` into that section first; the tag workflow's
+   `check-release-versions.sh --release` refuses a nonempty `## Unreleased`.
    `bash scripts/release-preflight.sh` fails on anything that still states
    the old version, such as the C ABI goldens under `tests/data/capi_matrix`.
 2. Create an annotated `vX.Y.Z` tag on the tested main commit and push it.
@@ -503,9 +520,15 @@ updates `Cargo.lock`. Then:
    re-run the failed run. "Run workflow" builds and checks the tarballs but
    stages no draft.
 3. Inspect the draft and its five binary assets, then publish the release.
+   For API edits, address the draft by its release ID and include the exact
+   `tag_name` and tested commit SHA as `target_commitish`, even when changing
+   only the notes. A draft's `untagged-*` URL is not its release tag. Read back
+   the same release ID, verify its `tag_name`, and confirm the annotated tag
+   still resolves to the tested commit before publishing. The publication
+   request must preserve these explicit tag and commit fields too.
    The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio-core,
-   powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-synth,
+   powerio-archive, powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-synth,
    powerio-matrix, powerio, and powerio-cli, in dependency order). Both
    deploy through reviewer protected environments (`pypi` and `crates-io`;
    the protection lives in the repo settings). A rerun skips the PyPI files
@@ -533,16 +556,60 @@ updates `Cargo.lock`. Then:
    [PowerIO.jl's release section](https://github.com/eigenergy/PowerIO.jl/blob/main/CONTRIBUTING.md#releasing)
    covers a failed run and how to hold a release.
 
-A breaking C ABI change bumps `PIO_ABI_VERSION` first; see
+A breaking C ABI change starts a new release series; see
 [C ABI changes](#c-abi-changes) above.
 
-### Patch before the next release series
+### Starting a release series
 
-For a 0.11 patch release followed by the 0.12 candidate, merge the
-ABI-7-compatible Julia patch companion first. Complete the 0.11 patch's Rust
-release and Julia artifact testing/registration before merging the 0.12 Julia
-companion. The RC tag tests
-Julia main, so that companion must then land before tagging the candidate.
-Merge compatible patch fixes into the RC and re-run final checks. Preserve
-folded PR ancestry with merge commits so GitHub records indirect merges and
-individual attribution. A release tag still requires a maintainer request.
+A release that starts a new series (0.12.0 after 0.11.x) has four more
+steps around the ones above:
+
+- Finish any pending patch release of the previous series first, including
+  its PowerIO.jl artifact tests and registration, so that patch's Julia
+  follow-up is not built against the new C ABI.
+- Check that the `CHANGELOG.md` breaking list and the migration guide name
+  every Rust API break. On a new series `scripts/check-semver.sh` runs a
+  second, non-failing pass with the minor rules that lists the breaks against
+  the previous series, since cargo-semver-checks skips every lint for what it
+  sees as a major change. It does not see every break, such as a return type
+  that changed from `impl Iterator` to `Vec`, so read the public diff too.
+- Merge the PowerIO.jl companion branch with a merge commit before the tag.
+  Its `main` must read the new C ABI before the tag workflow tests it against
+  the tagged library.
+- Merge the release pull request into `main` with a merge commit, so the pull
+  requests whose heads are its ancestors are recorded as merged with their
+  authors. Wait for checks on both resulting `main` commits; if Julia's source
+  check ran against the older Rust `main`, rerun it after the Rust merge.
+
+### Prereleases
+
+PowerIO releases final versions. When a prerelease is ever wanted, it follows
+Cargo's conventions:
+
+- The workspace version carries the suffix (`1.0.0-rc.1`), and every
+  intra-workspace requirement in `[workspace.dependencies]` pins it exactly
+  (`version = "=1.0.0-rc.1"`). A caret requirement on a prerelease also
+  matches later prereleases and the final release, so a published prerelease
+  could resolve to sibling crates from another build.
+  `scripts/check-release-versions.sh` requires the exact pin for a prerelease
+  and the caret requirement otherwise.
+- The numbers a consumer compares state the core release (`1.0.0`): the
+  PowerIO IR schema directory and `IR_VERSION`, `PIO_VERSION_*`, and the C
+  header. The crate versions, `pio_version()`, and the Python version (which
+  maturin writes in its PEP 440 form, `1.0.0rc1`) carry the suffix.
+- Its `CHANGELOG.md` section, release notes, and tag name the prerelease
+  (`## 1.0.0-rc.1`, `docs/release-notes/1.0.0-rc.1.md`, `v1.0.0-rc.1`), and
+  its GitHub release is published with **Set as a pre-release** checked.
+- The release event does not publish a GitHub prerelease anywhere else:
+  crates.yml and python.yml skip crates.io and PyPI, and notify-powerio-jl.yml
+  does not start PowerIO.jl's Release workflow. Publishing a prerelease to
+  crates.io or PyPI is a deliberate maintainer decision for that prerelease,
+  not a side effect of the tag; a published version cannot be withdrawn, only
+  yanked. The workflows' manual-dispatch recovery paths also refuse a
+  prerelease, so publishing one is a manual step outside the workflows,
+  crate by crate in the crates.yml order.
+- The final release is a new version and tag. Drop the suffix, return the
+  intra-workspace requirements to caret, fold the prerelease's changelog
+  section into the release's, and follow the release steps above. Never move a
+  prerelease tag or turn its GitHub release into a stable one. A further
+  prerelease takes the next number (`1.0.0-rc.2`).

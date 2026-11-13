@@ -491,9 +491,7 @@ case stores zero shunt MW and the reader sets G = 0.
 
 `.pwd` files are display artifacts rather than network cases. The top-level
 facade's `parse` operation reads one into `PioValue::GeoLayer`; the layer can
-then travel through PowerIO IR and the ordinary module emission path. Python's
-raw-display compatibility helper `parse_display` returns
-`DisplayData("powerworld", PwdDisplay(...))`.
+then travel through PowerIO IR and the ordinary module emission path.
 
 The `.pwd` decoder reads substation symbols, supported bus symbols, and
 supported branch paths. Palettes, fonts, field labels, branch pies, and other

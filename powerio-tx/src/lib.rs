@@ -65,6 +65,8 @@ pub mod merge;
 pub mod network;
 mod normalize;
 mod operations;
+mod thermal_limit;
+mod union_find;
 #[doc(hidden)]
 pub mod version;
 
@@ -161,14 +163,14 @@ pub use network::{
     ImpedanceCorrection, ImpedanceCorrectionPoint, ImpedanceCorrectionVariable, InternalConnection,
     Junction, LineCommutatedConverter, LineCommutatedConverterOperatingMode,
     LineCommutatedConverterReactiveModel, Load, LoadVoltageModel, LoadingLimits,
-    MinMaxReactiveLimits, OmittedField, OmittedFieldName, OperationalLimitGroup,
-    ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock,
-    SolverParams, SourceFormat, StaticVarCompensator, StaticVarCompensatorRegulationMode, Storage,
-    Subnetwork, Substation, Switch, SwitchKind, SwitchedShuntControl, SwitchedShuntMode,
-    TapChanger, TapChangerKind, TapChangerRegulationMode, TapChangerStep, TemporaryLimit, Terminal,
-    TerminalReference, TieLine, TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W,
-    TransformerControl, TransformerControlMode, VoltageLevel, VoltageSourceConverter, Winding,
-    calc_series_admittance_of, repair_values,
+    MagnetizingConnection, MinMaxReactiveLimits, OmittedField, OmittedFieldName,
+    OperationalLimitGroup, ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits,
+    Shunt, ShuntBlock, SolverParams, SourceFormat, StaticVarCompensator,
+    StaticVarCompensatorRegulationMode, Storage, Subnetwork, Substation, Switch, SwitchKind,
+    SwitchedShuntControl, SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode,
+    TapChangerStep, TemporaryLimit, Terminal, TerminalReference, TieLine, TopologyEndpoint,
+    TopologyKind, TopologySwitch, Transformer3W, TransformerControl, TransformerControlMode,
+    VoltageLevel, VoltageSourceConverter, Winding, calc_series_admittance_of, repair_values,
 };
 pub use normalize::{
     AngleDifferenceBounds, ClosedSwitchPolicy, NormalizeOptions, NormalizeReport,
