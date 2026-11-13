@@ -1276,7 +1276,6 @@ impl<'a> Mapper<'a> {
     /// other rows writes as an object of its own. The flag is false when the
     /// segment states no impedance and the code is a zero placeholder.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn line_code_for(
         &mut self,
         line: &str,
