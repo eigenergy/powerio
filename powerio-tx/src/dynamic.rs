@@ -2,9 +2,10 @@
 //!
 //! A DYR file is a model library paired with a steady-state case, not itself a
 //! power-flow network. This module therefore keeps dynamic records separate
-//! from BalancedNetwork. Model-specific parameter schemas are intentionally
-//! not guessed: unknown/user-defined model names and their ordered parameters
-//! remain available to callers.
+//! from BalancedNetwork. Records stay untyped here: unknown/user-defined model
+//! names and their ordered parameters remain available to callers, and
+//! [`crate::dynamic_models`] reads the models with a documented PSS/E schema
+//! and links them to generators.
 //!
 //! Parsing is bounded and quote-aware. The original source is retained, so
 //! DynamicCase::to_dyr_string reproduces comments, whitespace, line endings,
@@ -46,7 +47,8 @@ impl DynamicCase {
     /// The check deliberately validates only the generic bus reference. It
     /// does not assume that every model's second identifier is a generator ID:
     /// DYR model families use different device keys, and custom models are
-    /// retained without pretending to understand their schemas.
+    /// retained without pretending to understand their schemas. Model-aware
+    /// generator linking is [`crate::dynamic_models::link_machines`].
     #[must_use]
     pub fn unresolved_buses(&self, bus_ids: &BTreeSet<u32>) -> Vec<UnresolvedBusReference> {
         self.records
@@ -67,6 +69,8 @@ impl DynamicCase {
     ///
     /// This deliberately does not validate `device_id`: there is no
     /// model-independent rule that the second DYR key names a generator.
+    /// [`DynamicStudy::machines`] resolves it for the generator models that
+    /// [`crate::dynamic_models`] reads.
     #[must_use]
     pub fn unresolved_buses_in(
         &self,
@@ -84,8 +88,10 @@ impl DynamicCase {
 /// A steady-state case explicitly paired with its transient-stability data.
 ///
 /// This is a study-level association, not a mutation of [`crate::BalancedNetwork`].
-/// The current linking guarantee validates generic bus references only; it does
-/// not resolve model-specific device keys or claim that the named device exists.
+/// [`DynamicStudy::unresolved_buses`] validates generic bus references only;
+/// [`DynamicStudy::machines`] resolves the `(bus, machine id)` keys of the
+/// generator models [`crate::dynamic_models`] reads, and reports every record
+/// it does not attach.
 #[derive(Clone, Debug)]
 pub struct DynamicStudy {
     network: crate::BalancedNetwork,
@@ -118,7 +124,9 @@ impl DynamicStudy {
         &self.dynamics
     }
 
-    /// DYR records whose bus reference is absent from the static case.
+    /// DYR records whose bus reference is absent from the static case. This
+    /// checks bus numbers only; [`DynamicStudy::machines`] checks that a
+    /// generator model names an in-service generator.
     #[must_use]
     pub fn unresolved_buses(&self) -> Vec<UnresolvedBusReference> {
         self.dynamics.unresolved_buses_in(&self.network)
@@ -132,7 +140,8 @@ impl DynamicStudy {
 }
 
 /// One DYR model record. Parameters remain ordered and lexically decoded;
-/// model-specific interpretation belongs in a separate, schema-backed layer.
+/// [`crate::dynamic_models::typed_model`] reads them through a model's PSS/E
+/// schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DynamicRecord {
     model_name: String,

@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter, governor and
-  stabilizer models, linked to generators by `(bus, machine id)` with `DynamicStudy::machines()`.
+  stabilizer models, linked to generators by `(bus, machine id)` with `DynamicStudy::machines()`;
+  as in PSS/E, a later record of one role for a unit replaces the earlier one.
 
 ## 0.11.12
 

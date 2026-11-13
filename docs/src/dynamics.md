@@ -42,8 +42,8 @@ buses. It does **not** assert that the optional
 `device_id` refers to a generator, load, or other particular equipment: the
 meaning of that field and the association rule depend on the model family.
 Unknown and user-defined models are preserved rather than rejected or
-silently dropped. Parameters remain strings until a schema-backed model view
-exists.
+silently dropped. Parameters remain strings on the record; the typed views and
+model-aware generator linking below read the models with a PSS/E schema.
 
 ## Typed model views and generator linking
 
@@ -51,19 +51,29 @@ exists.
 parameter schema for `GENCLS`, `GENROU`, `GENROE`, `GENSAL`, `GENSAE`,
 `SEXS`, `ESAC1A`, `EXST1`, `TGOV1`, `GAST`, `HYGOV` and `IEEEST`
 (`powerio::SUPPORTED_MODELS`). Parameters keep PSS/E names, order and the
-machine base; a record of another model, with the wrong parameter count or a
-non-numeric token, returns a `ModelError` and stays available raw. The typed
-view never changes the retained records, so `to_dyr_string()` still writes the
-source back byte for byte.
+machine base; a Fortran `D` exponent (`1.0D0`) reads as `E`. A record of
+another model, with the wrong parameter count, a non-numeric token, or an
+integer code (`IEEEST` `ICS` and `IB`) that is not an integer in range returns
+a `ModelError` and stays available raw. Other parameter values pass through
+without range checks, and some zeros carry PSS/E meaning: a zero time
+constant bypasses its block, and `GENCLS` with `H = 0` is an infinite bus.
+The typed view never changes the retained records, so `to_dyr_string()` still
+writes the source back byte for byte.
 
 `DynamicStudy::machines()` (or `powerio::link_machines`) attaches the typed
 records to the generators they name by `(bus, machine id)`. The PSS/E reader
 keeps a machine id only when it differs from the positional default, so
 `powerio::psse_machine_ids` rebuilds every generator's id with the writer's
-allocation rule, and `powerio::generator_source_impedance` returns `ZSORCE`. Each
-generator gets at most one machine, exciter, governor and stabilizer; every
-record that does not attach is reported as a `LinkIssue` (untyped, no such
-generator, or a duplicate role).
+allocation rule, and `powerio::generator_source_impedance` returns `ZSORCE`.
+A machine id matches exactly; when no generator on the bus has it, the one
+generator whose id matches ignoring ASCII case is used, and several such are
+reported as ambiguous. Each generator gets at most one machine, exciter,
+governor and stabilizer. As in PSS/E, which replaces a model of the same
+category for a machine when a later DYR record states one, the last record of
+a role wins and the replacement is reported. Every record that does not
+attach is reported as a `LinkIssue`: untyped (naming the generator only for a
+model known to attach to one), no such generator, out of service, ambiguous
+id, or replaced.
 
 Not implemented yet: typed views for further models, load and dc-line
 models, DYR-to-DYD/SWI/PowerWorld AUX conversion, transient simulation
