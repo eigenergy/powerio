@@ -22,6 +22,7 @@ use std::fmt;
 use crate::BalancedNetwork;
 use crate::dynamic::{DynamicCase, DynamicRecord};
 use crate::format::psse::detailed_source_property;
+use crate::network::BusId;
 
 /// Round-rotor machine data shared by `GENROU` (quadratic saturation) and
 /// `GENROE` (exponential saturation), in DYR order.
@@ -181,12 +182,13 @@ pub struct Hygov {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Ieeest {
-    /// `ICS`: 1 rotor speed deviation, 2 bus frequency deviation, 3 generator
-    /// electrical power, 4 accelerating power, 5 bus voltage, 6 bus voltage
-    /// derivative.
-    pub input_code: i32,
-    /// `IB`: remote bus for the input signal, 0 for the generator's own bus.
-    pub remote_bus: i32,
+    /// `ICS`, in `1..=6`: 1 rotor speed deviation, 2 bus frequency
+    /// deviation, 3 generator electrical power, 4 accelerating power, 5 bus
+    /// voltage, 6 bus voltage derivative.
+    pub input_code: u8,
+    /// `IB`: remote bus for the input signal; `None` when the record states 0,
+    /// the generator's own bus.
+    pub remote_bus: Option<BusId>,
     pub a1: f64,
     pub a2: f64,
     pub a3: f64,
@@ -305,6 +307,14 @@ pub enum ModelError {
         index: usize,
         token: String,
     },
+    /// An integer parameter (`ICON`) is not an integer, or is outside the
+    /// range the model accepts: `IEEEST` `ICS` must be in `1..=6`, and `IB`
+    /// a bus number from 0 to `u32::MAX`.
+    InvalidIcon {
+        model_name: String,
+        index: usize,
+        token: String,
+    },
 }
 
 impl fmt::Display for ModelError {
@@ -328,6 +338,15 @@ impl fmt::Display for ModelError {
                 "{model_name} parameter {} ({token:?}) is not a finite number",
                 index + 1
             ),
+            Self::InvalidIcon {
+                model_name,
+                index,
+                token,
+            } => write!(
+                f,
+                "{model_name} parameter {} ({token:?}) is not a valid integer code",
+                index + 1
+            ),
         }
     }
 }
@@ -348,8 +367,10 @@ fn numbers(record: &DynamicRecord, expected: usize) -> Result<Vec<f64>, ModelErr
         .iter()
         .enumerate()
         .map(|(index, token)| {
+            // Fortran list-directed output may write `1.0D0` for `1.0E0`.
             token
                 .trim()
+                .replacen(['D', 'd'], "E", 1)
                 .parse::<f64>()
                 .ok()
                 .filter(|v| v.is_finite())
@@ -362,7 +383,31 @@ fn numbers(record: &DynamicRecord, expected: usize) -> Result<Vec<f64>, ModelErr
         .collect()
 }
 
-#[allow(clippy::cast_possible_truncation)]
+/// An integer parameter of an already finite value: the value must be exactly
+/// integral (`1` or `1.0`) and inside `range`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn icon(
+    record: &DynamicRecord,
+    p: &[f64],
+    index: usize,
+    range: std::ops::RangeInclusive<u32>,
+) -> Result<u32, ModelError> {
+    let value = p[index];
+    let in_range = value.fract() == 0.0
+        && value >= f64::from(*range.start())
+        && value <= f64::from(*range.end());
+    if in_range {
+        // Exact: an integral value inside a `u32` range.
+        Ok(value as u32)
+    } else {
+        Err(ModelError::InvalidIcon {
+            model_name: record.model_name().trim().to_ascii_uppercase(),
+            index,
+            token: record.parameters()[index].clone(),
+        })
+    }
+}
+
 fn round_rotor(p: &[f64]) -> RoundRotor {
     RoundRotor {
         td0_p: p[0],
@@ -404,7 +449,10 @@ fn salient_pole(p: &[f64]) -> SalientPole {
 /// # Errors
 /// [`ModelError::Unsupported`] for a model outside [`SUPPORTED_MODELS`],
 /// [`ModelError::Arity`] or [`ModelError::NotANumber`] when the record does
-/// not match the schema.
+/// not match the schema, [`ModelError::InvalidIcon`] for an integer parameter
+/// that is not an integer in range. Other parameter values pass through
+/// unchecked: several zeros carry PSS/E meaning (a zero time constant
+/// bypasses its block, `GENCLS` `H = 0` is an infinite bus).
 #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)] // one arm per schema
 pub fn typed_model(record: &DynamicRecord) -> Result<DynamicModel, ModelError> {
     let name = record.model_name().trim().to_ascii_uppercase();
@@ -496,8 +544,11 @@ pub fn typed_model(record: &DynamicRecord) -> Result<DynamicModel, ModelError> {
             qnl: p[11],
         }),
         "IEEEST" => DynamicModel::Ieeest(Ieeest {
-            input_code: p[0] as i32,
-            remote_bus: p[1] as i32,
+            // Exact: ICS is in 1..=6.
+            input_code: icon(record, &p, 0, 1..=6)? as u8,
+            remote_bus: Some(icon(record, &p, 1, 0..=u32::MAX)?)
+                .filter(|&bus| bus != 0)
+                .map(|bus| BusId(bus as usize)),
             a1: p[2],
             a2: p[3],
             a3: p[4],
@@ -838,7 +889,7 @@ mod tests {
                 ],
                 DynamicModel::Ieeest(m) => vec![
                     f64::from(m.input_code),
-                    f64::from(m.remote_bus),
+                    m.remote_bus.map_or(0.0, |b| b.0 as f64),
                     m.a1,
                     m.a2,
                     m.a3,
@@ -874,5 +925,83 @@ mod tests {
                 token: "x".into()
             })
         );
+    }
+
+    fn ieeest(ics: &str, ib: &str) -> Result<DynamicModel, ModelError> {
+        let text =
+            format!("1 'IEEEST' 1 {ics} {ib} 0 0 0 0 0 0 0 0 0 0.02 1.65 1.65 100 0.1 -0.1 0 0 /");
+        typed_model(&parse_dyr(&text).unwrap().records()[0])
+    }
+
+    #[test]
+    fn ieeest_icons_are_integers_in_range() {
+        let Ok(DynamicModel::Ieeest(p)) = ieeest("2", "0") else {
+            panic!("IEEEST not typed");
+        };
+        assert_eq!((p.input_code, p.remote_bus), (2, None));
+        // An exactly integral float is an integer code.
+        let Ok(DynamicModel::Ieeest(p)) = ieeest("6.0", "4294967295") else {
+            panic!("IEEEST not typed");
+        };
+        assert_eq!(
+            (p.input_code, p.remote_bus),
+            (6, Some(BusId(4_294_967_295)))
+        );
+        let Ok(DynamicModel::Ieeest(p)) = ieeest("1", "1.0D2") else {
+            panic!("IEEEST not typed");
+        };
+        assert_eq!(p.remote_bus, Some(BusId(100)));
+        let invalid = |index: usize, token: &str| {
+            Err(ModelError::InvalidIcon {
+                model_name: "IEEEST".into(),
+                index,
+                token: token.into(),
+            })
+        };
+        assert_eq!(ieeest("1.5", "0"), invalid(0, "1.5"));
+        assert_eq!(ieeest("0", "0"), invalid(0, "0"));
+        assert_eq!(ieeest("7", "0"), invalid(0, "7"));
+        assert_eq!(ieeest("1", "-1"), invalid(1, "-1"));
+        assert_eq!(ieeest("1", "4294967296"), invalid(1, "4294967296"));
+        assert_eq!(ieeest("1", "2.5"), invalid(1, "2.5"));
+        // A token that is no number at all stays NotANumber.
+        assert!(matches!(
+            ieeest("x", "0"),
+            Err(ModelError::NotANumber { index: 0, .. })
+        ));
+        assert_eq!(
+            invalid(0, "7").unwrap_err().to_string(),
+            "IEEEST parameter 1 (\"7\") is not a valid integer code"
+        );
+    }
+
+    #[test]
+    fn fortran_d_exponents_are_numbers() {
+        let case = parse_dyr("1 'SEXS' 1 1.0D-1 1.0d1 2.0D+1 0.1 -5.0D0 5D0 /").unwrap();
+        let Ok(DynamicModel::Sexs(s)) = typed_model(&case.records()[0]) else {
+            panic!("SEXS not typed");
+        };
+        let read = [s.ta_tb, s.tb, s.k, s.te, s.emin, s.emax];
+        let expected = [0.1, 10.0, 20.0, 0.1, -5.0, 5.0];
+        assert!(
+            read.iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 1e-12),
+            "{read:?}"
+        );
+        // Errors keep the source token; a second D, or an overflow, is refused.
+        for bad in ["1.0D0D0", "1D999", "D"] {
+            let text = format!("1 'SEXS' 1 0.1 10 {bad} 0.1 0 3 /");
+            let case = parse_dyr(&text).unwrap();
+            assert_eq!(
+                typed_model(&case.records()[0]),
+                Err(ModelError::NotANumber {
+                    model_name: "SEXS".into(),
+                    index: 2,
+                    token: bad.into()
+                }),
+                "{bad}"
+            );
+        }
     }
 }
