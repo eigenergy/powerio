@@ -73,7 +73,6 @@ Q
         panic!("expected a balanced network");
     };
     assert_eq!(powerio::psse_machine_ids(network), ["1", "G2", "1", "OS"]);
-    assert_eq!(powerio::psse_branch_circuit_ids(network), ["1", "2"]);
     assert_eq!(
         powerio::generator_source_impedance(network, 1),
         Some((1e-3, 0.2995))

@@ -60,8 +60,7 @@ source back byte for byte.
 records to the generators they name by `(bus, machine id)`. The PSS/E reader
 keeps a machine id only when it differs from the positional default, so
 `powerio::psse_machine_ids` rebuilds every generator's id with the writer's
-allocation rule; `powerio::psse_branch_circuit_ids` does the same for branch
-circuits, and `powerio::generator_source_impedance` returns `ZSORCE`. Each
+allocation rule, and `powerio::generator_source_impedance` returns `ZSORCE`. Each
 generator gets at most one machine, exciter, governor and stabilizer; every
 record that does not attach is reported as a `LinkIssue` (untyped, no such
 generator, or a duplicate role).

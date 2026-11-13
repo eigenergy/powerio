@@ -155,10 +155,7 @@ pub(crate) fn machine_index(
 /// them, each family with its own id allocation, both keyed on the stored
 /// terminal pair. Walking the table twice reproduces that order while keeping
 /// the ids aligned with the table.
-pub(crate) fn branch_index(
-    net: &BalancedNetwork,
-    sanitized: &mut usize,
-) -> (Vec<String>, BranchRows) {
+fn branch_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, BranchRows) {
     let mut ids = vec![String::new(); net.branches().len()];
     let mut rows: BranchRows = BTreeMap::new();
     let mut line_ids = BTreeMap::new();

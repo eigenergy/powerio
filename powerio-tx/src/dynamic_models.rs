@@ -531,16 +531,6 @@ pub fn psse_machine_ids(net: &BalancedNetwork) -> Vec<String> {
     ids.into_iter().map(|id| id.trim().to_owned()).collect()
 }
 
-/// The PSS/E circuit id of every branch, aligned with
-/// [`BalancedNetwork::branches`], trimmed: the id the PSS/E writer states and
-/// the `.con` resolver matches (lines and two-winding transformers keep
-/// separate id spaces per bus pair).
-#[must_use]
-pub fn psse_branch_circuit_ids(net: &BalancedNetwork) -> Vec<String> {
-    let (ids, _) = crate::contingency::branch_index(net, &mut 0);
-    ids.into_iter().map(|id| id.trim().to_owned()).collect()
-}
-
 /// The generator's source impedance `ZSORCE = ZR + jZX` on its machine base,
 /// as the static case states it (PSS/E defaults `0 + j1` when absent); `None`
 /// when the network has no such generator.

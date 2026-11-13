@@ -127,8 +127,8 @@ pub use powerio_tx::dynamic::{
 pub use powerio_tx::dynamic_models::{
     DynamicModel, Esac1a, Exst1, Gast, Gencls, Hygov, Ieeest, LinkIssue, LinkedModel,
     MachineDynamics, MachineLinking, ModelError, ModelRole, RoundRotor, SUPPORTED_MODELS,
-    SalientPole, Sexs, Tgov1, generator_source_impedance, link_machines, psse_branch_circuit_ids,
-    psse_machine_ids, typed_model,
+    SalientPole, Sexs, Tgov1, generator_source_impedance, link_machines, psse_machine_ids,
+    typed_model,
 };
 
 use powerio_tx::format;
