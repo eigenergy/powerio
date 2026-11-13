@@ -93,6 +93,35 @@ def test_multiconductor_is_the_only_model_name():
     case = _parse_file_value(FOURWIRE)
     assert isinstance(case, dist.MulticonductorNetwork)
     assert powerio.MulticonductorNetwork is dist.MulticonductorNetwork
+
+
+def test_located_network_tables_are_independent_python_rows():
+    module = powerio.parse(io.StringIO("""
+module powerflow;
+object node { name source; phases AN; bustype SWING; nominal_voltage 240;
+    latitude 0; longitude 153.02; }
+object line_configuration { name cfg; z11 1+.5j; }
+object overhead_line { name line; from source; to sink; phases AN; length 100 m;
+    configuration cfg; }
+object load { name sink; phases AN; nominal_voltage 240; constant_power_A 20+5j; }
+"""), format="glm", name="located.glm")
+    stored = json.loads(_emit_module(module))["value"]["data"]
+    assert stored["type"] == "powerio.LocatedMulticonductorNetwork"
+    body = stored["value"]["network"]
+    for value in (module.value, _parse_module(_emit_module(module)).value):
+        for table, field in (
+            ("buses", "buses"), ("line_codes", "linecodes"),
+            ("lines", "lines"), ("switches", "switches"),
+            ("transformers", "transformers"), ("loads", "loads"),
+            ("generators", "generators"), ("ibrs", "ibrs"),
+            ("control_profiles", "control_profiles"), ("shunts", "shunts"),
+            ("capacitors", "capacitors"), ("voltage_sources", "sources"),
+            ("untyped_objects", "untyped"),
+        ):
+            assert getattr(value, table) == body.get(field, []), table
+        rows = value.buses
+        rows[0]["id"] = "edited copy"
+        assert value.buses[0]["id"] == body["buses"][0]["id"]
     assert "MulticonductorNetwork" in dist.__all__
     assert "DistCase" not in dist.__all__
     # The final surface has one multiconductor model name.
@@ -445,6 +474,14 @@ def test_referenced_source_rows_read_like_earth_source_rows():
     assert rows[0]["terminal_map"] == ["a"]
     assert rows[0]["reference_terminal"] == "n"
     assert "type" not in rows[0]
+
+
+def test_table_nonfinite_limits_keep_the_network_spelling():
+    stored = json.loads(_emit_module(powerio.parse(FOURWIRE)))
+    expected = stored["value"]["data"]["lines"]
+    expected[0]["i_max"][0] = "Infinity"
+    value = _parse_module(json.dumps(stored)).value
+    assert value.lines == expected
 
 
 def test_source_energy_prices_and_draft_schema_digest_survive_ir():

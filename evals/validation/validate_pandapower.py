@@ -72,7 +72,7 @@ def check_case(path):
     name = path.name
     case = powerio.parse(path).value
     try:
-        ppc = _m2ppc(str(path), "mpc")
+        ppc = _m2ppc(str(path))
     except OverflowError as exc:
         # pandapower's reader (matpowercaseframes) does int(float(tok)) and raises on
         # the `Inf` limit tokens MATPOWER uses for "unlimited" (e.g. pegase branch

@@ -103,7 +103,7 @@ cargo build -p powerio-tnd --features sincal --example sincal_balanced
 python evals/sincal/check_balanced_simbench.py target/debug/examples/sincal_balanced /tmp/simbench-check.json
 ```
 
-The independent check requires `numpy` and `pandapower==3.2.2`. It compares
+The independent check requires `numpy` and `pandapower==3.5.6`. It compares
 Rust network parameters with the original CSV files, constructs a pandapower
 network solely from those CSV inputs, and compares a fresh pi-transformer
 load-flow solution with independently solved nodal equations for the mapped

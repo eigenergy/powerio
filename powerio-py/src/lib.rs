@@ -1865,19 +1865,15 @@ fn json_value_to_py<'py>(
     })
 }
 
-/// Return one serialized model field. The concrete helpers below keep the
-/// serde trait out of this crate's public dependency list.
-fn serialized_value_field_to_py<'py>(
-    py: Python<'py>,
-    value: serde_json::Value,
-    field: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    let field_value = value.get(field).ok_or_else(|| {
-        PowerIOError::new_err(format!(
-            "the native model serialization has no {field:?} field"
+/// Materialize only the requested table, with the network's nonfinite spelling.
+/// Serializing the entire network both scales with unrelated tables and exposes
+/// durable IR wrappers that are not part of Python's physical row interface.
+fn table_json<T: serde::Serialize + ?Sized>(table: &T) -> PyResult<serde_json::Value> {
+    table
+        .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
+            serde_json::value::Serializer,
         ))
-    })?;
-    json_value_to_py(py, field_value)
+        .map_err(serialize_pyerr)
 }
 
 /// Return one balanced model field through that model's own serde surface.
@@ -1886,15 +1882,24 @@ fn balanced_field_to_py<'py>(
     model: &BalancedNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let mut value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    let mut value = match field {
+        "static_var_compensators" => table_json(model.static_var_compensators()),
+        "storage" => table_json(model.storage()),
+        "hvdc" => table_json(model.hvdc()),
+        "transformers_3w" => table_json(model.transformers_3w()),
+        "areas" => table_json(model.areas()),
+        _ => {
+            return Err(PowerIOError::new_err(format!(
+                "unknown balanced table {field:?}"
+            )));
+        }
+    }?;
     // Python exposes physical table rows, not the tagged IR representation.
     // Partial three-winding transformers keep the same dictionary fields as
     // ordinary transformers even though their durable IR must fail closed in
     // older readers that do not implement per-winding status.
     if field == "transformers_3w"
-        && let Some(rows) = value
-            .get_mut(field)
-            .and_then(serde_json::Value::as_array_mut)
+        && let Some(rows) = value.as_array_mut()
     {
         for row in rows {
             if row.get("type").and_then(serde_json::Value::as_str)
@@ -1907,7 +1912,7 @@ fn balanced_field_to_py<'py>(
             }
         }
     }
-    serialized_value_field_to_py(py, value, field)
+    json_value_to_py(py, &value)
 }
 
 /// Return one multiconductor model field through that model's own serde
@@ -1917,14 +1922,31 @@ fn dist_field_to_py<'py>(
     model: &powerio_dist::MulticonductorNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let mut value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    let mut value = match field {
+        "buses" => table_json(model.buses()),
+        "linecodes" => table_json(model.line_codes()),
+        "lines" => table_json(model.lines()),
+        "switches" => table_json(model.switches()),
+        "transformers" => table_json(model.transformers()),
+        "loads" => table_json(model.loads()),
+        "generators" => table_json(model.generators()),
+        "ibrs" => table_json(model.ibrs()),
+        "control_profiles" => table_json(model.control_profiles()),
+        "shunts" => table_json(model.shunts()),
+        "capacitors" => table_json(model.capacitors()),
+        "sources" => table_json(model.sources()),
+        "untyped" => table_json(model.untyped_objects()),
+        _ => {
+            return Err(PowerIOError::new_err(format!(
+                "unknown multiconductor table {field:?}"
+            )));
+        }
+    }?;
     // Python exposes physical source rows, not the tagged IR record: a
     // referenced source keeps every earth-referenced field and adds
     // `reference_terminal`, so `row["name"]` reads the same for both.
     if field == "sources"
-        && let Some(rows) = value
-            .get_mut(field)
-            .and_then(serde_json::Value::as_array_mut)
+        && let Some(rows) = value.as_array_mut()
     {
         for row in rows {
             if row.get("type").and_then(serde_json::Value::as_str)
@@ -1934,12 +1956,7 @@ fn dist_field_to_py<'py>(
             }
         }
     }
-    // These tables omit their JSON key when empty. The Python table surface
-    // still returns an empty list so every declared table is always readable.
-    if value.get(field).is_none() && matches!(field, "ibrs" | "control_profiles" | "capacitors") {
-        return Ok(PyList::empty(py).into_any());
-    }
-    serialized_value_field_to_py(py, value, field)
+    json_value_to_py(py, &value)
 }
 
 /// [`json_value_to_py`] for a JSON object, kept separate so a diagnostic's

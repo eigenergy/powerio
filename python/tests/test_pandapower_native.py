@@ -46,3 +46,40 @@ def test_native_default_import_preserves_split_zip_load_columns():
     pp.runpp(native, init="flat", calculate_voltage_angles=True, numba=False)
     assert native.converged
 
+
+@pytest.mark.parametrize("start", [-10.0, 0.0, 10.0])
+@pytest.mark.parametrize("element_type", ["gen", "ext_grid"])
+def test_native_piecewise_objective_preserves_nonzero_first_power(start, element_type):
+    pp = pytest.importorskip("pandapower")
+    import numpy as np
+    from pandapower.converter.pypower import to_ppc
+    from pandapower.pypower.idx_cost import NCOST
+    from pandapower.pypower.totcost import totcost
+
+    source = native_network(pp)
+    if element_type == "gen":
+        element = pp.create_gen(source, 7, p_mw=10, vm_pu=1,
+                                min_p_mw=-100, max_p_mw=100,
+                                min_q_mvar=-100, max_q_mvar=100, controllable=True)
+    else:
+        element = source.ext_grid.index[0]
+    pp.create_pwl_cost(source, element, element_type,
+                       [[start, start + 10, 5], [start + 10, start + 20, 8]])
+    module = powerio.parse(io.StringIO(pp.to_json(source)), format="pandapower-json")
+    costs = [g["cost"] for g in module.value.generators if g["cost"] is not None]
+    assert len(costs) == 1
+    cost = costs[0]
+    typed_curve = np.array([[cost["model"], cost["startup"], cost["shutdown"],
+                             cost["ncost"], *cost["coeffs"]]])
+    output = pp.from_json_string(canonical(pp, source))
+    for network in (source, output):
+        ppc = to_ppc(network, init="flat", mode="opf")
+        # The only curve with three points is the synthetic cost above.
+        curve = ppc["gencost"][ppc["gencost"][:, NCOST] == 3]
+        assert curve.shape[0] == 1
+        for power, expected in ((start, 5 * start),
+                                (start + 5, 5 * start + 25),
+                                (start + 15, 5 * start + 90)):
+            assert totcost(curve, np.array([power]))[0] == pytest.approx(expected)
+            assert totcost(typed_curve, np.array([power]))[0] == pytest.approx(expected)
+
