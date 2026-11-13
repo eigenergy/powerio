@@ -19857,6 +19857,12 @@ unsafe fn dc_vector(
     }
 }
 
+/// Signed branch by bus incidence matrix of a balanced network. `formula`
+/// names the branch susceptance formula, which decides the zero impedance
+/// guard: `series_susceptance` (the default when `formula` is NULL),
+/// `series_susceptance_no_phase_shift`, `tap_adjusted_reactance`,
+/// `tap_adjusted_series_susceptance`, or `reactance_only`. Any other token
+/// fails with `REQUEST.CAPI.UNKNOWN_FORMULA`.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
