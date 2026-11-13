@@ -151,6 +151,23 @@ every change that needs action.
   `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
   in-service branch over dense bus indices; build a graph with any library
   from it.
+- `powerio-prob`'s SOCWR solution names its branch flows as the other
+  solutions do: the `SocwrOpfValues` fields and the `SocwrOpfSolution`
+  accessors `branch_from_active_power`, `branch_from_reactive_power`,
+  `branch_to_active_power`, and `branch_to_reactive_power` are now
+  `branch_from_active_flow`, `branch_from_reactive_flow`,
+  `branch_to_active_flow`, and `branch_to_reactive_flow`, with no alias. The
+  PowerIO IR keys and the quantity names the C ABI's solution value accessor
+  takes follow; the IR reader still accepts the 0.11 keys.
+  `SocwrOpfSolution::bus_order` and `branch_order` return a `Vec`, as every
+  other solution's do, instead of an iterator, and are `#[must_use]`. See
+  [Renamed for consistency](docs/src/migration-0.12.md#renamed-for-consistency).
+- `powerio-dist` removes every version-bearing BMOPF name:
+  `BmopfSchemaVersion`, `BmopfEmitOptions::schema_version`,
+  `with_schema_version` and `sideload_coordinates`, and
+  `BMOPF_SCHEMA_VERSION`; `BMOPF_PROPOSAL_URL` becomes the function
+  `bmopf_proposal_url()`. The `bmopf-json@<version>` output tokens are refused.
+  **BMOPF** below gives the details.
 - Use numeric zero for a zero flow bound and positive infinity for no bound
   across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
   conventions at import/export and preserve 0.11 IR meanings on read (#841).
