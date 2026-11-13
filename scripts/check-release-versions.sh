@@ -3,7 +3,7 @@
 # one story before anything publishes.
 #
 # The workspace version is MAJOR.MINOR.PATCH with an optional prerelease
-# suffix (0.12.0-rc.1). The suffix names a candidate of the release before it;
+# suffix (1.0.0-rc.1). The suffix marks a prerelease of the core release;
 # everything that states a release number states that core release.
 #
 # - PIO_VERSION_MAJOR, _MINOR, and _PATCH in the Rust source and the

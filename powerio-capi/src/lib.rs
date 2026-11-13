@@ -21338,7 +21338,7 @@ mod tests {
         );
         let version = pio_version_numbers();
         assert_eq!([version.major, version.minor, version.patch], numbers);
-        // A prerelease (0.12.0-rc.1) states its core release in the numbers
+        // A prerelease (1.0.0-rc.1) states its core release in the numbers
         // and the whole version in the string.
         let text = unsafe { view_text(pio_version()) };
         assert_eq!(text, powerio::VERSION);

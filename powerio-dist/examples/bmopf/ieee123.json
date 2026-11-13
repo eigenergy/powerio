@@ -5584,13 +5584,13 @@
   "meta": {
     "case_study_generator": {
       "tool": "powerio",
-      "version": "0.12.0-rc.1"
+      "version": "0.12.0"
     },
     "frequency": 60.0,
     "provenance": {
       "powerio_bmopf": {
         "producer": "powerio",
-        "producer_version": "0.12.0-rc.1",
+        "producer_version": "0.12.0",
         "schema_commit": "6796394f6a4326b61c7fcf5ab5c0d55181b67d25",
         "schema_id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/schema-v0.2.0/schema/bmopf/0.2.0/bmopf.schema.json",
         "schema_retrieval_url": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/6796394f6a4326b61c7fcf5ab5c0d55181b67d25/schema/bmopf/0.2.0/bmopf.schema.json",

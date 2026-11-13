@@ -87,7 +87,7 @@ Added:
   a `PioVersionView` with `major`, `minor`, and `patch` fields.
 
 `pio_version()` still returns the release as text. A prerelease such as
-`0.12.0-rc.1` states its core release, `0.12.0`, in the numbers and the whole
+`1.0.0-rc.1` states its core release, `1.0.0`, in the numbers and the whole
 version in `pio_version()`.
 
 A program compiled against the header of release X.Y.Z works with any library

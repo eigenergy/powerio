@@ -21,8 +21,8 @@ if ! cargo semver-checks --version >/dev/null 2>&1; then
     exit 2
 fi
 
-# The core release of the workspace version: a prerelease such as 0.12.0-rc.1
-# compares as a candidate of 0.12.0.
+# The core release of the workspace version: a prerelease such as 1.0.0-rc.1
+# compares as a prerelease of 1.0.0.
 version=$(grep -m1 -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?"' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 baseline=
 for tag in $(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V); do

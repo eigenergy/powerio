@@ -2,13 +2,12 @@
 
 ## Unreleased
 
-## 0.12.0-rc.1
+## 0.12.0
 
-The release candidate for PowerIO 0.12, which starts the 0.12.x release
-series. Before 1.0, the public numerical types and the outstanding
-conventions and milestone work need a maintainer decision. See
-[From 0.11 to 0.12](docs/src/migration-0.12.md) for every change that needs
-action.
+PowerIO 0.12.0 starts the 0.12.x release series. Before 1.0, the public
+numerical types and the outstanding conventions and milestone work need a
+maintainer decision. See [From 0.11 to 0.12](docs/src/migration-0.12.md) for
+every change that needs action.
 
 **Interoperability**
 
