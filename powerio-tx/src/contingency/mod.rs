@@ -38,6 +38,8 @@ mod expand;
 mod lexer;
 pub mod mon;
 mod resolve;
+
+pub(crate) use resolve::{branch_index, machine_index};
 pub mod sub;
 mod tara;
 

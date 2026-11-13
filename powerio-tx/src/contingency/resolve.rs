@@ -130,7 +130,10 @@ type Transformer3wRows = BTreeMap<[BusId; 3], Vec<(String, usize)>>;
 ///
 /// The key is the trimmed id the writer allocates, which is the id a RAW file
 /// states and a `.con` statement names.
-fn machine_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, MachineRows) {
+pub(crate) fn machine_index(
+    net: &BalancedNetwork,
+    sanitized: &mut usize,
+) -> (Vec<String>, MachineRows) {
     let mut ids = Vec::with_capacity(net.generators().len());
     let mut rows = BTreeMap::new();
     let mut used = BTreeMap::new();
@@ -152,7 +155,10 @@ fn machine_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, 
 /// them, each family with its own id allocation, both keyed on the stored
 /// terminal pair. Walking the table twice reproduces that order while keeping
 /// the ids aligned with the table.
-fn branch_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, BranchRows) {
+pub(crate) fn branch_index(
+    net: &BalancedNetwork,
+    sanitized: &mut usize,
+) -> (Vec<String>, BranchRows) {
     let mut ids = vec![String::new(); net.branches().len()];
     let mut rows: BranchRows = BTreeMap::new();
     let mut line_ids = BTreeMap::new();

@@ -45,8 +45,29 @@ Unknown and user-defined models are preserved rather than rejected or
 silently dropped. Parameters remain strings until a schema-backed model view
 exists.
 
-Not implemented yet: typed machine/exciter/governor/stabilizer models,
-model-aware device association, DYR-to-DYD/SWI/PowerWorld AUX conversion,
-transient simulation, and dynamics exposure through PowerIO IR, C ABI, Julia,
-or Python. This is the initial public API boundary, not a claim that those
-features are complete.
+## Typed model views and generator linking
+
+`powerio::typed_model` reads a record through its PSS/E Model Library
+parameter schema for `GENCLS`, `GENROU`, `GENROE`, `GENSAL`, `GENSAE`,
+`SEXS`, `ESAC1A`, `EXST1`, `TGOV1`, `GAST`, `HYGOV` and `IEEEST`
+(`powerio::SUPPORTED_MODELS`). Parameters keep PSS/E names, order and the
+machine base; a record of another model, with the wrong parameter count or a
+non-numeric token, returns a `ModelError` and stays available raw. The typed
+view never changes the retained records, so `to_dyr_string()` still writes the
+source back byte for byte.
+
+`DynamicStudy::machines()` (or `powerio::link_machines`) attaches the typed
+records to the generators they name by `(bus, machine id)`. The PSS/E reader
+keeps a machine id only when it differs from the positional default, so
+`powerio::psse_machine_ids` rebuilds every generator's id with the writer's
+allocation rule; `powerio::psse_branch_circuit_ids` does the same for branch
+circuits, and `powerio::generator_source_impedance` returns `ZSORCE`. Each
+generator gets at most one machine, exciter, governor and stabilizer; every
+record that does not attach is reported as a `LinkIssue` (untyped, no such
+generator, or a duplicate role).
+
+Not implemented yet: typed views for further models, load and dc-line
+models, DYR-to-DYD/SWI/PowerWorld AUX conversion, transient simulation
+(tellegen's `rms` module consumes these views), and dynamics exposure through
+PowerIO IR, C ABI, Julia, or Python. This is the initial public API boundary,
+not a claim that those features are complete.

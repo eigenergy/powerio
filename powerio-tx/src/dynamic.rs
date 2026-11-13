@@ -93,6 +93,13 @@ pub struct DynamicStudy {
 }
 
 impl DynamicStudy {
+    /// Attach the typed DYR models to the generators they name by
+    /// `(bus, machine id)`; see [`crate::dynamic_models::link_machines`].
+    #[must_use]
+    pub fn machines(&self) -> crate::dynamic_models::MachineLinking {
+        crate::dynamic_models::link_machines(&self.network, &self.dynamics)
+    }
+
     /// Pair a parsed static network with a parsed DYR case.
     #[must_use]
     pub fn new(network: crate::BalancedNetwork, dynamics: DynamicCase) -> Self {
