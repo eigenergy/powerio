@@ -55,18 +55,26 @@ pub enum BranchSusceptanceFormula {
     ///
     /// Reads the whole series impedance, so it describes a branch with a real
     /// r/x ratio. A transformer tap does not scale it, and it reduces to
-    /// `-1/x` when the resistance is zero. This is PowerModels' DC branch
-    /// susceptance exactly.
+    /// `-1/x` when the resistance is zero. The coefficient matches PowerModels DCP; its phase-shift
+    /// treatment does not. Use `SeriesSusceptanceNoPhaseShift` for DCP.
     #[default]
     SeriesSusceptance,
+    /// `b = -x/((r² + x²) tau)` with phase shift injections (ignore conductance).
+    TapAdjustedSeriesSusceptance,
+    /// Series susceptance, ignoring taps and phase shifts, matching PowerModels
+    /// DCP on the same branch orientation and impedance reference side.
+    /// PowerModels may reverse antiparallel transformers during parsing, scaling
+    /// their impedance by the original tap squared; this tap-ignoring coefficient
+    /// then changes. The two tap-adjusted conventions are invariant under that
+    /// complete reversal transformation.
+    SeriesSusceptanceNoPhaseShift,
 }
 
 impl BranchSusceptanceFormula {
     /// The public branch susceptance, in PowerModels signs: the imaginary
     /// part of the series admittance the selected formula models, negative
-    /// for an inductive branch. Only [`Self::TapAdjustedReactance`] reads the
-    /// tap, and only [`Self::SeriesSusceptance`] reads the resistance; a
-    /// value the selected formula never reads cannot reject a branch.
+    /// for an inductive branch. The dependency helpers
+    /// state which input values can reject a branch.
     ///
     /// Non-finite in, non-finite out. The reciprocal rules need the guard
     /// because `1/±inf` is a finite `0.0`: a branch Y_bus rejects outright
@@ -91,7 +99,15 @@ impl BranchSusceptanceFormula {
         match self {
             Self::ReactanceOnly => negated_reciprocal(reactance),
             Self::TapAdjustedReactance => negated_reciprocal(reactance * effective_tap),
-            Self::SeriesSusceptance => series_admittance_parts(resistance, reactance).1,
+            Self::SeriesSusceptance | Self::SeriesSusceptanceNoPhaseShift => {
+                series_admittance_parts(resistance, reactance).1
+            }
+            Self::TapAdjustedSeriesSusceptance => {
+                if !effective_tap.is_finite() {
+                    return f64::NAN;
+                }
+                series_admittance_parts(resistance, reactance).1 / effective_tap
+            }
         }
     }
 
@@ -115,15 +131,31 @@ impl BranchSusceptanceFormula {
     /// the tap can bound or reject a branch.
     #[must_use]
     pub fn reads_tap(self) -> bool {
-        matches!(self, Self::TapAdjustedReactance)
+        matches!(
+            self,
+            Self::TapAdjustedReactance | Self::TapAdjustedSeriesSusceptance
+        )
+    }
+
+    /// Whether resistance participates in the series impedance coefficient.
+    #[must_use]
+    pub fn reads_resistance(self) -> bool {
+        matches!(
+            self,
+            Self::SeriesSusceptance
+                | Self::TapAdjustedSeriesSusceptance
+                | Self::SeriesSusceptanceNoPhaseShift
+        )
     }
 
     /// Whether phase shifts contribute to the nodal injection vector.
     #[must_use]
     pub fn includes_phase_shifts(self) -> bool {
         match self {
-            Self::ReactanceOnly => false,
-            Self::TapAdjustedReactance | Self::SeriesSusceptance => true,
+            Self::ReactanceOnly | Self::SeriesSusceptanceNoPhaseShift => false,
+            Self::TapAdjustedReactance
+            | Self::SeriesSusceptance
+            | Self::TapAdjustedSeriesSusceptance => true,
         }
     }
 
@@ -134,6 +166,8 @@ impl BranchSusceptanceFormula {
             Self::SeriesSusceptance => "series_susceptance",
             Self::TapAdjustedReactance => "tap_adjusted_reactance",
             Self::ReactanceOnly => "reactance_only",
+            Self::TapAdjustedSeriesSusceptance => "tap_adjusted_series_susceptance",
+            Self::SeriesSusceptanceNoPhaseShift => "series_susceptance_no_phase_shift",
         }
     }
 
@@ -144,6 +178,8 @@ impl BranchSusceptanceFormula {
             "series_susceptance" => Some(Self::SeriesSusceptance),
             "tap_adjusted_reactance" => Some(Self::TapAdjustedReactance),
             "reactance_only" => Some(Self::ReactanceOnly),
+            "tap_adjusted_series_susceptance" => Some(Self::TapAdjustedSeriesSusceptance),
+            "series_susceptance_no_phase_shift" => Some(Self::SeriesSusceptanceNoPhaseShift),
             _ => None,
         }
     }
@@ -161,6 +197,8 @@ mod tests {
             BranchSusceptanceFormula::SeriesSusceptance,
             BranchSusceptanceFormula::TapAdjustedReactance,
             BranchSusceptanceFormula::ReactanceOnly,
+            BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+            BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
         ] {
             assert_eq!(
                 BranchSusceptanceFormula::from_formula_name(convention.formula_name()),
@@ -173,6 +211,20 @@ mod tests {
             BranchSusceptanceFormula::from_formula_name("matpower"),
             None
         );
+    }
+
+    #[test]
+    fn tap_adjusted_series_is_finite_at_large_impedance_and_ignores_no_inputs() {
+        let f = BranchSusceptanceFormula::TapAdjustedSeriesSusceptance;
+        let b = f.calc_branch_susceptance(1e200, 1e200, 2.0);
+        assert!((b / -2.5e-201 - 1.0).abs() < 1e-14);
+        for tap in [f64::INFINITY, f64::NAN, 0.0] {
+            assert!(!f.calc_branch_susceptance(0.1, 0.2, tap).is_finite());
+        }
+        assert!(f.reads_tap() && f.reads_resistance() && f.includes_phase_shifts());
+        let dcp = BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift;
+        assert!(dcp.reads_resistance() && !dcp.reads_tap() && !dcp.includes_phase_shifts());
+        assert!((dcp.calc_branch_susceptance(0.1, 0.2, f64::NAN) + 4.0).abs() < 1e-12);
     }
 
     /// Public values carry PowerModels signs: negative for an inductive

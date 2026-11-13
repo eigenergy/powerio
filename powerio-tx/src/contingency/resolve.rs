@@ -130,7 +130,10 @@ type Transformer3wRows = BTreeMap<[BusId; 3], Vec<(String, usize)>>;
 ///
 /// The key is the trimmed id the writer allocates, which is the id a RAW file
 /// states and a `.con` statement names.
-fn machine_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, MachineRows) {
+pub(crate) fn machine_index(
+    net: &BalancedNetwork,
+    sanitized: &mut usize,
+) -> (Vec<String>, MachineRows) {
     let mut ids = Vec::with_capacity(net.generators().len());
     let mut rows = BTreeMap::new();
     let mut used = BTreeMap::new();

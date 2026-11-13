@@ -959,6 +959,12 @@ impl From<SchemeArg> for Scheme {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum BranchSusceptanceFormulaArg {
+    /// Series susceptance scaled by the transformer tap, with phase shifts.
+    #[value(name = "tap-adjusted-series-susceptance")]
+    TapAdjustedSeriesSusceptance,
+    /// PowerModels DCP: series susceptance, without taps or phase shifts.
+    #[value(name = "series-susceptance-no-phase-shift")]
+    SeriesSusceptanceNoPhaseShift,
     /// The whole series impedance: `imag(inv(r + jx))`, with phase shift
     /// injections.
     #[value(name = "series-susceptance")]
@@ -979,6 +985,12 @@ impl From<BranchSusceptanceFormulaArg> for BranchSusceptanceFormula {
             BranchSusceptanceFormulaArg::SeriesSusceptance => Self::SeriesSusceptance,
             BranchSusceptanceFormulaArg::TapAdjustedReactance => Self::TapAdjustedReactance,
             BranchSusceptanceFormulaArg::ReactanceOnly => Self::ReactanceOnly,
+            BranchSusceptanceFormulaArg::TapAdjustedSeriesSusceptance => {
+                Self::TapAdjustedSeriesSusceptance
+            }
+            BranchSusceptanceFormulaArg::SeriesSusceptanceNoPhaseShift => {
+                Self::SeriesSusceptanceNoPhaseShift
+            }
         }
     }
 }

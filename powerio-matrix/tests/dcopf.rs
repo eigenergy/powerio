@@ -1435,3 +1435,57 @@ fn economic_output_signs_match_optimal_value_derivatives() {
     );
     assert!((reverse_rating_derivative + 20.0).abs() < 1e-8);
 }
+
+/// A transformer with r, tap and shift distinguishes every convention. The
+/// affine injection and flow operator must use exactly the preparation weight.
+#[test]
+fn explicit_dc_variants_share_weights_offsets_and_ratings() {
+    use BranchSusceptanceFormula as F;
+    use powerio_matrix::{DcOperators, DcOpfAssemblyOptions};
+    use powerio_prob::{DcOpfInstance, DcPfInstance};
+    let mut branch = Branch::new(BusId(1), BusId(2), 0.1, 0.2);
+    branch.tap = 1.3;
+    branch.shift = 10.0;
+    branch.rate_a = 100.0;
+    let mut network = net(
+        "variants",
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![branch],
+    );
+    network.generators_mut().push(Generator::new(BusId(1)));
+    let angle = 10_f64.to_radians();
+    for (formula, b, shift) in [
+        (F::SeriesSusceptance, -4.0, angle),
+        (F::TapAdjustedSeriesSusceptance, -4.0 / 1.3, angle),
+        (F::SeriesSusceptanceNoPhaseShift, -4.0, 0.0),
+        (F::TapAdjustedReactance, -5.0 / 1.3, angle),
+        (F::ReactanceOnly, -5.0, 0.0),
+    ] {
+        for normalized in [false, true] {
+            let network = if normalized {
+                network.to_normalized().unwrap()
+            } else {
+                network.clone()
+            };
+            let pf = DcPfInstance::from_network(network.clone())
+                .unwrap()
+                .with_branch_susceptance_formula(formula);
+            let op = DcOperators::build(&pf).unwrap();
+            let opf = DcOpfInstance::from_network(network)
+                .unwrap()
+                .with_branch_susceptance_formula(formula);
+            let prep =
+                powerio_matrix::build_dc_opf_preparation(&opf, &DcOpfAssemblyOptions::default())
+                    .unwrap();
+            assert!((op.calc_branch_susceptances()[0] - b).abs() < 1e-12);
+            assert!((prep.branches.susceptance_magnitude[0] + b).abs() < 1e-12);
+            assert!((prep.calc_branch_flow_offset()[0] - b * shift).abs() < 1e-12);
+            assert!((prep.p_shift[0] - b * shift).abs() < 1e-12);
+            assert!((prep.p_shift[1] + b * shift).abs() < 1e-12);
+            assert!((prep.branches.f_max[0] - 1.0).abs() < 1e-12);
+        }
+    }
+}

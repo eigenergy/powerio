@@ -770,7 +770,9 @@ class BalancedNetwork:
 
     def calc_ptdf(self, formula: str = "series_susceptance", solver: str = "auto"):
         """DC PTDF (m×n). ``formula`` is ``"series_susceptance"``,
-        ``"tap_adjusted_reactance"``, or ``"reactance_only"``.
+        ``"tap_adjusted_reactance"``, ``"reactance_only"``,
+        ``"tap_adjusted_series_susceptance"``, or
+        ``"series_susceptance_no_phase_shift"``.
 
         ``solver`` is ``"auto"``, ``"dense"``, or ``"sparse"``. ``"auto"``
         uses the dense factorization on small cases and the sparse Cholesky

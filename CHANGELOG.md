@@ -9,6 +9,26 @@ numerical types and the outstanding conventions and milestone work need a
 maintainer decision. See [From 0.11 to 0.12](docs/src/migration-0.12.md) for
 every change that needs action.
 
+**Dynamics**
+
+- Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter,
+  governor and stabilizer models, linked to generators by `(bus, machine id)`
+  with `DynamicStudy::machines()`. As in PSS/E, a later record of one role for
+  a unit replaces the earlier one (`LinkIssue::Replaced`); machine ids match
+  exactly, then case-insensitively when one generator on the bus matches
+  (#871, @sebeich).
+
+**DC formulations**
+
+- Explicit tap-adjusted series-susceptance and PowerModels DCP conventions
+  across DC matrices, instances and bindings; the default is unchanged
+  (#820, @frederikgeth).
+- Behaviour change: DC OPF preparation with the default `series_susceptance`
+  formula (and the other series-admittance formulas) keeps a purely resistive
+  branch (r > 0, x = 0) as a zero-weight row, matching the DC operator
+  builders; it is no longer reported as `ZeroImpedance` or skipped by
+  `skip_zero_impedance` (#820).
+
 **Interoperability**
 
 - Share repeated CGMES class and property names during parsing through a bounded

@@ -62,7 +62,10 @@ pub struct DcOpfOptions {
     /// Formula used to calculate each branch susceptance.
     pub formula: BranchSusceptanceFormula,
     pub units: Units,
-    /// Skip non-self-loop branches with zero reactance. Off by default:
+    /// Skip non-self-loop branches with an unusable formula denominator.
+    /// Series-admittance formulas bound `hypot(r, x)`; reciprocal-reactance
+    /// formulas bound `abs(x)`. Purely resistive branches remain as zero-weight
+    /// rows for series-admittance formulas. Off by default:
     /// zero impedance branches are preserved in networks and instances, so
     /// assembly refuses them with [`powerio_tx::Error::ZeroImpedance`] until
     /// the caller resolves them explicitly
@@ -451,17 +454,22 @@ pub(crate) fn preparation_from_view(
             // DC flow, and its shift injection cancels at its own bus.
             continue;
         }
-        // The reactance the DC matrix builders bound, on the same rule: an
-        // `x = 1e-300` gives a finite `b = 1e300` that annihilates every real
-        // branch sharing a bus with it. Exact zero used to be the whole test.
-        if branch.x.abs() < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE {
+        // Match the operator/incidence denominator guard. A purely resistive
+        // branch has zero DC coupling in series-admittance models, but 1/x
+        // models cannot divide by its reactance. Keep zero-weight branch rows.
+        let denominator = if options.formula.reads_resistance() {
+            branch.r.hypot(branch.x)
+        } else {
+            branch.x.abs()
+        };
+        if denominator < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
             return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
         }
-        // Only the tap-reading formula can be bounded by a tap (#324).
+        // Only tap-reading formulas can be bounded by a tap (#324).
         let tap = if options.formula.reads_tap() {
             branch.calc_divisible_tap(source_row)?
         } else {
