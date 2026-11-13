@@ -1196,7 +1196,7 @@ mod tests {
         assert_eq!(linking.machines.len(), 7);
         let g2 = unit(&linking, 102, "G2");
         assert_eq!((g2.generator, g2.bus, g2.mbase), (1, BusId(102), 200.0));
-        assert!(linking.issues.is_empty());
+        assert_eq!(linking.issues, []);
     }
 
     /// PSS/E replaces an earlier model of the same category for one machine
