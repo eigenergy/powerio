@@ -846,6 +846,13 @@ fn simulator24_saves_of_case14_match_the_matpower_case() {
         );
         assert_decoded_shape(&pwb, &path);
         assert_pwb_matches_text(&pwb, &case14, Quanta::MATPOWER, file);
+        // The aux stated every bus's VMIN/VMAX as its limit set A, which the
+        // bus record tail stores as the first entry of its limit lists.
+        for (p, t) in pwb.buses().iter().zip(case14.buses()) {
+            assert_eq!(p.id, t.id, "{file}: bus order");
+            close(p.vmin, t.vmin, 0.0, file, &format!("bus {} vmin", p.id));
+            close(p.vmax, t.vmax, 0.0, file, &format!("bus {} vmax", p.id));
+        }
         decodes.push(pwb);
     }
     // The two layouts store the same records.
@@ -855,6 +862,112 @@ fn simulator24_saves_of_case14_match_the_matpower_case() {
     assert_eq!(v577.loads(), v483.loads());
     assert_eq!(v577.shunts(), v483.shunts());
     assert_eq!(v577.branches(), v483.branches());
+}
+
+/// PowerWorld Simulator 24 saves of an edited case14 in its own layout
+/// (header 577) and the `PWB19` (425) and `PWB17` (338) layouts, cut like
+/// the case14 saves above (`tests/data/powerworld/README.md`). The aux
+/// Simulator loaded edits case14.m to state the three fields the reader
+/// decodes from these saves and every older corpus file stores as zero or
+/// absent:
+///
+/// - per bus voltage limits: bus 1 gives limit sets A to D distinct values,
+///   bus 2 keeps its lists with `BusVoltLim` NO, bus 13 never had limits
+///   (no lists), bus 14 had `BusVoltLim` set to YES without values (lists
+///   of Simulator's 0.9/1.1 defaults), and the rest keep case14's 0.94/1.06;
+/// - the bus 9 shunt's nominal MW (`SSNMW`) 12.5;
+/// - the 5-6 transformer's phase shift (`LinePhase`) -3.5 degrees;
+///
+/// plus bus shunts (`BusG:1`/`BusB:1`) on buses 1, 3, and 13, which move the
+/// voltage limit lists 8 bytes down their record tails. Simulator's own
+/// `GetParametersMultipleElement` values for the loaded case are the
+/// expectations below.
+#[test]
+fn simulator24_saves_of_edited_case14_decode_limits_shunt_mw_and_phase() {
+    let mut case14 = parse_file(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m"),
+        None,
+    )
+    .unwrap()
+    .network;
+    for bus in case14.buses_mut().iter_mut() {
+        bus.base_kv = 138.0;
+    }
+    let pattern = case14.shunts()[0].clone();
+    assert_eq!((pattern.bus.0, pattern.g, pattern.b), (9, 0.0, 19.0));
+    case14.shunts_mut()[0].g = 12.5;
+    for (bus, g, b) in [(1, 2.5, 10.0), (3, 0.0, -5.0), (13, 1.5, 0.0)] {
+        let mut shunt = pattern.clone();
+        shunt.bus = powerio_tx::BusId(bus);
+        shunt.g = g;
+        shunt.b = b;
+        case14.shunts_mut().push(shunt);
+    }
+    let phase_shifter = case14
+        .branches_mut()
+        .iter_mut()
+        .find(|br| (br.from.0, br.to.0) == (5, 6))
+        .unwrap();
+    phase_shifter.shift = -3.5;
+    let limits = |bus: usize| match bus {
+        1 => (0.91, 1.01),
+        2 => (0.95, 1.05),
+        13 | 14 => (0.9, 1.1),
+        _ => (0.94, 1.06),
+    };
+
+    let mut decodes = Vec::new();
+    for (file, header) in [
+        ("case14_edits_v577.pwb", 577u64),
+        ("case14_edits_v425.pwb", 425),
+        ("case14_edits_v338.pwb", 338),
+    ] {
+        let path = vendored(file);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            header,
+            "{file} header constant"
+        );
+        let pwb = parse_bytes(&bytes, "pwb").unwrap().network;
+        assert_eq!(
+            (
+                pwb.buses().len(),
+                pwb.generators().len(),
+                pwb.loads().len(),
+                pwb.shunts().len(),
+                pwb.branches().len()
+            ),
+            (14, 5, 11, 4, 20),
+            "{file} counts"
+        );
+        assert_decoded_shape(&pwb, &path);
+        assert_pwb_matches_text(&pwb, &case14, Quanta::MATPOWER, file);
+        for bus in pwb.buses() {
+            let (vmin, vmax) = limits(bus.id.0);
+            // f32 storage: 0.91 reads 0.9100000262260437.
+            close(bus.vmin, vmin, 0.0, file, &format!("bus {} vmin", bus.id));
+            close(bus.vmax, vmax, 0.0, file, &format!("bus {} vmax", bus.id));
+        }
+        let shunt9 = pwb.shunts().iter().find(|s| s.bus.0 == 9).unwrap();
+        assert_eq!(shunt9.g, 12.5, "{file}: 0.125 per unit is exact in f32");
+        close(shunt9.b, 19.0, 0.0, file, "bus 9 shunt B");
+        for br in pwb.branches() {
+            let shift = if (br.from.0, br.to.0) == (5, 6) {
+                -3.5
+            } else {
+                0.0
+            };
+            assert_eq!(br.shift, shift, "{file}: {}-{} shift", br.from, br.to);
+        }
+        decodes.push(pwb);
+    }
+    // The three layouts store the same records.
+    for other in &decodes[1..] {
+        assert_eq!(decodes[0].buses(), other.buses());
+        assert_eq!(decodes[0].shunts(), other.shunts());
+        assert_eq!(decodes[0].branches(), other.branches());
+    }
 }
 
 /// The published ACTIVSg2000 set's current era export (bus flag bits 6/8)
