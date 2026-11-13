@@ -16,6 +16,7 @@
 #   v<workspace version>.
 # - The published 0.11 schema files keep their exact bytes.
 # - Every publishable crate carries the one workspace version.
+# - `--release` requires `## Unreleased` in CHANGELOG.md to be empty.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -157,6 +158,17 @@ changelog_version=$(grep -m1 -oE "^## $semver\$" CHANGELOG.md | grep -oE "$semve
 if [ "$changelog_version" != "$workspace_version" ]; then
     echo "CHANGELOG.md leads with $changelog_version, the workspace says $workspace_version" >&2
     exit 1
+fi
+# Entries still under `## Unreleased` would ship in this release while missing
+# from its section, which is also the GitHub release body. A release requires
+# that heading to be empty; otherwise this only warns.
+unreleased=$(awk '/^## / { inside = ($0 == "## Unreleased"); next } inside && NF' CHANGELOG.md)
+if [ -n "$unreleased" ]; then
+    if $release; then
+        echo "CHANGELOG.md still has entries under ## Unreleased; move them into ## $workspace_version" >&2
+        exit 1
+    fi
+    echo "warning: CHANGELOG.md has entries under ## Unreleased, which --release refuses" >&2
 fi
 release_notes="docs/release-notes/$workspace_version.md"
 if [ ! -f "$release_notes" ]; then

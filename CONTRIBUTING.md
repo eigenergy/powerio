@@ -505,7 +505,9 @@ tag. Then:
 
 1. Merge the bump with a `CHANGELOG.md` section headed exactly `## X.Y.Z`
    and release notes at `docs/release-notes/X.Y.Z.md` titled
-   `# PowerIO X.Y.Z release notes`, and wait for main CI.
+   `# PowerIO X.Y.Z release notes`, and wait for main CI. Move every entry
+   under `## Unreleased` into that section first; the tag workflow's
+   `check-release-versions.sh --release` refuses a nonempty `## Unreleased`.
    `bash scripts/release-preflight.sh` fails on anything that still states
    the old version, such as the C ABI goldens under `tests/data/capi_matrix`.
 2. Create an annotated `vX.Y.Z` tag on the tested main commit and push it.
