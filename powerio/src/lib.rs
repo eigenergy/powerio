@@ -123,6 +123,13 @@ pub use powerio_tx::dynamic::{
     DynamicCase, DynamicRecord, DynamicStudy, DyrError, UnresolvedBusReference, parse_dyr,
     parse_dyr_bytes,
 };
+/// Typed PSS/E DYR model views and model-aware generator linking.
+pub use powerio_tx::dynamic_models::{
+    DynamicModel, Esac1a, Exst1, Gast, Gencls, Hygov, Ieeest, LinkIssue, LinkedModel,
+    MachineDynamics, MachineLinking, ModelError, ModelRole, RoundRotor, SUPPORTED_MODELS,
+    SalientPole, Sexs, Tgov1, generator_source_impedance, link_machines, psse_machine_ids,
+    typed_model,
+};
 
 use powerio_tx::format;
 pub use powerio_tx::{

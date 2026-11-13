@@ -11,6 +11,10 @@
   builders; it is no longer reported as `ZeroImpedance` or skipped by
   `skip_zero_impedance`.
 
+- Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter, governor and
+  stabilizer models, linked to generators by `(bus, machine id)` with `DynamicStudy::machines()`;
+  as in PSS/E, a later record of one role for a unit replaces the earlier one.
+
 **PowerWorld**
 
 - The `.aux` writer uses the field names PowerWorld Simulator defines and
