@@ -198,7 +198,10 @@ between produces none of these findings.
   `Error::ZeroImpedance`; `true` skips the branch and records the skipped
   source branch rows in `MatrixStats` as `skipped_zero_impedance` and
   `skipped_zero_impedance_branches`. Full AC admittance builders use
-  \\(r^2 + x^2\\); DC incidence and reactance only FDPF forms use \\(x\\).
+  \\(r^2 + x^2\\). DC incidence and the DC OPF use \\(r^2 + x^2\\) under the
+  formulas that read resistance (`series_susceptance`,
+  `tap_adjusted_series_susceptance`, `series_susceptance_no_phase_shift`) and
+  \\(x\\) under the reactance formulas; reactance only FDPF forms use \\(x\\).
   The gridfm export still zeros its admittance and flow columns for these rows
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
   `BalancedNetwork::merge_buses` resolves them explicitly instead, together
