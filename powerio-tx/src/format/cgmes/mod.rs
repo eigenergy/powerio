@@ -5586,7 +5586,7 @@ mod tests {
             assert_eq!(parsed.network.branches()[0].rate_a, 80.0, "{version:?}");
             for expected in [
                 "ActivePowerLimit `flow-floor` is a low-direction limit",
-                "ActivePowerLimit `flow-cap` value -30 is negative",
+                "ActivePowerLimit `flow-cap` has a nonfinite or negative value",
             ] {
                 assert!(
                     parsed.warnings.iter().any(|warning| warning.info.code
