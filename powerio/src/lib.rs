@@ -91,32 +91,24 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The `schema` discriminator of every PowerIO IR document.
 pub const IR_SCHEMA_NAME: &str = "pio-ir";
 
-/// The PowerIO IR version this build writes.
+/// The release whose PowerIO IR schema this build writes, stated as the
+/// `version` of every document it serializes.
 ///
-/// The IR version is an integer that advances only when the serialized
-/// representation changes incompatibly for an existing value type. It is
-/// independent of the PowerIO release, which the `producer` record of a
-/// document names, and of the C ABI version.
+/// Compatibility follows the release series as Cargo defines it: one minor
+/// release before 1.0 (0.12.x) and one major release from 1.0 on. A reader accepts a document from any release in its own series,
+/// including a later one, and refuses a structural type it does not
+/// implement, one type at a time. A change that existing readers cannot read
+/// starts a new series. This build also reads the integer version `2` that
+/// every 0.11 release wrote.
 ///
-/// | IR version | First release | Change |
-/// |---|---|---|
-/// | 1 | v0.10.0 | the `PioModule` serialization, under the identity `powerio.module` |
-/// | 2 | v0.11.0 | the identity `pio-ir`; the producer release recorded apart from the IR version; retained source bytes left out |
-///
-/// Additive structural types keep the IR version unchanged. A reader accepts
-/// the types it implements; an unknown type requires a newer reader.
-/// [`IR_MIN_VERSION`] is the oldest IR version this build reads.
-pub const IR_VERSION: u64 = 2;
+/// The constant names a release at or after the workspace version, and
+/// equals it in a published release. `producer.version` names the software
+/// that wrote a document, which need not be PowerIO.
+pub const IR_VERSION: &str = "0.12.0";
 
-/// The oldest PowerIO IR version this build reads.
-///
-/// The floor rises only at a minor release boundary. PowerIO 0.11 writes and
-/// reads IR version 2.
-pub const IR_MIN_VERSION: u64 = 2;
-
-/// The `$id` of the schema snapshot describing this build's structural types.
-/// The release in the path identifies the catalog, not a new IR version.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.8/schema.json";
+/// The `$id` of the schema describing this build's document:
+/// `pio-ir/<IR_VERSION>/schema.json` beneath `https://powerio.dev/schema/`.
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.0/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{
@@ -140,16 +132,16 @@ pub use powerio_tx::{
     CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Expanded, Extras, GenCaps, GenCost,
     Generator, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget,
     Hvdc, Impedance, IndexCore, IndexedNetwork, InterfaceMember, JSON_CLASSES, JoinName, JsonClass,
-    Load, LoadVoltageModel, Location, MonitorScope, MonitorStatement, MonitoredParsed,
-    MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay, PwdSubstation, ResolvedCase,
-    ResolvedComponent, ResolvedInterface, ResolvedVoltageScope, RetainedStatement, Selector,
-    SelectorGroup, SharedPsseEquipmentIndex, Shunt, ShuntBlock, SkipRule, SolverParams,
-    SourceFormat, Storage, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet, Switch,
-    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
-    TransformerControlMode, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason,
-    UnresolvedReason, Winding, apply_substation_points, calc_series_admittance_of,
-    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
-    to_lonlat_from_pwd_mercator,
+    Load, LoadVoltageModel, Location, MagnetizingConnection, MonitorScope, MonitorStatement,
+    MonitoredParsed, MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay,
+    PwdSubstation, ResolvedCase, ResolvedComponent, ResolvedInterface, ResolvedVoltageScope,
+    RetainedStatement, Selector, SelectorGroup, SharedPsseEquipmentIndex, Shunt, ShuntBlock,
+    SkipRule, SolverParams, SourceFormat, Storage, Subsystem, SubsystemParsed, SubsystemSelector,
+    SubsystemSet, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, UnresolvedAction, UnresolvedMonitor,
+    UnresolvedMonitorReason, UnresolvedReason, Winding, apply_substation_points,
+    calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
+    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
@@ -165,8 +157,8 @@ pub use powerio_core::{
     DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, EmitResult,
     EmittedOutput, Fidelity, FormatId, HistoryEntry, HistoryId, HistoryKind, MemoryArtifact,
     OutputLayout, PioModule, Producer, Scenario, ScenarioId, ScenarioSet, Source, SourceBuffer,
-    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, StagedEdit, TimePoint,
-    TimeSeries,
+    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, SourceTree,
+    SourceTreeLimits, StagedEdit, TimePoint, TimeSeries,
 };
 
 /// The facade error covers source acquisition, routing, stored modules, and
@@ -197,9 +189,9 @@ pub mod dist {
     }
 }
 pub use powerio_dist::{
-    BmopfEmitOptions, BmopfSchemaVersion, ConductorMatrix, DistComponentLocation, DistGeoMeta,
-    DistGeographicPoint, DistGraphEdgeKind, DistLocationTarget, MulticonductorNetwork,
-    NeutralKronOptions, NeutralKronReport,
+    BmopfEmitOptions, ConductorMatrix, DistComponentLocation, DistGeoMeta, DistGeographicPoint,
+    DistGraphEdgeKind, DistLocationTarget, MulticonductorNetwork, NeutralKronOptions,
+    NeutralKronReport,
 };
 
 pub use powerio_prob::solution::{SocwrOpfDuals, SocwrOpfSolution, SocwrOpfValues};
@@ -237,6 +229,8 @@ pub use powerio_matrix as matrix;
 #[path = "gridfm.rs"]
 pub mod __gridfm;
 pub mod codes;
+pub mod collection;
+pub use collection::{Collection, CollectionLimits, CollectionSelection};
 mod formats;
 pub use formats::{FormatInfo, GridFormatInfo, NetworkFamily, grid_formats, resolve_format};
 #[cfg(feature = "gridfm")]
@@ -260,10 +254,10 @@ pub use transform::{
     ac_ots_instance_from_base, ac_ots_solution, apply_geo_layer, fix_ac_ots_topology,
     materialize_ac_ots_solution, network_with_operating_point, neutral_kron,
     neutral_kron_with_options, to_ac_opf_instance, to_ac_ots_instance,
-    to_ac_ots_instance_with_options, to_ac_pf_instance, to_dc_opf_instance, to_dc_pf_instance,
-    to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options,
-    to_lindist3flow_pf_instance, to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance,
-    to_mc_ac_pf_instance,
+    to_ac_ots_instance_with_options, to_ac_pf_instance, to_balanced, to_balanced_report,
+    to_dc_opf_instance, to_dc_pf_instance, to_lindist3flow_opf_instance,
+    to_lindist3flow_opf_instance_with_options, to_lindist3flow_pf_instance,
+    to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance, to_mc_ac_pf_instance,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1823,3 +1817,6 @@ mod tests {
         assert_value_type(&module, "powerio.BalancedNetwork");
     }
 }
+
+#[cfg(feature = "schema")]
+mod schema_units;

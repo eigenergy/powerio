@@ -11,6 +11,7 @@ from typing import (
     Literal,
     Mapping,
     NamedTuple,
+    NotRequired,
     Optional,
     Sequence,
     Tuple,
@@ -38,6 +39,8 @@ __all__ = [
     "BalancedNetwork",
     "BusMerge",
     "CalculationUpdate",
+    "Collection",
+    "CollectionResult",
     "ComponentId",
     "ContingencySet",
     "DcOpfInstance",
@@ -45,7 +48,6 @@ __all__ = [
     "DcPfInstance",
     "DcPfSolution",
     "Diagnostic",
-    "DisplayData",
     "EmitResult",
     "FormatInfo",
     "GeoLayer",
@@ -66,8 +68,6 @@ __all__ = [
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
-    "PwdDisplay",
-    "PwdSubstation",
     "ReactivePower",
     "Residuals",
     "Scenario",
@@ -112,7 +112,6 @@ __all__ = [
     "features",
     "from_ppc",
     "parse",
-    "parse_display",
     "parse_geo",
     "resolve_format",
     "serialize",
@@ -373,6 +372,8 @@ class ThreeWindingTransformer(TypedDict):
     star_va: float
     mag_g: float
     mag_b: float
+    # Absent means "star_point"; PSS/E data states "winding1_terminal".
+    magnetizing_connection: NotRequired[Literal["star_point", "winding1_terminal"]]
     in_service: bool
     name: Optional[str]
     uid: Optional[str]
@@ -839,22 +840,6 @@ class DetailedConnectivity(TypedDict, total=False):
     voltage_source_converters: List[VoltageSourceConverter]
     line_commutated_converters: List[LineCommutatedConverter]
 
-class PwdSubstation(NamedTuple):
-    number: int
-    name: str
-    x: float
-    y: float
-
-class PwdDisplay(NamedTuple):
-    canvas_width: int
-    canvas_height: int
-    stamp: int
-    substations: List[PwdSubstation]
-
-class DisplayData(NamedTuple):
-    kind: Literal["powerworld"]
-    data: PwdDisplay
-
 class BusGroup(TypedDict):
     survivor: int
     members: List[int]
@@ -1126,7 +1111,6 @@ Format = str
 from . import dist as dist
 from .dist import MulticonductorNetwork as MulticonductorNetwork
 
-def parse_display(path: Any, format: Optional[Format] = ...) -> DisplayData: ...
 def resolve_format(name: str) -> Optional[FormatInfo]: ...
 def versions() -> Any: ...
 def from_ppc(ppc: Dict[str, Any]) -> BalancedNetwork: ...
@@ -1337,6 +1321,10 @@ class PioModule(Generic[_T]):
     def type_name(self) -> str: ...
     @property
     def diagnostics(self) -> List[Diagnostic]: ...
+    @property
+    def extension_keys(self) -> List[str]: ...
+    def extension(self, namespace: str) -> Any: ...
+    def with_extension(self, namespace: str, value: Any) -> PioModule[_T]: ...
     def to_balanced_report(self, base_mva: float = ...) -> Any: ...
     def to_balanced(self, base_mva: float = ...) -> PioModule[BalancedNetwork]: ...
     def to_dc_pf_instance(self) -> PioModule[DcPfInstance]: ...
@@ -1400,3 +1388,6 @@ def diagnostic_record(diagnostic: Diagnostic) -> Dict[str, Any]: ...
 def diagnostic_records(
     diagnostics: Iterable[Diagnostic],
 ) -> List[Dict[str, Any]]: ...
+
+from .collection import Collection as Collection
+from .collection import CollectionResult as CollectionResult

@@ -2,85 +2,83 @@
 //! (<https://github.com/distribution-system-opt/dsopt-schema>).
 //!
 //! Everything is explicit SI: volts, watts, vars, ohms, siemens, meters,
-//! radians, string bus ids and terminal names. Both schema versions set
-//! `additionalProperties: false` on electrical elements and permit free-form
-//! top-level `extras` and `meta.provenance` objects, so the strict emitter drops what the target
-//! version cannot carry and says so per field.
+//! radians, string bus ids and terminal names. The schema sets
+//! `additionalProperties: false` on electrical elements and permits free-form
+//! top-level `extras` and `meta.provenance` objects, so the strict emitter
+//! drops what the schema cannot carry and says so per field.
 //!
-//! # Two schema versions
+//! # One BMOPF
 //!
-//! [`BmopfSchemaVersion`] names the version. Schema 0.1.0 is what the task force
-//! accepts: ten element classes and four transformer subtypes. Schema 0.2.0
-//! is the proposal that declares the classes 0.1.0 has no table for, and
-//! gives the transformer taps, winding neutral impedance, and no load
-//! admittance their own subtype slots.
+//! PowerIO reads and writes one BMOPF: the schema proposed in
+//! [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2)
+//! and vendored from its commit [`BMOPF_PROPOSAL_COMMIT`]. It is the Task
+//! Force's schema plus the classes the task force's draft carried (IBR,
+//! control profiles, time series, the DC network, the n-winding and regulator
+//! transformers, typed geometry). Its `$id` is [`BMOPF_SCHEMA_ID`].
 //!
-//! The reader accepts both, whatever a document states, because every class
-//! 0.2.0 declares at the top level also reads from the `extras` slot 0.1.0
-//! files it under. It resolves the version from `meta.$schema` and reports
-//! `READ.BMOPF.SCHEMA_ABSENT` when the document states none and
-//! `READ.BMOPF.SCHEMA_UNKNOWN` when the value names no version: the class
-//! layout of such a document is stated nowhere, and a consumer that assumes
-//! one reads a different network on the other.
+//! A document names the release it was written against in
+//! `meta.schema_version`, its only version identifier; the writer states the
+//! one the schema's `$id` names, and any patch release of that line reads as
+//! current. A document from an older draft states no release and is
+//! identified by its `meta.$schema`, as those drafts defined it.
 //!
-//! The writer targets one version, 0.2.0 by default. Writing 0.2.0 keeps supported proposal fields in place. Writing 0.1.0 relocates what that version has no slot for, listed
-//! below, and reports each move.
+//! The reader reads every document as the one BMOPF. A document from an
+//! older draft (including the `bmopf-report` drafts and the early draft
+//! PowerIO 0.11 wrote) is read through the legacy paths that accept the
+//! older layouts, and reported once with `READ.BMOPF.SCHEMA_LEGACY`. The
+//! older layouts are: the IBR, control profile, DC, time series, and overflow
+//! transformer tables under `extras`; the transformer `tap` spelling; the
+//! `cost` spelling of `energy_cost_rate`; the bus bounds `v_min`/`v_max` and
+//! `vn_max`; `meta.$schema`; the regulators' `tap_ratio`; `DSTATCOM`,
+//! `VA_FRACTION` and the lowercase enum values; and the `extras.geojson`
+//! geometry layer. A current document that uses those spellings gets the
+//! same single finding, and one stating both bus bound spellings with
+//! different values is `READ.BMOPF.SEMANTIC_INVALID`. A document stating no
+//! version is reported with `READ.BMOPF.SCHEMA_ABSENT`, and one naming no
+//! known release with `READ.BMOPF.SCHEMA_UNKNOWN`; both are read the same way.
 //!
-//! # What a 0.1.0 write parks under `extras`
+//! Output always states the current schema, even for an unchanged document
+//! read from an older draft: the retained source bytes are echoed only when
+//! the source itself states a current release and no `meta.$schema`. The
+//! writer never states a value the schema rejects; it drops it and reports
+//! it.
 //!
-//! Some data has a physical meaning schema 0.1.0 cannot express in place but
-//! can carry in the free form `extras` object, and that data is relocated
-//! rather than dropped, with a warning per element. A consumer that reads the
-//! document and ignores `extras` gets a network that differs physically from
-//! the source and no error saying so: a tapped transformer reads as nominal
-//! tap, an impedance grounded neutral loses its internal grounding branch, and the
-//! magnetizing branch disappears.
+//! The phase to ground bounds are `vpg_min`/`vpg_max`, and the neutral to
+//! ground cap is `vng_max`. Geometry goes in the
+//! typed `bus.*.geo` (a GeoJSON Point) and `line.*.geo` (a GeoJSON
+//! LineString) slots, with the coordinate system in `meta.crs` (absent means
+//! OGC:CRS84, longitude then latitude, which the writer leaves implicit); a coordinate
+//! space the schema cannot name is also recorded as `extras.powerio_geo`.
+//! Component locations (`MulticonductorNetwork::component_locations`) travel
+//! as the `geo` Point of the voltage source, load, generator, IBR, shunt,
+//! capacitor, switch or transformer they attach to, in a WGS84 document; a
+//! switch or transformer `geo` LineString reads as the midpoint of its end
+//! positions. `ibr` and `control_profile` are top-level tables, the two-winding
+//! transformer subtypes spell the ratio `tap_ratio`, `tap_ratio_min` and
+//! `tap_ratio_max`, the regulators `voltage_ratio`, `voltage_ratio_min` and
+//! `voltage_ratio_max`, and costs are `energy_cost_rate`. Line and linecode
+//! `s_max` have one entry per conductor.
 //!
-//! ## Transformer fields
+//! The schema's `$id` ([`BMOPF_SCHEMA_ID`]), where the exact schema bytes
+//! were retrieved from ([`bmopf_proposal_url`]), and their digest
+//! ([`BMOPF_PROPOSAL_SHA256`]) are recorded under
+//! `meta.provenance.powerio_bmopf`.
 //!
-//! Schema 0.1.0 has no slot for these nine fields in the `single_phase`,
-//! `center_tap`, `wye_delta`, and `delta_wye` subtype definitions, so a
-//! transformer carrying any of them emits them under
-//! `extras.transformer.<subtype>.<name>`, keyed by the same transformer name
-//! the subtype table uses:
+//! # What stays under `extras`
 //!
-//! `tap`, `tap_min`, `tap_max`, `r_neutral_from`, `x_neutral_from`,
-//! `r_neutral_to`, `x_neutral_to`, `g_no_load`, `b_no_load`.
-//!
-//! Schema 0.2.0 declares all nine on those subtypes, so they stay in place
-//! and only the three tap names change, to `tap_ratio`, `tap_ratio_min`, and
-//! `tap_ratio_max`, the spelling its regulator subtypes use.
-//!
-//! Neither version defines untyped `transformer.<subtype>` passthrough
-//! objects, so those keep every field in place and nothing moves. The BMOPF
-//! reader folds a 0.1.0 overlay back onto the subtype objects; on a key
-//! collision the field already in the subtype object wins.
-//!
-//! ## Whole tables
-//!
-//! Schema 0.1.0 has no top level slot for these classes, so under that
-//! version each emits at `extras.<class>.<name>` with the keying its top
-//! level table used:
-//!
-//! - `ibr` and `control_profile`, emitted from the typed model
-//! - `dc_bus`, `dc_branch`, `dc_grounding`, `dc_load`, `dc_source`,
-//!   `time_series`, emitted from untyped objects of that class
-//! - `capacitor`, only for a capacitor too malformed to type; a typed
-//!   capacitor goes to the strict top level `capacitor` table
-//!
-//! Schema 0.2.0 declares every one of them but `capacitor`, whose top level
-//! table stays strict there too, so a malformed capacitor keeps its raw
-//! properties under `extras` under either version.
-//!
-//! A source document's own `extras` object is stashed on read and re-emitted
-//! verbatim, so consumer keys beside these survive a write and read back.
+//! The top-level `capacitor` table is strict, so a capacitor too malformed to
+//! type keeps its raw properties under `extras.capacitor`, and a time series
+//! profile BMOPF's multiplicative semantics cannot represent stays verbatim
+//! under `extras.time_series`; each is reported. A source document's own
+//! `extras` object is stashed on read and re-emitted verbatim, so consumer
+//! keys beside these survive a write and read back.
 //!
 //! # Regulator subtypes
 //!
-//! Schema 0.1.0 defines no regulator subtype; the task force's BMOPFTools
-//! toolchain extends it with `single_phase_autotransformer` and
-//! `open_delta_regulator`, and schema 0.2.0 declares both. This emitter
-//! writes them at top level under 0.2.0 and in `extras.transformer` under 0.1.0.
+//! The first BMOPF draft defined no regulator subtype; the task force's
+//! BMOPFTools toolchain extended it with `single_phase_autotransformer` and
+//! `open_delta_regulator`, and the schema declares both. This emitter
+//! writes them in the top-level `transformer` table.
 //! An OpenDSS transformer a RegControl targets emits as
 //! `transformer.single_phase_autotransformer` when it reads as a series
 //! regulator (one phase, two windings of equal connection, voltage, and
@@ -107,9 +105,40 @@ pub(crate) mod read;
 mod write;
 
 pub use profile::{
-    BMOPF_PROPOSAL_COMMIT, BMOPF_PROPOSAL_SHA256, BMOPF_PROPOSAL_URL, BmopfSchemaVersion,
+    BMOPF_PROPOSAL_COMMIT, BMOPF_PROPOSAL_SHA256, BMOPF_SCHEMA_ID, bmopf_proposal_url,
 };
+pub use write::BmopfEmitOptions;
 pub(crate) use write::emit_bmopf_json_text_with_options;
-pub use write::{BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfEmitOptions};
+
+/// Whether a BMOPF document identifies itself as the schema PowerIO writes:
+/// a current `meta.schema_version` and no earlier `meta.$schema`. A
+/// same-format emission echoes retained source bytes only then; a document
+/// from an older draft, or stating none, is written fresh. Shared with the
+/// facade, which echoes calculation values itself.
+#[doc(hidden)]
+#[must_use]
+pub fn __states_written_version(text: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Document {
+        meta: Option<Meta>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Meta {
+        schema_version: Option<String>,
+        #[serde(rename = "$schema")]
+        schema: Option<serde::de::IgnoredAny>,
+    }
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    serde_json::from_str::<Document>(text)
+        .ok()
+        .and_then(|document| document.meta)
+        .is_some_and(|meta| {
+            meta.schema.is_none()
+                && meta
+                    .schema_version
+                    .as_deref()
+                    .is_some_and(profile::states_current_release)
+        })
+}
 
 mod validate;

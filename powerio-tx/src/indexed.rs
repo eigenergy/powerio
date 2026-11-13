@@ -12,15 +12,13 @@
 //! The derived core is one `HashMap`, six `Vec<f64>`, and the HVDC injection
 //! record. One-shot callers use
 //! [`IndexedNetwork::new`], which builds and owns a throwaway core. A long-lived
-//! handle (the Python and C ABI wrappers) builds an [`IndexCore`] once at parse
-//! time and rebinds a borrowing view per query with
+//! handle (the Python and C ABI wrappers) builds an [`IndexCore`] once and
+//! rebinds a borrowing view per query with
 //! [`IndexedNetwork::with_core`], so repeated queries never re-fold the loads
 //! and shunts.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-
-use petgraph::graph::UnGraph;
 
 use crate::hvdc::HvdcInjections;
 use crate::network::{BalancedNetwork, Branch, BusId, BusType, Generator, Switch};
@@ -340,18 +338,15 @@ impl<'n> IndexedNetwork<'n> {
         }
     }
 
-    /// Undirected graph view: node weight = dense bus index, edge weight =
-    /// index into [`branches`](Self::branches). Out-of-service branches are
-    /// skipped; parallel branches are kept as separate edges.
-    pub fn to_petgraph(&self) -> UnGraph<usize, usize> {
-        let mut g = UnGraph::with_capacity(self.n(), self.net.branches().len());
-        let nodes: Vec<_> = (0..self.n()).map(|i| g.add_node(i)).collect();
-        for (idx, br) in self.in_service_branches() {
-            if let (Some(i), Some(j)) = (self.bus_index(br.from), self.bus_index(br.to)) {
-                g.add_edge(nodes[i], nodes[j], idx);
-            }
-        }
-        g
+    /// The in-service topology as undirected edges between dense bus
+    /// indices: `(branch, from, to)`, where `branch` indexes the network's
+    /// branch table. Out-of-service branches are skipped and parallel
+    /// branches stay separate edges, so a graph library of your choice can
+    /// build its graph from this without PowerIO exposing one.
+    pub fn branch_edges(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        self.in_service_branches().filter_map(|(branch, br)| {
+            Some((branch, self.bus_index(br.from)?, self.bus_index(br.to)?))
+        })
     }
 
     /// In-service switches that are closed and join two distinct buses, with
@@ -404,7 +399,7 @@ impl<'n> IndexedNetwork<'n> {
     /// them for equality grouping (e.g. checking every island carries a
     /// reference bus to ground).
     pub fn calc_island_labels(&self) -> Vec<usize> {
-        let mut uf = petgraph::unionfind::UnionFind::new(self.n());
+        let mut uf = crate::union_find::UnionFind::new(self.n());
         let edges = self
             .in_service_branches()
             .map(|(_, br)| (br.from, br.to))
@@ -590,9 +585,9 @@ mod tests {
             tap: 1.0,
             shift: 0.0,
             nominal_kv: 0.0,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         };
         let imp = Impedance {
@@ -607,6 +602,7 @@ mod tests {
             star_va: 0.0,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
             in_service: true,
             name: None,
             uid: None,
@@ -712,6 +708,37 @@ mod tests {
         assert_aggregates(&IndexedNetwork::new(&net));
         let core = IndexCore::build(&net);
         assert_aggregates(&IndexedNetwork::with_core(&net, &core));
+    }
+
+    #[test]
+    fn branch_edges_list_the_in_service_branches_between_dense_indices() {
+        // Bus ids 10, 20, 30 take dense indices 0, 1, 2. Two parallel lines
+        // join 10 and 20; the 20-30 line is out of service.
+        let mut out = crate::network::Branch::new(BusId(20), BusId(30), 0.0, 0.1);
+        out.in_service = false;
+        let net = BalancedNetwork::in_memory(
+            "edges",
+            100.0,
+            vec![
+                bus(10, BusType::Ref),
+                bus(20, BusType::Pq),
+                bus(30, BusType::Pq),
+            ],
+            vec![
+                crate::network::Branch::new(BusId(10), BusId(20), 0.0, 0.1),
+                crate::network::Branch::new(BusId(20), BusId(10), 0.0, 0.2),
+                out,
+            ],
+        );
+        let view = IndexedNetwork::new(&net);
+        assert_eq!(
+            view.branch_edges().collect::<Vec<_>>(),
+            [(0, 0, 1), (1, 1, 0)]
+        );
+        let labels = view.calc_island_labels();
+        assert_eq!(labels[0], labels[1]);
+        assert_ne!(labels[0], labels[2]);
+        assert_eq!(view.calc_island_count(), 2);
     }
 
     #[test]

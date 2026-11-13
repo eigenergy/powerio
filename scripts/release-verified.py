@@ -46,6 +46,7 @@ DOCS_CONVERTER_JOBS = {
 CRATE_OWNER = "samtalki"
 CRATES = (
     "powerio-core",
+    "powerio-archive",
     "powerio-tx",
     "powerio-dist",
     "powerio-tnd",
@@ -716,6 +717,7 @@ def main(argv=None):
         "Tag moved during packaging; refusing publication.",
     )
     print("Phase 4: reconcile draft and publish only after verified gates.", flush=True)
+    release_id = release["id"]
     if release["draft"]:
         require_crate_ownership()
         current_run = api(f"repos/{REPO}/actions/runs/{run['id']}")
@@ -734,11 +736,17 @@ def main(argv=None):
             "Julia main moved during packaging; refusing publication pending review.",
         )
         api(
-            f"repos/{REPO}/releases/{release['id']}",
+            f"repos/{REPO}/releases/{release_id}",
             "PATCH",
-            {"draft": False, "make_latest": "true"},
+            {
+                "tag_name": tag,
+                "target_commitish": args.candidate,
+                "draft": False,
+                "make_latest": "true",
+            },
         )
-    release = api(f"repos/{REPO}/releases/{release['id']}")
+    release = api(f"repos/{REPO}/releases/{release_id}")
+    require(release["id"] == release_id, "Release readback has a different identity.")
     validate_release(release, tag)
     require(
         not release["draft"] and release.get("published_at"),

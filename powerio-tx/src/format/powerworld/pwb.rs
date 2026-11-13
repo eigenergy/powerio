@@ -2076,9 +2076,12 @@ fn read_standard_branch_head(
         x,
         b: b_chg,
         charging: None,
-        rate_a: rates[0],
-        rate_b: rates[1],
-        rate_c: rates[2],
+        rate_a: crate::thermal_limit::from_zero_unlimited(rates[0])
+            .map_err(|_| "invalid branch rating")?,
+        rate_b: crate::thermal_limit::from_zero_unlimited(rates[1])
+            .map_err(|_| "invalid branch rating")?,
+        rate_c: crate::thermal_limit::from_zero_unlimited(rates[2])
+            .map_err(|_| "invalid branch rating")?,
         rating_sets: Vec::new(),
         current_ratings: None,
         tap,
@@ -2166,9 +2169,9 @@ fn read_step_up_transformer_head(
         x: x_device * mbase / MVA_BASE,
         b: 0.0,
         charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
+        rate_a: f64::INFINITY,
+        rate_b: f64::INFINITY,
+        rate_c: f64::INFINITY,
         rating_sets: Vec::new(),
         current_ratings: None,
         tap: 1.0,

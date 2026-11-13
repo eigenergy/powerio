@@ -79,7 +79,7 @@ def network_boundary_violations(edges: set[tuple[str, str]]) -> set[tuple[str, s
                  ("powerio-tx", "powerio"), ("powerio-dist", "powerio")}
     return {edge for edge in edges if edge in forbidden
             or (edge[0] in {"powerio-tx", "powerio-dist"} and edge[1] == "powerio-tnd")
-            or (edge[0] == "powerio-tnd" and edge[1] not in {"powerio-core", "powerio-tx", "powerio-dist"})}
+            or (edge[0] == "powerio-tnd" and edge[1] not in {"powerio-core", "powerio-tx", "powerio-dist", "powerio-archive"})}
 
 def main() -> int:
     render = "--render" in sys.argv

@@ -491,40 +491,47 @@ fn norm_branches(
     branches: &[Branch],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> (Vec<Branch>, Vec<Option<usize>>) {
+) -> Result<(Vec<Branch>, Vec<Option<usize>>)> {
     branches
         .iter()
         .enumerate()
         .filter(|(_, br)| br.in_service)
-        .filter_map(|(row, br)| {
-            let mut branch = br.clone();
-            branch.from = remap(map, br.from)?;
-            branch.to = remap(map, br.to)?;
-            branch.rate_a = br.rate_a / base;
-            branch.rate_b = br.rate_b / base;
-            branch.rate_c = br.rate_c / base;
-            for set in &mut branch.rating_sets {
-                set.rate_mva /= base;
-            }
-            branch.tap = br.calc_effective_tap();
-            branch.shift = br.shift * DEG_TO_RAD;
-            branch.angmin = br.angmin * DEG_TO_RAD;
-            branch.angmax = br.angmax * DEG_TO_RAD;
-            if let Some(s) = &mut branch.solution {
-                s.pf /= base;
-                s.qf /= base;
-                s.pt /= base;
-                s.qt /= base;
-            }
-            // Remap the regulated-bus reference through the id map and drop it
-            // if its target was filtered out (out of service / isolated), so the
-            // normalized network has no dangling control reference.
-            if let Some(c) = &mut branch.control {
-                norm_transformer_control(c, base, map);
-            }
-            Some((branch, Some(row)))
-        })
-        .unzip()
+        .try_fold(
+            (Vec::new(), Vec::new()),
+            |(mut branches, mut rows), (row, br)| {
+                let mut branch = br.clone();
+                let (Some(from), Some(to)) = (remap(map, br.from), remap(map, br.to)) else {
+                    return Ok((branches, rows));
+                };
+                branch.from = from;
+                branch.to = to;
+                branch.rate_a = crate::thermal_limit::scaled(br.rate_a, 1.0 / base)?;
+                branch.rate_b = crate::thermal_limit::scaled(br.rate_b, 1.0 / base)?;
+                branch.rate_c = crate::thermal_limit::scaled(br.rate_c, 1.0 / base)?;
+                for set in &mut branch.rating_sets {
+                    set.rate_mva = crate::thermal_limit::scaled(set.rate_mva, 1.0 / base)?;
+                }
+                branch.tap = br.calc_effective_tap();
+                branch.shift = br.shift * DEG_TO_RAD;
+                branch.angmin = br.angmin * DEG_TO_RAD;
+                branch.angmax = br.angmax * DEG_TO_RAD;
+                if let Some(s) = &mut branch.solution {
+                    s.pf /= base;
+                    s.qf /= base;
+                    s.pt /= base;
+                    s.qt /= base;
+                }
+                // Remap the regulated-bus reference through the id map and drop it
+                // if its target was filtered out (out of service / isolated), so the
+                // normalized network has no dangling control reference.
+                if let Some(c) = &mut branch.control {
+                    norm_transformer_control(c, base, map);
+                }
+                branches.push(branch);
+                rows.push(Some(row));
+                Ok((branches, rows))
+            },
+        )
 }
 
 fn validate_normalize_options(options: &NormalizeOptions) -> Result<()> {
@@ -845,65 +852,72 @@ fn norm_transformers_3w(
     base: f64,
     map: &HashMap<BusId, BusId>,
     warnings: &mut crate::diagnostics::Diagnostics,
-) -> (Vec<Transformer3W>, Vec<Option<usize>>) {
+) -> Result<(Vec<Transformer3W>, Vec<Option<usize>>)> {
     let mut taken_out = Vec::new();
     let normalized = xfmrs
         .iter()
         .enumerate()
         .filter(|(_, t)| t.in_service)
-        .filter_map(|(row, t)| {
-            // A winding whose bus this pass drops goes out of service, as PSS/E
-            // takes out a winding on a disconnected bus; the other two stay
-            // coupled through the star point. Its bus field then names a
-            // kept winding's bus, so the record stays reference consistent,
-            // and the source row gives the original. A transformer left with
-            // fewer than two windings couples nothing and is dropped. Phase
-            // shifts and the star angle go to radians; winding ratings go per
-            // unit; the pairwise impedances are already per unit on the system
-            // base.
-            let mut live = t.winding_in_service();
-            for (state, winding) in live.iter_mut().zip(&t.windings) {
-                *state &= remap(map, winding.bus).is_some();
-            }
-            let kept_bus = t
-                .windings
-                .iter()
-                .zip(live)
-                .find(|(_, on)| *on)
-                .map(|(winding, _)| winding.bus)?;
-            if live.iter().filter(|&&on| on).count() < 2 {
-                return None;
-            }
-            let mut windings = t.windings.clone();
-            for w in &mut windings {
-                w.bus = remap(map, w.bus).unwrap_or(kept_bus);
-                if let Some(control) = &mut w.control {
-                    norm_transformer_control(control, base, map);
+        .try_fold(
+            (Vec::new(), Vec::new()),
+            |(mut transformers, mut rows), (row, t)| -> Result<_> {
+                // A winding whose bus this pass drops goes out of service, as PSS/E
+                // takes out a winding on a disconnected bus; the other two stay
+                // coupled through the star point. Its bus field then names a
+                // kept winding's bus, so the record stays reference consistent,
+                // and the source row gives the original. A transformer left with
+                // fewer than two windings couples nothing and is dropped. Phase
+                // shifts and the star angle go to radians; winding ratings go per
+                // unit; the pairwise impedances are already per unit on the system
+                // base.
+                let mut live = t.winding_in_service();
+                for (state, winding) in live.iter_mut().zip(&t.windings) {
+                    *state &= remap(map, winding.bus).is_some();
                 }
-                w.shift *= DEG_TO_RAD;
-                w.rate_a /= base;
-                w.rate_b /= base;
-                w.rate_c /= base;
-            }
-            let mut transformer = Transformer3W {
-                windings,
-                star_va: t.star_va * DEG_TO_RAD,
-                ..t.clone()
-            };
-            for winding in 0..3 {
-                let mut sets = t.winding_rating_sets(winding);
-                for set in &mut sets {
-                    set.rate_mva /= base;
+                let Some(kept_bus) = t
+                    .windings
+                    .iter()
+                    .zip(live)
+                    .find(|(_, on)| *on)
+                    .map(|(winding, _)| winding.bus)
+                else {
+                    return Ok((transformers, rows));
+                };
+                if live.iter().filter(|&&on| on).count() < 2 {
+                    return Ok((transformers, rows));
                 }
-                transformer.set_winding_rating_sets(winding, sets);
-            }
-            if live != t.winding_in_service() {
-                transformer.set_winding_in_service(live);
-                taken_out.push(row);
-            }
-            Some((transformer, Some(row)))
-        })
-        .unzip();
+                let mut windings = t.windings.clone();
+                for w in &mut windings {
+                    w.bus = remap(map, w.bus).unwrap_or(kept_bus);
+                    if let Some(control) = &mut w.control {
+                        norm_transformer_control(control, base, map);
+                    }
+                    w.shift *= DEG_TO_RAD;
+                    w.rate_a = crate::thermal_limit::scaled(w.rate_a, 1.0 / base)?;
+                    w.rate_b = crate::thermal_limit::scaled(w.rate_b, 1.0 / base)?;
+                    w.rate_c = crate::thermal_limit::scaled(w.rate_c, 1.0 / base)?;
+                }
+                let mut transformer = Transformer3W {
+                    windings,
+                    star_va: t.star_va * DEG_TO_RAD,
+                    ..t.clone()
+                };
+                for winding in 0..3 {
+                    let mut sets = t.winding_rating_sets(winding);
+                    for set in &mut sets {
+                        set.rate_mva = crate::thermal_limit::scaled(set.rate_mva, 1.0 / base)?;
+                    }
+                    transformer.set_winding_rating_sets(winding, sets);
+                }
+                if live != t.winding_in_service() {
+                    transformer.set_winding_in_service(live);
+                    taken_out.push(row);
+                }
+                transformers.push(transformer);
+                rows.push(Some(row));
+                Ok((transformers, rows))
+            },
+        )?;
     if !taken_out.is_empty() {
         let names = taken_out
             .iter()
@@ -925,7 +939,7 @@ fn norm_transformers_3w(
             ),
         );
     }
-    normalized
+    Ok(normalized)
 }
 
 /// No reference survived the bus type pass: anchor the slack at the largest
@@ -1398,7 +1412,7 @@ impl BalancedNetwork {
         let (shunts, shunt_rows) = norm_shunts(self.shunts(), base, &id_map);
         let (static_var_compensators, static_var_compensator_rows) =
             norm_static_var_compensators(self.static_var_compensators(), base, &id_map);
-        let (mut branches, branch_rows) = norm_branches(self.branches(), base, &id_map);
+        let (mut branches, branch_rows) = norm_branches(self.branches(), base, &id_map)?;
         if options.clamp_angle_bounds {
             clamp_angle_bounds(&mut branches, options.angle_bound_pad, &mut warnings);
         }
@@ -1407,7 +1421,7 @@ impl BalancedNetwork {
         let (storage, storage_rows) = norm_storage(self.storage(), base, &id_map);
         let (hvdc, hvdc_rows) = norm_hvdc(self.hvdc(), base, &id_map);
         let (transformers_3w, transformer_3w_rows) =
-            norm_transformers_3w(self.transformers_3w(), base, &id_map, &mut warnings);
+            norm_transformers_3w(self.transformers_3w(), base, &id_map, &mut warnings)?;
         let source_rows = NormalizeSourceRows {
             buses: bus_rows,
             loads: load_rows,
@@ -1739,9 +1753,9 @@ mod tests {
             x: 0.1,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,

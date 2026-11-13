@@ -14,7 +14,6 @@ import io
 import json
 import operator
 import os
-import stat
 import sys
 from pathlib import Path
 from typing import (
@@ -141,7 +140,7 @@ def _apply_service_limits(environ: MutableMapping[str, str] = os.environ) -> Non
 
 
 def _primary_byte_limit() -> int:
-    """The byte limit for inline arguments and display files.
+    """The byte limit for inline arguments.
 
     ``POWERIO_MAX_PRIMARY_BYTES`` when it holds a positive decimal byte count
     that PowerIO accepts; otherwise the 256 MiB service default.
@@ -741,45 +740,6 @@ def _matrix_impl(
     return payload
 
 
-def _checked_display_file(path: str) -> str:
-    """Confine a display path and hold it to the primary byte limit.
-
-    The display reader reads the whole file without a byte limit of its own,
-    so the server requires a regular file no larger than the limit first.
-    """
-    checked = sandbox.checked_path(path, purpose="path")
-    try:
-        info = os.stat(checked)
-    except OSError as exc:
-        raise _coded_error("display parse failed", exc) from exc
-    if not stat.S_ISREG(info.st_mode):
-        raise ValueError(f"display `path` must be a regular file: {checked}")
-    limit = _primary_byte_limit()
-    if info.st_size > limit:
-        raise _over_limit("path", limit)
-    return checked
-
-
-def _display_impl(path: str, format: Optional[str] = None) -> Dict[str, Any]:
-    checked = _checked_display_file(path)
-    try:
-        data = powerio.parse_display(checked, format)
-    except (powerio.PowerIOError, OSError, ValueError) as exc:
-        raise _coded_error("display parse failed", exc) from exc
-    if data.kind != "powerworld":
-        raise ValueError(f"unsupported display format: {data.kind!r}")
-    display = data.data
-    return {
-        "format": "powerworld-pwd",
-        "canvas": {"width": display.canvas_width, "height": display.canvas_height},
-        "stamp": display.stamp,
-        "substations": [
-            {"number": row.number, "name": row.name, "x": row.x, "y": row.y}
-            for row in display.substations
-        ],
-    }
-
-
 _MODULE_INPUT_HELP = (
     "Provide one of `powerio_ir`, `path`, or `content`. `powerio_ir` is "
     "serialized PowerIO IR; `path` and `content` are grid exchange data."
@@ -932,16 +892,6 @@ def _calc_matrix_tool(
     )
 
 
-@_tool(name="display")
-def _display_tool(path: str, format: Optional[str] = None) -> dict:
-    """Return the raw record of a PowerWorld display file.
-
-    Kept only for 0.11 compatibility and removed in 0.12; `parse` reads the
-    same file to a GeoLayer with its diagnostics.
-    """
-    return _display_impl(path, format)
-
-
 @_tool(
     name="to_balanced_report",
     description="Report whether a MulticonductorNetwork can become a "
@@ -994,7 +944,10 @@ def _to_balanced_tool(
 
 @_tool(
     name="about",
-    description="Return the PowerIO version, IR version, feature set, and MCP tools.",
+    description=(
+        "Return the PowerIO version, the PowerIO IR schema name and the release "
+        "whose schema its documents follow, the feature set, and the MCP tools."
+    ),
 )
 def _about_tool() -> dict:
     return {
@@ -1084,10 +1037,6 @@ def calc_matrix(
     )
 
 
-def display(path: str, format: Optional[str] = None) -> dict:
-    return _display_impl(path, format)
-
-
 def diagnostics(powerio_ir: str) -> dict:
     return _diagnostics_payload(powerio_ir)
 
@@ -1100,7 +1049,7 @@ def main() -> None:
     unset or empty. Importing this module leaves the environment alone, so a
     program that calls the tool functions directly keeps the library defaults
     for what PowerIO reads; the checks this module makes itself, on inline
-    arguments and display files, still default to 256 MiB.
+    arguments, still default to 256 MiB.
     """
     _apply_service_limits()
     sandbox._DEFAULT_ROOT = Path.cwd().resolve(strict=True)

@@ -4,7 +4,7 @@ exist on the surfaces that ship. A rendered page with a dead symbol fails.
 
 Checked shapes:
 - C symbols (`pio_*`) in active pages exist in the installed header; the
-  0.10-to-0.11 migration inventory may name removed ones.
+  migration guides may name removed ones.
 - CLI invocations in shell fences use real subcommands.
 - Julia identifiers in julia fences that PowerIO.jl exports; needs POWERIO_JL
   naming a checkout, else skipped.
@@ -21,7 +21,7 @@ DOCS = ROOT / "docs" / "src"
 # `parse` extends `Base.parse` and is deliberately not exported, and the
 # argument types are Base types.
 JULIA_BASE = {"parse", "IO", "AbstractVector", "length", "keys", "haskey"}
-HISTORY_PAGES = {"migration-0.11.md"}
+HISTORY_PAGES = {"migration-0.11.md", "migration-0.12.md"}
 
 def fail(page: Path, message: str) -> None:
     print(f"{page.relative_to(ROOT)}: {message}", file=sys.stderr)

@@ -123,6 +123,14 @@ def _close(a, b):
         return False
 
 
+def _stated_rating(rating):
+    """The MVA a Branch row states: PowerWorld writes no limit as 0, and the
+    model holds no limit as infinity (or no value)."""
+    if rating is None or math.isinf(rating):
+        return 0.0
+    return rating
+
+
 def _yes(flag):
     return "YES" if flag else "NO"
 
@@ -332,9 +340,9 @@ def validate(path, sa, workdir):
             "LineR": br["r"],
             "LineX": br["x"],
             "LineC": br["b"],
-            "LineAMVA": br["rate_a"],
-            "LineAMVA:1": br["rate_b"],
-            "LineAMVA:2": br["rate_c"],
+            "LineAMVA": _stated_rating(br["rate_a"]),
+            "LineAMVA:1": _stated_rating(br["rate_b"]),
+            "LineAMVA:2": _stated_rating(br["rate_c"]),
             "LinePhase": br["shift"],
             "LineStatus": _status(br["in_service"]),
         }

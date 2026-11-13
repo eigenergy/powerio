@@ -25,6 +25,7 @@ use powerio_tx::{AngleDifferenceBounds, EmitOptions, MissingGenCostPolicy};
 use serde_json::json;
 mod cases;
 mod codes;
+mod collection;
 mod module_io;
 mod tui;
 
@@ -134,6 +135,11 @@ enum DiagnosticsFormat {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Inspect and explicitly select inputs from a ZIP or folder collection.
+    Collection {
+        #[command(subcommand)]
+        command: collection::CollectionCommand,
+    },
     /// Launch the interactive TUI (default if no subcommand is given).
     Tui {
         /// Directory scanned recursively for case files (.m, .raw, .aux,
@@ -679,6 +685,25 @@ enum FormatArg {
     /// Surge native JSON network document.
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
+    /// PowerSystems.jl serialized System JSON (reads data formats 4.0.0 and 5.0.0, writes 5.0.0).
+    #[value(name = "powersystems-json", alias = "powersystems")]
+    PowerSystemsJson,
+    /// SiennaSchemas SystemDocument (preserve source version, otherwise 0.4).
+    #[value(name = "sienna-json", alias = "sienna")]
+    SiennaJson,
+    /// SiennaSchemas 0.1 SystemDocument.
+    #[value(name = "sienna-0-1-json")]
+    Sienna01Json,
+    /// SiennaSchemas 0.2 SystemDocument.
+    #[value(name = "sienna-0-2-json")]
+    Sienna02Json,
+    /// SiennaSchemas 0.3 SystemDocument.
+    #[value(name = "sienna-0-3-json")]
+    Sienna03Json,
+    /// SiennaSchemas 0.4 SystemDocument.
+    #[value(name = "sienna-0-4-json")]
+    Sienna04Json,
+
     /// JSON document from a DeepMind OPFData release (parse only).
     #[value(
         name = "opfdata-json",
@@ -716,19 +741,14 @@ enum FormatArg {
     /// PowerModelsDistribution MATHEMATICAL JSON (parse and emit).
     #[value(name = "pmd-math-json", alias = "pmd-math", alias = "mathematical")]
     PmdMathJson,
-    /// IEEE BMOPF JSON distribution case (parse and emit).
+    /// IEEE BMOPF JSON distribution case (parse and emit). A document from an
+    /// older BMOPF draft reads as BMOPF.
     #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
     /// Distribution CIM, CIM100 RDF/XML (parse and emit; parse also reads a
     /// directory of documents).
     #[value(name = "cim-dist", alias = "cimdist")]
     CimDist,
-    /// Re-encode against the BMOPF 0.1.0 schema.
-    #[value(name = "bmopf-json@0.1.0")]
-    Bmopf010,
-    /// Re-encode against draft BMOPF 0.2.
-    #[value(name = "bmopf-json@0.2.0")]
-    Bmopf020,
 }
 
 impl FormatArg {
@@ -754,6 +774,13 @@ impl FormatArg {
             FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Goc3Json => TargetFormat::Goc3Json,
             FormatArg::SurgeJson => TargetFormat::SurgeJson,
+            FormatArg::PowerSystemsJson => TargetFormat::PowerSystemsJson,
+            FormatArg::SiennaJson => TargetFormat::SiennaJson { version: 0 },
+            FormatArg::Sienna01Json => TargetFormat::SiennaJson { version: 1 },
+            FormatArg::Sienna02Json => TargetFormat::SiennaJson { version: 2 },
+            FormatArg::Sienna03Json => TargetFormat::SiennaJson { version: 3 },
+            FormatArg::Sienna04Json => TargetFormat::SiennaJson { version: 4 },
+
             FormatArg::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
             FormatArg::RavensJson => TargetFormat::RavensJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
@@ -773,8 +800,6 @@ impl FormatArg {
             | FormatArg::PmdJson
             | FormatArg::PmdMathJson
             | FormatArg::BmopfJson
-            | FormatArg::Bmopf010
-            | FormatArg::Bmopf020
             | FormatArg::CimDist => return None,
         })
     }
@@ -801,9 +826,7 @@ impl FormatArg {
             FormatArg::GridlabdArras => Some(DistTargetFormat::GridlabdArras),
             FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
             FormatArg::PmdMathJson => Some(DistTargetFormat::PmdMathJson),
-            FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
-                Some(DistTargetFormat::BmopfJson)
-            }
+            FormatArg::BmopfJson => Some(DistTargetFormat::BmopfJson),
             FormatArg::CimDist => Some(DistTargetFormat::CimDist),
             FormatArg::Matpower
             | FormatArg::PowerModelsJson
@@ -824,6 +847,12 @@ impl FormatArg {
             | FormatArg::Pslf
             | FormatArg::Goc3Json
             | FormatArg::SurgeJson
+            | FormatArg::PowerSystemsJson
+            | FormatArg::SiennaJson
+            | FormatArg::Sienna01Json
+            | FormatArg::Sienna02Json
+            | FormatArg::Sienna03Json
+            | FormatArg::Sienna04Json
             | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
             | FormatArg::Pwb
@@ -857,6 +886,13 @@ impl FormatArg {
             FormatArg::Pslf => "pslf",
             FormatArg::Goc3Json => "goc3-json",
             FormatArg::SurgeJson => "surge-json",
+            FormatArg::PowerSystemsJson => "powersystems-json",
+            FormatArg::SiennaJson => "sienna-json",
+            FormatArg::Sienna01Json => "sienna-0-1-json",
+            FormatArg::Sienna02Json => "sienna-0-2-json",
+            FormatArg::Sienna03Json => "sienna-0-3-json",
+            FormatArg::Sienna04Json => "sienna-0-4-json",
+
             FormatArg::DeepMindOpfDataJson => "opfdata-json",
             FormatArg::RavensJson => "ravens-json",
             FormatArg::Gridfm => "gridfm",
@@ -868,8 +904,6 @@ impl FormatArg {
             FormatArg::PmdJson => "pmd-json",
             FormatArg::PmdMathJson => "pmd-math-json",
             FormatArg::BmopfJson => "bmopf-json",
-            FormatArg::Bmopf010 => "bmopf-json@0.1.0",
-            FormatArg::Bmopf020 => "bmopf-json@0.2.0",
             FormatArg::CimDist => "cim-dist",
         }
     }
@@ -1083,6 +1117,7 @@ fn main() -> std::process::ExitCode {
     install_tracing(cli.diagnostics_format);
     let _ = DIAGNOSTICS_FORMAT.set(cli.diagnostics_format);
     let result: anyhow::Result<()> = match cli.command.unwrap_or_else(default_command) {
+        Command::Collection { command } => collection::run(command),
         Command::Tui { data_dir, out_dir } => tui::run(tui::TuiOptions { data_dir, out_dir }),
         Command::Batch {
             input,
@@ -2804,13 +2839,8 @@ fn convert_multiconductor_module(
             to.name()
         )
     })?;
-    let emission = if matches!(to, FormatArg::Bmopf010 | FormatArg::Bmopf020) {
-        let result = powerio::emit(module, to.name(), powerio::Destination::memory("output")?)?;
-        module_io::unpack_memory_emission(result, None)?
-    } else {
-        module_io::emit_multiconductor_module(module, target)
-            .with_context(|| format!("emitting {}", target.name()))?
-    };
+    let emission = module_io::emit_multiconductor_module(module, target)
+        .with_context(|| format!("emitting {}", target.name()))?;
     finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
@@ -4284,13 +4314,10 @@ mpc.branch = [
             vec![7200.0, 0.0],
             vec![0.0, 0.0],
         ));
-        let mut options = powerio_dist::EmitOptions::default();
-        options.bmopf.sideload_coordinates = true;
         let module = powerio_core::PioModule::new(net);
-        let bmopf = crate::module_io::emit_multiconductor_module_with_options(
+        let bmopf = crate::module_io::emit_multiconductor_module(
             &module,
             powerio_dist::DistTargetFormat::BmopfJson,
-            &options,
         )
         .unwrap();
         std::fs::write(&input, bmopf.text).unwrap();

@@ -2,19 +2,6 @@
 
 ## Unreleased
 
-- Add explicit tap-adjusted series-susceptance and PowerModels DCP conventions
-  across DC matrices, instances and bindings; preserve the existing default.
-
-- Behaviour change: DC OPF preparation with the default `series_susceptance`
-  formula (and the other series-admittance formulas) keeps a purely resistive
-  branch (r > 0, x = 0) as a zero-weight row, matching the DC operator
-  builders; it is no longer reported as `ZeroImpedance` or skipped by
-  `skip_zero_impedance`.
-
-- Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter, governor and
-  stabilizer models, linked to generators by `(bus, machine id)` with `DynamicStudy::machines()`;
-  as in PSS/E, a later record of one role for a unit replaces the earlier one.
-
 **PowerWorld**
 
 - The `.aux` writer uses the field names PowerWorld Simulator defines and
@@ -55,6 +42,424 @@
   every written field, and a power flow against PowerIO's own network. All
   17 MATPOWER, PGLib, PSS/E, and PowerWorld fixtures pass with Simulator 24
   (#868).
+
+## 0.12.0
+
+PowerIO 0.12.0 starts the 0.12.x release series. Before 1.0, the public
+numerical types and the outstanding conventions and milestone work need a
+maintainer decision. See [From 0.11 to 0.12](docs/src/migration-0.12.md) for
+every change that needs action.
+
+**Dynamics**
+
+- Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter,
+  governor and stabilizer models, linked to generators by `(bus, machine id)`
+  with `DynamicStudy::machines()`. As in PSS/E, a later record of one role for
+  a unit replaces the earlier one (`LinkIssue::Replaced`); machine ids match
+  exactly, then case-insensitively when one generator on the bus matches
+  (#871, @sebeich).
+
+**DC formulations**
+
+- Explicit tap-adjusted series-susceptance and PowerModels DCP conventions
+  across DC matrices, instances and bindings; the default is unchanged
+  (#820, @frederikgeth).
+- Behaviour change: DC OPF preparation with the default `series_susceptance`
+  formula (and the other series-admittance formulas) keeps a purely resistive
+  branch (r > 0, x = 0) as a zero-weight row, matching the DC operator
+  builders; it is no longer reported as `ZeroImpedance` or skipped by
+  `skip_zero_impedance` (#820).
+
+**Interoperability**
+
+- Share repeated CGMES class and property names during parsing through a bounded
+  per-document cache, reducing temporary allocations while keeping uncommon
+  and long extension names accepted. The cache changes no public model or API.
+- Reuse parsed CGMES property buffers, preserve duplicate-property ordering and
+  conflict errors, and release temporary growth capacity before constructing
+  the electrical network. Source replay, diagnostics and canonical output are
+  unchanged.
+- Reuse a recognized CIM namespace during CGMES parsing with a bounded
+  per-document cache, preserving namespace rebinding, mixed-version checks,
+  and acceptance of long namespace URIs.
+- Build the Python balanced network's derived analysis index on its first
+  topology or matrix query. Counts and metadata no longer allocate that index;
+  subsequent analysis queries reuse it. Updated and derived handles retain
+  their own immutable network and index state.
+- `reduce_passthrough_buses` keeps the sections' named rating sets on the
+  equivalent branch instead of dropping them: a set both sections state takes
+  the smaller rating, and an invalid one stays invalid, so validation still
+  refuses it after the fold.
+- Combine Exact and Lossless as Preserved in the conversion-matrix overview,
+  explain representation changes, adjustments, omitted data and incomplete
+  checks, and retain the original JSON grades and byte-replay evidence.
+- Preserve pandapower native bus voltage magnitudes and angles through IR and
+  canonical output, indexed independently of generator voltage targets.
+  Report unavailable states and unsupported result columns without claiming
+  convergence. Canonical output uses the 3.2.1 package profile and its 3.1.0
+  data format, with modern split P/Q ZIP-load fields instead of an invalid
+  mixture of legacy and modern columns. Default native imports and power-flow
+  execution are checked by the validation suite.
+- Egret keeps shunt service flags and diagnoses omitted component identities.
+  Foreign result extras cannot fill native PowerModels fields in the wrong
+  units. Operating-point columns clear inherited branch results. Time-series
+  emission accumulates varying fields incrementally, applies scalar loss checks
+  and deduplicates identical findings. Nested non-finite extension values remain
+  diagnosed. The reviewed CIM frequency and XfmrCode selector fixes from 0.11.10
+  are included.
+- CGMES active limits take precedence over equipment defaults, and transformer
+  current limits use their own terminal voltage. Distinct defaults lost during
+  canonical output are diagnosed. Imported ratio/phase tap-changer identities
+  and names survive canonical output, including older IR metadata.
+- Preserve two-winding CGMES transformer circuits across different rated/bus
+  voltage bases and secondary ratio taps using the common parameter base and
+  primary-shunt L model. Diagnose nonconforming source conventions, secondary
+  shunt projection loss and active phase magnitudes or tap-step deviations
+  omitted by the calculation projection. Reject invalid active ratios and
+  arithmetic overflow while retaining detailed tap records.
+- Preserve native Egret branch results and canonically emit electrical time
+  series after IR round trips, including labels and optional durations.
+  Reject unsupported variation and invalid time axes. C and Julia expose
+  time metadata without serializing networks; the native Egret ModelData
+  oracle checks emitted snapshot values.
+- Publish exact-commit conversion evidence and a ranked findings backlog from
+  the same graded cells as the PR matrix. Baseline changes remain reviewed;
+  independent native-consumer evidence is stated separately.
+
+- Read and write SiennaSchemas SystemDocument 0.1 through 0.4 through the
+  shared module API, CLI, and bindings. Preserve source identifiers and report
+  fields outside the electrical mapping.
+- Read native PowerSystems.jl data formats 4 and 5, and write format 5.
+  Resolve UUID references and device units independently of display settings.
+- Retain bounded Sienna JSON/HDF5 bundles through PowerIO IR, including
+  association records, array shapes, and stored values. Map switched-shunt
+  blocks and voltage or reactive control bands in each schema release.
+- Add optional Python PyPSA NetCDF/HDF5 transports and TransitionZero source
+  and sink entry points, with electrical time series and IR retention of
+  pipeline extension records and companion series.
+- Python `PioModule.extension_keys`, `extension(namespace)`, and
+  `with_extension(namespace, value)` read and attach module extensions
+  without serializing the typed value. The Sienna bundle and TransitionZero
+  transports use them instead of round-tripping the module through IR text.
+- A two-winding transformer's secondary-terminal charging written to Sienna
+  as a `FixedAdmittance` carries an `ext` marker that the reader folds back
+  into the branch, so a round trip adds no bus shunt. The reader folds it
+  back only while the shunt and its transformer share one status; a native
+  edit that disables the generated shunt leaves a disabled bus shunt and an
+  uncharged branch, in Sienna documents and in PowerSystems JSON.
+- The Sienna reader indexes `TransformerCircuit` rows by id, and canonical
+  emission of an edited document indexes its retained rows and source
+  generator rows by id, so parsing and re-emission stay linear in the
+  component count.
+- Reuse parsed Sienna and PowerSystems documents for module retention, and
+  decode the native adapter's intermediate document directly. Full source
+  extensions and same-format fidelity are unchanged (review by @MohamedNumair).
+- Annotate the current PowerIO IR schema with physical units, per-unit bases,
+  and sign conventions. The schema and the field documentation state the
+  converter setpoint conventions as their sources do: a reduced-model
+  `HvdcConverter::reactive_power_setpoint_mvar` is injected into the AC bus
+  (PowSybl `vscConverterStation`), and the detailed
+  `VoltageSourceConverter::reactive_power_setpoint_mvar` and its reactive
+  limits use load convention at the point of common coupling (PowSybl
+  `voltageSourceConverter`, CGMES `VsConverter.targetQpcc`).
+- Correct the contributor IR compatibility guidance and canonical HVDC format
+  descriptions.
+
+**Breaking changes**
+
+- PowerIO IR documents state the release whose schema they follow: the
+  header's `"version"` is now `"0.12.0"` instead of the integer `2`.
+  `powerio::IR_VERSION` becomes that release as a string, `IR_MIN_VERSION` is
+  removed, and `IR_SCHEMA_ID` names `pio-ir/0.12.0/schema.json`. A reader
+  accepts documents from its own release series (any 0.12.z) and the
+  `"version": 2` documents every 0.11 release wrote, with their meaning;
+  0.11 readers refuse 0.12 documents. Every release now publishes its own
+  `docs/schema/pio-ir/<release>/schema.json`, and the files under `pio-ir/2/`
+  keep their bytes. `powerio.versions()["powerio_ir"]["version"]` and the
+  `powerio_ir.version` that `pio_schema_report` returns are now the release
+  string (#701).
+- Replace the C ABI number with the PowerIO release (#701). `PIO_ABI_VERSION`,
+  `pio_abi_version()`, and the `abi` key of `pio_schema_report` are removed
+  with no alias. The header states the release it was generated from as
+  `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and
+  `pio_version_numbers()` returns the release of the loaded library. A
+  program compiled against the header of release 0.12.Z works with any
+  0.12.x library at 0.12.Z or newer; within a release series the C ABI only gains
+  symbols, which `scripts/check-capi-header.py` checks against the latest
+  release header. `scripts/check-capi-v7.sh` is now `scripts/check-capi.sh`.
+- `Transformer3W` gains `magnetizing_connection` (`StarPoint` or
+  `Winding1Terminal`). The PSS/E readers state `Winding1Terminal`, and the
+  star lowering connects that admittance from winding 1's bus to ground
+  outside its ratio, where PSS/E connects `MAG1 + jMAG2`; 0.11 placed it at
+  the star point, off by about `|Ym|` in `Y_bus` for an off-nominal winding 1
+  (#741). The IR states the field only when it is not the star point, so 0.11
+  documents keep their meaning. Writers that cannot place it where the source
+  did report `VALUE_SUBSTITUTED`. The C view and Julia row end with the new
+  field.
+- XIIDM and JIIDM batteries read their generation-positive `targetP`,
+  `targetQ`, and reactive limits as negated storage withdrawal (`ps`, `qs`,
+  `qmin`, `qmax`), and a converter station's terminal `q` as the negated HVDC
+  injection `qf`/`qt`; the writers state the inverse (#700).
+- Remove the Python `parse_display`, `DisplayData`, `PwdDisplay`, and
+  `PwdSubstation` and the MCP server's `display` tool. `parse` reads a `.pwd`
+  display to a `GeoLayer` under the input byte limits (#612). The Rust
+  `parse_pwd_file` helper is gone; `PwdDisplay` and `to_geo_layer_from_pwd`
+  remain.
+- Remove the inert `arrow` Cargo feature of `powerio-capi`; a build command
+  that names it no longer resolves (#673).
+- Remove `IndexedNetwork::to_petgraph`, and with it `powerio-tx`'s petgraph
+  dependency, so no pre-1.0 graph crate type is in the public API.
+  `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
+  in-service branch over dense bus indices; build a graph with any library
+  from it.
+- `powerio-prob`'s SOCWR solution names its branch flows as the other
+  solutions do: the `SocwrOpfValues` fields and the `SocwrOpfSolution`
+  accessors `branch_from_active_power`, `branch_from_reactive_power`,
+  `branch_to_active_power`, and `branch_to_reactive_power` are now
+  `branch_from_active_flow`, `branch_from_reactive_flow`,
+  `branch_to_active_flow`, and `branch_to_reactive_flow`, with no alias. The
+  PowerIO IR keys and the quantity names the C ABI's solution value accessor
+  takes follow; the IR reader still accepts the 0.11 keys.
+  `SocwrOpfSolution::bus_order` and `branch_order` return a `Vec`, as every
+  other solution's do, instead of an iterator, and are `#[must_use]`. See
+  [Renamed for consistency](docs/src/migration-0.12.md#renamed-for-consistency).
+- `powerio-dist` removes every version-bearing BMOPF name:
+  `BmopfSchemaVersion`, `BmopfEmitOptions::schema_version`,
+  `with_schema_version` and `sideload_coordinates`, and
+  `BMOPF_SCHEMA_VERSION`; `BMOPF_PROPOSAL_URL` becomes the function
+  `bmopf_proposal_url()`. The `bmopf-json@<version>` output tokens are refused.
+  **BMOPF** below gives the details.
+- Use numeric zero for a zero flow bound and positive infinity for no bound
+  across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
+  conventions at import/export and preserve 0.11 IR meanings on read (#841).
+  Sienna and PowerSystems JSON state an unlimited required rating as
+  PowerSystems' `INFINITE_BOUND` and read it back as unlimited. See
+  [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings).
+- The PyPSA readers bound a line or transformer's flow by `s_nom * s_max_pu`,
+  as PyPSA does. 0.11 read `s_nom` alone, ignored `s_max_pu`, and read an
+  absent or zero `s_nom` as no bound; 0.12 reads it as a zero bound and
+  reports the in service branches it holds at zero with
+  `READ.PYPSA.THERMAL_BOUND_ZERO`. An extendable branch
+  (`s_nom_extendable`) is bounded by `s_nom_max * s_max_pu`, unbounded by
+  default, and reported with `READ.PYPSA.VALUE_APPROXIMATED`.
+- Python table rows state a nonfinite value as a float in every table. The
+  `hvdc`, `storage`, `static_var_compensators`, `areas`, and distribution
+  rows carried the IR's `"Infinity"` and `"-Infinity"` strings in 0.11, while
+  branch and winding ratings were already floats.
+- The Rust MSRV is 1.89, as in 0.11.10.
+
+**Collections**
+
+- Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
+- Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry and expansion budgets for admitted content, a per-operation input and decompression work bound, native ZIP layer accounting, and cooperative cancellation.
+- Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.
+- Python `Collection` inspects bounded ZIP/folder/memory inventories and parses
+  independent selections with typed modules, dependencies and explicit lifetime.
+- The converter uses shared collection selections for overlapping masters and
+  mixed cases, defers parsing until requested, and reuses bounded worker input.
+  ZIP upload scopes remain independent when display names collide, XML-only
+  network batches stay selectable, and empty directory records are verified.
+- `powerio collection inspect/parse` lists ZIP/folder inputs and processes
+  explicit entries, dataset roots, or document groups with independent results.
+- Collection selections can explicitly group CIM/CGMES documents and GO
+  problem/solution roles without merging unrelated inputs.
+- Collection inspection discovers separate PyPSA and GridFM dataset roots;
+  explicit directory selections preserve internal time/scenario values.
+- Inspect bounded ZIP/folder collections and explicitly select independent
+  standalone inputs or OpenDSS masters over shared immutable companions.
+- The public `powerio::collection` structs and enums, and the
+  `powerio-archive` `EndRecordRefusal` and `DeclaredSizeFailure` enums, are
+  `#[non_exhaustive]`, so 0.12.x can add fields and variants. Build options
+  from `Default` (or `CollectionCase::new`) and set fields.
+- Add shared `SourceTree` file and directory views with explicit admission limits
+  and independent successful-read dependency tracking for each selection (#774).
+- CGMES and SINCAL share bounded ZIP acquisition primitives while preserving
+  their format-specific namespace, diagnostic, and source replay policies.
+- Add `powerio-archive`: bounded ZIP indexing and verified member reads with
+  explicit limits and namespace checks, as shared infrastructure for #774.
+- Parse explicitly selected SINCAL MDB inputs with acquired-table companions
+  through collections, preserving root confinement and work budgets.
+- Python `Collection.parse` raises `TypeError` when `sincal_multiconductor` or
+  `sincal_balanced` is given the wrong options type, instead of reading the
+  wrong family's options or failing with an `AttributeError` (#845, by
+  @BurhanAbdullah).
+
+**Distribution**
+
+- OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
+  selected, matching native scalar-property replay and preserving the intended
+  winding resistance and neutral grounding (#813).
+- Reject nonzero RAVENS transformer impedance or no-load loss when its input
+  voltage, rating or test power base is unusable, instead of reading it as an
+  ideal transformer. Name the affected tank, winding and field in the error.
+- Reject an explicitly invalid balanced RAVENS `baseMVA` before per-unit
+  conversion, and diagnose skipped loads, shunts, generators, sources, lines
+  and transformer windings that lack usable terminals.
+- Project Kron-reduced PMD delta loads onto three phase coordinates, preserving
+  each conductor pair and ZIP part. Keep the explicit-conductor model when a
+  three-phase basis is unavailable. Refuse RAVENS transformer impedance
+  emission when a nonpositive or nonfinite winding rating makes its base
+  undefined.
+- The `cim-dist` reader reads CIM16 LV feeders stated with sequence
+  impedances and no per phase class. A header-less CIM document with the
+  IEC 61968 customer classes (`ServiceLocation`, `UsagePoint`) now routes to
+  `cim-dist` instead of failing as CGMES. Enumerations written as text
+  (`<cim:Terminal.phases>A</cim:Terminal.phases>`) read like references, so
+  a single phase fuse is no longer read as a three phase switch. A segment
+  takes its ampacity from the `WireInfo.ratedCurrent` its `AssetDatasheet`
+  names, with a finding for a stated value that is no positive current. The
+  Diagram Layout gives segment routes and bus locations in the coordinate
+  reference system the diagram names, taking a node's or terminal's own
+  drawing first and reporting a drawing that places nothing. A CIM16 document
+  set without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
+  and `PSRType` are reported as context.
+- Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
+
+**BMOPF**
+
+- There is one BMOPF. PowerIO reads and writes the schema proposed in
+  [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
+  vendored from the Task Force repository at commit
+  [`6796394`](https://github.com/distribution-system-opt/dsopt-schema/commit/6796394f6a4326b61c7fcf5ab5c0d55181b67d25):
+  the proposal reconciled with the Task Force's schema, the Task Force review
+  answers (`vng_max`, geometry for every located element) and the review
+  fixes to dsopt-schema#2. The pin moves to the release tag the schema's
+  `$id` names once the Task Force ratifies it (#844).
+- Multiconductor IVR preparation follows the schema's inverter power factor
+  sign, the OpenDSS PVSystem and Storage convention: `pf > 0` puts Q on the
+  same side as P. Preparation used the opposite sign, so an OpenDSS `pf=0.9`
+  inverter absorbed reactive power where OpenDSS injects it; the coefficient
+  row is now `a*P - pf*Q = 0`.
+- A type-A regulator's `tap_ratio` is the regulated over source voltage ratio,
+  as for type B; `regulator_type` records the hardware only. IVR preparation
+  read a type-A ratio inverted.
+- IVR preparation prices an inverter from its `energy_cost_rate`. It priced
+  only from `cost` and refused `energy_cost_rate` as an uninterpreted field,
+  so an inverter price read from BMOPF was never honoured.
+- The schema removed `voltage_source.cost` and `ibr.cost`. A document that
+  still states them reads them as `energy_cost_rate`, and a write states only
+  `energy_cost_rate`. A writer drops a negative or nonfinite n-winding neutral
+  field with `EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED`, and drops an inverter
+  `dc_bus` that states no `dc_terminal_map`, which the schema requires beside
+  it; the semantic check names the missing map.
+- Output names the bus phase to ground bounds `vpg_min`/`vpg_max` and the
+  neutral to ground cap `vng_max` (earlier `vn_max`), and writes geometry in
+  the schema's typed slots, `bus.*.geo`, `line.*.geo` and
+  `meta.crs`, instead of the `extras.geojson` layer.
+- Component locations travel as the `geo` Point of the voltage source, load,
+  generator, IBR, shunt, capacitor, switch or transformer they attach to, in
+  a WGS84 document, and read back as component locations. A switch or
+  transformer `geo` LineString reads as the midpoint of its end positions.
+  BMOPF output no longer reports line routes it writes as dropped.
+- Output states `meta.schema_version`, which the schema requires, as the
+  document's one version identifier and no `meta.$schema`, which the schema
+  removed; a PowerIO archive URL no longer appears
+  ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
+  The schema's `$id`, the commit, digest and retrieval permalink stay in
+  `meta.provenance`. The reader identifies a document by
+  `meta.schema_version` (any patch release of the schema's line) and falls
+  back to the older drafts' `meta.$schema` classification; a current
+  document still carrying `$schema` reads, counted in the one legacy warning.
+- An absent `meta.crs` means `OGC:CRS84`, and coordinates are always longitude
+  then latitude; `EPSG:4326` reads the same way, and the writer leaves the CRS
+  out for WGS84.
+- The schema renamed tokens, which the writer follows and the reader takes
+  in either spelling: UPPER_SNAKE `wire_data.kind`, `line_geometry.earth_model`
+  and `dc_control` (`DROOP`), `STATCOM` for `DSTATCOM`, `PU` for
+  `VA_FRACTION`, and the regulators' `voltage_ratio` (with `_min`/`_max` and
+  `time_series` keys) for `tap_ratio`.
+- Line and linecode `s_max` have one entry per conductor. A per-phase line
+  `s_max` from an older document reads per conductor with the neutral
+  unbounded; the writer drops an `s_max` of any other length.
+- The writer never states a value the schema rejects: a non-positive rating,
+  nominal voltage, tap or ratio, a control law of the wrong shape or without a
+  `voltage_reference`, or a bus bound the bus cannot carry is dropped with a
+  finding, and a record whose required rating or nominal voltage is not
+  positive is dropped whole. The reader checks the schema's semantic rules
+  (neutral and phase-count bounds, frequency consistency, control
+  breakpoints, Volt-Watt and Volt-VAr limits, per-conductor `s_max`, wire
+  and load requirements).
+- A document from an older BMOPF draft (including the `bmopf-report` drafts
+  and the early draft PowerIO 0.11 wrote) reads as BMOPF and is reported once
+  with the new `READ.BMOPF.SCHEMA_LEGACY` warning. A current document that
+  uses the `v_min`/`v_max` or `vn_max` spelling gets the same single warning.
+  Writing a legacy document produces the current schema; only a source that
+  states it is echoed byte for byte.
+- Removed every version-bearing BMOPF name: the `bmopf-json@<version>`
+  output tokens (a token naming a version is refused with a pointer to
+  `bmopf-json`), `BmopfSchemaVersion`, `BmopfEmitOptions::schema_version` and
+  `with_schema_version`, `BMOPF_SCHEMA_VERSION`, and
+  `BmopfEmitOptions::sideload_coordinates`. `BMOPF_PROPOSAL_URL` is now the
+  function `bmopf_proposal_url()`, and `BMOPF_SCHEMA_ID` moved from the writer
+  to the schema pin; the version reports of the C ABI (`pio_schema_report`)
+  and Python (`powerio.versions()`) state the schema's `$id` as
+  `bmopf_schema`. The Rust crate and the Python package ship the one schema
+  at `schemas/bmopf/bmopf.schema.json`.
+
+**Conversion fidelity**
+
+- PowerModels JSON and egret JSON carry, as keys those tools leave alone and
+  PowerIO reads back, what their standard fields cannot: area records, case
+  metadata, system frequency (egret), source element identities, branch
+  rating sets beyond the three ratings, each element's untyped fields, the
+  detailed connectivity hierarchy, bus locations and branch routes with their
+  coordinate reference, transformer and switched shunt controls, generator
+  regulation and active power control, IIDM HVDC line detail, and for egret
+  MATPOWER's generator capability columns and the dcline cost.
+- The MATPOWER reader reads a solved case's branch flow columns `PF`, `QF`,
+  `PT`, and `QT`, which it used to discard, and the writer states them when
+  every branch has a solution.
+- The PMD ENGINEERING writer writes back a generator control mode the source
+  stated instead of always writing `FREQUENCYDROOP`.
+- With these and the format fixes above, the conversion matrix has 25 more
+  lossless cells than 0.11, 26 fewer dropped ones, and no cell is worse.
+
+**Carried from 0.11.10**
+
+- Everything in [0.11.10](#01110): the OpenDSS helper line nodes (#765),
+  absent line ampacity (#762), names OpenDSS cannot carry (#770), BMOPF
+  provenance (#763), the libsqlite3-sys advisory fix through rusqlite 0.41
+  with the Rust 1.89 MSRV, and the dependency bumps (#749, #751, #752,
+  #753, #754, #760, #793).
+
+**Carried from 0.11.11**
+
+- Everything in [0.11.11](#01111): XIIDM terminals for static var
+  compensators and for equipment without a stated terminal in partial
+  substation data (#831, #832), Egret `null` points for unlimited branch
+  ratings (#828), the winding reactance base of a generated CGMES phase tap
+  changer (#829), letter-case fallback for OpenDSS companions supplied as
+  named buffers (#812), absolute include detection on every platform for
+  GridLAB-D and OpenDSS, the Python classifier cleanup, and the Windows
+  architecture map check (#833, #834).
+- Unlike 0.11.11, which still reads a native Egret numeric `0` rating as
+  unlimited, 0.12 reads it as the zero thermal limit Egret enforces, since
+  0.12 ratings use zero for a zero bound and positive infinity for no bound.
+  See [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings)
+  (#828, #841).
+
+**Carried from 0.11.12**
+
+- Everything in [0.11.12](#01112): XIIDM and JIIDM extensions for equipment
+  that is not written (#837, #839), the native pandapower piecewise cost
+  anchor (#840), Python table getters that read only the requested table
+  (#842), and the pandapower 3.5.6 validation oracles (#851).
+
+**Contributor credit**
+
+- @frederikgeth authored the collection/archive stack (#775, #776,
+  #802 through #812, #814) and identified the shunt-status, scaling, typing,
+  naming, and switch-rating review follow-ups.
+- @MohamedNumair authored the CIM16/layout and OpenDSS safe-name changes
+  (#768, #770), fixed PyPSA HDF5 metadata handling, and contributed the
+  convention and retained-document reviews in #821.
+- @BurhanAbdullah authored the absent OpenDSS ampacity correction (#790)
+  and the collection SINCAL option type check (#845).
+- @qian-harvard preserved foreign PowerModels/Egret extension-key values and
+  strengthened refusal of executable HDF5 attribute metadata in #821.
+- @samtalki integrated the release, compatibility migration, adapters, and
+  review follow-ups in #821 and #823. Original contributor commits and
+  coauthor attribution are retained.
 
 ## 0.11.12
 

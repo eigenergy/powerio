@@ -11,7 +11,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use super::BmopfSchemaVersion;
+use super::profile::{self, OlderDraft};
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -45,15 +45,24 @@ pub(crate) fn parse_bmopf_collecting(
         ..MulticonductorNetworkTables::default()
     });
     report_non_numeric_fields(&doc, diags);
-    report_schema_version(&doc, diags);
-    super::validate::report(&doc, diags);
+    let stated = report_schema_version(&doc, diags);
+    let states_current = stated.current;
+    super::validate::report(&doc, diags, states_current);
     super::capacitor::lower(&mut doc, diags)?;
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
         frequency_stated: false,
+        states_current,
+        legacy_spellings: std::collections::BTreeMap::new(),
     };
+    if stated.schema_key {
+        rd.note_legacy_spelling("meta.$schema");
+    }
     rd.document(&doc);
+    rd.note_lowercase_tokens(&doc);
+    rd.line_s_max_per_conductor(&doc);
+    rd.report_legacy_spellings();
     let found = std::mem::take(&mut rd.diagnostics);
     diags.absorb(found);
     super::geo::read(&doc, &mut net, diags);
@@ -61,46 +70,117 @@ pub(crate) fn parse_bmopf_collecting(
     Ok(net)
 }
 
-/// Report unresolved schema identities and reject contradictory version declarations.
-fn report_schema_version(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
-    let stated = doc
-        .get("meta")
-        .and_then(Value::as_object)
-        .and_then(|m| m.get("$schema"))
-        .and_then(Value::as_str);
-    if let (Some(profile), Some(version)) = (
-        stated.and_then(BmopfSchemaVersion::from_schema_id),
-        doc.get("meta").and_then(|meta| meta.get("schema_version")),
-    ) && version.as_str() != Some(profile.version())
-    {
+/// What a document's `meta` states about the release it was written against.
+struct StatedVersion {
+    /// Whether the document states the schema PowerIO writes.
+    current: bool,
+    /// A current document that also carries the earlier `meta.$schema` key.
+    schema_key: bool,
+}
+
+/// Identify the release a document was written against and reject
+/// contradictory declarations. A current document states
+/// `meta.schema_version`; a document from an older draft states only
+/// `meta.$schema`, which is classified as those drafts defined it. Every
+/// document is read as the one schema PowerIO writes; one from an older draft
+/// is read through the legacy paths and reported once with
+/// `READ.BMOPF.SCHEMA_LEGACY`.
+fn report_schema_version(
+    doc: &Map<String, Value>,
+    diags: &mut crate::collect::Diagnostics,
+) -> StatedVersion {
+    let meta = doc.get("meta").and_then(Value::as_object);
+    let release = meta.and_then(|m| m.get("schema_version"));
+    let stated = meta.and_then(|m| m.get("$schema")).and_then(Value::as_str);
+    let by_id = stated.is_some_and(profile::names_current_schema);
+    let legacy_found = |diags: &mut crate::collect::Diagnostics| {
+        diags.push(
+            &C::READ_BMOPF_SCHEMA_LEGACY,
+            "the document is an older BMOPF draft; it is read as BMOPF, and a BMOPF write \
+             states the current schema",
+        );
+    };
+    let mismatch = |release: &Value, diags: &mut crate::collect::Diagnostics| {
         diags.push(
             &C::READ_BMOPF_SCHEMA_MISMATCH,
-            format!(
-                "meta.schema_version {version} disagrees with the {} schema URI",
-                profile.version()
-            ),
+            format!("meta.schema_version {release} disagrees with the schema `meta.$schema` names"),
         );
+    };
+    let absent = StatedVersion {
+        current: false,
+        schema_key: false,
+    };
+    // An older draft's schema location identifies the document whatever
+    // release number it also states (PowerIO 0.11 stated a release beside
+    // its draft).
+    if let Some(draft) = stated.and_then(OlderDraft::from_schema_id) {
+        if let Some(release) = release
+            && release
+                .as_str()
+                .and_then(|text| {
+                    if profile::states_current_release(text) {
+                        Some(profile::release())
+                    } else {
+                        OlderDraft::from_release(text).map(OlderDraft::release)
+                    }
+                })
+                .is_none_or(|line| line.get(..3) != draft.release().get(..3))
+        {
+            mismatch(release, diags);
+        }
+        legacy_found(diags);
+        return absent;
     }
-    match stated {
-        None => diags.push(
-            &C::READ_BMOPF_SCHEMA_ABSENT,
-            format!(
-                "the document states no `meta.$schema`, so the BMOPF schema version it was \
-                 written against is unknown; both {} and {} are accepted",
-                BmopfSchemaVersion::Bmopf010.version(),
-                BmopfSchemaVersion::Bmopf020.version()
-            ),
-        ),
-        Some(id) if BmopfSchemaVersion::from_schema_id(id).is_none() => diags.push(
-            &C::READ_BMOPF_SCHEMA_UNKNOWN,
-            format!(
-                "`meta.$schema` is `{id}`, which names no known BMOPF schema version; both {} \
-                 and {} are accepted",
-                BmopfSchemaVersion::Bmopf010.version(),
-                BmopfSchemaVersion::Bmopf020.version()
-            ),
-        ),
-        Some(_) => {}
+    match release {
+        Some(release) => {
+            let text = release.as_str();
+            if text.is_some_and(profile::states_current_release) {
+                return StatedVersion {
+                    current: true,
+                    schema_key: stated.is_some(),
+                };
+            }
+            if by_id {
+                mismatch(release, diags);
+            }
+            if text.and_then(OlderDraft::from_release).is_some() {
+                legacy_found(diags);
+            } else {
+                diags.push(
+                    &C::READ_BMOPF_SCHEMA_UNKNOWN,
+                    format!(
+                        "`meta.schema_version` is {release}, which names no BMOPF release \
+                         PowerIO knows; read as BMOPF"
+                    ),
+                );
+            }
+            absent
+        }
+        None => match (stated, by_id) {
+            (None, _) => {
+                diags.push(
+                    &C::READ_BMOPF_SCHEMA_ABSENT,
+                    "the document states no `meta.schema_version` (nor an earlier \
+                     `meta.$schema`), so the BMOPF release it was written against is \
+                     unknown; read as BMOPF",
+                );
+                absent
+            }
+            (Some(_), true) => StatedVersion {
+                current: true,
+                schema_key: true,
+            },
+            (Some(id), false) => {
+                diags.push(
+                    &C::READ_BMOPF_SCHEMA_UNKNOWN,
+                    format!(
+                        "`meta.$schema` is `{id}`, which names no known BMOPF schema; read as \
+                         BMOPF"
+                    ),
+                );
+                absent
+            }
+        },
     }
 }
 
@@ -120,7 +200,7 @@ fn nonuniform_bound(value: Option<&Value>) -> Option<Vec<f64>> {
         .flatten()
 }
 
-/// Numeric field names shared with 0.1.0, plus draft energy prices. Derived from
+/// Numeric field names shared with the first draft, plus draft energy prices. Derived from
 /// the vendored schema; `schema_numeric_fields_match_the_vendored_schema`
 /// holds the two together.
 const NUMERIC_FIELDS: &[&str] = &[
@@ -160,6 +240,12 @@ const NUMERIC_FIELDS: &[&str] = &[
     "v_nom_to",
     "vn_max",
     "vneg_max",
+    "vng_max",
+    "voltage_ratio",
+    "voltage_ratio_max",
+    "voltage_ratio_min",
+    "vpg_max",
+    "vpg_min",
     "vpn_max",
     "vpn_min",
     "vpos_max",
@@ -196,7 +282,7 @@ fn is_numeric_field(key: &str) -> bool {
 
 /// Report every schema-numeric field holding something that is not a number.
 ///
-/// Schema 0.1.0 spells no `null` anywhere and types the bounds and ratings as
+/// The first draft spells no `null` anywhere and types the bounds and ratings as
 /// `nonnegative_number`, so every value this reaches is already invalid. Each
 /// reads as `NaN`, which serializes on as `null` and restores as an unbounded
 /// limit — an explicit "no limit" the source never stated. The `Error`
@@ -278,7 +364,42 @@ struct Reader<'a> {
     /// done so a helper never borrows the network the caller is writing into.
     diagnostics: crate::diagnostics::Diagnostics,
     frequency_stated: bool,
+    /// Whether the document states the schema PowerIO writes. Decides
+    /// whether a legacy field spelling gets a finding.
+    states_current: bool,
+    /// Earlier field spellings a document stating the current version used,
+    /// with the number of records that used each; reported once.
+    legacy_spellings: std::collections::BTreeMap<&'static str, usize>,
 }
+
+/// The bus fields the reader types; anything else lands in the bus's extras.
+/// `vpg_*` is the phase to ground bound since the revised draft, `v_*` the first
+/// draft's spelling, `vng_max` the neutral to ground cap in the current schema, `vn_max` its
+/// earlier spelling, `geo` the current location, `longitude`/`latitude` and
+/// `vsym_*` pre-schema BMOPFTools fields.
+const BUS_KNOWN_FIELDS: &[&str] = &[
+    "terminal_names",
+    "perfectly_grounded_terminals",
+    "longitude",
+    "latitude",
+    "geo",
+    "vpg_min",
+    "vpg_max",
+    "v_min",
+    "v_max",
+    "vpn_min",
+    "vpn_max",
+    "vpp_min",
+    "vpp_max",
+    "vpos_min",
+    "vpos_max",
+    "vneg_max",
+    "vzero_max",
+    "vng_max",
+    "vn_max",
+    "vsym_min",
+    "vsym_max",
+];
 
 const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
 
@@ -528,8 +649,8 @@ impl Reader<'_> {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             *self.net.name_mut() = Some(name.to_string());
         }
-        // Schema 0.1.0 carries the frequency in `meta`; the top-level
-        // spellings are the pre-0.1.0 vintage.
+        // The first draft carries the frequency in `meta`; the top-level
+        // spellings are the pre-draft vintage.
         if let Some(frequency) = first_float(
             doc.get("meta")
                 .and_then(Value::as_object)
@@ -600,8 +721,9 @@ impl Reader<'_> {
                 // `meta` is provenance (license, authors, generator tool),
                 // with no typed slot in the model. Stash it whole, the way the
                 // PMD reader stashes `pmd_settings`; the BMOPF writer owns
-                // `$schema`/`frequency`/`case_study_generator` and folds the
-                // other schema fields back from this stash.
+                // `schema_version`/`frequency`/`case_study_generator`/`crs`,
+                // drops `$schema`, and folds the other schema fields back
+                // from this stash.
                 "meta" => {
                     self.net
                         .extras_mut()
@@ -660,17 +782,23 @@ impl Reader<'_> {
         }
     }
 
-    /// The top-level `extras` escape hatch (schema 0.1.0). The IBR and
+    /// The top-level `extras` escape hatch (the first draft). The IBR and
     /// control profile tables that lost their top-level slots read typed from
     /// here, the transformer overflow is consumed by the transformer merge,
-    /// and everything else is stashed verbatim for the writer to re-emit.
+    /// the geometry layer (`geojson`, `powerio_geo`) is consumed by the
+    /// geometry reader, and everything else is stashed verbatim for the
+    /// writer to re-emit.
     fn extras_block(&mut self, items: &Map<String, Value>) {
         let mut stash = Map::new();
         for (key, value) in items {
             match (key.as_str(), value) {
                 ("ibr", Value::Object(table)) => self.ibrs(table),
                 ("control_profile", Value::Object(table)) => self.control_profiles(table),
-                ("transformer", Value::Object(_)) => {}
+                // The transformer overflow is consumed by the transformer
+                // merge; the geometry layer is typed into bus locations and
+                // line routes, then re-emitted from the model (a stashed copy
+                // would go stale on an edit).
+                ("transformer", Value::Object(_)) | ("geojson" | "powerio_geo", _) => {}
                 _ => {
                     stash.insert(key.clone(), value.clone());
                 }
@@ -686,7 +814,14 @@ impl Reader<'_> {
     fn capacitors(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let known = ["bus", "terminal_map", "configuration", "q_rated", "v_nom"];
+            let known = [
+                "bus",
+                "terminal_map",
+                "configuration",
+                "q_rated",
+                "v_nom",
+                "geo",
+            ];
             for (field, value) in [("q_rated", o.get("q_rated")), ("v_nom", o.get("v_nom"))] {
                 if value.is_none() {
                     self.diagnostics.push(
@@ -732,6 +867,7 @@ impl Reader<'_> {
             "q_max",
             "control_profile",
             "voltage_aggregation",
+            "geo",
         ];
         let mut taken: std::collections::BTreeSet<String> = self
             .net
@@ -751,8 +887,18 @@ impl Reader<'_> {
                 &mut self.diagnostics,
             )
             .unwrap_or(IbrTopology::SinglePhase);
+            // The schema removed DSTATCOM, a synonym of STATCOM.
+            let dstatcom = o.get("prime_mover").and_then(Value::as_str) == Some("DSTATCOM");
+            if dstatcom {
+                self.note_legacy_spelling("ibr.prime_mover DSTATCOM");
+            }
+            let statcom = Value::from("STATCOM");
             let prime_mover = enum_field::<IbrPrimeMover>(
-                o.get("prime_mover"),
+                if dstatcom {
+                    Some(&statcom)
+                } else {
+                    o.get("prime_mover")
+                },
                 &format!("ibr {name} prime_mover"),
                 &mut self.diagnostics,
             )
@@ -762,6 +908,19 @@ impl Reader<'_> {
                 if !TYPED.contains(&key.as_str()) {
                     extras.insert(key.clone(), value.clone());
                 }
+            }
+            // The schema prices an inverter with `energy_cost_rate` only;
+            // the earlier `cost` spelling reads as it.
+            if let Some(cost) = extras.remove("cost") {
+                self.note_legacy_spelling("ibr.cost");
+                extras.entry("energy_cost_rate".to_owned()).or_insert(cost);
+            }
+            // Every enum of the schema is UPPER_SNAKE; the DC control mode was `droop`.
+            if let Some(Value::String(mode)) = extras.get_mut("dc_control")
+                && mode.as_str() == "droop"
+            {
+                "DROOP".clone_into(mode);
+                self.note_legacy_spelling("ibr.dc_control droop");
             }
             self.net.ibrs_mut().push(DistIbr {
                 name: name.clone(),
@@ -791,7 +950,7 @@ impl Reader<'_> {
     }
 
     /// True when `name` (case-insensitive) is already in `taken`. Schema
-    /// 0.1.0 moved the IBR and control profile tables under `extras`, and the
+    /// The first draft moved the IBR and control profile tables under `extras`, and the
     /// reader accepts both places, so a part-migrated document can declare
     /// the same name twice. Two elements of one name double every count and
     /// let the writer silently keep only the last, so the second reads as a
@@ -843,7 +1002,7 @@ impl Reader<'_> {
                     breakpoints: floats(vv.get("breakpoints")).unwrap_or_default(),
                     q_limits: floats(vv.get("q_limits")).unwrap_or_default(),
                     q_unit: enum_field::<ReactivePowerUnit>(
-                        vv.get("q_unit"),
+                        self.unit_token(vv.get("q_unit")).as_ref(),
                         &format!("control_profile {name} volt_var q_unit"),
                         &mut self.diagnostics,
                     ),
@@ -866,7 +1025,7 @@ impl Reader<'_> {
                     breakpoints: floats(vw.get("breakpoints")).unwrap_or_default(),
                     p_limits: floats(vw.get("p_limits")).unwrap_or_default(),
                     p_unit: enum_field::<ActivePowerUnit>(
-                        vw.get("p_unit"),
+                        self.unit_token(vw.get("p_unit")).as_ref(),
                         &format!("control_profile {name} volt_watt p_unit"),
                         &mut self.diagnostics,
                     ),
@@ -889,25 +1048,6 @@ impl Reader<'_> {
     fn buses(&mut self, items: &Map<String, Value>) {
         for (id, v) in items {
             let Value::Object(o) = v else { continue };
-            let known = [
-                "terminal_names",
-                "perfectly_grounded_terminals",
-                "longitude",
-                "latitude",
-                "v_min",
-                "v_max",
-                "vpn_min",
-                "vpn_max",
-                "vpp_min",
-                "vpp_max",
-                "vpos_min",
-                "vpos_max",
-                "vneg_max",
-                "vzero_max",
-                "vn_max",
-                "vsym_min",
-                "vsym_max",
-            ];
             let lon = first_float(o.get("longitude")).filter(|v| v.is_finite());
             let lat = first_float(o.get("latitude")).filter(|v| v.is_finite());
             let has_lon = o.contains_key("longitude");
@@ -928,8 +1068,13 @@ impl Reader<'_> {
                 }
                 _ => None,
             };
-            let mut extras =
-                take_extras(o, &known, &format!("bus {id}"), &mut self.diagnostics, &[]);
+            let mut extras = take_extras(
+                o,
+                BUS_KNOWN_FIELDS,
+                &format!("bus {id}"),
+                &mut self.diagnostics,
+                &[],
+            );
             if location.is_none() {
                 if let Some(value) = o.get("longitude") {
                     extras.insert("longitude".into(), value.clone());
@@ -938,11 +1083,11 @@ impl Reader<'_> {
                     extras.insert("latitude".into(), value.clone());
                 }
             }
-            // Legacy (pre-0.1.0) `vsym_min`/`vsym_max` arrays carried the
+            // Legacy (pre-draft) `vsym_min`/`vsym_max` arrays carried the
             // symmetrical component bounds in zero/positive/negative order.
-            // Schema 0.1.0 replaced them with named per-sequence scalars;
+            // The first draft replaced them with named per-sequence scalars;
             // map what has a slot and warn about what does not (the negative
-            // and zero sequence lower bounds are fixed at 0 in 0.1.0).
+            // and zero sequence lower bounds are fixed at 0 in the first draft).
             let legacy_min = floats(o.get("vsym_min"));
             let legacy_max = floats(o.get("vsym_max"));
             if legacy_min.is_some() || legacy_max.is_some() {
@@ -966,18 +1111,25 @@ impl Reader<'_> {
                     &C::READ_BMOPF_FIELD_DROPPED,
                     format!(
                         "bus {id}: legacy vsym_min zero/negative sequence lower bounds have no \
-                     slot in schema 0.1.0 (fixed at 0); dropped"
+                     slot in the BMOPF schema (fixed at 0); dropped"
                     ),
                 );
             }
+            // Renamed bounds read under either spelling, the current one
+            // first: the phase to ground bounds are `vpg_min`/`vpg_max` since
+            // the revised draft (the first draft's `v_min`/`v_max`), and the neutral to ground
+            // cap is `vng_max` in the current schema (earlier `vn_max`).
+            let vpg_min = self.renamed_bus_field(o, "vpg_min", "v_min");
+            let vpg_max = self.renamed_bus_field(o, "vpg_max", "v_max");
+            let vng_max = self.renamed_bus_field(o, "vng_max", "vn_max");
             self.net.buses_mut().push(DistBus {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
                 grounded: strings(o.get("perfectly_grounded_terminals")),
-                v_min: uniform_bound(o.get("v_min")),
-                v_max: uniform_bound(o.get("v_max")),
-                v_min_phase: nonuniform_bound(o.get("v_min")),
-                v_max_phase: nonuniform_bound(o.get("v_max")),
+                v_min: uniform_bound(vpg_min),
+                v_max: uniform_bound(vpg_max),
+                v_min_phase: nonuniform_bound(vpg_min),
+                v_max_phase: nonuniform_bound(vpg_max),
                 vpn_min: floats(o.get("vpn_min")),
                 vpn_max: floats(o.get("vpn_max")),
                 vpp_min: floats(o.get("vpp_min")),
@@ -986,11 +1138,171 @@ impl Reader<'_> {
                 vpos_max: first_float(o.get("vpos_max")).or(legacy_vpos_max),
                 vneg_max: first_float(o.get("vneg_max")).or(legacy_vneg_max),
                 vzero_max: first_float(o.get("vzero_max")).or(legacy_vzero_max),
-                vn_max: first_float(o.get("vn_max")),
+                vn_max: first_float(vng_max),
                 location,
                 extras,
             });
         }
+    }
+
+    /// A bus field the schema spells differently from an earlier version:
+    /// the current spelling, else the earlier one. A document that states
+    /// the current schema and uses the earlier spelling is noted for the one
+    /// `READ.BMOPF.SCHEMA_LEGACY` finding, since that schema rejects it; a
+    /// document stating an earlier version, or none, already has its one
+    /// schema finding. Both spellings disagreeing is
+    /// `READ.BMOPF.SEMANTIC_INVALID` (see `validate.rs`).
+    fn renamed_bus_field<'v>(
+        &mut self,
+        o: &'v Map<String, Value>,
+        current: &str,
+        legacy: &'static str,
+    ) -> Option<&'v Value> {
+        let old = o.get(legacy);
+        if old.is_some() {
+            self.note_legacy_spelling(legacy);
+        }
+        o.get(current).or(old)
+    }
+
+    /// A regulator record with its ratio under the name the model keeps,
+    /// `tap_ratio` (with `_min`/`_max`). The schema names it
+    /// `voltage_ratio`, the regulated over source voltage, in the record and
+    /// in its `time_series` references; the earlier `tap_ratio` spelling is
+    /// noted for the one legacy finding.
+    fn regulator_ratio_spelling(&mut self, o: &Map<String, Value>) -> Map<String, Value> {
+        let mut o = o.clone();
+        for (model, current) in [
+            ("tap_ratio", "voltage_ratio"),
+            ("tap_ratio_min", "voltage_ratio_min"),
+            ("tap_ratio_max", "voltage_ratio_max"),
+        ] {
+            if let Some(value) = o.remove(current) {
+                o.insert(model.to_owned(), value);
+            } else if o.contains_key(model) {
+                self.note_legacy_spelling("regulator tap_ratio");
+            }
+            if let Some(Value::Object(refs)) = o.get_mut("time_series")
+                && let Some(value) = refs.remove(model)
+            {
+                refs.insert(current.to_owned(), value);
+                self.note_legacy_spelling("regulator tap_ratio");
+            }
+        }
+        o
+    }
+
+    /// A control limit's unit token as the model names it. The schema calls
+    /// a limit stated per unit of its base `PU`; the model's `VA_FRACTION` is
+    /// the earlier spelling, noted for the one legacy finding.
+    fn unit_token(&mut self, value: Option<&Value>) -> Option<Value> {
+        match value.and_then(Value::as_str) {
+            Some("PU") => Some(Value::from("VA_FRACTION")),
+            Some("VA_FRACTION") => {
+                self.note_legacy_spelling("control_profile VA_FRACTION");
+                value.cloned()
+            }
+            _ => value.cloned(),
+        }
+    }
+
+    /// A line's `s_max` has one entry per conductor in the schema. Schema
+    /// the revised draft's line text, and the proposal before its review, said one
+    /// per phase conductor. A line stating one entry per phase on a map with a
+    /// neutral is read faithfully: each phase conductor keeps its stated
+    /// limit and the neutral conductor, which the document did not bound, has
+    /// none (positive infinity). The reading is reported once per line.
+    fn line_s_max_per_conductor(&mut self, doc: &Map<String, Value>) {
+        let conventions = doc.get("terminal_conventions");
+        let mut inferred = Vec::new();
+        for line in self.net.lines_mut() {
+            let Some(limits) = &line.s_max else { continue };
+            let conductors = line.terminal_map_from.len();
+            if limits.len() == conductors {
+                continue;
+            }
+            let phases =
+                DistBus::new("", line.terminal_map_from.clone()).phase_indices(conventions);
+            if limits.len() != phases.len() {
+                continue;
+            }
+            let mut per_conductor = vec![f64::INFINITY; conductors];
+            for (&index, &limit) in phases.iter().zip(limits) {
+                per_conductor[index] = limit;
+            }
+            line.s_max = Some(per_conductor);
+            inferred.push(line.name.clone());
+        }
+        for name in inferred {
+            self.diagnostics.push(
+                &C::READ_BMOPF_VALUE_INFERRED,
+                format!(
+                    "line {name}: `s_max` states one entry per phase conductor, as older BMOPF \
+                     drafts did; read per conductor with the neutral conductor unbounded"
+                ),
+            );
+        }
+    }
+
+    /// Notes the lowercase enum values earlier drafts used where the schema
+    /// spells them UPPER_SNAKE: `wire_data.kind` and
+    /// `line_geometry.earth_model`. Both tables are retained as source data,
+    /// so only the spelling is noted.
+    fn note_lowercase_tokens(&mut self, doc: &Map<String, Value>) {
+        if !self.states_current {
+            return;
+        }
+        for (table, field, note) in [
+            ("wire_data", "kind", "wire_data.kind lowercase"),
+            (
+                "line_geometry",
+                "earth_model",
+                "line_geometry.earth_model lowercase",
+            ),
+        ] {
+            let lowercase = doc
+                .get(table)
+                .and_then(Value::as_object)
+                .into_iter()
+                .flat_map(|items| items.values())
+                .filter_map(|item| item.get(field).and_then(Value::as_str))
+                .filter(|value| value.chars().any(|c| c.is_ascii_lowercase()))
+                .count();
+            if lowercase > 0 {
+                *self.legacy_spellings.entry(note).or_default() += lowercase;
+            }
+        }
+    }
+
+    /// Notes a field spelled the way an earlier schema version spells it,
+    /// for the one `READ.BMOPF.SCHEMA_LEGACY` finding of a document that
+    /// states the current schema; a document stating an earlier version, or none, already
+    /// has its one schema finding.
+    fn note_legacy_spelling(&mut self, field: &'static str) {
+        if self.states_current {
+            *self.legacy_spellings.entry(field).or_default() += 1;
+        }
+    }
+
+    /// One `READ.BMOPF.SCHEMA_LEGACY` finding for a document that states the
+    /// current version but uses earlier field spellings.
+    fn report_legacy_spellings(&mut self) {
+        if self.legacy_spellings.is_empty() {
+            return;
+        }
+        let fields = self
+            .legacy_spellings
+            .iter()
+            .map(|(field, count)| format!("`{field}` ({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.diagnostics.push(
+            &C::READ_BMOPF_SCHEMA_LEGACY,
+            format!(
+                "the document states the current BMOPF schema but uses the spellings of an \
+                 older BMOPF draft, {fields}, which the schema rejects; read as BMOPF"
+            ),
+        );
     }
 
     fn line_codes(&mut self, items: &Map<String, Value>) {
@@ -1053,8 +1365,9 @@ impl Reader<'_> {
                 "terminal_map_to",
                 "i_max",
                 "s_max",
+                "geo",
             ];
-            // Schema 0.1.0 lines carry either a linecode + length or inline
+            // The first draft lines carry either a linecode + length or inline
             // impedance matrices (the linecode oneOf). Inline matrices read
             // into a synthesized single-use linecode named after the line.
             let mut linecode = string(o.get("linecode"));
@@ -1180,6 +1493,7 @@ impl Reader<'_> {
                 "terminal_map_to",
                 "open_switch",
                 "i_max",
+                "geo",
             ];
             self.net.switches_mut().push(DistSwitch {
                 name: name.clone(),
@@ -1222,6 +1536,7 @@ impl Reader<'_> {
                 "beta_p",
                 "gamma_p",
                 "gamma_q",
+                "geo",
             ];
             let v_nom = floats(o.get("v_nom")).unwrap_or_default();
             let has_zip = [
@@ -1296,6 +1611,7 @@ impl Reader<'_> {
                 "bus",
                 "configuration",
                 "terminal_map",
+                "geo",
             ];
             let p_min = floats(o.get("p_min"));
             let p_max = floats(o.get("p_max"));
@@ -1309,7 +1625,7 @@ impl Reader<'_> {
             };
             // Cost is a per-phase array in the schema, kept exactly as
             // stated. A bare scalar is still accepted for documents written
-            // before v0.0.1 and reads as a one-entry statement.
+            // before the first draft and reads as a one-entry statement.
             let cost = match o.get("energy_cost_rate").or_else(|| o.get("cost")) {
                 Some(Value::Array(a)) => Some(a.iter().map(f).collect::<Vec<f64>>()),
                 Some(v) => Some(vec![f(v)]),
@@ -1369,7 +1685,7 @@ impl Reader<'_> {
                 b: pad_to(b, n),
                 extras: take_extras(
                     o,
-                    &["bus", "terminal_map"],
+                    &["bus", "terminal_map", "geo"],
                     &format!("shunt {name}"),
                     &mut self.diagnostics,
                     &["G", "B"],
@@ -1409,7 +1725,13 @@ impl Reader<'_> {
                 "terminal_map",
                 "energy_cost_rate",
                 "cost",
+                "geo",
             ];
+            // The schema prices a source with `energy_cost_rate` only; the
+            // earlier `cost` spelling reads as it.
+            if o.contains_key("cost") {
+                self.note_legacy_spelling("voltage_source.cost");
+            }
             let energy_cost_rate = floats(o.get("energy_cost_rate").or_else(|| o.get("cost")));
             self.net.sources_mut().push(VoltageSource {
                 reference_terminal: None,
@@ -1454,10 +1776,12 @@ impl Reader<'_> {
                         self.net.transformers_mut().push(t);
                     }
                     "single_phase_autotransformer" => {
+                        let o = &self.regulator_ratio_spelling(o);
                         let t = self.autotransformer_regulator(name, o, &bus_index);
                         self.net.transformers_mut().push(t);
                     }
                     "open_delta_regulator" => {
+                        let o = &self.regulator_ratio_spelling(o);
                         for t in self.open_delta_regulator(name, o, &bus_index) {
                             self.net.transformers_mut().push(t);
                         }
@@ -1508,6 +1832,7 @@ impl Reader<'_> {
             "tap_ratio",
             "tap_ratio_min",
             "tap_ratio_max",
+            "geo",
         ];
         if !matches!(
             subtype,
@@ -1811,6 +2136,7 @@ impl Reader<'_> {
             "i_max_from",
             "i_max_to",
             "connection",
+            "geo",
         ];
         let bus_from = string(o.get("bus_from"));
         let bus_to = string(o.get("bus_to"));
@@ -1928,6 +2254,7 @@ impl Reader<'_> {
             "g_no_load",
             "b_no_load",
             "no_load_shunt",
+            "geo",
         ];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
@@ -2325,7 +2652,7 @@ mod tests {
             );
         }
         let draft_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("schemas/bmopf/0.2.0/bmopf.schema.json");
+            .join("schemas/bmopf/bmopf.schema.json");
         let draft: Value =
             serde_json::from_str(&std::fs::read_to_string(draft_path).unwrap()).unwrap();
         walk(&draft, &mut names, &mut patterns);

@@ -168,7 +168,7 @@ fn canonical_key(name: &str) -> String {
 const DISTRIBUTION_ELEMENT_TABLES: &[&str] = &[
     "capacitor",
     // `control_profile` and `ibr` are typed dispatch tables of the reader,
-    // though schema 0.1.0 moved them under `extras`: a pre-0.1.0 document
+    // though the first draft moved them under `extras`: a pre-draft document
     // still declares them at the top level, and what the reader accepts the
     // classifier must identify.
     "control_profile",
@@ -657,6 +657,11 @@ fn echo_text(
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
+    // PowerIO writes one BMOPF version: a document stating an earlier one,
+    // or none, is written fresh rather than echoed.
+    if target == DistTargetFormat::BmopfJson && !crate::bmopf::__states_written_version(text) {
+        return None;
+    }
     Some(text.to_owned())
 }
 
@@ -683,7 +688,10 @@ pub(crate) fn emit_value_text_with_options(
         DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
         DistTargetFormat::RavensJson => crate::ravens::emit_ravens_json_text(net)?,
     };
-    if !net.component_locations().is_empty() {
+    // BMOPF writes component points and line routes as typed `geo` and
+    // reports the ones it cannot write itself.
+    let writes_geometry = format == DistTargetFormat::BmopfJson;
+    if !writes_geometry && !net.component_locations().is_empty() {
         conv.push(&crate::diagnostics::codes::EMIT_DIST_COMPONENT_COORDINATES_DROPPED,
             format!("{} component point(s) dropped: {} cannot carry their attachment, partial-axis and datum semantics",
                 net.component_locations().len(), format.name()));
@@ -694,14 +702,14 @@ pub(crate) fn emit_value_text_with_options(
             "Native SINCAL source-only data are omitted from the typed electrical conversion.",
         );
     }
-    // No distribution format carries line routes; report the loss the
+    // No other distribution format carries line routes; report the loss the
     // way bus locations already do (`.pio.json` keeps them).
     let routed = net
         .lines()
         .iter()
         .filter(|line| line.route.is_some())
         .count();
-    if routed > 0 {
+    if routed > 0 && !writes_geometry {
         conv.push(
             &crate::diagnostics::codes::EMIT_MULTICONDUCTOR_ROUTE_DROPPED,
             format!(
@@ -855,13 +863,13 @@ mod tests {
         );
         for doc in [
             r#"{"bus": {}, "voltage_source": {}}"#,
-            // A pre-0.1.0 feeder fragment: no `voltage_source`, but the
+            // A pre-draft feeder fragment: no `voltage_source`, but the
             // reader accepts it, so the classifier must too.
             r#"{"bus": {}, "line": {}, "linecode": {}}"#,
             r#"{"bus": {}, "transformer": {}}"#,
             r#"{"bus": {}, "capacitor": {}}"#,
             r#"{"bus": {}, "generator": {}}"#,
-            // The pre-0.1.0 top-level spellings of the tables 0.1.0 moved
+            // The pre-draft top-level spellings of the tables the first draft moved
             // under `extras`; the reader dispatches both.
             r#"{"bus": {}, "ibr": {}}"#,
             r#"{"bus": {}, "control_profile": {}}"#,

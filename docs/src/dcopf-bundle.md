@@ -71,8 +71,9 @@ all zero under `--hvdc ignore`), and `fixed_withdrawal`, equal to
 `pd + gs + p_shift - p_hvdc`.
 
 The branch indexed vectors, of length \\(m\\), are `b` (susceptances), `shift`
-(radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal
-limits; \\(0\\) means unlimited per MATPOWER), and the radian limits
+(radians), `flow_offset` (equal to `-b * shift` elementwise), `fmax` (per unit
+thermal limits: \\(0\\) is a zero flow bound and `inf` is no bound, see the
+0.12 note below), and the radian limits
 `angle_min` and `angle_max` on \\(\theta_{\mathrm{from}} - \theta_{\mathrm{to}}\\), the
 MATPOWER and PowerModels convention, which is not net of the branch's phase
 shift. By default they carry PowerModels' ±60 degree pad
@@ -95,7 +96,7 @@ Unwrapped DC angle differences can exceed a full turn, so ±360 degrees is
 not a substitute for no constraint. Bundle vectors spell infinities `-inf`
 and `inf`; consumers must omit the corresponding inequality side. Preparation
 JSON uses the strings `"-Infinity"` and `"Infinity"`, retaining numeric values
-for finite limits. The default padded policy and ABI 7 remain unchanged.
+for finite limits. The default padded policy and the C ABI remain unchanged.
 
 The generator space vectors, of length \\(n_{\mathrm{gen}}\\), are `q_gen`,
 `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.
@@ -118,6 +119,11 @@ inside the bound of each generator. A bus with one generator keeps that
 generator's curve.
 
 ## Manifest (`dcopf_meta.json`)
+
+Starting in 0.12, `fmax.mtx` uses zero for a zero flow bound and positive
+infinity for no bound, including inactive constraints. Zero never changes
+branch status. Earlier bundles used zero for no bound; check `powerio_version`
+when reading those files.
 
 The manifest has schema `powerio.dcopf` and is stamped with the writing
 release in `powerio_version`. It describes the Matrix Market files with

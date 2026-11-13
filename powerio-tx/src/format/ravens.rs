@@ -1053,14 +1053,14 @@ fn write_branch(
             "ActivePowerLimit",
             &format!("{set_name}_rate_a"),
             None,
-            branch.rate_a * WATT,
+            crate::thermal_limit::to_zero_unlimited(branch.rate_a) * WATT,
             TYPE_HIGH_CONT,
         ),
         limit_value(
             "ActivePowerLimit",
             &format!("{set_name}_rate_b"),
             None,
-            branch.rate_b * WATT,
+            crate::thermal_limit::to_zero_unlimited(branch.rate_b) * WATT,
             TYPE_HIGH_EMER,
         ),
         limit_value(
@@ -1091,7 +1091,7 @@ fn write_branch(
             ),
         );
     }
-    if branch.rate_c != 0.0 {
+    if !branch.rate_c.is_infinite() {
         warnings.push(
             &F.field_dropped,
             format!(
@@ -1669,8 +1669,10 @@ pub(crate) fn parse_ravens_source(
     });
     for obj in branch_objs {
         if obj.kind == "PowerTransformer" {
-            if let Some(branch) = read_transformer(&doc, obj, base_mva, &kv_of, &bus_ids, warnings)
+            if let Some(mut branch) =
+                read_transformer(&doc, obj, base_mva, &kv_of, &bus_ids, warnings)
             {
+                read_branch_limits(&doc, obj, &mut branch)?;
                 branches.push(branch);
             }
             continue;
@@ -1701,7 +1703,7 @@ pub(crate) fn parse_ravens_source(
         branch.b = f_or(obj, "ACLineSegment.bch", 0.0) / y_base;
         branch.in_service = in_service(obj);
         branch.uid = mrid(obj);
-        read_branch_limits(&doc, obj, &mut branch);
+        read_branch_limits(&doc, obj, &mut branch)?;
         branches.push(branch);
     }
 
@@ -1970,13 +1972,13 @@ fn limit_type_name(limit: &Map<String, Value>) -> Option<String> {
     Some(rest.strip_suffix('\'')?.to_owned())
 }
 
-fn read_branch_limits(doc: &Doc, obj: &Obj, branch: &mut Branch) {
+fn read_branch_limits(doc: &Doc, obj: &Obj, branch: &mut Branch) -> Result<()> {
     let Some(set) = obj
         .props
         .get("Equipment.OperationalLimitSet")
         .and_then(|p| doc.resolve(p))
     else {
-        return;
+        return Ok(());
     };
     for limit in limit_values(set) {
         let kind = limit
@@ -1990,8 +1992,18 @@ fn read_branch_limits(doc: &Doc, obj: &Obj, branch: &mut Branch) {
                 continue;
             };
             match ty.as_str() {
-                TYPE_HIGH_CONT => branch.rate_a = value / WATT,
-                TYPE_HIGH_EMER => branch.rate_b = value / WATT,
+                TYPE_HIGH_CONT => {
+                    branch.rate_a = crate::thermal_limit::scaled(
+                        crate::thermal_limit::from_zero_unlimited(value)?,
+                        1.0 / WATT,
+                    )?;
+                }
+                TYPE_HIGH_EMER => {
+                    branch.rate_b = crate::thermal_limit::scaled(
+                        crate::thermal_limit::from_zero_unlimited(value)?,
+                        1.0 / WATT,
+                    )?;
+                }
                 _ => {}
             }
         } else if kind == "VoltageLimit"
@@ -2010,6 +2022,7 @@ fn read_branch_limits(doc: &Doc, obj: &Obj, branch: &mut Branch) {
             }
         }
     }
+    Ok(())
 }
 
 fn read_transformer(
@@ -2105,7 +2118,6 @@ fn read_transformer(
             branch.shift = angle.to_degrees();
         }
     }
-    read_branch_limits(doc, obj, &mut branch);
     Some(branch)
 }
 
@@ -2612,8 +2624,8 @@ mod tests {
             assert!((a.b - b.b).abs() < 1e-12);
             assert!((a.calc_effective_tap() - b.calc_effective_tap()).abs() < 1e-12);
             assert!((a.shift - b.shift).abs() < 1e-9);
-            assert!((a.rate_a - b.rate_a).abs() < 1e-9);
-            assert!((a.rate_b - b.rate_b).abs() < 1e-9);
+            crate::thermal_limit::assert_close(a.rate_a, b.rate_a, 1e-9);
+            crate::thermal_limit::assert_close(a.rate_b, b.rate_b, 1e-9);
         }
         for (a, b) in net.generators().iter().zip(rt.generators()) {
             assert_eq!(a.bus, b.bus);

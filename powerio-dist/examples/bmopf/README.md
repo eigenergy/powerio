@@ -1,15 +1,16 @@
 # IEEE cases in BMOPF JSON
 
-Reference encodings of IEEE distribution test cases in draft BMOPF 0.2,
-produced by `powerio-dist`. They validate against that schema and
+Reference encodings of IEEE distribution test cases in BMOPF, the schema
+proposed in dsopt-schema#2 and the one BMOPF PowerIO writes, produced by
+`powerio-dist`. They validate against that schema and
 exercise parsers and validation tools. Regenerate them
 rather than editing by hand.
 
 | Case | Source `.dss` | Size | Write diagnostics |
 |---|---|---|---|
-| IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 49,836 bytes | 104 |
-| IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 111,693 bytes | 143 |
-| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 17,654 bytes | 0 |
+| IEEE 34 | `tests/data/dist/opendss/ieee34/ieee34Mod1.dss` (vendored) | 49,651 bytes | 104 |
+| IEEE 123 | `tests/data/dist/opendss/ieee123/IEEE123Master.dss` (vendored) | 111,508 bytes | 143 |
+| 4 bus delta wye | `4Bus-DY-Bal/4Bus-DY-Bal.DSS` from the OpenDSS distribution | 19,159 bytes | 0 |
 
 34 and 123 are recognizable feeders. The Kersting 4 bus case isolates a single
 delta to wye service transformer, the four wire winding that the BMOPF schema's
@@ -22,7 +23,7 @@ cargo run -p powerio-dist --example regen_bmopf_examples -- --check
 ```
 
 Every document validates against the vendored schema
-(`powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json`), and the writer reports each
+(`powerio-dist/schemas/bmopf/bmopf.schema.json`), and the writer reports each
 field or conversion the selected target cannot represent. Diagnostic counts
 count aggregated records; each record retains its occurrence count. These are
 canonical conversions. Re-emitting them as OpenDSS does not reconstruct the
@@ -31,9 +32,10 @@ emitted in the same format in which that module was parsed.
 
 
 Each document carries a top level `meta` block. `meta.case_study_generator`
-names the writing tool and version. `meta.$schema` gives a PowerIO archive commit
-retrieval URL, while `meta.provenance.powerio_bmopf` records its canonical
-identity, commit, schema digest and proposal status.
+names the writing tool and version, and `meta.schema_version` is the release
+the schema requires a document to state. `meta.provenance.powerio_bmopf`
+records the schema's canonical `$id`, the proposal commit, the schema digest,
+the retrieval permalink of those bytes and the proposal status.
 The block is deterministic (no timestamp) so output stays byte stable. Generator `energy_cost_rate` is a per-phase array in $/kWh.
 
 ## Source provenance

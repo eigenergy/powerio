@@ -67,10 +67,10 @@ mod pypsa;
 mod ravens;
 mod rawx;
 pub mod routing;
+mod sienna;
 mod surge;
 
 mod ucte;
-mod union_find;
 mod xiidm;
 mod xml;
 
@@ -144,6 +144,10 @@ pub enum TargetFormat {
     /// MG-RAVENS JSON, the LANL CIM-derived interchange schema
     /// (<https://github.com/lanl-ansi/MG-RAVENS>), balanced subset.
     RavensJson,
+    /// SiennaSchemas 0.1 through 0.4; zero uses the source version or latest.
+    SiennaJson { version: u8 },
+    /// Serialized PowerSystems.jl System, writing data format 5.0.0.
+    PowerSystemsJson,
 }
 
 impl TargetFormat {
@@ -156,6 +160,8 @@ impl TargetFormat {
             | TargetFormat::PandapowerJson
             | TargetFormat::Goc3Json
             | TargetFormat::SurgeJson
+            | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
             | TargetFormat::RavensJson
             | TargetFormat::DeepMindOpfDataJson => "json",
             TargetFormat::Psse { .. } => "raw",
@@ -184,6 +190,8 @@ impl TargetFormat {
             TargetFormat::Pslf => "PSLF .epc",
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
+            TargetFormat::SiennaJson { .. } => "SiennaSchemas JSON",
+            TargetFormat::PowerSystemsJson => "PowerSystems JSON",
             TargetFormat::RavensJson => "MG-RAVENS JSON",
             TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
             TargetFormat::Xiidm => "XIIDM 1.17 XML",
@@ -209,6 +217,8 @@ impl TargetFormat {
             TargetFormat::Pslf => "pslf",
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
+            TargetFormat::SiennaJson { version } => sienna::token(version),
+            TargetFormat::PowerSystemsJson => "powersystems-json",
             TargetFormat::RavensJson => "ravens-json",
             TargetFormat::DeepMindOpfDataJson => "opfdata-json",
             TargetFormat::Xiidm => "xiidm",
@@ -268,6 +278,12 @@ pub fn parse_target_format(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
+        TransmissionFormat::PowerSystemsJson => TargetFormat::PowerSystemsJson,
+        sienna @ (TransmissionFormat::SiennaJson
+        | TransmissionFormat::Sienna01Json
+        | TransmissionFormat::Sienna02Json
+        | TransmissionFormat::Sienna03Json
+        | TransmissionFormat::Sienna04Json) => sienna_target(sienna)?,
         TransmissionFormat::RavensJson => TargetFormat::RavensJson,
         TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::Xiidm => TargetFormat::Xiidm,
@@ -453,7 +469,10 @@ pub fn parse_with_json_class(
     }) || cgmes::looks_like_profile_set(&source);
     let mut warnings = Diagnostics::new();
     match parse_to_network(&source, &mut warnings, json_class) {
-        Ok(mut network) => {
+        Ok(ParsedNetwork {
+            mut network,
+            extension,
+        }) => {
             network.assign_missing_component_ids();
             // Record the detected format on the retained source before the
             // common constructor builds descriptors and the coarse root
@@ -486,7 +505,11 @@ pub fn parse_with_json_class(
                     Err(_) => source,
                 }
             };
-            PioModule::parsed(network, source, warnings.into_records())
+            let mut module = PioModule::parsed(network, source, warnings.into_records())?;
+            if let Some((namespace, document)) = extension {
+                module.insert_extension(namespace, document)?;
+            }
+            Ok(module)
         }
         Err(error) => {
             // A reader that failed on a located record leaves that record's
@@ -503,6 +526,21 @@ pub fn parse_with_json_class(
     }
 }
 
+/// Reader output before the module takes ownership of the retained document.
+struct ParsedNetwork {
+    network: BalancedNetwork,
+    extension: Option<(&'static str, Value)>,
+}
+
+impl From<BalancedNetwork> for ParsedNetwork {
+    fn from(network: BalancedNetwork) -> Self {
+        Self {
+            network,
+            extension: None,
+        }
+    }
+}
+
 /// The format dispatch behind [`parse`]: name and content detection, then the
 /// one reader map. `json_class` is a classification the caller already
 /// computed on this source's own text ([`parse_with_json_class`]); when it is
@@ -513,7 +551,7 @@ fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut Diagnostics,
     json_class: Option<routing::JsonClass>,
-) -> Result<BalancedNetwork> {
+) -> Result<ParsedNetwork> {
     let from = source.format().map(powerio_core::FormatId::as_str);
     let path = std::path::Path::new(source.name());
     // The file stem is the name hint for formats that don't carry their own
@@ -536,13 +574,13 @@ fn parse_to_network(
             .expect("static name is a valid artifact path");
         if from.is_some_and(is_pypsa_csv_name) || (from.is_none() && source.buffer(&marker).is_ok())
         {
-            return pypsa::read_pypsa_csv_source(source, warnings);
+            return pypsa::read_pypsa_csv_source(source, warnings).map(Into::into);
         }
         if from.is_some_and(|format| {
             routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
         }) || (from.is_none() && cgmes::looks_like_profile_set(source))
         {
-            return cgmes::parse_source(source, warnings);
+            return cgmes::parse_source(source, warnings).map(Into::into);
         }
         // Any other directory has no reader; refuse it as a directory before
         // the extension logic reads ".07" off a name like `pglib-opf-23.07`.
@@ -562,7 +600,7 @@ fn parse_to_network(
         routing::parse_transmission_format(format) == Some(TransmissionFormat::Cgmes)
     }) || (from.is_none() && cgmes::looks_like_profile_set(source))
     {
-        return cgmes::parse_source(source, warnings);
+        return cgmes::parse_source(source, warnings).map(Into::into);
     }
     // PowerWorld `.pwb` is binary and read only; dispatch it before the text
     // read. `from` accepts "pwb" for files with a different extension.
@@ -579,13 +617,13 @@ fn parse_to_network(
         // Binary input: the exact bytes go to the reader, byte order mark
         // handling included, since the mark is a text concept.
         let buffer = primary(source)?;
-        return powerworld::parse_pwb_collecting(buffer.bytes(), stem, warnings);
+        return powerworld::parse_pwb_collecting(buffer.bytes(), stem, warnings).map(Into::into);
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
         let buffer = primary(source)?;
         let network = pslf::parse_pslf_source(source_text(&buffer)?, stem, warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
-        return Ok(network);
+        return Ok(network.into());
     }
     // An IEEE CDF case has no fixed extension: the public archives use
     // `.txt` and some tools `.cdf`, so those two are inferred from the
@@ -607,7 +645,7 @@ fn parse_to_network(
         );
         let network = ieee_cdf::parse_ieee_cdf_source(text, stem, Some(origin), warnings)?;
         reject_empty_case(&network, ieee_cdf::FMT)?;
-        return Ok(network);
+        return Ok(network.into());
     }
     if from
         .and_then(parse_source_target_format)
@@ -677,7 +715,7 @@ fn parse_to_network(
     if fmt_hint == Some(TargetFormat::Xiidm) {
         let network = xiidm::parse_xiidm_bytes(buffer.content_bytes(), warnings)?;
         reject_empty_case(&network, TargetFormat::Xiidm.label())?;
-        return Ok(network);
+        return Ok(network.into());
     }
     let text = source_text(&buffer)?;
     // Readers that locate records mark them as byte ranges of `text`; the
@@ -733,7 +771,8 @@ fn read_source(
     fmt: TargetFormat,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
-) -> Result<BalancedNetwork> {
+) -> Result<ParsedNetwork> {
+    let mut extension = None;
     let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(text, name_hint, warnings),
         TargetFormat::PowerModelsJson => {
@@ -758,6 +797,22 @@ fn read_source(
             ));
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
+        TargetFormat::SiennaJson { .. } | TargetFormat::PowerSystemsJson => {
+            let document = serde_json::from_str(text).map_err(|e| sienna::error(e.to_string()))?;
+            let (network, namespace) = if let TargetFormat::SiennaJson { version } = fmt {
+                (
+                    sienna::read(&document, name_hint, version, warnings)?,
+                    sienna::EXTENSION,
+                )
+            } else {
+                (
+                    sienna::powersystems::read(&document, name_hint, warnings)?,
+                    sienna::powersystems::EXTENSION,
+                )
+            };
+            extension = Some((namespace, document));
+            Ok(network)
+        }
         TargetFormat::RavensJson => ravens::parse_ravens_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
             opfdata::parse_opfdata_source(text, name_hint, warnings)
@@ -770,7 +825,10 @@ fn read_source(
         TargetFormat::Ucte => ucte::parse_ucte_source(text, name_hint, warnings),
     }?;
     reject_empty_case(&net, fmt.label())?;
-    Ok(net)
+    Ok(ParsedNetwork {
+        network: net,
+        extension,
+    })
 }
 
 /// Geographic metadata for a reader that harvested longitude/latitude
@@ -980,13 +1038,31 @@ fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
     }
 }
 
+/// The Sienna target a Sienna transmission token selects; version 0 keeps the
+/// version the document states.
+fn sienna_target(format: TransmissionFormat) -> Option<TargetFormat> {
+    let version = match format {
+        TransmissionFormat::SiennaJson => 0,
+        TransmissionFormat::Sienna01Json => 1,
+        TransmissionFormat::Sienna02Json => 2,
+        TransmissionFormat::Sienna03Json => 3,
+        TransmissionFormat::Sienna04Json => 4,
+        _ => return None,
+    };
+    Some(TargetFormat::SiennaJson { version })
+}
+
 fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> {
+    if let Some(target) = sienna_target(format) {
+        return Ok(target);
+    }
     match format {
         TransmissionFormat::PowerModelsJson => Ok(TargetFormat::PowerModelsJson),
         TransmissionFormat::EgretJson => Ok(TargetFormat::EgretJson),
         TransmissionFormat::PandapowerJson => Ok(TargetFormat::PandapowerJson),
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
+        TransmissionFormat::PowerSystemsJson => Ok(TargetFormat::PowerSystemsJson),
         TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
         TransmissionFormat::PsseRawx => Ok(TargetFormat::PsseRawx),
         TransmissionFormat::Jiidm => Ok(TargetFormat::Jiidm),
@@ -1070,9 +1146,36 @@ fn emit_text(
     if let Some(text) = echo_text(module, format) {
         return Ok(TextEmission::faithful(text));
     }
-    let mut conv = emit_value_text(module.value(), format).map_err(core_error)?;
+    let mut conv = match emit_sienna_text(module.value(), module, format) {
+        Some(emission) => emission?,
+        None => emit_value_text(module.value(), format).map_err(core_error)?,
+    };
     warn_psse_downgrade(module, format, &mut conv);
     Ok(conv)
+}
+
+/// Emit `net` to a Sienna-family target with the source document `module`
+/// retained for that target, or `None` when `format` is another target.
+fn emit_sienna_text(
+    net: &BalancedNetwork,
+    module: &PioModule<BalancedNetwork>,
+    format: TargetFormat,
+) -> Option<std::result::Result<TextEmission, powerio_core::Error>> {
+    // Both writers validate the thermal limits in `write_document`.
+    let written = match format {
+        TargetFormat::PowerSystemsJson => sienna::powersystems::write(
+            net,
+            module.extensions().get(sienna::powersystems::EXTENSION),
+        ),
+        TargetFormat::SiennaJson { version } => {
+            sienna::write(net, version, module.extensions().get(sienna::EXTENSION))
+        }
+        _ => return None,
+    };
+    Some(written.map_err(core_error).map(|mut emission| {
+        append_emit_warnings(net, format, &mut emission);
+        emission
+    }))
 }
 
 /// Project a crate failure onto the common operation failure type.
@@ -1094,6 +1197,18 @@ fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Optio
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
+    if let TargetFormat::SiennaJson { version } = target
+        && version != 0
+        // The parse retained the document, so its version needs no second parse.
+        && match module.extensions().get(sienna::EXTENSION) {
+            Some(document) => sienna::version(document),
+            None => sienna::document_version(text),
+        }
+        .ok()?
+            != version
+    {
+        return None;
+    }
     // A PSS/E source echoes only when the requested revision equals the
     // source's own; any other revision goes through write_psse_rev so the
     // caller gets the layout it asked for instead of the original bytes.
@@ -1140,6 +1255,7 @@ fn sincal_source_omitted(net: &BalancedNetwork) -> Option<Diagnostic> {
 
 /// Serialize a typed network to `format` with no source echo.
 pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Result<TextEmission> {
+    net.check_thermal_limits()?;
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
@@ -1167,6 +1283,8 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
         TargetFormat::Pslf => write_pslf(net),
         TargetFormat::SurgeJson => write_surge_json(net),
+        TargetFormat::SiennaJson { version } => sienna::write(net, version, None)?,
+        TargetFormat::PowerSystemsJson => sienna::powersystems::write(net, None)?,
         TargetFormat::RavensJson => write_ravens_json(net),
         TargetFormat::Goc3Json => {
             return Err(Error::WriteUnsupported {
@@ -1191,6 +1309,65 @@ pub(crate) fn emit_value_text(net: &BalancedNetwork, format: TargetFormat) -> Re
 
 /// Shared post-writer checks for scalar and time-series canonical emission.
 fn append_emit_warnings(net: &BalancedNetwork, format: TargetFormat, conv: &mut TextEmission) {
+    let legacy_family = match format {
+        TargetFormat::Matpower => Some(&codes::EMIT_MATPOWER),
+        TargetFormat::PowerModelsJson => Some(&codes::EMIT_POWERMODELS),
+        TargetFormat::Psse { .. } | TargetFormat::PsseRawx => Some(&codes::EMIT_PSSE),
+        TargetFormat::PowerWorld => Some(&codes::EMIT_POWERWORLD),
+        TargetFormat::Pslf => Some(&codes::EMIT_PSLF),
+        TargetFormat::PandapowerJson => Some(&codes::EMIT_PANDAPOWER),
+        TargetFormat::SurgeJson => Some(&codes::EMIT_SURGE),
+        TargetFormat::RavensJson => Some(&codes::EMIT_RAVENS),
+        TargetFormat::Ucte => Some(&codes::EMIT_UCTE),
+        _ => None,
+    };
+    if let Some(family) = legacy_family {
+        // Name the element only for a zero limit, so an emission without one
+        // allocates nothing per branch.
+        let mut warn = |identity: &dyn Fn() -> String, field: &str, limit: f64| {
+            if limit == 0.0 {
+                conv.push(&family.field_dropped, format!(
+                    "{} finite-zero {field} constraint is not preserved by the {format} writer's legacy rating projection",
+                    identity()
+                ));
+            }
+        };
+        for (row, branch) in net.branches().iter().enumerate() {
+            let identity = || format!("branch {} ({} to {})", row + 1, branch.from, branch.to);
+            for (field, limit) in [
+                ("rate_a", branch.rate_a),
+                ("rate_b", branch.rate_b),
+                ("rate_c", branch.rate_c),
+            ] {
+                warn(&identity, field, limit);
+            }
+            for rating in &branch.rating_sets {
+                warn(&identity, &rating.name, rating.rate_mva);
+            }
+        }
+        for (row, transformer) in net.transformers_3w().iter().enumerate() {
+            for (side, winding) in transformer.windings.iter().enumerate() {
+                let identity = || {
+                    format!(
+                        "three winding transformer {} winding {} (bus {})",
+                        row + 1,
+                        side + 1,
+                        winding.bus
+                    )
+                };
+                for (field, limit) in [
+                    ("rate_a", winding.rate_a),
+                    ("rate_b", winding.rate_b),
+                    ("rate_c", winding.rate_c),
+                ] {
+                    warn(&identity, field, limit);
+                }
+                for rating in transformer.winding_rating_sets(side) {
+                    warn(&identity, &rating.name, rating.rate_mva);
+                }
+            }
+        }
+    }
     conv.diagnostics.extend(sincal_source_omitted(net));
     warn_normalized_tap(net, format, conv);
     warn_missing_reference(net, format, conv);
@@ -1357,6 +1534,7 @@ pub fn __emit_pypsa_csv_with_options(
     options: &EmitOptions,
     destination: powerio_core::Destination,
 ) -> std::result::Result<powerio_core::EmitResult, powerio_core::Error> {
+    module.value().check_thermal_limits().map_err(core_error)?;
     let (working, mut diagnostics) = if options.is_default() {
         (None, Vec::new())
     } else {
@@ -1404,7 +1582,10 @@ fn emit_text_with_options(
     }
     let (working, policy_warnings) =
         apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
-    let mut conv = emit_value_text(&working, format).map_err(core_error)?;
+    let mut conv = match emit_sienna_text(&working, module, format) {
+        Some(emission) => emission?,
+        None => emit_value_text(&working, format).map_err(core_error)?,
+    };
     conv.prepend(policy_warnings);
     Ok(conv)
 }
@@ -1524,6 +1705,8 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::PandapowerJson
             | TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
+            | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
     );
     if carries_frequency {
         return;
@@ -1634,6 +1817,8 @@ fn warn_dropped_exchange_context(
             | TargetFormat::PandapowerJson
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
+            | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
             | TargetFormat::RavensJson
             | TargetFormat::Ucte
     ) {
@@ -1642,7 +1827,9 @@ fn warn_dropped_exchange_context(
     let message = match format {
         // MG-RAVENS carries stable component identities as mRIDs, but not
         // the source-neutral topology hierarchy or case/solver metadata.
-        TargetFormat::RavensJson => {
+        TargetFormat::RavensJson
+        | TargetFormat::SiennaJson { .. }
+        | TargetFormat::PowerSystemsJson => {
             exchange_context_loss_carrying(net, format.label(), CarriedContext::Identities)
         }
         // PowerModels JSON and egret JSON rows carry a source identity as
@@ -2110,6 +2297,8 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::PandapowerJson
             | TargetFormat::Pslf
             | TargetFormat::SurgeJson
+            | TargetFormat::SiennaJson { .. }
+            | TargetFormat::PowerSystemsJson
     );
     if needs_ref && let Some(message) = missing_reference_warning(net) {
         conv.push(&format.emit_family().reference_missing, message);
@@ -2172,11 +2361,12 @@ pub(super) fn normalized_tap_warning(net: &BalancedNetwork) -> Option<String> {
     })
 }
 
-/// True when `value` is set and deviates from `reference`: the shared test for
-/// "does this rating column carry information the target cannot" used by the
-/// rate_b/rate_c drop warnings.
-pub(super) fn nonzero_differs(value: f64, reference: f64) -> bool {
-    value.abs() > f64::EPSILON && (value - reference).abs() > f64::EPSILON
+/// An additional finite constraint differs from the retained one: the shared
+/// test the rate_b/rate_c drop warnings use. Zero is a constraint, not a
+/// missing value, so it is never skipped.
+#[allow(clippy::float_cmp)] // Any changed constraint warrants a loss diagnostic.
+pub(super) fn thermal_limit_differs(value: f64, reference: f64) -> bool {
+    value.is_finite() && value != reference
 }
 
 /// Set a bus's kind through the `bus_pos` index, leaving Isolated buses alone.
@@ -2254,6 +2444,10 @@ fn same_target_format(requested: TargetFormat, source: TargetFormat) -> bool {
         || matches!(
             (requested, source),
             (TargetFormat::Psse { .. }, TargetFormat::Psse { .. })
+                | (
+                    TargetFormat::SiennaJson { .. },
+                    TargetFormat::SiennaJson { .. }
+                )
         )
 }
 
@@ -2299,6 +2493,11 @@ fn collect_null_keys(value: &Value, out: &mut BTreeSet<String>) {
     match value {
         Value::Object(map) => {
             for (key, val) in map {
+                // PowerIO's rating set extension reads a null rate as an
+                // unlimited set, so that null loses nothing.
+                if key == "rating_sets" {
+                    continue;
+                }
                 if val.is_null() {
                     out.insert(key.clone());
                 } else {

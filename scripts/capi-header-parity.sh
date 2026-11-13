@@ -11,7 +11,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 {
-    grep -ohE 'extern "C" fn pio_[a-z0-9_]+' powerio-capi/src/lib.rs \
+    grep -ohE 'extern "C" fn pio_[a-z0-9_]+' powerio-capi/src/*.rs \
         | grep -oE 'pio_[a-z0-9_]+'
     awk '
         /^(scuc_transformer_control_accessors|scuc_membership_accessors)!\(/ {

@@ -335,15 +335,16 @@ fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
     // PowerModels' rule: a transformer is a branch with an off-nominal raw tap.
     // A pure phase shifter (tap 0, shift ≠ 0) is not flagged, matching matpower.jl.
     m.insert("transformer".into(), Value::Bool(br.tap != 0.0));
-    // PowerModels omits a rate when it is 0 (unlimited).
-    if br.rate_a != 0.0 {
-        m.insert("rate_a".into(), jnum(br.rate_a * p));
+    // PowerModels default JSON validation removes zero rating fields. The
+    // writer diagnoses explicit finite-zero limits before this projection.
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_a) {
+        m.insert("rate_a".into(), jnum(limit * p));
     }
-    if br.rate_b != 0.0 {
-        m.insert("rate_b".into(), jnum(br.rate_b * p));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_b) {
+        m.insert("rate_b".into(), jnum(limit * p));
     }
-    if br.rate_c != 0.0 {
-        m.insert("rate_c".into(), jnum(br.rate_c * p));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_c) {
+        m.insert("rate_c".into(), jnum(limit * p));
     }
     if let Some(current) = br.current_ratings {
         if current.c_rating_a != 0.0 {
@@ -1135,9 +1136,18 @@ fn read_branch(
             g_to: row.g_to.unwrap_or(0.0),
             b_to,
         }),
-        rate_a: row.rate_a.unwrap_or(0.0) * pscale,
-        rate_b: row.rate_b.unwrap_or(0.0) * pscale,
-        rate_c: row.rate_c.unwrap_or(0.0) * pscale,
+        rate_a: crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(row.rate_a.unwrap_or(0.0))?,
+            pscale,
+        )?,
+        rate_b: crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(row.rate_b.unwrap_or(0.0))?,
+            pscale,
+        )?,
+        rate_c: crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(row.rate_c.unwrap_or(0.0))?,
+            pscale,
+        )?,
         // `json_extension::read_branch` reads the rating sets PowerIO wrote.
         rating_sets: Vec::new(),
         current_ratings: (row.c_rating_a.is_some()

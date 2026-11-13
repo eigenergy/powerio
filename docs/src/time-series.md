@@ -48,16 +48,18 @@ contingency data, stays in the retained source, is reported as
 uninterpreted, and survives a same format emission.
 [Formats and fidelity](format-fidelity.md) says where each profile ends.
 
+PyPSA `lines-s_max_pu.csv` and `transformers-s_max_pu.csv` set each snapshot's
+thermal bound to `s_nom * s_max_pu`. Zero and positive infinity are preserved;
+the equipment's status and transformer impedance base remain separate.
+
 ## Egret electrical time series
 
 Egret branch ratings use `null` (or an absent scalar field) for unlimited
 flow. Canonical output writes, for example, `[null, 150.0]` when PowerIO's
-`rate_a` values are `[0.0, 150.0]`. This applies to long-term, short-term,
-and emergency ratings. A native Egret numeric zero imposes a zero thermal
-limit, which PowerIO's branch rating fields cannot represent because they
-reserve zero for unlimited flow. PowerIO 0.11 still reads such a zero, scalar
-or at any time point, as unlimited, as earlier releases did. Refusing it is
-tracked for 0.12.
+`rate_a` values are `[Inf, 150.0]`. This applies to long-term,
+short-term, and emergency ratings. A native Egret numeric zero imports as
+`0.0` and emits as zero, including inside a time series. The branch
+remains energized; its status is a separate field.
 
 PowerIO 0.11.10 and earlier reject `null` inside rating time series. Upgrade
 those readers before reimporting corrected canonical output. Native Egret
@@ -66,9 +68,10 @@ accepts these unlimited points.
 Earlier PowerIO output could put numeric zero in mixed rating series.
 Regenerate those files from the original model. Change zero to `null` in an
 existing Egret file only after confirming that the source intended unlimited
-flow. A PowerIO IR document made from a native Egret zero holds unlimited and
-has lost that distinction; regenerate it from its original Egret input if the
-zero limit matters. The PowerIO IR layout and branch convention are unchanged.
+flow. An older PowerIO IR document that already converted a native Egret zero
+to unlimited has lost that distinction and must be regenerated from its
+original Egret input. The IR document version determines how old numeric
+zeros are read; current documents preserve zero and infinity as distinct bounds.
 
 Egret `system.time_keys` and per-element `data_type: "time_series"` values
 parse into `TimeSeries<BalancedNetwork>`. Labels must be unique. A stated

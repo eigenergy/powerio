@@ -44,7 +44,7 @@ SINCAL is the first adapter under `powerio_tnd::formats::sincal`. Enable the
 `sincal` feature to acquire and retain native projects, parse explicit balanced
 or multiconductor profiles, and author the supported experimental outputs.
 Storage internals remain hidden from normal rustdoc. The existing `powerio`
-format names, CLI behavior, Python API, and C ABI 7 remain available.
+format names, CLI behavior, Python API, and C ABI remain available.
 Direct Rust users of the unreleased SINCAL adapters move from the tx/dist crates
 to tnd. `powerio::dist::parse_sincal` remains available as a facade convenience.
 The published `powerio-sincal-tables` transport identity remains unchanged.
@@ -62,7 +62,7 @@ A [PowerModelsITD.jl adapter](https://lanl-ansi.github.io/PowerModelsITD.jl/stab
 can map its component files and boundary definitions into this composition.
 Both adapters should reuse the component parsers and checked interface constructor.
 
-The initial integration API is Rust-only. PowerIO IR version 2 and the facade's
+The initial integration API is Rust-only. PowerIO IR and the facade's
 `PioValue` variants are unchanged. A future integrated IR variant and binding
 accessors need a separate compatibility design. Coupled calculation instances
 belong in `powerio-prob`, while sparse coupled operators belong in

@@ -16,6 +16,7 @@ on:
       - "Cargo.lock"
       - "powerio/**"
       - "powerio-tx/**"
+      - "powerio-archive/**"
       - "powerio-core/**"
       - "powerio-tnd/**"
       - "powerio-dist/**"
@@ -99,7 +100,7 @@ jobs:
         test -s tests/data/large/case13659pegase.m
     - name: Test Egret temporal output with native ModelData
       run: .venv/bin/python -m pytest python/tests/test_egret_temporal.py -q
-    - name: Test pandapower native JSON imports
+    - name: Test pandapower default import and voltage results
       run: .venv/bin/python -m pytest python/tests/test_pandapower_native.py -q
     - name: Test snapshot schema validation
       run: .venv/bin/python -m unittest discover -s evals/validation -p test_validate_bmopf_schema.py

@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::diagnostics::Diagnostic;
 use crate::merge::{BusMergeRule, MergeSurvivor, ZeroImpedanceRule, kind_priority};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras,
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchRatingSet, Bus, BusId, BusType, Extras,
     IMPEDANCE_CORRECTION_APPLIED_EXTRA, IMPEDANCE_CORRECTION_NOMINAL_EXTRA,
     ImpedanceCorrectionVariable, SourceFormat, current_correction_nominal,
 };
@@ -58,15 +58,38 @@ fn other_end(b: &Branch, m: BusId) -> BusId {
     if b.from == m { b.to } else { b.from }
 }
 
-/// Combine two thermal ratings into the equivalent for a series pair. `0` means
-/// "no limit" in the MATPOWER convention, so it yields to a finite rating; two
-/// finite ratings give the more limiting (smaller) one.
+/// The series pair is constrained by the smaller rating, including zero. An
+/// invalid rating (NaN or negative) stays invalid in the equivalent branch, so
+/// validation refuses the folded network as it would have refused the section.
 fn combine_rate(a: f64, b: f64) -> f64 {
-    match (a == 0.0, b == 0.0) {
-        (true, _) => b,
-        (_, true) => a,
-        _ => a.min(b),
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
     }
+}
+
+/// The series pair's named rating sets. A set both sections state is bound by
+/// the smaller rating; a set one section omits imposes no bound there, so the
+/// other section's rating binds. Sets keep the first section's order, followed
+/// by the second's unmatched sets.
+fn combine_rating_sets(a: &[BranchRatingSet], b: &[BranchRatingSet]) -> Vec<BranchRatingSet> {
+    let mut unmatched: Vec<Option<&BranchRatingSet>> = b.iter().map(Some).collect();
+    let mut combined: Vec<BranchRatingSet> = a
+        .iter()
+        .map(|set| {
+            let other = unmatched
+                .iter_mut()
+                .find(|other| other.is_some_and(|other| other.name == set.name))
+                .and_then(Option::take);
+            let rate = other.map_or(set.rate_mva, |other| {
+                combine_rate(set.rate_mva, other.rate_mva)
+            });
+            BranchRatingSet::new(set.name.clone(), rate)
+        })
+        .collect();
+    combined.extend(unmatched.into_iter().flatten().cloned());
+    combined
 }
 
 /// What [`reduce_zero_impedance_with_report`](BalancedNetwork::reduce_zero_impedance_with_report)
@@ -551,8 +574,10 @@ impl BalancedNetwork {
     /// branches (never transformers) that are both in service and run to two
     /// distinct other buses. The equivalent branch sums the series impedance and
     /// line charging, takes the more limiting thermal rating of the two sections,
-    /// and intersects their angle limits. Chains of dummy buses collapse fully, one
-    /// bus per step.
+    /// and intersects their angle limits. Named rating sets combine by name the
+    /// same way. An invalid section rating (NaN or negative) carries into the
+    /// equivalent branch, where validation refuses it.
+    /// Chains of dummy buses collapse fully, one bus per step.
     pub fn reduce_passthrough_buses(&mut self) -> usize {
         let mut collapsed = 0;
         // Re-scan after each fold: the equivalent branch becomes a section for the
@@ -671,7 +696,7 @@ impl BalancedNetwork {
             rate_a: combine_rate(s1.rate_a, s2.rate_a),
             rate_b: combine_rate(s1.rate_b, s2.rate_b),
             rate_c: combine_rate(s1.rate_c, s2.rate_c),
-            rating_sets: Vec::new(),
+            rating_sets: combine_rating_sets(&s1.rating_sets, &s2.rating_sets),
             current_ratings: None,
             tap: 0.0,
             shift: 0.0,
@@ -883,9 +908,9 @@ mod tests {
             x: 0.1,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
@@ -933,9 +958,9 @@ mod tests {
             tap: 1.0,
             shift: 0.0,
             nominal_kv: 0.0,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         };
         let imp = Impedance {
@@ -950,6 +975,7 @@ mod tests {
             star_va: 0.0,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
             in_service: true,
             name: None,
             uid: None,
@@ -1135,7 +1161,7 @@ mod tests {
         s1.rate_a = 100.0;
         let mut s2 = line(2, 3);
         s2.rate_a = 80.0;
-        let s3 = line(3, 4); // rate_a 0 == no limit
+        let s3 = line(3, 4); // rate_a Inf == no limit
         let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
@@ -1168,6 +1194,56 @@ mod tests {
             "the more limiting finite rating wins"
         );
         net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_passthrough_carries_an_invalid_rating_into_the_equivalent() {
+        // Skipping the fold hid the invalid rating; the folded branch keeps it
+        // where validation reports it.
+        for invalid in [f64::NAN, -1.0] {
+            let mut s1 = line(1, 2);
+            s1.rate_c = invalid;
+            let mut net = BalancedNetwork::in_memory(
+                "net",
+                100.0,
+                vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+                vec![s1, line(2, 3)],
+            );
+            assert!(net.validate().is_err());
+            assert_eq!(net.reduce_passthrough_buses(), 1, "{invalid}");
+            let rate_c = net.branches()[0].rate_c;
+            assert!(rate_c.is_nan() || rate_c < 0.0, "{invalid}: {rate_c}");
+            assert!(net.validate().is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn reduce_passthrough_combines_named_rating_sets() {
+        let mut s1 = line(1, 2);
+        s1.rating_sets = vec![
+            BranchRatingSet::new("RATE4", 90.0),
+            BranchRatingSet::new("RATE5", f64::NAN),
+        ];
+        let mut s2 = line(2, 3);
+        s2.rating_sets = vec![
+            BranchRatingSet::new("RATE6", 70.0),
+            BranchRatingSet::new("RATE4", 60.0),
+        ];
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![s1, s2],
+        );
+        assert_eq!(net.reduce_passthrough_buses(), 1);
+        let sets = &net.branches()[0].rating_sets;
+        let names: Vec<_> = sets.iter().map(|set| set.name.as_str()).collect();
+        assert_eq!(names, ["RATE4", "RATE5", "RATE6"]);
+        assert_eq!(sets[0].rate_mva, 60.0);
+        assert!(sets[1].rate_mva.is_nan());
+        assert_eq!(sets[2].rate_mva, 70.0);
+        // The invalid set still fails validation after the fold.
+        assert!(net.validate().is_err());
     }
 
     #[test]

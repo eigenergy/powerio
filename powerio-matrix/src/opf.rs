@@ -209,9 +209,9 @@ pub(crate) fn constraint_mask(
         .collect())
 }
 
-// Keep prepared angle infinities round-trippable without changing finite JSON
+// Keep prepared numeric bounds round-trippable without changing finite JSON
 // numbers or the binary representation. Use the shared PowerIO spelling.
-pub(crate) mod angle_bounds_serde {
+pub(crate) mod nonfinite_vec {
     use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

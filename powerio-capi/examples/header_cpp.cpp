@@ -3,7 +3,11 @@
 
 #include <type_traits>
 
-static_assert(PIO_ABI_VERSION == 7);
+// The release macros are integer constants that fit the PioVersionView
+// fields; a missing, negative, or out of range value does not compile.
+constexpr PioVersionView header_release{PIO_VERSION_MAJOR, PIO_VERSION_MINOR,
+                                        PIO_VERSION_PATCH};
+static_assert(std::is_standard_layout_v<PioVersionView>);
 static_assert(std::is_standard_layout_v<PioStringView>);
 static_assert(std::is_standard_layout_v<PioByteView>);
 static_assert(std::is_standard_layout_v<PioF64View>);
@@ -50,5 +54,9 @@ static_assert(std::is_standard_layout_v<PioMulticonductorUntypedPropertyView>);
 static_assert(std::is_standard_layout_v<PioMulticonductorCommandView>);
 
 int main() {
-    return pio_abi_version() == PIO_ABI_VERSION ? 0 : 1;
+    const PioVersionView release = pio_version_numbers();
+    const bool same = release.major == header_release.major &&
+                      release.minor == header_release.minor &&
+                      release.patch == header_release.patch;
+    return same ? 0 : 1;
 }

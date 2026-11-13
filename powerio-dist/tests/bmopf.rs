@@ -1,18 +1,20 @@
-//! BMOPF reader/writer against the two vendored schema versions and the two
-//! public example networks from distribution-system-opt/bmopf-resources.
+//! BMOPF reader/writer against the vendored schema, the one BMOPF PowerIO
+//! writes, and the two public example networks from
+//! distribution-system-opt/bmopf-resources, which are older BMOPF drafts and
+//! read as legacy input.
 
 use std::path::PathBuf;
 
 use powerio_dist::{
-    BmopfEmitOptions, BmopfSchemaVersion, Configuration, CoordinateSpace, DiagnosticSeverity,
-    DiagnosticStage, DistBus, DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation,
-    DistTransformer, DistWinding, DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
+    Configuration, CoordinateSpace, DiagnosticSeverity, DiagnosticStage, DistBus, DistCoordsKind,
+    DistGeoMeta, DistLineCode, DistLocation, DistTransformer, DistWinding, DistWindingConn, Extras,
+    MulticonductorNetwork, VoltageSource,
 };
 
 mod helpers;
 use helpers::{
-    emit_bmopf_json, emit_bmopf_json_with_options, emit_dss, emit_pmd_json, parse_bmopf_file,
-    parse_bmopf_str, parse_dss_file, parse_dss_str, parse_pmd_str,
+    emit_bmopf_json, emit_dss, emit_pmd_json, parse_bmopf_file, parse_bmopf_str, parse_dss_file,
+    parse_dss_str, parse_pmd_str,
 };
 
 /// The findings beside the schema version notice.
@@ -25,6 +27,12 @@ fn beside_schema_version(warnings: &[String]) -> Vec<&String> {
         .iter()
         .filter(|w| !w.starts_with("READ.BMOPF.SCHEMA_"))
         .collect()
+}
+
+/// The release a written document states in `meta.schema_version`: the
+/// directory the schema's `$id` names.
+fn release() -> &'static str {
+    powerio_dist::BMOPF_SCHEMA_ID.rsplit('/').nth(1).unwrap()
 }
 
 fn fixture(rel: &str) -> PathBuf {
@@ -47,13 +55,14 @@ fn nonuniform_phase_bounds_survive_value_serialization_and_emission() {
     let output = emit_bmopf_json(&restored);
     let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
     assert_eq!(
-        doc["bus"]["b"]["v_min"],
+        doc["bus"]["b"]["vpg_min"],
         serde_json::json!([210.0, 215.0, 220.0])
     );
     assert_eq!(
-        doc["bus"]["b"]["v_max"],
+        doc["bus"]["b"]["vpg_max"],
         serde_json::json!([240.0, 245.0, 250.0])
     );
+    assert!(doc["bus"]["b"].get("v_min").is_none());
     assert!(schema_validator().is_valid(&doc));
 }
 
@@ -61,7 +70,7 @@ fn nonuniform_phase_bounds_survive_value_serialization_and_emission() {
 fn contradictory_schema_versions_are_reported_as_errors() {
     let input = format!(
         r#"{{"meta":{{"$schema":"{}","schema_version":"0.1.0"}},"bus":{{}}}}"#,
-        BmopfSchemaVersion::Bmopf020.retrieval_url()
+        powerio_dist::bmopf::bmopf_proposal_url()
     );
     let parsed = parse_bmopf_str(&input).unwrap();
     assert!(
@@ -73,24 +82,38 @@ fn contradictory_schema_versions_are_reported_as_errors() {
     );
 }
 
-/// The validator for one vendored schema version.
-fn schema_validator_for(profile: BmopfSchemaVersion) -> jsonschema::Validator {
-    let file = match profile {
-        BmopfSchemaVersion::Bmopf010 => "schemas/bmopf/0.1.0/bmopf.schema.json",
-        BmopfSchemaVersion::Bmopf020 => "schemas/bmopf/0.2.0/bmopf.schema.json",
-        _ => unreachable!("every schema version has a vendored document"),
-    };
+fn validator_at(file: &str) -> jsonschema::Validator {
     let schema: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
             .unwrap(),
     )
     .unwrap();
-    jsonschema::validator_for(&schema).expect("vendored schema compiles")
+    jsonschema::validator_for(&schema).expect("schema compiles")
 }
 
-/// The validator for the version the writer targets by default.
+/// The validator for the one schema the writer targets.
 fn schema_validator() -> jsonschema::Validator {
-    schema_validator_for(BmopfSchemaVersion::default())
+    validator_at("schemas/bmopf/bmopf.schema.json")
+}
+
+/// The historical first draft schema, the oracle for legacy input.
+fn legacy_schema_validator() -> jsonschema::Validator {
+    validator_at("../tests/data/dist/bmopf/draft_bmopf_schema.json")
+}
+
+/// The schema requires a non-empty `bus` and `voltage_source`. A test
+/// network built without a source (or without buses) can only fail those two
+/// rules, which the writer reports rather than invents; these validate
+/// everything else.
+fn errors_beside_empty_tables(validator: &jsonschema::Validator, text: &str) -> Vec<String> {
+    errors(validator, text)
+        .into_iter()
+        .filter(|e| !(e.starts_with("/bus: {}") || e.starts_with("/voltage_source: {}")))
+        .collect()
+}
+
+fn valid_beside_empty_tables(doc: &serde_json::Value) -> bool {
+    errors_beside_empty_tables(&schema_validator(), &doc.to_string()).is_empty()
 }
 
 fn errors(validator: &jsonschema::Validator, text: &str) -> Vec<String> {
@@ -153,12 +176,12 @@ fn vendored_examples_validate_after_canonicalization() {
     }
 }
 
-/// Both vendored fixtures are schema 0.1.0 documents and validate as shipped
-/// against that version, so any raw validation failure is a real schema
-/// mismatch.
+/// Both vendored fixtures are the first draft documents and validate as shipped
+/// against the historical draft schema, so any raw validation failure is a
+/// real schema mismatch.
 #[test]
 fn vendored_examples_raw_validation_is_known_and_bounded() {
-    let v = schema_validator_for(BmopfSchemaVersion::Bmopf010);
+    let v = legacy_schema_validator();
     for example in ["bmopf/example_ieee13.json", "bmopf/example_enwl_n1_f2.json"] {
         let text = std::fs::read_to_string(fixture(example)).unwrap();
         assert_eq!(errors(&v, &text), Vec::<String>::new(), "{example}");
@@ -206,7 +229,14 @@ fn parse_the_public_examples() {
     assert_eq!(net.generators().len(), 1);
     assert_eq!(net.transformers().len(), 2);
     assert_eq!(net.sources().len(), 1);
-    assert!(net.warnings.is_empty(), "{:?}", net.warnings);
+    // An older draft: the one finding is the version notice.
+    assert_eq!(
+        net.warnings,
+        vec![String::from(
+            "READ.BMOPF.SCHEMA_LEGACY: the document is an older BMOPF draft; it is read as \
+             BMOPF, and a BMOPF write states the current schema"
+        )]
+    );
 
     let enwl = parse_bmopf_file(fixture("bmopf/example_enwl_n1_f2.json")).unwrap();
     assert_eq!(enwl.buses().len(), 506);
@@ -282,7 +312,7 @@ fn assert_model_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork) {
 }
 
 /// Every distribution case fixture, whatever its source format, emits a
-/// document that the vendored schema 0.1.0 accepts. The emitted document
+/// document that the vendored the schema accepts. The emitted document
 /// must also read back, re-emit valid, and re-emit byte identical, so a
 /// schema break shows up here whether it is in the writer or the reader.
 #[test]
@@ -422,7 +452,7 @@ fn bmopf_dangling_bus_reference_warns() {
 }
 
 /// An ibr or control profile declared twice under one class, differing only
-/// by case, is the schema 0.1.0 top level plus `extras` migration overlap:
+/// by case, is the the first draft top level plus `extras` migration overlap:
 /// the second copy drops with a warning rather than doubling the count.
 #[test]
 fn an_ibr_declared_twice_differing_only_by_case_drops_the_second() {
@@ -654,8 +684,8 @@ fn delta_wye_leakage_uses_each_winding_base() {
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["delta_wye"]["t1"];
-    // Schema 0.1.0 three phase transformers carry one lumped pair on the wye
-    // side; the split `_from`/`_to` fields lost their slots.
+    // The schema's three phase transformers carry one lumped pair on the wye
+    // side; they have no split `_from`/`_to` fields.
     assert!(t.get("r_series_from").is_none(), "{t:?}");
     assert!(t.get("x_series_from").is_none(), "{t:?}");
 
@@ -1142,31 +1172,35 @@ fn bmopf_coordinates_keep_schema_valid_geometry_after_mutation() {
         y: 35.0,
         kind: None,
     });
-    for sideload in [false, true] {
-        let mut options = BmopfEmitOptions::default();
-        options.sideload_coordinates = sideload;
-        let encoded = emit_bmopf_json_with_options(&net, options);
-        let doc: serde_json::Value = serde_json::from_str(&encoded.text).unwrap();
-        assert!(doc["bus"]["sourcebus"].get("longitude").is_none());
-        assert_eq!(
-            doc["extras"]["geojson"]["features"][0]["geometry"]["coordinates"],
-            serde_json::json!([-80.0, 35.0])
-        );
-        assert!(
-            !encoded
-                .warnings
-                .iter()
-                .any(|w| w.contains("BUS_LOCATION_DROPPED"))
-        );
-        let mut restored = parse_bmopf_str(&encoded.text).unwrap();
-        restored.buses_mut()[0].location.as_mut().unwrap().x = -81.0;
-        let changed = emit_bmopf_json(&restored);
-        let again = parse_bmopf_str(&changed.text).unwrap();
-        assert_eq!(
-            again.buses()[0].location.unwrap().x.to_bits(),
-            (-81.0_f64).to_bits()
-        );
-    }
+    let encoded = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&encoded.text).unwrap();
+    assert!(doc["bus"]["sourcebus"].get("longitude").is_none());
+    // The location travels in the typed slot, and no `extras.geojson` layer
+    // is written.
+    assert_eq!(
+        doc["bus"]["sourcebus"]["geo"],
+        serde_json::json!({"type": "Point", "coordinates": [-80.0, 35.0]})
+    );
+    assert!(doc["meta"].get("crs").is_none(), "WGS84 is the default");
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    assert_eq!(
+        errors(&schema_validator(), &encoded.text),
+        Vec::<String>::new()
+    );
+    assert!(
+        !encoded
+            .warnings
+            .iter()
+            .any(|w| w.contains("BUS_LOCATION_DROPPED"))
+    );
+    let mut restored = parse_bmopf_str(&encoded.text).unwrap();
+    restored.buses_mut()[0].location.as_mut().unwrap().x = -81.0;
+    let changed = emit_bmopf_json(&restored);
+    let again = parse_bmopf_str(&changed.text).unwrap();
+    assert_eq!(
+        again.buses()[0].location.unwrap().x.to_bits(),
+        (-81.0_f64).to_bits()
+    );
 }
 
 #[test]
@@ -1570,7 +1604,10 @@ fn n_winding_explicit_delta_roll_round_trips_through_bmopf() {
     .unwrap();
 
     let out = emit_bmopf_json(&net);
-    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert_eq!(
+        errors_beside_empty_tables(&v, &out.text),
+        Vec::<String>::new()
+    );
     assert!(
         out.warnings
             .iter()
@@ -1915,7 +1952,10 @@ fn wye_wye_3_raw_no_load_splits_across_decomposition() {
     net.transformers_mut().push(t);
 
     let out = emit_bmopf_json(&net);
-    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert_eq!(
+        errors_beside_empty_tables(&schema_validator(), &out.text),
+        Vec::<String>::new()
+    );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = doc["transformer"]["single_phase"].as_object().unwrap();
     assert_eq!(sp.len(), 3);
@@ -2175,35 +2215,26 @@ fn unequal_center_tap_pair_leakages_keep_explicit_zeros() {
         net.transformers_mut()[0].xsc_pct = xsc.to_vec();
         let original = &net.transformers()[0];
         let base = original.windings[0].v_ref.powi(2) / original.windings[0].s_rating;
-        for profile in [BmopfSchemaVersion::Bmopf020, BmopfSchemaVersion::Bmopf010] {
-            let output = emit_bmopf_json_with_options(
-                &net,
-                BmopfEmitOptions::default().with_schema_version(profile),
-            );
-            let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
-            assert!(schema_validator_for(profile).is_valid(&doc), "{doc}");
-            let encoded = if profile == BmopfSchemaVersion::Bmopf020 {
-                &doc["transformer"]["n_winding"]["t1"]
-            } else {
-                &doc["extras"]["transformer"]["n_winding"]["t1"]
-            };
-            for (pair, expected) in ["1_2", "1_3", "2_3"].into_iter().zip(xsc) {
-                let actual = encoded["x_sc"][pair].as_f64().unwrap();
-                assert!((actual - expected / 100.0 * base).abs() < 1e-12);
-            }
-            let back = parse_bmopf_str(&output.text).unwrap();
-            let transformer = &back.transformers()[0];
-            for (actual, expected) in transformer.xsc_pct.iter().zip(xsc) {
-                assert!((actual - expected).abs() < 1e-12);
-            }
-            for (actual, expected) in transformer.windings.iter().zip(&original.windings) {
-                assert_eq!(actual.bus, expected.bus);
-                assert_eq!(actual.terminal_map, expected.terminal_map);
-                assert_eq!(actual.conn, expected.conn);
-                assert!((actual.v_ref - expected.v_ref).abs() < 1e-12);
-                assert!((actual.s_rating - expected.s_rating).abs() < 1e-12);
-                assert!((actual.r_pct - expected.r_pct).abs() < 1e-12);
-            }
+        let output = emit_bmopf_json(&net);
+        let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+        let encoded = &doc["transformer"]["n_winding"]["t1"];
+        for (pair, expected) in ["1_2", "1_3", "2_3"].into_iter().zip(xsc) {
+            let actual = encoded["x_sc"][pair].as_f64().unwrap();
+            assert!((actual - expected / 100.0 * base).abs() < 1e-12);
+        }
+        let back = parse_bmopf_str(&output.text).unwrap();
+        let transformer = &back.transformers()[0];
+        for (actual, expected) in transformer.xsc_pct.iter().zip(xsc) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        for (actual, expected) in transformer.windings.iter().zip(&original.windings) {
+            assert_eq!(actual.bus, expected.bus);
+            assert_eq!(actual.terminal_map, expected.terminal_map);
+            assert_eq!(actual.conn, expected.conn);
+            assert!((actual.v_ref - expected.v_ref).abs() < 1e-12);
+            assert!((actual.s_rating - expected.s_rating).abs() < 1e-12);
+            assert!((actual.r_pct - expected.r_pct).abs() < 1e-12);
         }
     }
 }
@@ -2511,7 +2542,10 @@ fn linecode_constructor_sizes_x_only_matrix_from_x() {
     let mut net = MulticonductorNetwork::default();
     net.line_codes_mut().push(lc);
     let out = emit_bmopf_json(&net);
-    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert_eq!(
+        errors_beside_empty_tables(&schema_validator(), &out.text),
+        Vec::<String>::new()
+    );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(doc["linecode"]["lc"]["R_series_1_1"], 0.0);
     assert_eq!(doc["linecode"]["lc"]["X_series_1_1"], 0.4);
@@ -2681,8 +2715,12 @@ fn missing_voltage_source_warns() {
     let net = parse_bmopf_str(r#"{"bus": {"a": {"terminal_names": ["1"]}}}"#).unwrap();
     let out = emit_bmopf_json(&net);
     assert!(out.warnings.iter().any(|w| w.contains("no voltage source")));
-    // Still schema valid: the required key exists, empty.
-    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    // The schema requires a non-empty `voltage_source`, which the writer
+    // reports rather than invents; that is the one rule the output fails.
+    assert_eq!(
+        errors(&schema_validator(), &out.text),
+        vec!["/voltage_source: {} has less than 1 property".to_owned()]
+    );
 }
 
 #[test]
@@ -2789,53 +2827,43 @@ fn reader_is_liberal_where_the_writer_is_strict() {
 }
 
 /// The writer seeds its `extras` block from the source document's own
-/// `extras` object, then, writing schema 0.1.0, files the tables that version
-/// has no top-level slot for into the same block. A source value that is not
-/// a table has no slot for a named entry, so it must not reach the write as
-/// one.
+/// `extras` object, then files a time series profile BMOPF cannot represent
+/// into the same block. A source value that is not a table has no slot for a
+/// named entry, so it must not reach the write as one.
 #[test]
 fn source_extras_value_that_is_not_a_table_does_not_panic() {
-    for class in ["time_series", "dc_bus", "dc_branch", "dc_load", "dc_source"] {
-        let text = doc_with(&format!(
-            r#", "extras": {{"{class}": 1}}, "{class}": {{"t1": {{"values": [1.0]}}}}"#
-        ));
-        let net = parse_bmopf_str(&text).unwrap();
-        let out = emit_bmopf_json_with_options(
-            &net,
-            BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
-        );
-        assert!(
-            out.warnings
-                .iter()
-                .any(|w| w.contains(&format!("extras `{class}`")) && w.contains("not a table")),
-            "{class}: {:?}",
-            out.warnings
-        );
-        // The top-level objects survive into the relocated table.
-        let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-        assert!(
-            doc["extras"][class]["t1"].is_object(),
-            "{class}: {}",
-            out.text
-        );
-    }
+    let text =
+        doc_with(r#", "extras": {"time_series": 1}, "time_series": {"t1": {"time": [0, 1]}}"#);
+    let net = parse_bmopf_str(&text).unwrap();
+    let out = emit_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("extras `time_series`") && w.contains("not a table")),
+        "{:?}",
+        out.warnings
+    );
+    // The top-level object survives into the retained table.
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc["extras"]["time_series"]["t1"].is_object(),
+        "{}",
+        out.text
+    );
 }
 
-/// Writing schema 0.1.0, the same `extras` slot takes entries from two
-/// places: the source `extras` block and the source top-level table. A name in
-/// both is a replacement, and the two tier fidelity rule says a replacement is
+/// The same `extras` slot takes entries from two places: the source `extras`
+/// block and a source top-level profile BMOPF cannot represent. A name in both
+/// is a replacement, and the two tier fidelity rule says a replacement is
 /// never silent.
 #[test]
 fn source_extras_entry_replaced_by_the_top_level_table_warns() {
     let text = doc_with(
-        r#", "extras": {"time_series": {"t1": {"values": [9.0]}}},
-        "time_series": {"t1": {"values": [1.0]}}"#,
+        r#", "extras": {"time_series": {"t1": {"time": [9.0]}}},
+        "time_series": {"t1": {"time": [1.0]}}"#,
     );
     let net = parse_bmopf_str(&text).unwrap();
-    let out = emit_bmopf_json_with_options(
-        &net,
-        BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
-    );
+    let out = emit_bmopf_json(&net);
     assert!(
         out.warnings
             .iter()
@@ -2844,7 +2872,7 @@ fn source_extras_entry_replaced_by_the_top_level_table_warns() {
         out.warnings
     );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    assert_eq!(doc["extras"]["time_series"]["t1"]["values"][0], 1.0);
+    assert_eq!(doc["extras"]["time_series"]["t1"]["time"][0], 1.0);
 }
 
 #[test]
@@ -2899,7 +2927,7 @@ fn meta_block_is_kept_in_extras() {
     );
 }
 
-/// Schema 0.1.0 calls `length` "purely descriptive" on the inline impedance
+/// The first draft calls `length` "purely descriptive" on the inline impedance
 /// branch: the matrices are the whole impedance of the line, in ohms. A
 /// reader that scales them by a declared length multiplies the impedance.
 #[test]
@@ -2926,7 +2954,7 @@ fn inline_impedance_is_not_scaled_by_a_descriptive_length() {
     );
 }
 
-/// Schema 0.1.0 moved the IBR and control profile tables under `extras`, and
+/// The first draft moved the IBR and control profile tables under `extras`, and
 /// the reader accepts both places. A part-migrated document that declares a
 /// name twice must not produce two elements of that name.
 #[test]
@@ -3049,7 +3077,10 @@ fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it(
         "{:?}",
         out.warnings
     );
-    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert_eq!(
+        errors_beside_empty_tables(&schema_validator(), &out.text),
+        Vec::<String>::new()
+    );
 }
 
 /// The re-vendored example networks carry no generator `cost` and no bus
@@ -3060,7 +3091,7 @@ fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it(
 #[test]
 fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
     let text = r#"{
-      "bus": {"a": {"terminal_names": ["1", "2", "3"],
+      "bus": {"a": {"terminal_names": ["1", "2", "3", "n"],
         "vpn_min": [220.0, 220.0, 220.0], "vpn_max": [260.0, 260.0, 260.0]}},
       "voltage_source": {"s": {"v_magnitude": [240.0], "v_angle": [0.0],
         "bus": "a", "terminal_map": ["1"]}},
@@ -3092,7 +3123,7 @@ fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
     assert_eq!(again.generators()[0].cost, generator.cost);
 }
 
-/// Schema 0.1.0 defines generator `s_max`/`i_max`, linecode `source`, and the
+/// The first draft defines generator `s_max`/`i_max`, linecode `source`, and the
 /// `meta` provenance fields. Each is read into the model without an
 /// outside-the-schema warning, survives the write, and validates; `meta`
 /// keeps the source provenance while the writer owns `$schema`, `frequency`,
@@ -3531,8 +3562,9 @@ fn dss_single_phase_regulator_emits_the_autotransformer_subtype() {
     assert!((reg["r_series_from"].as_f64().unwrap() - 0.005 / 100.0 * zb).abs() < 1e-15);
     assert!((reg["x_series_from"].as_f64().unwrap() - 0.01 / 100.0 * zb).abs() < 1e-15);
     assert_eq!(reg["x_series_to"], serde_json::json!(0.0));
-    assert_eq!(reg["tap_ratio"], serde_json::json!(1.05));
-    // The subtype has no voltage fields; the ratio is tap_ratio alone.
+    assert_eq!(reg["voltage_ratio"], serde_json::json!(1.05));
+    assert!(reg.get("tap_ratio").is_none());
+    // The subtype has no voltage fields; the ratio is voltage_ratio alone.
     assert!(reg.get("v_nom_from").is_none(), "{reg}");
     assert!(reg.get("v_nom_to").is_none(), "{reg}");
 
@@ -3585,7 +3617,7 @@ fn dss_open_delta_regulator_pair_merges_into_one_object() {
     assert_eq!(reg["bus_to"], "busb");
     assert_eq!(reg["terminal_map_from"], serde_json::json!(["1", "2", "3"]));
     assert_eq!(reg["terminal_map_to"], serde_json::json!(["1", "2", "3"]));
-    assert_eq!(reg["tap_ratio"], serde_json::json!([1.03, 1.06]));
+    assert_eq!(reg["voltage_ratio"], serde_json::json!([1.03, 1.06]));
     let zb = 4160.0 * 4160.0 / 1_000_000.0;
     assert!((reg["r_series_from"].as_f64().unwrap() - 0.1 / 100.0 * zb).abs() < 1e-12);
     assert!((reg["x_series_from"].as_f64().unwrap() - 1.0 / 100.0 * zb).abs() < 1e-12);
@@ -3711,7 +3743,7 @@ fn bmopf_regulator_subtypes_round_trip_verbatim() {
                     "r_series_from": 0.001, "x_series_from": 0.002,
                     "r_series_to": 0.001, "x_series_to": 0.0,
                     "g_no_load": 0.0001, "b_no_load": -0.0002,
-                    "tap_ratio": 1.05, "tap_ratio_min": 0.9, "tap_ratio_max": 1.1,
+                    "voltage_ratio": 1.05, "voltage_ratio_min": 0.9, "voltage_ratio_max": 1.1,
                     "regulator_type": "B",
                     "i_max_from": [668.0], "i_max_to": [668.0]
                 }
@@ -3723,7 +3755,7 @@ fn bmopf_regulator_subtypes_round_trip_verbatim() {
                     "s_rating": 1000000.0,
                     "r_series_from": 0.01, "x_series_from": 0.02,
                     "connection": "BCAC",
-                    "tap_ratio": [1.03, 1.06],
+                    "voltage_ratio": [1.03, 1.06],
                     "regulator_type": "A"
                 }
             }
@@ -3745,7 +3777,7 @@ fn bmopf_regulator_subtypes_round_trip_verbatim() {
         svr.extras.get("bmopf_subtype").and_then(|v| v.as_str()),
         Some("single_phase_autotransformer")
     );
-    // tap_ratio regulates the to side: to tap over from tap.
+    // voltage_ratio regulates the to side: to tap over from tap.
     assert!((svr.windings[1].tap / svr.windings[0].tap - 1.05).abs() < 1e-12);
     // The BCAC connection names legs on phases (2,3) and (1,3).
     let odr = by_name("odr");
@@ -3857,43 +3889,90 @@ fn regulator_banks_survive_a_dss_bmopf_dss_round_trip() {
 
 // ----- schema versions ----------------------------------------------------
 
-/// The writer stamps the version it targets into `meta`, and the reader
-/// resolves that same value back to the version.
+/// An older draft reads as BMOPF with one `READ.BMOPF.SCHEMA_LEGACY`
+/// finding, and writes as the current schema: the canonical `$id`, the
+/// version field, and the `vpg_*` bus bounds. The written document reads
+/// back with no schema finding at all.
 #[test]
-fn the_written_schema_version_reads_back_as_the_version_written() {
-    for profile in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
-        let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
-        let out = emit_bmopf_json_with_options(
-            &net,
-            BmopfEmitOptions::default().with_schema_version(profile),
+fn a_legacy_document_reads_once_reported_and_writes_as_the_current_schema() {
+    let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
+    let legacy: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code().starts_with("READ.BMOPF.SCHEMA_"))
+        .collect();
+    assert_eq!(legacy.len(), 1, "{:?}", net.diagnostics);
+    assert_eq!(legacy[0].code(), "READ.BMOPF.SCHEMA_LEGACY");
+    assert_eq!(legacy[0].severity(), DiagnosticSeverity::Warning);
+    assert!(
+        legacy[0].message().contains("an older BMOPF draft"),
+        "{legacy:?}"
+    );
+
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    // `meta.schema_version` is the one identifier; the current schema
+    // removed `$schema`, and the schema's `$id` is recorded in provenance.
+    assert!(doc["meta"].get("$schema").is_none(), "{}", doc["meta"]);
+    assert_eq!(doc["meta"]["schema_version"], release());
+    assert_eq!(
+        doc["meta"]["provenance"]["powerio_bmopf"]["schema_id"],
+        powerio_dist::BMOPF_SCHEMA_ID
+    );
+    let buses = doc["bus"].as_object().unwrap();
+    assert!(
+        buses.values().any(|bus| bus.get("vpg_min").is_some()),
+        "{doc}"
+    );
+    assert!(
+        buses
+            .values()
+            .all(|bus| bus.get("v_min").is_none() && bus.get("v_max").is_none()),
+        "{doc}"
+    );
+    let reparsed = parse_bmopf_str(&out.text).unwrap();
+    assert!(
+        !reparsed
+            .diagnostics
+            .iter()
+            .any(|d| d.code().starts_with("READ.BMOPF.SCHEMA_")),
+        "{:?}",
+        reparsed.diagnostics
+    );
+}
+
+/// Each older draft's schema location a document can state reads with
+/// exactly one `READ.BMOPF.SCHEMA_LEGACY` finding.
+#[test]
+fn every_legacy_schema_location_is_reported_once() {
+    for id in [
+        "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json",
+        "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.1/bmopf.schema.json",
+        "https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks",
+        "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.1.0/bmopf.schema.json",
+        "https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json",
+    ] {
+        let text = format!(
+            r#"{{"meta": {{"$schema": "{id}"}},
+            "bus": {{"b": {{"terminal_names": ["1", "n"], "v_min": [200.0], "v_max": [250.0]}}}},
+            "voltage_source": {{"src": {{"v_magnitude": [240.0, 0.0], "v_angle": [0.0, 0.0],
+                "bus": "b", "terminal_map": ["1", "n"]}}}}}}"#
         );
-        assert_eq!(
-            errors(&schema_validator_for(profile), &out.text),
-            Vec::<String>::new(),
-            "{}",
-            profile.version()
-        );
-        let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-        assert_eq!(doc["meta"]["$schema"], profile.retrieval_url());
-        assert_eq!(
-            BmopfSchemaVersion::from_schema_id(doc["meta"]["$schema"].as_str().unwrap()),
-            Some(profile)
-        );
-        // Only 0.2.0 declares the version field, and its `meta` rejects what
-        // it does not declare.
-        match profile {
-            BmopfSchemaVersion::Bmopf010 => assert!(doc["meta"]["schema_version"].is_null()),
-            _ => assert_eq!(doc["meta"]["schema_version"], profile.version()),
-        }
-        let reparsed = parse_bmopf_str(&out.text).unwrap();
+        let net = parse_bmopf_str(&text).unwrap();
+        let schema: Vec<_> = net
+            .diagnostics
+            .iter()
+            .filter(|d| d.code().starts_with("READ.BMOPF.SCHEMA_"))
+            .collect();
+        assert_eq!(schema.len(), 1, "{id}: {:?}", net.diagnostics);
+        assert_eq!(schema[0].code(), "READ.BMOPF.SCHEMA_LEGACY", "{id}");
         assert!(
-            !reparsed
-                .diagnostics
-                .iter()
-                .any(|d| d.code().starts_with("READ.BMOPF.SCHEMA_")),
-            "{:?}",
-            reparsed.diagnostics
+            schema[0].message().contains("an older BMOPF draft"),
+            "{id}: {schema:?}"
         );
+        let bus = net.buses().iter().find(|b| b.id == "b").unwrap();
+        assert_eq!(bus.v_min, Some(200.0), "{id}");
     }
 }
 
@@ -3923,26 +4002,12 @@ fn a_document_naming_no_schema_version_is_reported() {
         "{:?}",
         unknown.diagnostics
     );
-
-    // The two published examples state the draft schema location of the
-    // repository that only ever held 0.1.0, so they resolve.
-    for example in ["bmopf/example_ieee13.json", "bmopf/example_enwl_n1_f2.json"] {
-        let net = parse_bmopf_file(fixture(example)).unwrap();
-        assert!(
-            !net.diagnostics
-                .iter()
-                .any(|d| d.code().starts_with("READ.BMOPF.SCHEMA_")),
-            "{example}: {:?}",
-            net.diagnostics
-        );
-    }
 }
 
-/// Schema 0.2.0 declares the IBR, control profile, DC and time series tables
-/// at the top level, so writing it relocates nothing; schema 0.1.0 has no
-/// table for them and files each under `extras`.
+/// The schema declares the IBR, control profile, DC and time series tables
+/// at the top level, so writing it relocates nothing.
 #[test]
-fn the_tables_schema_0_1_0_relocates_stay_in_place_under_0_2_0() {
+fn the_ibr_time_series_and_dc_tables_stay_at_the_top_level() {
     let text = doc_with(
         r#", "ibr": {"pv": {"bus": "a", "terminal_map": ["1", "2"],
             "topology": "SINGLE_PHASE", "prime_mover": "PV", "s_max": [5000.0]}},
@@ -3959,25 +4024,6 @@ fn the_tables_schema_0_1_0_relocates_stay_in_place_under_0_2_0() {
     }
     assert_eq!(
         errors(&schema_validator(), &out.text),
-        Vec::<String>::new(),
-        "{}",
-        out.text
-    );
-
-    let out = emit_bmopf_json_with_options(
-        &net,
-        BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
-    );
-    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    for table in ["ibr", "time_series", "dc_bus"] {
-        assert!(doc["extras"][table].is_object(), "{table}: {}", out.text);
-        assert!(doc[table].is_null(), "{table}: {}", out.text);
-    }
-    assert_eq!(
-        errors(
-            &schema_validator_for(BmopfSchemaVersion::Bmopf010),
-            &out.text
-        ),
         Vec::<String>::new(),
         "{}",
         out.text
@@ -4002,37 +4048,29 @@ fn n_winding_ratings_taps_neutrals_and_limits_survive_serialization() {
     let parsed = parse_bmopf_str(&input.to_string()).unwrap();
     let restored: MulticonductorNetwork =
         serde_json::from_str(&serde_json::to_string(&*parsed).unwrap()).unwrap();
-    for profile in [BmopfSchemaVersion::Bmopf020, BmopfSchemaVersion::Bmopf010] {
-        let mut options = BmopfEmitOptions::default();
-        options.schema_version = profile;
-        let output = emit_bmopf_json_with_options(&restored, options);
-        let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
-        assert!(schema_validator_for(profile).is_valid(&doc), "{doc}");
-        let encoded = if profile == BmopfSchemaVersion::Bmopf020 {
-            &doc["transformer"]["n_winding"]["t"]
-        } else {
-            &doc["extras"]["transformer"]["n_winding"]["t"]
-        };
-        assert_eq!(encoded["windings"][0]["i_max"], 9.0);
-        assert_eq!(encoded["windings"][0]["tap_ratio_min"], 0.95);
-        let back = parse_bmopf_str(&output.text).unwrap();
-        let transformer = &back.transformers()[0];
-        assert_eq!(
-            transformer.windings[0].s_rating.to_bits(),
-            9000.0_f64.to_bits()
-        );
-        assert_eq!(
-            transformer.windings[1].s_rating.to_bits(),
-            8000.0_f64.to_bits()
-        );
-        assert_eq!(transformer.windings[0].tap.to_bits(), 1.02_f64.to_bits());
-        assert_eq!(transformer.windings[0].r_neutral, Some(5.0));
-        assert!(
-            (transformer.windings[0].r_pct - restored.transformers()[0].windings[0].r_pct).abs()
-                < 1e-12
-        );
-        assert_eq!(encoded["x_sc"]["1_2"], 1.5);
-    }
+    let output = emit_bmopf_json(&restored);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert!(valid_beside_empty_tables(&doc), "{doc}");
+    let encoded = &doc["transformer"]["n_winding"]["t"];
+    assert_eq!(encoded["windings"][0]["i_max"], 9.0);
+    assert_eq!(encoded["windings"][0]["tap_ratio_min"], 0.95);
+    let back = parse_bmopf_str(&output.text).unwrap();
+    let transformer = &back.transformers()[0];
+    assert_eq!(
+        transformer.windings[0].s_rating.to_bits(),
+        9000.0_f64.to_bits()
+    );
+    assert_eq!(
+        transformer.windings[1].s_rating.to_bits(),
+        8000.0_f64.to_bits()
+    );
+    assert_eq!(transformer.windings[0].tap.to_bits(), 1.02_f64.to_bits());
+    assert_eq!(transformer.windings[0].r_neutral, Some(5.0));
+    assert!(
+        (transformer.windings[0].r_pct - restored.transformers()[0].windings[0].r_pct).abs()
+            < 1e-12
+    );
+    assert_eq!(encoded["x_sc"]["1_2"], 1.5);
 }
 
 #[test]
@@ -4045,10 +4083,8 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     );
     let out = emit_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    assert_eq!(
-        doc["meta"]["$schema"],
-        BmopfSchemaVersion::Bmopf020.retrieval_url()
-    );
+    assert!(doc["meta"].get("$schema").is_none());
+    assert_eq!(doc["meta"]["schema_version"], release());
     let provenance = &doc["meta"]["provenance"];
     assert_eq!(provenance["powerio_bmopf"]["note"], "keep");
     assert_eq!(provenance["powerio_bmopf_1"]["schema_status"], "proposal");
@@ -4059,6 +4095,20 @@ fn proposal_provenance_is_pinned_and_preserves_existing_keys() {
     assert_eq!(
         provenance["powerio_bmopf_1"]["schema_commit"],
         BMOPF_PROPOSAL_COMMIT
+    );
+    assert_eq!(
+        provenance["powerio_bmopf_1"]["schema_retrieval_url"],
+        powerio_dist::bmopf::bmopf_proposal_url()
+    );
+    assert!(
+        provenance["powerio_bmopf_1"]["schema_retrieval_url"]
+            .as_str()
+            .unwrap()
+            .contains(BMOPF_PROPOSAL_COMMIT)
+    );
+    assert_eq!(
+        provenance["powerio_bmopf_1"]["schema_id"],
+        powerio_dist::BMOPF_SCHEMA_ID
     );
     assert_eq!(
         emit_bmopf_json(&parse_bmopf_str(&out.text).unwrap()).text,
@@ -4177,11 +4227,9 @@ fn bmopftools_element_geometry_and_projected_crs_survive_mutation() {
     net.buses_mut()[0].location.as_mut().unwrap().x += 4.0;
     net.lines_mut()[0].route.as_mut().unwrap()[1].y += 2.0;
     let emitted = emit_bmopf_json(&net);
-    assert!(
-        schema_validator()
-            .is_valid(&serde_json::from_str::<serde_json::Value>(&emitted.text).unwrap()),
-        "{:?}",
-        errors(&schema_validator(), &emitted.text)
+    assert_eq!(
+        errors_beside_empty_tables(&schema_validator(), &emitted.text),
+        Vec::<String>::new()
     );
     let again = parse_bmopf_str(&emitted.text).unwrap();
     assert_eq!(
@@ -4286,35 +4334,6 @@ fn pmd_profile_without_replace_is_retained_even_without_source_id() {
 }
 
 #[test]
-fn pmd_loadshape_references_are_not_active_in_schema_010() {
-    let source = std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap();
-    let net = parse_pmd_str(&source).unwrap();
-    let output = emit_bmopf_json_with_options(
-        &net,
-        BmopfEmitOptions::default().with_schema_version(BmopfSchemaVersion::Bmopf010),
-    );
-    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
-
-    assert!(doc.get("time_series").is_none(), "{doc}");
-    assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
-    assert!(doc["extras"]["time_series"]["ls1"].is_object(), "{doc}");
-    assert!(
-        schema_validator_for(BmopfSchemaVersion::Bmopf010).is_valid(&doc),
-        "{:?}",
-        errors(
-            &schema_validator_for(BmopfSchemaVersion::Bmopf010),
-            &output.text
-        )
-    );
-    assert!(
-        output
-            .warnings
-            .iter()
-            .any(|warning| { warning.contains("schema 0.1.0") && warning.contains("time_series") })
-    );
-}
-
-#[test]
 fn unsupported_pmd_profile_semantics_are_retained_verbatim() {
     let mut source: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(fixture("pmd/case3_balanced.json")).unwrap())
@@ -4368,28 +4387,24 @@ fn pmd_profile_with_replace_true_is_retained_verbatim() {
     }));
 }
 
+/// The schema requires `values`; a profile without it has no top-level slot.
 #[test]
-fn profiles_without_values_stay_in_extras_for_both_schema_versions() {
+fn profiles_without_values_stay_in_extras() {
     let parsed =
         parse_bmopf_str(r#"{"bus":{},"voltage_source":{},"time_series":{"shape":{"time":[0,1]}}}"#)
             .unwrap();
 
-    for version in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
-        let output = emit_bmopf_json_with_options(
-            &parsed,
-            BmopfEmitOptions::default().with_schema_version(version),
-        );
-        let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
-        assert!(doc.get("time_series").is_none(), "{doc}");
-        assert_eq!(
-            doc["extras"]["time_series"]["shape"]["time"],
-            serde_json::json!([0, 1])
-        );
-        assert!(schema_validator_for(version).is_valid(&doc), "{doc}");
-        assert!(output.warnings.iter().any(|warning| {
-            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
-        }));
-    }
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none(), "{doc}");
+    assert_eq!(
+        doc["extras"]["time_series"]["shape"]["time"],
+        serde_json::json!([0, 1])
+    );
+    assert!(valid_beside_empty_tables(&doc), "{doc}");
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
+    }));
 }
 
 #[test]
@@ -4413,28 +4428,23 @@ fn pmd_profile_provenance_survives_canonical_source_reset() {
         let mut parsed = parse_pmd_str(&source.to_string()).unwrap();
         *parsed.source_format_mut() = None;
         assert_eq!(parsed.extras()["pmd_data_model"], "ENGINEERING");
-        for version in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
-            let output = emit_bmopf_json_with_options(
-                &parsed,
-                BmopfEmitOptions::default().with_schema_version(version),
+        let output = emit_bmopf_json(&parsed);
+        let doc: Value = serde_json::from_str(&output.text).unwrap();
+        assert!(schema_validator().is_valid(&doc), "{doc}");
+        if replace == Some(false) {
+            assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600]));
+            assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
+            let mut native = parse_bmopf_str(&output.text).unwrap();
+            *native.source_format_mut() = None;
+            let again: Value = serde_json::from_str(&emit_bmopf_json(&native).text).unwrap();
+            assert_eq!(again["time_series"]["ls1"]["time"], json!([0, 3600]));
+        } else {
+            assert!(doc.get("time_series").is_none(), "{doc}");
+            assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
+            assert_eq!(
+                doc["extras"]["time_series"]["ls1"],
+                source["time_series"]["ls1"]
             );
-            let doc: Value = serde_json::from_str(&output.text).unwrap();
-            assert!(schema_validator_for(version).is_valid(&doc), "{doc}");
-            if replace == Some(false) && version == BmopfSchemaVersion::Bmopf020 {
-                assert_eq!(doc["time_series"]["ls1"]["time"], json!([0, 3600]));
-                assert_eq!(doc["load"]["l1"]["time_series"]["p_nom"], "ls1");
-                let mut native = parse_bmopf_str(&output.text).unwrap();
-                *native.source_format_mut() = None;
-                let again: Value = serde_json::from_str(&emit_bmopf_json(&native).text).unwrap();
-                assert_eq!(again["time_series"]["ls1"]["time"], json!([0, 3600]));
-            } else {
-                assert!(doc.get("time_series").is_none(), "{doc}");
-                assert!(doc["load"]["l1"].get("time_series").is_none(), "{doc}");
-                assert_eq!(
-                    doc["extras"]["time_series"]["ls1"],
-                    source["time_series"]["ls1"]
-                );
-            }
         }
     }
 }
@@ -4452,7 +4462,7 @@ fn foreign_pmd_profile_markers_never_activate_native_bmopf_semantics() {
         let doc: Value = serde_json::from_str(&output.text).unwrap();
         assert!(doc.get("time_series").is_none(), "{doc}");
         assert_eq!(doc["extras"]["time_series"]["shape"]["time"], json!([0, 1]));
-        assert!(schema_validator().is_valid(&doc));
+        assert!(valid_beside_empty_tables(&doc));
         assert!(
             output
                 .warnings
@@ -4472,33 +4482,25 @@ fn foreign_profile_controls_are_retained_without_claiming_bmopf_semantics() {
     let input = r#"{"data_model":"ENGINEERING","bus":{},"time_series":{"shape":{"values":[0.5,1.0],"time":[0,1],"replace":true,"offset":2.0,"source_id":"loadshape.shape"}}}"#;
     let parsed = parse_pmd_str(input).unwrap();
     let expected: serde_json::Value = serde_json::from_str(input).unwrap();
-    for profile in [BmopfSchemaVersion::Bmopf010, BmopfSchemaVersion::Bmopf020] {
-        let output = emit_bmopf_json_with_options(
-            &parsed,
-            BmopfEmitOptions::default().with_schema_version(profile),
-        );
-        let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
-        assert!(doc.get("time_series").is_none());
-        assert_eq!(
-            doc["extras"]["time_series"]["shape"],
-            expected["time_series"]["shape"]
-        );
-        assert!(schema_validator_for(profile).is_valid(&doc));
-        assert!(output.warnings.iter().any(|warning| {
-            warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
-        }));
-        let reparsed = parse_bmopf_str(&output.text).unwrap();
-        let again = emit_bmopf_json_with_options(
-            &reparsed,
-            BmopfEmitOptions::default().with_schema_version(profile),
-        );
-        let again: serde_json::Value = serde_json::from_str(&again.text).unwrap();
-        assert_eq!(
-            again["extras"]["time_series"]["shape"],
-            expected["time_series"]["shape"]
-        );
-        assert!(again.get("time_series").is_none());
-    }
+    let output = emit_bmopf_json(&parsed);
+    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
+    assert!(doc.get("time_series").is_none());
+    assert_eq!(
+        doc["extras"]["time_series"]["shape"],
+        expected["time_series"]["shape"]
+    );
+    assert!(valid_beside_empty_tables(&doc));
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
+    }));
+    let reparsed = parse_bmopf_str(&output.text).unwrap();
+    let again = emit_bmopf_json(&reparsed);
+    let again: serde_json::Value = serde_json::from_str(&again.text).unwrap();
+    assert_eq!(
+        again["extras"]["time_series"]["shape"],
+        expected["time_series"]["shape"]
+    );
+    assert!(again.get("time_series").is_none());
 }
 
 #[test]
@@ -4510,7 +4512,7 @@ fn native_multiplicative_profiles_stay_in_the_bmopf_schema_table() {
         doc["time_series"]["shape"]["values"],
         serde_json::json!([0.5, 1.0])
     );
-    assert!(schema_validator().is_valid(&doc));
+    assert!(valid_beside_empty_tables(&doc));
 }
 
 /// PMD's `replace` defaults to true, so a bare profile is not multiplicative.
@@ -4525,26 +4527,10 @@ fn pmd_profiles_without_explicit_controls_are_not_multiplicative() {
         doc["extras"]["time_series"]["shape"]["values"],
         serde_json::json!([0.5, 1.0])
     );
-    assert!(schema_validator().is_valid(&doc));
+    assert!(valid_beside_empty_tables(&doc));
     assert!(output.warnings.iter().any(|warning| {
         warning.contains("EMIT.BMOPF.RETAINED_SOURCE_ONLY") && warning.contains("shape")
     }));
-}
-
-/// The schema requires `values`; a profile without it has no top-level slot.
-#[test]
-fn profiles_without_values_stay_in_extras() {
-    let parsed =
-        parse_bmopf_str(r#"{"bus":{},"voltage_source":{},"time_series":{"shape":{"time":[0,1]}}}"#)
-            .unwrap();
-    let output = emit_bmopf_json(&parsed);
-    let doc: serde_json::Value = serde_json::from_str(&output.text).unwrap();
-    assert!(doc.get("time_series").is_none());
-    assert_eq!(
-        doc["extras"]["time_series"]["shape"]["time"],
-        serde_json::json!([0, 1])
-    );
-    assert!(schema_validator().is_valid(&doc));
 }
 
 #[test]
@@ -4689,5 +4675,1160 @@ fn referenced_profiles_must_share_one_bmopf_time_axis() {
         }
         assert_eq!(doc["extras"]["time_series"], source["time_series"]);
         assert!(schema_validator().is_valid(&doc), "{doc}");
+    }
+}
+
+/// A located, routed network in a projected system: what a GIS backed feeder
+/// model carries.
+fn routed_network() -> MulticonductorNetwork {
+    let text = r#"{"bus":{"a":{"terminal_names":["1","2","3","4"]},"b":{"terminal_names":["1","2","3","4"]}},"linecode":{"c":{"R_series_1_1":0.1,"X_series_1_1":0.1}},"line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],"linecode":"c","length":12}},"voltage_source":{"s":{"bus":"a","terminal_map":["1","2","3","4"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.094,2.094,0]}}}"#;
+    let mut net = (*parse_bmopf_str(text).unwrap()).clone();
+    *net.geo_mut() = Some(DistGeoMeta {
+        space: CoordinateSpace::Projected {
+            crs: Some("EPSG:32617".into()),
+        },
+        kind: Some(DistCoordsKind::Source),
+    });
+    let at = |x: f64, y: f64| DistLocation { x, y, kind: None };
+    net.buses_mut()[0].location = Some(at(276_500.0, 4_686_200.0));
+    net.buses_mut()[1].location = Some(at(276_512.0, 4_686_207.0));
+    net.lines_mut()[0].route = Some(vec![
+        at(276_500.0, 4_686_200.0),
+        at(276_505.0, 4_686_209.0),
+        at(276_512.0, 4_686_207.0),
+    ]);
+    net
+}
+
+/// Output: `vpg_*` bounds and `vng_max`, geometry in the typed `geo` slots with the system
+/// in `meta.crs`, the canonical `$id` as the stamp, and no `extras.geojson`
+/// layer. The document validates against the vendored schema, which rejects
+/// the first draft's spellings and knows the typed slots.
+#[test]
+fn output_embeds_geometry_and_names_the_vpg_bounds() {
+    let mut net = routed_network();
+    net.buses_mut()[0].v_min = Some(207.0);
+    net.buses_mut()[0].v_max = Some(253.0);
+    net.buses_mut()[0].vn_max = Some(12.0);
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["meta"].get("$schema").is_none());
+    assert_eq!(doc["meta"]["schema_version"], release());
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert_eq!(
+        doc["bus"]["a"]["vpg_min"],
+        serde_json::json!([207.0, 207.0, 207.0])
+    );
+    assert!(doc["bus"]["a"].get("v_min").is_none());
+    // The neutral to ground cap is `vng_max` since the schema.
+    assert_eq!(doc["bus"]["a"]["vng_max"], 12.0);
+    assert!(doc["bus"]["a"].get("vn_max").is_none());
+    assert_eq!(
+        doc["bus"]["a"]["geo"],
+        serde_json::json!({"type": "Point", "coordinates": [276_500.0, 4_686_200.0]})
+    );
+    assert_eq!(
+        doc["line"]["ab"]["geo"],
+        serde_json::json!({"type": "LineString", "coordinates": [
+            [276_500.0, 4_686_200.0], [276_505.0, 4_686_209.0], [276_512.0, 4_686_207.0]
+        ]})
+    );
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    assert!(
+        doc.pointer("/extras/powerio_geo").is_none(),
+        "a named projected system reads back from meta.crs alone: {doc}"
+    );
+    let provenance = &doc["meta"]["provenance"]["powerio_bmopf"];
+    assert_eq!(provenance["schema_status"], "proposal");
+    assert_eq!(
+        provenance["schema_retrieval_url"],
+        powerio_dist::bmopf::bmopf_proposal_url()
+    );
+    assert_eq!(
+        provenance["schema_sha256"],
+        powerio_dist::bmopf::BMOPF_PROPOSAL_SHA256
+    );
+    assert_eq!(
+        provenance["schema_commit"],
+        powerio_dist::bmopf::BMOPF_PROPOSAL_COMMIT
+    );
+}
+
+/// A document PowerIO 0.11 wrote states its early draft's archive URL and
+/// carries `v_*` bounds and the `extras.geojson` layer. It reads with one
+/// `READ.BMOPF.SCHEMA_LEGACY` finding, keeps its bounds and geometry, and
+/// writes them in the current form: `vpg_*`, typed `geo` slots and `meta.crs`.
+#[test]
+fn a_powerio_0_11_document_upgrades_its_bounds_and_geometry() {
+    let text = r#"{"meta":{"$schema":"https://raw.githubusercontent.com/eigenergy/powerio/5234df55cd13ad31455697cffbdc16ca50662667/powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json","schema_version":"0.2.0"},
+        "bus":{"a":{"terminal_names":["1","2","3","4"],"v_min":[207,207,207],"v_max":[253,253,253]},"b":{"terminal_names":["1","2","3","4"]}},
+        "linecode":{"c":{"R_series_1_1":0.1,"X_series_1_1":0.1}},
+        "line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],"linecode":"c","length":12}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1","2","3","4"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.094,2.094,0]}},
+        "extras":{"geojson":{"type":"FeatureCollection","crs":"EPSG:32617","features":[
+            {"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[276500,4686200]}},
+            {"type":"Feature","properties":{"kind":"bus","id":"b"},"geometry":{"type":"Point","coordinates":[276512,4686207]}},
+            {"type":"Feature","properties":{"kind":"line","id":"ab"},"geometry":{"type":"LineString","coordinates":[[276500,4686200],[276505,4686209],[276512,4686207]]}}]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    let schema: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code().starts_with("READ.BMOPF.SCHEMA_"))
+        .collect();
+    assert_eq!(schema.len(), 1, "{:?}", net.diagnostics);
+    assert_eq!(schema[0].code(), "READ.BMOPF.SCHEMA_LEGACY");
+    assert_eq!(net.buses()[0].v_min, Some(207.0));
+    assert!(matches!(&net.geo().as_ref().unwrap().space,
+        CoordinateSpace::Projected { crs: Some(crs) } if crs == "EPSG:32617"));
+
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["meta"].get("$schema").is_none());
+    assert_eq!(doc["meta"]["schema_version"], release());
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert_eq!(
+        doc["bus"]["a"]["vpg_min"],
+        serde_json::json!([207.0, 207.0, 207.0])
+    );
+    assert!(doc["bus"]["a"].get("v_min").is_none());
+    assert!(doc["bus"]["a"].get("geo").is_some());
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.geo(), net.geo());
+    assert_eq!(
+        vertices(again.lines()[0].route.as_deref()),
+        vertices(net.lines()[0].route.as_deref())
+    );
+}
+
+/// The vertices of a route as bit patterns, without the per point origin
+/// marker the reader stamps.
+fn vertices(route: Option<&[DistLocation]>) -> Option<Vec<(u64, u64)>> {
+    route.map(|r| r.iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect())
+}
+
+/// The legacy spelling reads whatever the document states. A document that
+/// states the current schema and uses it gets one `READ.BMOPF.SCHEMA_LEGACY`
+/// finding naming the spellings, since that schema rejects them; a document
+/// from an older draft gets its one finding for the draft, and one
+/// stating none gets `READ.BMOPF.SCHEMA_ABSENT` instead.
+#[test]
+fn legacy_v_bounds_read_and_are_reported_once_per_document() {
+    let body = r#""bus":{"b":{"terminal_names":["a","b","c","n"],"v_min":[210,215,220],"v_max":[240,245,250],"vn_max":30}},"voltage_source":{"s":{"bus":"b","terminal_map":["a","b","c","n"],"v_magnitude":[230,230,230,0],"v_angle":[0,-2.094,2.094,0]}}"#;
+    for (meta, legacy_findings) in [
+        (String::new(), 0),
+        (
+            r#""meta":{"$schema":"https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json"},"#.to_owned(),
+            1,
+        ),
+        (
+            format!(
+                r#""meta":{{"$schema":"{}","schema_version":"{}"}},"#,
+                powerio_dist::BMOPF_SCHEMA_ID,
+                release()
+            ),
+            1,
+        ),
+    ] {
+        let net = parse_bmopf_str(&format!("{{{meta}{body}}}")).unwrap();
+        assert_eq!(
+            net.buses()[0].v_min_phase.as_deref(),
+            Some([210.0, 215.0, 220.0].as_slice()),
+            "{meta}"
+        );
+        assert_eq!(net.buses()[0].vn_max, Some(30.0), "{meta}");
+        let legacy: Vec<_> = net
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY")
+            .collect();
+        assert_eq!(legacy.len(), legacy_findings, "{meta}: {legacy:?}");
+    }
+    let stated = parse_bmopf_str(&format!(
+        r#"{{"meta":{{"$schema":"{}","schema_version":"{}"}},{body}}}"#,
+        powerio_dist::BMOPF_SCHEMA_ID,
+        release()
+    ))
+    .unwrap();
+    let finding = stated
+        .diagnostics
+        .iter()
+        .find(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY")
+        .unwrap();
+    assert!(
+        finding.message().contains("`v_min` (1)")
+            && finding.message().contains("`v_max` (1)")
+            && finding.message().contains("`vn_max` (1)"),
+        "{finding:?}"
+    );
+    // The current spelling reads the same values without a finding.
+    let current = parse_bmopf_str(
+        r#"{"bus":{"b":{"terminal_names":["a","b","c","n"],"vpg_min":[210,215,220],"vpg_max":[240,245,250],"vng_max":30}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        current.buses()[0].v_max_phase.as_deref(),
+        Some([240.0, 245.0, 250.0].as_slice())
+    );
+    assert_eq!(current.buses()[0].vn_max, Some(30.0));
+    assert!(
+        !current
+            .diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY")
+    );
+    // Both spellings stating different bounds is a contradiction.
+    let both = parse_bmopf_str(
+        r#"{"bus":{"b":{"terminal_names":["a","n"],"vpg_min":[210],"v_min":[200]}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        both.buses()[0].v_min,
+        Some(210.0),
+        "the current spelling wins"
+    );
+    assert!(
+        both.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID"
+                && d.message().contains("vpg_min and v_min")),
+        "{:?}",
+        both.diagnostics
+    );
+    let both =
+        parse_bmopf_str(r#"{"bus":{"b":{"terminal_names":["a","n"],"vng_max":30,"vn_max":20}}}"#)
+            .unwrap();
+    assert_eq!(
+        both.buses()[0].vn_max,
+        Some(30.0),
+        "the current spelling wins"
+    );
+    assert!(
+        both.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID"
+                && d.message().contains("vng_max and vn_max")),
+        "{:?}",
+        both.diagnostics
+    );
+}
+
+/// The typed `geo` slots read with `meta.crs`; the legacy `extras.geojson`
+/// layer reads when no element carries a typed slot; when both are present
+/// the typed slots win and the legacy layer is not merged in.
+#[test]
+fn embedded_geometry_wins_over_the_legacy_extras_geojson_layer() {
+    let embedded = r#"{"meta":{"crs":"EPSG:32617"},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[276500,4686200]}},"b":{"terminal_names":["1"]}},"line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],"R_series_1_1":1,"X_series_1_1":1,"geo":{"type":"LineString","coordinates":[[276500,4686200],[276512,4686207]]}}}}"#;
+    let net = parse_bmopf_str(embedded).unwrap();
+    assert!((net.buses()[0].location.unwrap().x - 276_500.0).abs() < 1e-9);
+    assert_eq!(net.lines()[0].route.as_ref().unwrap().len(), 2);
+    assert!(matches!(&net.geo().as_ref().unwrap().space,
+        CoordinateSpace::Projected { crs: Some(crs) } if crs == "EPSG:32617"));
+    assert!(
+        !net.warnings
+            .iter()
+            .any(|w| w.contains("`geo` is outside the schema")),
+        "{:?}",
+        net.warnings
+    );
+
+    let legacy = r#"{"bus":{"a":{"terminal_names":["1"]},"b":{"terminal_names":["1"]}},"line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],"R_series_1_1":1,"X_series_1_1":1}},"extras":{"geojson":{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-83.7,42.3]}},{"type":"Feature","properties":{"kind":"line","id":"ab"},"geometry":{"type":"LineString","coordinates":[[-83.7,42.3],[-83.6,42.4]]}}]}}}"#;
+    let net = parse_bmopf_str(legacy).unwrap();
+    assert!((net.buses()[0].location.unwrap().x + 83.7).abs() < 1e-9);
+    assert!((net.lines()[0].route.as_ref().unwrap()[1].y - 42.4).abs() < 1e-9);
+    assert!(matches!(
+        &net.geo().as_ref().unwrap().space,
+        CoordinateSpace::Geographic { .. }
+    ));
+    // The layer is typed into the model, not stashed: a re-emission writes
+    // the model's geometry once, in the typed slots.
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    assert_eq!(
+        doc["bus"]["a"]["geo"]["coordinates"],
+        serde_json::json!([-83.7, 42.3])
+    );
+
+    let both = r#"{"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[-83.7,42.3]}},"b":{"terminal_names":["1"]}},"extras":{"geojson":{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-80,35]}},{"type":"Feature","properties":{"kind":"bus","id":"b"},"geometry":{"type":"Point","coordinates":[-80,36]}}]}}}"#;
+    let net = parse_bmopf_str(both).unwrap();
+    assert!(
+        (net.buses()[0].location.unwrap().x + 83.7).abs() < 1e-9,
+        "typed slot wins"
+    );
+    assert!(
+        net.buses()[1].location.is_none(),
+        "the legacy layer is not merged in beside typed slots"
+    );
+}
+
+/// The diagnostics of a parse whose code is `code` and whose message names
+/// `subject`.
+fn findings<'a>(
+    diagnostics: &'a [powerio_dist::Diagnostic],
+    code: &str,
+    subject: &str,
+) -> Vec<&'a powerio_dist::Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|d| d.code() == code && d.message().contains(subject))
+        .collect()
+}
+
+/// The legacy `extras.geojson` layer beside typed `geo` slots is not read,
+/// and its features are reported as dropped rather than lost silently.
+#[test]
+fn a_legacy_geojson_layer_beside_typed_slots_is_reported_as_dropped() {
+    let both = r#"{"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[-83.7,42.3]}},"b":{"terminal_names":["1"]}},"extras":{"geojson":{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-80,35]}},{"type":"Feature","properties":{"kind":"bus","id":"b"},"geometry":{"type":"Point","coordinates":[-80,36]}}]}}}"#;
+    let net = parse_bmopf_str(both).unwrap();
+    assert!(net.buses()[1].location.is_none());
+    let dropped = findings(
+        &net.diagnostics,
+        "READ.BMOPF.FIELD_DROPPED",
+        "extras.geojson",
+    );
+    assert_eq!(dropped.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        dropped[0].message().contains("2 feature"),
+        "{:?}",
+        dropped[0]
+    );
+}
+
+/// A `geo` value the reader cannot assign has no other home in the model, so
+/// it is reported as dropped, not as retained source data.
+#[test]
+fn an_unassignable_geo_is_reported_as_dropped() {
+    let text = r#"{"bus":{"a":{"terminal_names":["1","n"],"geo":{"type":"Point","coordinates":["east","north"]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1","n"],"v_magnitude":[240.0,0.0],"v_angle":[0.0,0.0]}},
+        "load":{"l":{"bus":"a","terminal_map":["1","n"],"configuration":"WYE","p_nom":[1.0],"q_nom":[0.0],
+            "geo":{"type":"Polygon","coordinates":[]}}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(net.buses()[0].location.is_none());
+    assert_eq!(net.component_locations().as_slice(), []);
+    for subject in ["bus a:", "load l:"] {
+        assert_eq!(
+            findings(&net.diagnostics, "READ.BMOPF.FIELD_DROPPED", subject).len(),
+            1,
+            "{subject}: {:?}",
+            net.diagnostics
+        );
+        assert!(
+            findings(&net.diagnostics, "READ.BMOPF.RETAINED_SOURCE_ONLY", subject).is_empty(),
+            "{subject}: {:?}",
+            net.diagnostics
+        );
+    }
+    // Unreadable coordinate metadata drops every typed `geo` it would place.
+    let text = r#"{"meta":{"crs":123},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[1.0,2.0]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1"],"v_magnitude":[240.0],"v_angle":[0.0]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(net.buses()[0].location.is_none());
+    assert_eq!(
+        findings(&net.diagnostics, "READ.BMOPF.FIELD_DROPPED", "`geo`").len(),
+        1,
+        "{:?}",
+        net.diagnostics
+    );
+}
+
+/// A source `meta.crs` is the writer's to state: it writes the network's
+/// coordinate system back without reporting the source value as dropped.
+#[test]
+fn a_source_crs_is_restated_without_a_drop_finding() {
+    let text = r#"{"meta":{"crs":"EPSG:32617"},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[276500,4686200]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1"],"v_magnitude":[240.0],"v_angle":[0.0]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("`crs`")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// The canonical `$id` of the 0.2.0 draft PowerIO 0.11 targeted, before the
+/// proposal was reconciled with the Task Force's schema, names that older
+/// draft: a document stating it reads under the draft's rules, so its
+/// per-phase line `s_max` is no schema violation.
+#[test]
+fn the_pre_reconciliation_draft_id_reads_as_an_older_draft() {
+    let text = r#"{"meta":{"$schema":"https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json","schema_version":"0.2.0"},
+        "bus":{"a":{"terminal_names":["1","2","3","n"]},"b":{"terminal_names":["1","2","3","n"]}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1","2","3","n"],"v_magnitude":[240.0,240.0,240.0,0.0],"v_angle":[0.0,-2.0943951,2.0943951,0.0]}},
+        "line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1","2","3","n"],"terminal_map_to":["1","2","3","n"],
+            "R_series_1_1":1,"X_series_1_1":1,"s_max":[1.0e6,1.0e6,1.0e6]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        findings(&net.diagnostics, "READ.BMOPF.SEMANTIC_INVALID", "s_max").is_empty(),
+        "{:?}",
+        net.diagnostics
+    );
+    let schema = findings(&net.diagnostics, "READ.BMOPF.SCHEMA_LEGACY", "");
+    assert_eq!(schema.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        schema[0]
+            .message()
+            .starts_with("the document is an older BMOPF draft"),
+        "{schema:?}"
+    );
+}
+
+/// A space the schema cannot name travels as `extras.powerio_geo` beside the
+/// typed slots, so a read gets the same metadata back and does not take the
+/// coordinates for WGS84.
+#[test]
+fn an_unnamed_coordinate_space_rides_beside_embedded_geometry() {
+    let mut net = routed_network();
+    *net.geo_mut() = Some(DistGeoMeta {
+        space: CoordinateSpace::Unknown,
+        kind: Some(DistCoordsKind::Source),
+    });
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["meta"].get("crs").is_none());
+    assert!(doc["bus"]["a"].get("geo").is_some());
+    assert_eq!(doc["extras"]["powerio_geo"]["space"], "unknown");
+    assert!(doc.pointer("/extras/geojson").is_none());
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.geo(), net.geo());
+    assert_eq!(
+        again.buses()[0].location,
+        net.buses()[0].location.map(|p| DistLocation {
+            kind: Some(DistCoordsKind::Source),
+            ..p
+        })
+    );
+    assert_eq!(again.lines()[0].route.as_ref().unwrap().len(), 3);
+
+    // Synthetic coordinates keep their origin too.
+    let mut net = routed_network();
+    net.geo_mut().as_mut().unwrap().kind = Some(DistCoordsKind::Synthetic);
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert_eq!(doc["extras"]["powerio_geo"]["kind"], "synthetic");
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.geo(), net.geo());
+}
+
+/// OpenDSS bus coordinates survive a conversion to BMOPF and a trip
+/// through the serialized network: the same locations, routes and
+/// coordinate metadata on both sides.
+#[test]
+fn opendss_coordinates_round_trip_through_bmopf_and_the_serialized_network() {
+    let source = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
+    let located = source
+        .buses()
+        .iter()
+        .filter(|b| b.location.is_some())
+        .count();
+    assert!(located > 10, "the IEEE 13 fixture carries Buscoords");
+    let out = emit_bmopf_json(&source);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc.pointer("/extras/geojson").is_none(), "{doc}");
+    assert_eq!(
+        doc["bus"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|b| b.get("geo").is_some())
+            .count(),
+        located
+    );
+    let converted = parse_bmopf_str(&out.text).unwrap();
+    let encoded = serde_json::to_string(&*converted).unwrap();
+    let restored: MulticonductorNetwork = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.geo(), source.geo());
+    // The BMOPF bus table is keyed, so the order differs; match by id.
+    assert_eq!(source.buses().len(), restored.buses().len());
+    for a in source.buses() {
+        let b = restored
+            .bus(&a.id)
+            .unwrap_or_else(|| panic!("bus {}", a.id));
+        assert_eq!(
+            a.location.map(|p| (p.x.to_bits(), p.y.to_bits())),
+            b.location.map(|p| (p.x.to_bits(), p.y.to_bits())),
+            "bus {}",
+            a.id
+        );
+    }
+    assert_eq!(source.lines().len(), restored.lines().len());
+    for a in source.lines() {
+        let b = restored
+            .lines()
+            .iter()
+            .find(|l| l.name == a.name)
+            .unwrap_or_else(|| panic!("line {}", a.name));
+        assert_eq!(
+            vertices(a.route.as_deref()),
+            vertices(b.route.as_deref()),
+            "line {}",
+            a.name
+        );
+    }
+}
+
+/// Component locations travel as the typed `geo` Point of the element each
+/// one attaches to, and read back as the same component locations: a switch,
+/// a transformer, a load and a voltage source.
+#[test]
+fn component_locations_round_trip_as_element_geo() {
+    use powerio_dist::{DistComponentLocation, DistGeographicPoint, DistLocationTarget};
+
+    // The vendored IEEE 13 example has transformers, loads and a source;
+    // add a switch beside its line.
+    let mut source: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture("bmopf/example_ieee13.json")).unwrap(),
+    )
+    .unwrap();
+    source["switch"] = serde_json::json!({"sw1": {"bus_from": "671", "bus_to": "652",
+        "terminal_map_from": ["1"], "terminal_map_to": ["1"], "open_switch": false}});
+    let mut net = parse_bmopf_str(&source.to_string()).unwrap().clone();
+    let targets = [
+        (DistLocationTarget::Switch, "sw1".to_owned(), -83.70, 42.30),
+        (
+            DistLocationTarget::Transformer,
+            "xfm1".to_owned(),
+            -83.71,
+            42.31,
+        ),
+        (
+            DistLocationTarget::Load,
+            "load_611".to_owned(),
+            -83.72,
+            42.32,
+        ),
+        (
+            DistLocationTarget::Source,
+            "source".to_owned(),
+            -83.73,
+            42.33,
+        ),
+    ];
+    for (target, name, longitude, latitude) in &targets {
+        let mut point = DistGeographicPoint::new(Some(*latitude), Some(*longitude));
+        // An absent `meta.crs` means OGC:CRS84, the datum a read assigns.
+        point.datum = Some("OGC:CRS84".into());
+        let mut location = DistComponentLocation::new(*target, name.clone(), point);
+        location.kind = Some(DistCoordsKind::Source);
+        net.component_locations_mut().push(location);
+    }
+    net.validate_component_locations().unwrap();
+
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert!(
+        !out.warnings
+            .iter()
+            .any(|w| w.contains("COMPONENT_COORDINATES_DROPPED")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["load"][&targets[2].1]["geo"],
+        serde_json::json!({"type": "Point", "coordinates": [-83.72, 42.32]})
+    );
+    assert_eq!(
+        doc["switch"][&targets[0].1]["geo"]["coordinates"],
+        serde_json::json!([-83.70, 42.30])
+    );
+
+    let again = parse_bmopf_str(&out.text).unwrap();
+    let mut expected = net.component_locations().clone();
+    let mut actual = again.component_locations().clone();
+    let key = |l: &DistComponentLocation| (l.target, l.name.clone());
+    expected.sort_by_key(key);
+    actual.sort_by_key(key);
+    assert_eq!(actual, expected);
+    assert!(
+        !again.warnings.iter().any(|w| w.contains("`geo`")),
+        "{:?}",
+        again.warnings
+    );
+}
+
+/// A switch or transformer may state a LineString between its buses; its
+/// location is the midpoint of the two end positions, reported once. A
+/// component `geo` in a projected document has no geographic reading and is
+/// dropped with a finding.
+#[test]
+fn component_geo_line_strings_and_projected_points() {
+    let body = r#""bus":{"a":{"terminal_names":["1"]},"b":{"terminal_names":["1"]}},
+        "switch":{"s":{"bus_from":"a","bus_to":"b","terminal_map_from":["1"],"terminal_map_to":["1"],
+            "open_switch":false,"geo":{"type":"LineString","coordinates":[[-83.70,42.30],[-83.69,42.31],[-83.60,42.40]],"bbox":[-83.70,42.30,-83.60,42.40]}}},
+        "load":{"l":{"bus":"a","terminal_map":["1"],"configuration":"SINGLE_PHASE","p_nom":[1.0],"q_nom":[0.0],
+            "geo":{"type":"Point","coordinates":[-83.70,42.30]}}}"#;
+    let net = parse_bmopf_str(&format!("{{{body}}}")).unwrap();
+    let switch = net
+        .component_locations()
+        .iter()
+        .find(|l| l.name == "s")
+        .unwrap();
+    assert!((switch.point.longitude.unwrap() + 83.65).abs() < 1e-12);
+    assert!((switch.point.latitude.unwrap() - 42.35).abs() < 1e-12);
+    assert_eq!(switch.point.datum.as_deref(), Some("OGC:CRS84"));
+    assert_eq!(
+        net.diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.BMOPF.VALUE_COLLAPSED")
+            .count(),
+        1,
+        "{:?}",
+        net.diagnostics
+    );
+    assert_eq!(net.component_locations().len(), 2);
+    let doc: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(doc["switch"]["s"]["geo"]["type"], "Point");
+
+    let projected =
+        parse_bmopf_str(&format!(r#"{{"meta":{{"crs":"EPSG:32617"}},{body}}}"#)).unwrap();
+    assert_eq!(projected.component_locations().as_slice(), []);
+    assert_eq!(
+        projected
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.BMOPF.FIELD_DROPPED" && d.message().contains("`geo`"))
+            .count(),
+        2,
+        "{:?}",
+        projected.diagnostics
+    );
+}
+
+/// The schema removed `voltage_source.cost` and `ibr.cost`. A document that
+/// still states them reads them as `energy_cost_rate`, under the one
+/// `READ.BMOPF.SCHEMA_LEGACY` finding when it states the current schema, and a write
+/// states only `energy_cost_rate`, which validates.
+#[test]
+fn source_and_inverter_cost_read_as_energy_cost_rate_and_never_write() {
+    let text = serde_json::json!({
+        "meta": {"schema_version": release()},
+        "bus": {"b": {"terminal_names": ["a", "n"], "perfectly_grounded_terminals": ["n"]}},
+        "voltage_source": {"s": {"bus": "b", "terminal_map": ["a", "n"],
+            "v_magnitude": [230.0, 0.0], "v_angle": [0.0, 0.0], "cost": [0.1]}},
+        "ibr": {"pv": {"bus": "b", "terminal_map": ["a", "n"], "topology": "SINGLE_PHASE",
+            "prime_mover": "PV", "s_max": [5000.0], "cost": [0.02]}}
+    })
+    .to_string();
+    let net = parse_bmopf_str(&text).unwrap();
+    assert_eq!(net.sources()[0].energy_cost_rate, Some(vec![0.1]));
+    assert_eq!(
+        net.ibrs()[0].extras.get("energy_cost_rate"),
+        Some(&serde_json::json!([0.02]))
+    );
+    assert!(!net.ibrs()[0].extras.contains_key("cost"));
+    let legacy: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY")
+        .collect();
+    assert_eq!(legacy.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        legacy[0].message().contains("`voltage_source.cost` (1)")
+            && legacy[0].message().contains("`ibr.cost` (1)"),
+        "{legacy:?}"
+    );
+
+    // An inverter built with the earlier key still writes only the new one.
+    let mut net = (*net).clone();
+    net.ibrs_mut()[0].extras.clear();
+    net.ibrs_mut()[0]
+        .extras
+        .insert("cost".into(), serde_json::json!([0.03]));
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["voltage_source"]["s"]["energy_cost_rate"],
+        serde_json::json!([0.1])
+    );
+    assert!(doc["voltage_source"]["s"].get("cost").is_none());
+    assert_eq!(
+        doc["ibr"]["pv"]["energy_cost_rate"],
+        serde_json::json!([0.03])
+    );
+    assert!(doc["ibr"]["pv"].get("cost").is_none());
+}
+
+/// The schema takes nonnegative n-winding neutral fields: a negative or
+/// nonfinite `x_neutral` is dropped with the diagnostic the two-winding
+/// subtypes use, not written.
+#[test]
+fn n_winding_negative_neutral_reactance_is_dropped_not_written() {
+    let input = serde_json::json!({
+        "bus": {"p": {"terminal_names": ["a", "n"]}, "s": {"terminal_names": ["a", "n"]}},
+        "transformer": {"n_winding": {"t": {
+            "s_rating": 10000.0,
+            "windings": [
+                {"bus": "p", "terminal_map": ["a", "n"], "configuration": "WYE", "v_nom": 1000.0,
+                 "s_rating": 9000.0, "r_winding": 2.0, "r_neutral": 5.0, "x_neutral": 1.0},
+                {"bus": "s", "terminal_map": ["a", "n"], "configuration": "WYE", "v_nom": 100.0,
+                 "s_rating": 8000.0, "r_winding": 0.03}
+            ], "x_sc": {"1_2": 1.5}
+        }}}
+    });
+    let parsed = parse_bmopf_str(&input.to_string()).unwrap();
+    let mut net = (*parsed).clone();
+    net.transformers_mut()[0].windings[0].x_neutral = Some(-1.0);
+    net.transformers_mut()[0].windings[1].x_neutral = Some(f64::NAN);
+    let out = emit_bmopf_json(&net);
+    assert_eq!(
+        errors_beside_empty_tables(&schema_validator(), &out.text),
+        Vec::<String>::new()
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let windings = &doc["transformer"]["n_winding"]["t"]["windings"];
+    assert_eq!(windings[0]["r_neutral"], 5.0);
+    assert!(windings[0].get("x_neutral").is_none(), "{windings}");
+    assert!(windings[1].get("x_neutral").is_none(), "{windings}");
+    assert_eq!(
+        out.warnings
+            .iter()
+            .filter(|w| w.contains("TRANSFORMER_NEUTRAL_DROPPED") && w.contains("x_neutral"))
+            .count(),
+        2,
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// The schema requires `dc_terminal_map` beside an inverter's `dc_bus`. The
+/// semantic check names the missing map instead of comparing the AC terminal
+/// map with the DC bus, and the writer reports the field it cannot write.
+#[test]
+fn inverter_dc_bus_requires_dc_terminal_map() {
+    let text = serde_json::json!({
+        "bus": {"b": {"terminal_names": ["a", "n"], "perfectly_grounded_terminals": ["n"]}},
+        "voltage_source": {"s": {"bus": "b", "terminal_map": ["a", "n"],
+            "v_magnitude": [230.0, 0.0], "v_angle": [0.0, 0.0]}},
+        "dc_bus": {"d": {"terminal_names": ["p", "r"]}},
+        "ibr": {"pv": {"bus": "b", "terminal_map": ["a", "n"], "topology": "SINGLE_PHASE",
+            "prime_mover": "PV", "s_max": [5000.0], "dc_bus": "d"}}
+    })
+    .to_string();
+    let net = parse_bmopf_str(&text).unwrap();
+    let semantic: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID")
+        .collect();
+    assert_eq!(semantic.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        semantic[0].message().contains("requires `dc_terminal_map`"),
+        "{semantic:?}"
+    );
+    let out = emit_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["ibr"]["pv"].get("dc_bus").is_none(), "{doc}");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("ibr pv") && w.contains("dc_terminal_map")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// A current document names its release in `meta.schema_version` and no
+/// schema URL. Any patch release of the current line reads as current; a
+/// document that still carries `meta.$schema` reads too, with the key counted
+/// in the one legacy finding; a release outside the line is unknown.
+#[test]
+fn the_release_number_identifies_a_current_document() {
+    let body = r#""bus":{"b":{"terminal_names":["a","n"],"perfectly_grounded_terminals":["n"]}},
+        "voltage_source":{"s":{"bus":"b","terminal_map":["a","n"],"v_magnitude":[230,0],"v_angle":[0,0]}}"#;
+    let schema_findings = |meta: &str| {
+        let net = parse_bmopf_str(&format!(r#"{{"meta":{meta},{body}}}"#)).unwrap();
+        net.diagnostics
+            .iter()
+            .filter(|d| d.code().starts_with("READ.BMOPF.SCHEMA_"))
+            .map(|d| (d.code().to_owned(), d.message().to_owned()))
+            .collect::<Vec<_>>()
+    };
+    let stating = |release: &str| format!(r#"{{"schema_version":"{release}"}}"#);
+    // The current line, and its major and minor parts.
+    let line = &release()[..=release().rfind('.').unwrap()];
+    let (major, minor) = line.trim_end_matches('.').split_once('.').unwrap();
+    let next_minor = format!("{major}.{}.0", minor.parse::<u32>().unwrap() + 1);
+    for current in [
+        release().to_owned(),
+        format!("{line}7"),
+        format!("{line}12"),
+    ] {
+        assert_eq!(schema_findings(&stating(&current)), vec![], "{current}");
+    }
+    let with_url = schema_findings(&format!(
+        r#"{{"schema_version":"{}","$schema":"{}"}}"#,
+        release(),
+        powerio_dist::BMOPF_SCHEMA_ID
+    ));
+    assert_eq!(with_url.len(), 1, "{with_url:?}");
+    assert_eq!(with_url[0].0, "READ.BMOPF.SCHEMA_LEGACY");
+    assert!(with_url[0].1.contains("`meta.$schema` (1)"), "{with_url:?}");
+    for other in [
+        line.trim_end_matches('.').to_owned(),
+        format!("{line}01"),
+        next_minor,
+        format!("{line}x"),
+    ] {
+        let unknown = schema_findings(&stating(&other));
+        assert_eq!(unknown.len(), 1, "{other}: {unknown:?}");
+        assert_eq!(unknown[0].0, "READ.BMOPF.SCHEMA_UNKNOWN", "{other}");
+    }
+
+    // The writer states the release and no schema URL.
+    let net = parse_bmopf_str(&format!(
+        r#"{{"meta":{{"schema_version":"{}"}},{body}}}"#,
+        release()
+    ))
+    .unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(doc["meta"]["schema_version"], release());
+    assert!(doc["meta"].get("$schema").is_none());
+    assert!(powerio_dist::bmopf::__states_written_version(
+        &doc.to_string()
+    ));
+    let mut with_url = doc.clone();
+    with_url["meta"]["$schema"] = serde_json::json!(powerio_dist::BMOPF_SCHEMA_ID);
+    assert!(!powerio_dist::bmopf::__states_written_version(
+        &with_url.to_string()
+    ));
+}
+
+/// An absent `meta.crs` means OGC:CRS84, WGS84 longitude then latitude, and
+/// `EPSG:4326` and `OGC:CRS84` read the same way, x then y. The writer omits
+/// `meta.crs` for WGS84.
+#[test]
+fn wgs84_reads_longitude_first_whatever_its_name_and_writes_no_crs() {
+    for crs in [None, Some("OGC:CRS84"), Some("EPSG:4326")] {
+        let meta = crs.map_or(String::new(), |c| format!(r#""meta":{{"crs":"{c}"}},"#));
+        let text = format!(
+            r#"{{{meta}"bus":{{"a":{{"terminal_names":["1"],"geo":{{"type":"Point","coordinates":[-83.7,42.3]}}}}}},
+            "voltage_source":{{"s":{{"bus":"a","terminal_map":["1"],"v_magnitude":[230],"v_angle":[0],
+                "geo":{{"type":"Point","coordinates":[-83.6,42.4]}}}}}}}}"#
+        );
+        let net = parse_bmopf_str(&text).unwrap();
+        assert!(
+            matches!(
+                &net.geo().as_ref().unwrap().space,
+                CoordinateSpace::Geographic { .. }
+            ),
+            "{crs:?}"
+        );
+        let location = net.buses()[0].location.unwrap();
+        assert_eq!((location.x, location.y), (-83.7, 42.3), "{crs:?}");
+        let point = &net.component_locations()[0].point;
+        assert_eq!((point.longitude, point.latitude), (Some(-83.6), Some(42.4)));
+        assert_eq!(
+            point.datum.as_deref(),
+            Some(crs.unwrap_or("OGC:CRS84")),
+            "{crs:?}"
+        );
+        let doc: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+        assert!(doc["meta"].get("crs").is_none(), "{crs:?}: {}", doc["meta"]);
+        assert_eq!(
+            doc["voltage_source"]["s"]["geo"]["coordinates"],
+            serde_json::json!([-83.6, 42.4])
+        );
+    }
+}
+
+/// The schema spells every enum UPPER_SNAKE, names a per-unit limit `PU`,
+/// drops `DSTATCOM` for `STATCOM`, and names the regulators' ratio
+/// `voltage_ratio`. The earlier spellings read, counted in the one legacy
+/// finding; a write states the new ones.
+#[test]
+fn renamed_tokens_read_as_legacy_and_write_as_the_current_schema() {
+    let text = serde_json::json!({
+        "meta": {"schema_version": release(), "frequency": 60.0},
+        "terminal_conventions": {"phase": ["1", "2", "3"], "neutral": ["n"]},
+        "bus": {
+            "b1": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b2": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+        },
+        "voltage_source": {"src": {"bus": "b1", "terminal_map": ["1", "n"],
+            "v_magnitude": [2400.0, 0.0], "v_angle": [0.0, 0.0]}},
+        "transformer": {"single_phase_autotransformer": {"svr": {
+            "bus_from": "b1", "bus_to": "b2",
+            "terminal_map_from": ["1", "n"], "terminal_map_to": ["1", "n"],
+            "s_rating": 1_666_000.0,
+            "tap_ratio": 1.05, "tap_ratio_min": 0.9, "tap_ratio_max": 1.1,
+            "regulator_type": "B"
+        }}},
+        "ibr": {"st": {"bus": "b2", "terminal_map": ["1", "n"], "topology": "SINGLE_PHASE",
+            "prime_mover": "DSTATCOM", "s_max": [5000.0], "control_profile": "cp",
+            "dc_control": "droop"}},
+        "control_profile": {"cp": {
+            "volt_var": {"voltage_reference": "PN_PER_PHASE",
+                "breakpoints": [2160.0, 2350.0, 2450.0, 2640.0],
+                "q_limits": [-0.44, 0.44], "q_unit": "VA_FRACTION"},
+            "volt_watt": {"voltage_reference": "PN_PER_PHASE",
+                "breakpoints": [2500.0, 2640.0], "p_limits": [0.2, 1.0],
+                "p_unit": "VA_FRACTION"}
+        }},
+        "wire_data": {"w": {"kind": "overhead", "r_dc": 0.1, "gmr": 0.01}},
+        "line_geometry": {"g": {"earth_model": "deri", "frequency": 60.0}}
+    })
+    .to_string();
+    let net = parse_bmopf_str(&text).unwrap();
+    let legacy: Vec<_> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY")
+        .collect();
+    assert_eq!(legacy.len(), 1, "{:?}", net.diagnostics);
+    for spelling in [
+        "regulator tap_ratio",
+        "ibr.prime_mover DSTATCOM",
+        "ibr.dc_control droop",
+        "control_profile VA_FRACTION",
+        "wire_data.kind lowercase",
+        "line_geometry.earth_model lowercase",
+    ] {
+        assert!(
+            legacy[0].message().contains(spelling),
+            "{spelling}: {legacy:?}"
+        );
+    }
+    assert_eq!(
+        net.ibrs()[0].prime_mover,
+        powerio_dist::IbrPrimeMover::Statcom
+    );
+    let profile = &net.control_profiles()[0];
+    assert_eq!(
+        profile.volt_var.as_ref().unwrap().q_unit,
+        Some(powerio_dist::ReactivePowerUnit::VaFraction)
+    );
+    let svr = net.transformers().iter().find(|t| t.name == "svr").unwrap();
+    assert!((svr.windings[1].tap / svr.windings[0].tap - 1.05).abs() < 1e-12);
+
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let svr = &doc["transformer"]["single_phase_autotransformer"]["svr"];
+    assert_eq!(svr["voltage_ratio"], 1.05);
+    assert_eq!(svr["voltage_ratio_min"], 0.9);
+    assert_eq!(svr["voltage_ratio_max"], 1.1);
+    assert!(svr.get("tap_ratio").is_none(), "{svr}");
+    assert_eq!(doc["ibr"]["st"]["prime_mover"], "STATCOM");
+    assert_eq!(doc["ibr"]["st"]["dc_control"], "DROOP");
+    assert_eq!(doc["control_profile"]["cp"]["volt_var"]["q_unit"], "PU");
+    assert_eq!(doc["control_profile"]["cp"]["volt_watt"]["p_unit"], "PU");
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert!(
+        !again
+            .diagnostics
+            .iter()
+            .any(|d| d.code().starts_with("READ.BMOPF.SCHEMA_")),
+        "{:?}",
+        again.diagnostics
+    );
+}
+
+/// Line `s_max` has one entry per conductor in the schema. A document
+/// stating one per phase (the older drafts' line reading) reads per conductor with
+/// the unbounded neutral, reported; a write states only a full per-conductor
+/// array and drops any other length.
+#[test]
+fn line_s_max_is_per_conductor() {
+    let text = serde_json::json!({
+        "meta": {"$schema": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.1/bmopf.schema.json"},
+        "bus": {
+            "a": {"terminal_names": ["1", "2", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b": {"terminal_names": ["1", "2", "n"]}
+        },
+        "voltage_source": {"s": {"bus": "a", "terminal_map": ["1", "2", "n"],
+            "v_magnitude": [230.0, 230.0, 0.0], "v_angle": [0.0, 3.0, 0.0]}},
+        "linecode": {"c": {"R_series_1_1": 0.1, "X_series_1_1": 0.1,
+            "R_series_2_2": 0.1, "X_series_2_2": 0.1, "R_series_3_3": 0.1, "X_series_3_3": 0.1}},
+        "line": {"l": {"bus_from": "a", "bus_to": "b", "linecode": "c", "length": 10.0,
+            "terminal_map_from": ["1", "2", "n"], "terminal_map_to": ["1", "2", "n"],
+            "s_max": [5000.0, 6000.0]}}
+    })
+    .to_string();
+    let net = parse_bmopf_str(&text).unwrap();
+    assert!(
+        !net.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID"),
+        "{:?}",
+        net.diagnostics
+    );
+    assert_eq!(
+        net.lines()[0].s_max,
+        Some(vec![5000.0, 6000.0, f64::INFINITY])
+    );
+    assert!(
+        net.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.VALUE_INFERRED" && d.message().contains("s_max")),
+        "{:?}",
+        net.diagnostics
+    );
+    // An unbounded conductor has no BMOPF spelling, so the write drops it.
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["line"]["l"].get("s_max").is_none());
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+
+    // A full per-conductor array writes; a per-phase one is dropped.
+    let mut net = (*net).clone();
+    net.lines_mut()[0].s_max = Some(vec![5000.0, 6000.0, 7000.0]);
+    let doc: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(
+        doc["line"]["l"]["s_max"],
+        serde_json::json!([5000.0, 6000.0, 7000.0])
+    );
+    net.lines_mut()[0].s_max = Some(vec![5000.0, 6000.0]);
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["line"]["l"].get("s_max").is_none());
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("line l s_max") && w.contains("per conductor")),
+        "{:?}",
+        out.warnings
+    );
+
+    // In a current document a per-phase line s_max is a dimension error.
+    let mut current: serde_json::Value = serde_json::from_str(&text).unwrap();
+    current["meta"] = serde_json::json!({"schema_version": release()});
+    let net = parse_bmopf_str(&current.to_string()).unwrap();
+    assert!(
+        net.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID" && d.message().contains("s_max")),
+        "{:?}",
+        net.diagnostics
+    );
+}
+
+/// The writer never states a value the schema rejects: a transformer whose
+/// rating or nominal voltage is not positive is dropped whole, a tap outside
+/// the positive range leaves its record, and a control law of the wrong
+/// shape leaves its profile; each is reported.
+#[test]
+fn the_writer_drops_values_the_schema_rejects() {
+    let mut net = parse_dss_file(fixture("micro/xfmr_single_phase.dss")).unwrap();
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let (subtype, name) = doc["transformer"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find_map(|(s, t)| {
+            t.as_object()
+                .unwrap()
+                .keys()
+                .next()
+                .map(|n| (s.clone(), n.clone()))
+        })
+        .unwrap();
+    net.transformers_mut()[0].windings[0].v_ref = 0.0;
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc["transformer"]
+            .get(&subtype)
+            .and_then(|t| t.get(&name))
+            .is_none(),
+        "{doc}"
+    );
+    assert!(
+        out.warnings.iter().any(|w| w.contains("RECORD_DROPPED")
+            && w.contains(&name)
+            && w.contains("strictly positive")),
+        "{:?}",
+        out.warnings
+    );
+
+    let mut net = parse_bmopf_str(&doc_with("")).unwrap().clone();
+    let mut profile = powerio_dist::DistControlProfile::new("cp");
+    profile.volt_var = Some(
+        serde_json::from_value(serde_json::json!({
+            "voltage_reference": "PN_PER_PHASE",
+            "breakpoints": [200.0, 220.0, 240.0, 260.0], "q_limits": [0.4, 0.4]
+        }))
+        .unwrap(),
+    );
+    profile.volt_watt = Some(
+        serde_json::from_value(serde_json::json!({
+            "voltage_reference": "PN_PER_PHASE",
+            "breakpoints": [250.0, 240.0], "p_limits": [0.2, 1.0]
+        }))
+        .unwrap(),
+    );
+    net.control_profiles_mut().push(profile);
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc["control_profile"]["cp"].get("volt_var").is_none(),
+        "{doc}"
+    );
+    assert!(
+        doc["control_profile"]["cp"].get("volt_watt").is_none(),
+        "{doc}"
+    );
+    assert_eq!(
+        out.warnings
+            .iter()
+            .filter(|w| w.contains("control_profile cp") && w.contains("dropped"))
+            .count(),
+        2,
+        "{:?}",
+        out.warnings
+    );
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+/// The semantic rules of BMOPF conformance that the schema cannot state.
+#[test]
+fn the_semantic_rules_of_conformance_are_checked() {
+    let text = serde_json::json!({
+        "meta": {"schema_version": release(), "frequency": 50.0},
+        "bus": {
+            "a": {"terminal_names": ["1", "2", "3"], "vng_max": [10.0], "vpn_max": [250.0, 250.0, 250.0]},
+            "b": {"terminal_names": ["1", "n"], "vpp_max": [400.0], "vpos_max": 1.1}
+        },
+        "voltage_source": {"s": {"bus": "a", "terminal_map": ["1", "2", "3"],
+            "v_magnitude": [230.0, 230.0, 230.0], "v_angle": [0.0, -2.094, 2.094]}},
+        "line_geometry": {"g": {"frequency": 60.0}},
+        "control_profile": {"cp": {
+            "volt_var": {"breakpoints": [240.0, 220.0, 240.0, 260.0], "q_limits": [0.1, 0.4]},
+            "volt_watt": {"breakpoints": [240.0, 250.0], "p_limits": [1.0, 0.2]}
+        }}
+    })
+    .to_string();
+    let net = parse_bmopf_str(&text).unwrap();
+    let messages: Vec<String> = net
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID")
+        .map(|d| d.message().to_owned())
+        .collect();
+    for expected in [
+        "vng_max needs a neutral",
+        "vpn_max needs a neutral",
+        "vpp_* needs at least two phase",
+        "sequence bounds need exactly three",
+        "differs from meta.frequency",
+        "breakpoints must not decrease",
+        "p_limits must be [p_low, p_high]",
+        "q_limits must be [q_absorb <= 0, q_inject >= 0]",
+    ] {
+        assert!(
+            messages.iter().any(|m| m.contains(expected)),
+            "{expected}: {messages:?}"
+        );
     }
 }

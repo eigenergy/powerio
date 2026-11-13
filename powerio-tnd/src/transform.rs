@@ -773,7 +773,7 @@ format!(
         balanced_buses
     }
 
-    /// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`) has no
+    /// A rated capacitor bank (the BMOPF `capacitor`) has no
     /// balanced equivalent yet: `q_rated` at `v_nom` is a nameplate rating,
     /// not the admittance a balanced `Shunt` carries. The bank therefore
     /// drops, and the record names it, because a silent drop removes
@@ -903,10 +903,10 @@ format!(
             );
             let rate = line_rate_mva(line, code, &active, base_volts).unwrap_or_else(|| {
                 self.records.dropped_fields.push(format!(
-                    "line {} thermal rating defaulted to 0 MVA",
+                    "line {} has no finite apparent-power rating; projected as unlimited",
                     line.name
                 ));
-                0.0
+                f64::INFINITY
             });
             let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
             branch.b = charging.calc_total_b();
@@ -1618,7 +1618,7 @@ fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
     sum.sqrt()
 }
 
-/// The branch rating, in MVA. BMOPF schema 0.1.0 gives a line its own
+/// The branch rating, in MVA. BMOPF gives a line its own
 /// `i_max`/`s_max`, which "overrides the linecode's i_max for this line", so
 /// both line fields are tried before either linecode field. Within one owner
 /// `s_max` comes first, because an apparent power limit needs no voltage.

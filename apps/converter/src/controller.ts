@@ -1,6 +1,6 @@
 import { ArtifactStore, download } from './artifacts';
 import { analyticsEnabled, bucket, configureAnalytics, track, trackOperation } from './analytics';
-import { basename, groupInputs, safeName, stem, unpack, type InputCase } from './inputs';
+import { basename, groupCollectionInputs, safeName, stem, unpack, type InputCase } from './inputs';
 import { inputLimit } from './input-limits';
 import { acquire, available, type DropEntry, type InputEntry } from './acquisition';
 import { WorkerClient } from './worker-client';
@@ -93,6 +93,9 @@ export class ConverterController {
     this.state.phase = 'inspecting'; this.publish();
     const expanded: InputEntry[] = [];
     const rejected: InputCase[] = [];
+    // Archive names are display labels, not namespace identities. Reserve loose
+    // input roots too, so an extracted archive cannot acquire their companions.
+    const roots = new Set(entries.map(entry => entry.path.split('/')[0].toLowerCase()));
     for (const entry of entries) {
       if (epoch !== this.epoch) return;
       if (!available(entry)) { expanded.push(entry); continue; }
@@ -102,30 +105,45 @@ export class ConverterController {
         rejected.push({ name: entry.file.name, entries: [entry], error: limit });
         continue;
       }
-      try { expanded.push(...(archive ? await unpack(entry) : [entry])); }
+      let root = stem(entry.path);
+      if (archive) {
+        let suffix = 2;
+        while (roots.has(root.toLowerCase())) root = `${stem(entry.path)}-${suffix++}`;
+        roots.add(root.toLowerCase());
+      }
+      try { expanded.push(...(archive ? await unpack(entry, () => epoch !== this.epoch, root) : [entry])); }
       catch (error) {
         rejected.push({ name: entry.file.name, entries: [entry], error: { code: 'WEB.INPUT.ARCHIVE', message: message(error) } });
       }
     }
-    for (const input of [...rejected, ...await groupInputs(expanded, () => epoch !== this.epoch)]) {
+    const collectionKey = crypto.randomUUID();
+    const grouped = await groupCollectionInputs(expanded, files => this.client!.request('discover', { name: 'Input collection', collectionKey, files }), collectionKey, () => epoch !== this.epoch);
+    const inventories = new Map<BrowserFile[], { size: number; problem: ReturnType<typeof inputLimit> }>();
+    for (const input of [...rejected, ...grouped]) {
       if (epoch !== this.epoch) return;
-      const problem = input.error ?? inputLimit(input.entries);
+      let inventory = inventories.get(input.entries);
+      if (!inventory) {
+        inventory = { size: input.entries.reduce((sum, entry) => sum + entry.file.size, 0), problem: inputLimit(input.entries) };
+        inventories.set(input.entries, inventory);
+      }
+      const problem = input.error ?? inventory.problem;
       const job: Job = {
-        id: crypto.randomUUID(), name: input.name, files: input.paths ?? input.entries.map(entry => entry.path), acquisitionFailed: input.acquisitionFailed,
-        size: input.entries.reduce((sum, entry) => sum + entry.file.size, 0), primary: input.primary,
+        id: crypto.randomUUID(), name: input.name, selection: input.selection, collectionKey: input.collectionKey,
+        format: input.selection?.format || undefined, family: this.state.formats.find(f => f.token === input.selection?.format)?.family, files: input.paths ?? input.entries.map(entry => entry.path), acquisitionFailed: input.acquisitionFailed,
+        size: inventory.size, primary: input.primary,
         status: problem ? 'error' : input.needsPrimary ? 'needs-primary' : 'queued', diagnostics: problem ? [issue(problem.message, problem.code)] : [], outputs: [],
       };
       this.inputs.set(job.id, input.entries);
       this.state.jobs.push(job);
-      this.publish();
       if (problem) {
         this.discoveryFailures.add(job.id);
         trackOperation('input', 'error', undefined, undefined, job.diagnostics);
         continue;
       }
-      if (!input.needsPrimary) await this.inspect(job, epoch);
-      else trackOperation('input', 'needs-primary');
+      if (!input.needsPrimary && !input.selection) await this.inspect(job, epoch);
+      else if (input.needsPrimary) trackOperation('input', 'needs-primary');
     }
+    this.publish();
   }
   private job(id: string) { return this.state.jobs.find(job => job.id === id); }
   private async inspect(input: Job, epoch: number, release = true) {
@@ -133,7 +151,8 @@ export class ConverterController {
     const job = this.job(id)!;
     job.status = 'inspecting'; this.state.activeName = job.name; this.publish();
     try {
-      const result = await this.client!.request('inspect', { name: job.name, files: this.inputs.get(id), primary: job.primary, format: job.overrideFormat || undefined });
+      const selection = job.selection ? { ...job.selection, primary: job.primary ?? job.selection.primary, format: job.overrideFormat || job.selection.format } : undefined;
+      const result = await this.client!.request('inspect', { name: job.name, files: this.inputs.get(id), collectionKey: job.collectionKey, selection, primary: job.primary, format: job.overrideFormat || undefined });
       if (epoch !== this.epoch) return false;
       const current = this.job(id)!;
       current.diagnostics = result.diagnostics ?? [];
@@ -193,14 +212,16 @@ export class ConverterController {
     return this.run(async epoch => {
       const job = this.job(id); if (!job || job.acquisitionFailed) return;
       await this.invalidate(id);
-      const entries = this.inputs.get(id) ?? [];
+      const entries = [...(this.inputs.get(id) ?? [])];
+      if (job.collectionKey) job.collectionKey = crypto.randomUUID();
       for (const file of files) {
-        const path = file.webkitRelativePath || file.name;
+        const relative = file.webkitRelativePath || file.name;
+        const path = job.selection?.root ? `${job.selection.root}/${relative}` : relative;
         if (entries.some(entry => entry.path === path)) throw new Error(`The project already contains ${path}. Remove the case and add the corrected project folder.`);
         entries.push({ path, file });
       }
       this.inputs.set(id, entries);
-      job.files = entries.map(entry => entry.path); job.size = entries.reduce((sum, entry) => sum + entry.file.size, 0);
+      job.files = entries.map(entry => entry.path).filter(path => !job.selection?.root || path.startsWith(`${job.selection.root}/`)).map(path => job.selection?.root ? path.slice(job.selection.root.length + 1) : path); job.size = entries.reduce((sum, entry) => sum + entry.file.size, 0);
       this.state.phase = 'inspecting'; await this.inspect(job, epoch);
     });
   }
@@ -214,7 +235,9 @@ export class ConverterController {
         const entries = this.inputs.get(key);
         if (entries && this.discoveryFailures.has(key)) {
           await this.remove(key);
+          const existing = new Set(this.state.jobs.map(job => job.id));
           await this.addInputs(entries, epoch);
+          for (const added of this.state.jobs.filter(job => !existing.has(job.id) && job.status === "queued")) await this.inspect(added, epoch);
         } else if (entries) await this.inspect(job, epoch);
       }
     });
@@ -312,6 +335,7 @@ export class ConverterController {
       for (const artifact of this.artifacts.get(output.id) ?? []) await this.store.remove(artifact.key);
       this.artifacts.delete(output.id);
     }
+    if (job.collectionKey && !this.state.jobs.some(other => other.id !== id && other.collectionKey === job.collectionKey)) await this.client?.request('release_collection', { collectionKey: job.collectionKey });
     this.inputs.delete(id); this.discoveryFailures.delete(id); this.state.jobs = this.state.jobs.filter(job => job.id !== id); this.publish();
   }
   private async invalidate(id: string) {

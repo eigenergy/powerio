@@ -122,10 +122,9 @@ records.
 
 `powerio-mcp` (from the Python package) calls the public Python API directly.
 Its tools are `parse`, `emit`, `summarize`, `diagnostics`, `to_normalized`,
-`calc_matrix`, `to_balanced_report`, `to_balanced`, `display`, and `about`.
-`parse` reads a PowerWorld `.pwd` display to a `GeoLayer`. `display` returns
-the raw display record and remains only for 0.11 compatibility; 0.12 removes
-it.
+`calc_matrix`, `to_balanced_report`, `to_balanced`, and `about`.
+`parse` reads a PowerWorld `.pwd` display to a `GeoLayer`; the `display` tool,
+which returned the raw display record, was removed in 0.12.
 `parse` returns serialized PowerIO IR, and the tools that accept `powerio_ir`
 deserialize that same IR rather than defining a network, collection,
 calculation, update, or solution representation of their own.
@@ -171,8 +170,7 @@ CGMES archive expands to 82.5 MiB of XML. A file named by `path` may hold at
 most the primary limit, checked before memory is reserved, and the files a
 case references or a directory holds share the referenced limit. Inline
 `content` and `powerio_ir` arguments are held to the primary limit in UTF-8
-bytes and refused before parsing, and the `display` tool reads only a regular
-file within it. The stdio transport reads and decodes each request whole
+bytes and refused before parsing. The stdio transport reads and decodes each request whole
 before any tool runs, so these limits bound what the server parses, not the
 size of a request. To accept larger inputs, set either variable in the
 server's environment to a positive decimal byte count; the server keeps any

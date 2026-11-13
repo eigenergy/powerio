@@ -1,5 +1,6 @@
 """The multiconductor value surface and canonical parse/emit path."""
 
+import copy
 import inspect
 import io
 import json
@@ -451,11 +452,16 @@ def test_parse_confines_includes_to_the_case_directory(tmp_path):
     assert "include_root" not in inspect.signature(powerio.parse).parameters
 
 
+def _bmopf_release():
+    """The release a written BMOPF document states: the schema's `$id` directory."""
+    return powerio.versions()["bmopf_schema"].rsplit("/", 2)[-2]
+
+
 def test_referenced_source_rows_read_like_earth_source_rows():
     # The IR keeps a referenced source in a tagged record so older readers
     # reject it; Python rows stay flat and add `reference_terminal`.
     document = {
-        "meta": {"schema_version": "0.2.0"},
+        "meta": {"schema_version": _bmopf_release()},
         "bus": {"b": {"terminal_names": ["a", "n"]}},
         "voltage_source": {"s": {
             "bus": "b", "terminal_map": ["a"],
@@ -476,19 +482,20 @@ def test_referenced_source_rows_read_like_earth_source_rows():
     assert "type" not in rows[0]
 
 
-def test_table_nonfinite_limits_keep_the_network_spelling():
+def test_table_nonfinite_limits_are_python_floats():
     stored = json.loads(_emit_module(powerio.parse(FOURWIRE)))
-    expected = stored["value"]["data"]["lines"]
-    expected[0]["i_max"][0] = "Infinity"
+    stored["value"]["data"]["lines"][0]["i_max"][0] = "Infinity"
+    expected = copy.deepcopy(stored["value"]["data"]["lines"])
+    expected[0]["i_max"][0] = float("inf")
     value = _parse_module(json.dumps(stored)).value
     assert value.lines == expected
 
 
-def test_source_energy_prices_and_draft_schema_digest_survive_ir():
+def test_source_energy_prices_and_schema_digest_survive_ir():
     import hashlib
 
     document = {
-        "meta": {"schema_version": "0.2.0"},
+        "meta": {"schema_version": _bmopf_release()},
         "bus": {"b": {"terminal_names": ["a", "n"]}},
         "voltage_source": {"s": {
             "bus": "b", "terminal_map": ["a", "n"],
@@ -499,14 +506,22 @@ def test_source_energy_prices_and_draft_schema_digest_survive_ir():
     module = powerio.parse(io.StringIO(json.dumps(document)), format="bmopf-json")
     restored = _parse_module(_emit_module(module))
     assert restored.value.voltage_sources[0]["energy_cost_rate"] == [0.1]
-    output = json.loads(powerio.emit(restored, "bmopf-json@0.2.0").text)
+    output = json.loads(powerio.emit(restored, "bmopf-json").text)
     provenance = output["meta"]["provenance"]["powerio_bmopf"]
-    schema = (DATA.parents[2] / "powerio-dist" / "schemas" / "bmopf" / "0.2.0" / "bmopf.schema.json").read_bytes()
+    schema = (DATA.parents[2] / "powerio-dist" / "schemas" / "bmopf" / "bmopf.schema.json").read_bytes()
     assert provenance["schema_sha256"] == hashlib.sha256(schema).hexdigest()
     assert provenance["schema_status"] == "proposal"
     assert provenance["schema_commit"] in provenance["schema_upstream_url"]
-    assert output["meta"]["$schema"] == provenance["schema_retrieval_url"]
-    assert "raw.githubusercontent.com/eigenergy/powerio/" in output["meta"]["$schema"]
-    legacy = json.loads(powerio.emit(restored, "bmopf-json@0.1.0").text)
-    assert "energy_cost_rate" not in legacy["voltage_source"]["s"]
-    assert legacy["extras"]["voltage_source"]["s"]["energy_cost_rate"] == [0.1]
+    assert provenance["schema_commit"] in provenance["schema_retrieval_url"]
+    # `meta.schema_version` is the one version identifier; the schema's `$id`
+    # and the retrieval permalink live in provenance.
+    assert "$schema" not in output["meta"]
+    assert output["meta"]["schema_version"] == _bmopf_release()
+    assert provenance["schema_id"] == json.loads(schema)["$id"]
+    assert provenance["schema_id"] == powerio.versions()["bmopf_schema"]
+    assert output["voltage_source"]["s"]["energy_cost_rate"] == [0.1]
+    # There is one BMOPF: a token naming a version (as PowerIO 0.11 accepted)
+    # is refused.
+    for token in ("bmopf-json@0.1.0", "bmopf-json@0.2.0"):
+        with pytest.raises(powerio.PowerIOError, match="PowerIO writes one BMOPF"):
+            powerio.emit(restored, token)

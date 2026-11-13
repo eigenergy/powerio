@@ -122,13 +122,16 @@ pub(super) fn line(
         "line current limit",
     )?;
     branch.current_ratings = Some(BranchCurrentRatings::new(amps, 0.0, 0.0));
-    branch.rate_a = finite(
+    let rate = finite(
         3.0_f64.sqrt() * kv(network, ports[0]) * amps / 1000.0,
         "line thermal rating",
     )?;
     // A stated limit must not round to zero, which would read as unlimited.
-    if ampacity > 0.0 && (amps == 0.0 || branch.rate_a == 0.0) {
+    if ampacity > 0.0 && (amps == 0.0 || rate == 0.0) {
         return Err(row.bad("fr", "line current limit underflows"));
+    }
+    if rate > 0.0 {
+        branch.rate_a = rate;
     }
     branch.uid = Some(uid.to_owned());
     if default_temperature {

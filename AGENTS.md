@@ -18,6 +18,9 @@ check the current source, tests, and release notes.
   `cim` vocabulary the CIM derived formats share (deterministic mRIDs, the
   phase letters, MG-RAVENS profile detection). It has no electrical network,
   matrix, or solver dependencies.
+- **`powerio-archive`**: bounded in-memory ZIP transport over core, with explicit
+  limits, namespace validation, and lazy verified reads; no electrical types
+  or case discovery.
 - **`powerio-tx`**: the format neutral `BalancedNetwork`, the balanced format
   readers and writers, normalization, and derived indexed views.
 - **`powerio-tnd`**: integrated transmission/distribution composition, explicit
@@ -44,12 +47,14 @@ check the current source, tests, and release notes.
   over the facade and its component crates.
 - **`powerio-py`**: the PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); it hands back COO triplets that SciPy assembles.
-- **`powerio-capi`**: C ABI 7 over `powerio` (`pio_*`, header `powerio.h`)
+- **`powerio-capi`**: the C ABI over `powerio` (`pio_*`, header `powerio.h`)
   for C, C++, Julia, and other FFI users. `pio_parse` returns a module
   handle, `pio_module_value` an owner rooted value handle, and the typed
-  accessors return borrowed views. ABI 7 exports one fixed symbol set; only
-  the `gridfm` cargo feature changes the build, and the other feature names
-  the release build passes gate nothing.
+  accessors return borrowed views. The header states the release it was
+  generated from (`PIO_VERSION_MAJOR`, `_MINOR`, `_PATCH`), and
+  `pio_version_numbers` returns the library's. The C ABI exports one fixed
+  symbol set; only the `gridfm` cargo feature changes the build, and the
+  other feature names the release build passes gate nothing.
 
 `BalancedNetwork` and `MulticonductorNetwork` are the two electrical network
 types. The normalized solver tables and dense row arrays are internal
@@ -98,8 +103,8 @@ Matrix outputs (`powerio-matrix`):
 - DC matrix data follows PowerModels: incidence `A` is branches by buses with
   `+1` at the from bus and `-1` at the to bus, `B = A' * Diagonal(b) * A`,
   and `Bf = Diagonal(b) * A`. Phase shift injection stays separate.
-- petgraph `UnGraph<bus_idx, branch_idx>` data plus connectivity and radial
-  diagnostics.
+- Graph data as `IndexedNetwork::branch_edges()` (branch, from, to) over dense
+  bus indices, plus connectivity and radial diagnostics.
 - GridFM Parquet directory writing through `gridfm-datakit` compatible
   tables; GridFM parsing reuses one balanced network identity set across
   scenarios rather than cloning one network per scenario.
@@ -145,8 +150,15 @@ release on its own.
    `## X.Y.Z` and release notes at `docs/release-notes/X.Y.Z.md` titled
    `# PowerIO X.Y.Z release notes`, and wait for `main` CI to pass on that
    merge commit. The tag workflow copies the section into the draft release
-   body and fails without it. `bash scripts/release-preflight.sh` fails on
-   anything that still states the old version.
+   body and fails without it. The bump also sets `IR_VERSION` to the release
+   and commits its schema file unless it already names it
+   (`docs/schema/README.md`), sets `PIO_VERSION_MAJOR`, `_MINOR`, and
+   `_PATCH` in `powerio-capi/src/lib.rs`, and regenerates `powerio.h`.
+   `bash scripts/release-preflight.sh` fails on anything that still states
+   the old version. PowerIO.jl refuses a library from another release
+   series, so a bump that starts a new series also needs a PowerIO.jl
+   companion branch of the same name that regenerates `src/LibPowerIO.jl`
+   from the new header, merged before the tag.
 2. Create a release tag only when the maintainer asks for the release.
    Check that the tag does not exist, then create an annotated tag on
    `origin/main` and push it:
@@ -169,8 +181,8 @@ release on its own.
    its platform. Only then does it stage a **draft** GitHub release with the
    five assets.
 4. A human inspects and publishes the draft. Publishing starts `python.yml`
-   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-tx`, `powerio-dist`,
-   `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
+   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-archive`,
+   `powerio-tx`, `powerio-dist`, `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
    `powerio-cli`, in dependency order). Both deploy through the `pypi` and
    `crates-io` environments, which wait for the maintainer's approval. A
    rerun skips files and versions already published. A crate's first
@@ -185,12 +197,13 @@ release on its own.
    That workflow sets the Julia version, pins the release tarballs in
    `Artifacts.toml`, runs the Julia tests against them, pushes the release
    commit to PowerIO.jl `main`, and asks JuliaRegistrator to register it.
-   Releasing needs no PowerIO.jl change. The PowerIO.jl repository variable
-   `RELEASE_HOLD=true` pauses it.
+   Within a release series, releasing needs no PowerIO.jl change. The
+   PowerIO.jl repository variable `RELEASE_HOLD=true` pauses it.
 
 ## Layout
 
 ```
+powerio-archive/src           lib.rs (ZIP index/cache/limits), preflight.rs, local.rs
 powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
                               diagnostic.rs, codes.rs, error.rs, records.rs,
                               time_series.rs, scenario.rs, component_id.rs,
@@ -262,8 +275,9 @@ docs/                         the mdBook guide, the schema archive, release note
   combinations and the PyO3 extension. Run `bash scripts/ci-clippy.sh` before
   pushing Rust, C ABI, matrix, feature, or Python extension changes.
 - **SINCAL is the `sincal` feature.** The facade enables `powerio-tnd/sincal`
-  by default. The tx and dist crates depend only on core within the workspace;
-  they own neither SINCAL adapters nor SQLite. The tnd crate is format neutral
+  by default. Within the workspace, the dist crate depends only on core and
+  the tx crate on core and `powerio-archive` (for CGMES ZIPs); they own
+  neither SINCAL adapters nor SQLite. The tnd crate is format neutral
   by default. Keep the no-default-features and wasm32 checks green.
 - **One Python wheel (maturin mixed layout).** `powerio-py/` compiles to the
   native module `powerio._powerio`; `python/powerio/` is the pure Python
@@ -290,15 +304,28 @@ docs/                         the mdBook guide, the schema archive, release note
   and the CLI token in `FormatArg` in `powerio-cli/src/main.rs`. Format enums are nonexhaustive and bindings use
   stable names rather than integer positions.
 - **PowerIO IR.** `serialize` and `deserialize` move `PioModule<PioValue>`.
-  Retained source bytes are not serialized. The document identity is
-  `pio-ir` with integer version `2`; `IR_VERSION` and `IR_MIN_VERSION` in
-  `powerio/src/lib.rs` state the window. Additive structural types retain the
-  IR version; older readers reject types they do not implement. Existing
-  type layouts and meanings stay compatible throughout 0.11.x. The DTOs in
-  `powerio/src/stored/dto.rs` define the document layout. Regenerate the schema
-  named by `IR_SCHEMA_ID`, currently `docs/schema/pio-ir/2/0.11.8/schema.json`.
-  Published snapshots, including `pio-ir/2/schema.json` from 0.11.0, remain
-  byte-exact. The release in a catalog path is not a new IR version.
+  Retained source bytes are not serialized. The header is `"schema": "pio-ir"`
+  with `"version"` naming the release whose schema the document follows;
+  `IR_VERSION` in `powerio/src/lib.rs` is that release for this build. The
+  reader accepts its own release series (one minor release before 1.0, such as
+  0.12.x; one major release from 1.0 on) and the integer version `2` every
+  0.11 release wrote. Within a
+  series, releases add structural types and existing type layouts and
+  meanings stay unchanged; older readers reject types they do not implement.
+  The DTOs in `powerio/src/stored/dto.rs` define the document layout.
+  Regenerate the schema named by `IR_SCHEMA_ID`, currently
+  `docs/schema/pio-ir/0.12.0/schema.json`. Every release adds its own
+  `pio-ir/<release>/schema.json`; `IR_VERSION` is at or after the workspace
+  version and equals it in a release. Published schema files, including all
+  of `pio-ir/2/`, remain byte-exact.
+- **C ABI compatibility.** A program compiled against the header of release
+  X.Y.Z works with any library from the same release series (the same major
+  and minor numbers before 1.0, the same major number from 1.0 on) at X.Y.Z
+  or newer. Within a release series the C ABI only gains symbols: never
+  remove a `pio_*` function, struct, or `#define`, and never change a
+  signature or struct layout. `scripts/check-capi-header.py` (in
+  `semver.yml`) compares `powerio.h` with the latest release header; a break
+  needs the `semver-major` label and lands in the next release series.
 - **Bindings stay typed and lazy.** C calls `pio_module_value`, checks the
   structural type, and requests an owner rooted typed handle. Python reads
   `module.value`; Julia dispatches on `PioModule{T}`. Typed access does not
@@ -334,8 +361,11 @@ docs/                         the mdBook guide, the schema archive, release note
   that states a linear curve often carries a quadratic term near `1e-17`.
   `GenCost::LEADING_COEFF_TOL` (`1e-12`) is the tolerance the quadratic
   projections apply before counting the row's degree.
-- **`rate_a == 0` means unlimited.** The opt in `synthesize_unrated_limits`
-  build option replaces it with `Branch::synthesize_rate_a`. `angmin` and
+- **Thermal ratings are numeric.** `0.0` is a zero bound; `f64::INFINITY`
+  imposes no thermal constraint. Neither changes equipment status. Readers and
+  writers translate format-specific conventions. The opt in
+  `synthesize_unrated_limits` build option replaces only infinity with
+  `Branch::synthesize_rate_a`. `angmin` and
   `angmax` are degrees in the neutral model and radians after
   `to_normalized`; the builders convert so a raw case and its normalized form
   get the same bound.
@@ -358,9 +388,10 @@ docs/                         the mdBook guide, the schema archive, release note
   deduplicates its `(i, j)` entry in O(1) amortized time.
 - **The TUI lives in the CLI crate** under `powerio-cli/src/tui/` and is
   testable through `ratatui::backend::TestBackend`.
-- **petgraph data.** `IndexedNetwork::to_petgraph()` returns
-  `UnGraph<usize, usize>` with the dense bus index as node weight and the
-  branch index as edge weight.
+- **Graph data.** `IndexedNetwork::branch_edges()` yields `(branch, from, to)`
+  for each in-service branch over dense bus indices, so a caller builds a graph
+  with any library. No graph crate type is in the public API: a pre-1.0
+  dependency in a public signature would hold PowerIO below 1.0.
 - **Format validation needs Julia and Python oracles.** The harnesses under
   `evals/validation/` and `evals/powsybl/` check the readers and writers
   against PowerModels.jl, PowSybl, and the Python tools; they do not run in
