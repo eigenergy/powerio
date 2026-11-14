@@ -31,12 +31,13 @@ pub struct GridFormatInfo {
 impl GridFormatInfo {
     /// Whether a format profile accepts this electrical network family.
     /// MG-RAVENS accepts both families under one token; its parsed value's
-    /// family follows the document's classes. Other catalog entries accept
-    /// their primary [`Self::family`].
+    /// family follows the document's classes. pandapower JSON accepts both
+    /// as well: a three-phase document parses to a MulticonductorNetwork.
+    /// Other catalog entries accept their primary [`Self::family`].
     #[must_use]
     pub fn supports_family(&self, family: NetworkFamily) -> bool {
         self.family == family
-            || (self.format.token == "ravens-json"
+            || (matches!(self.format.token, "ravens-json" | "pandapower-json")
                 && matches!(
                     family,
                     NetworkFamily::Transmission | NetworkFamily::Distribution
@@ -338,7 +339,7 @@ mod tests {
             };
             assert_eq!(
                 entry.supports_family(other),
-                entry.format.token == "ravens-json",
+                matches!(entry.format.token, "ravens-json" | "pandapower-json"),
                 "{}",
                 entry.format.token
             );

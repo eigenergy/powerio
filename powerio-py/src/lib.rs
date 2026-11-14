@@ -1637,8 +1637,8 @@ impl PyMulticonductorNetwork {
     }
 
     /// Format the case was parsed from (`dss`, `pmd-json`, `pmd-math-json`,
-    /// `bmopf-json`, `ravens-json`, `cim-dist`); `None` for a network built
-    /// in code.
+    /// `bmopf-json`, `ravens-json`, `cim-dist`, `pandapower-json`); `None` for
+    /// a network built in code.
     fn source_format(&self) -> Option<&'static str> {
         self.inner().source_format().map(|f| f.name())
     }

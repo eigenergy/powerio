@@ -104,11 +104,11 @@ pub const IR_SCHEMA_NAME: &str = "pio-ir";
 /// The constant names a release at or after the workspace version, and
 /// equals it in a published release. `producer.version` names the software
 /// that wrote a document, which need not be PowerIO.
-pub const IR_VERSION: &str = "0.12.0";
+pub const IR_VERSION: &str = "0.12.1";
 
 /// The `$id` of the schema describing this build's document:
 /// `pio-ir/<IR_VERSION>/schema.json` beneath `https://powerio.dev/schema/`.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.0/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.1/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{
@@ -617,6 +617,16 @@ pub fn parse_with_options(
                 Ok(module.map_value(PioValue::from))
             }
         },
+        // A three-phase pandapower network reads as multiconductor and any
+        // other as balanced, by the tables the document fills.
+        RoutedFamily::Pandapower => match powerio_tnd::formats::pandapower::parse(source)? {
+            powerio_tnd::formats::pandapower::PandapowerModule::Balanced(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+            powerio_tnd::formats::pandapower::PandapowerModule::Multiconductor(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+        },
     }
 }
 
@@ -896,6 +906,9 @@ enum RoutedFamily {
     /// the family, follows the document; `powerio_tnd::formats::ravens`
     /// decides.
     Ravens,
+    /// A pandapower document, by token or by content. Its tables select the
+    /// family. `powerio_tnd::formats::pandapower` decides.
+    Pandapower,
     Goc3,
     OpfData,
     PypsaDirectory,
@@ -1172,6 +1185,9 @@ fn json_family(
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(
             TransmissionFormat::EgretJson,
         ))) => Ok(RoutedFamily::Egret),
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::PandapowerJson,
+        ))) => Ok(RoutedFamily::Pandapower),
         // Either MG-RAVENS classification: the header classifier sees only
         // the top level tables, and the adapter spanning both models reads
         // the profile from the whole document.
@@ -1226,6 +1242,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
         Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
+        Some(TargetFormat::PandapowerJson) => RoutedFamily::Pandapower,
         _ => RoutedFamily::Balanced(None),
     }
 }

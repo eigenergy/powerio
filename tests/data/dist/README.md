@@ -155,6 +155,23 @@ entry, an absolute path into the local Julia depot, with the package relative
 | `ut_trans_2w_yy_eng.json` | 651 | 10,940 |
 | `ut_trans_2w_yy_math.json` | 1,601 | 26,993 |
 
+## pandapower/
+
+`tiny_3ph.json` is a synthetic five-bus three-phase network, original to this
+repository under its code license. No third-party data went into it.
+pandapower 3.5.6 wrote it with `pp.to_json` after a converged `runpp_3ph`. It
+is committed byte exact as the tool wrote it (1,618 lines, 60,924 bytes).
+It holds an ext_grid, a 20/0.4 kV `Dyn` transformer with a 150 degree shift
+and zero-sequence data, two lines, an asymmetric load and sgen, a delta and a
+wye load, a shunt, a closed bus-bus switch with a rating and an sgen without
+a type. Its generator is `build_tiny_3ph.py` beside it:
+
+    python -X utf8 tests/data/dist/pandapower/build_tiny_3ph.py
+
+The network is built without std types (`add_stdtypes=False`), which keeps the
+file below 100 KiB. Another pandapower version reorders columns and defaults,
+so regenerate with 3.5.6 from `evals/validation/requirements.txt`.
+
 ## ravens/
 
 MG-RAVENS multiconductor JSON example from the schema project, vendored
@@ -175,7 +192,8 @@ from the upstream distribution), `micro/License.md` (CC BY 4.0),
 `cim/License.md` (MIT OR Apache-2.0), `pmd/License.md` (derivatives carry
 their sources' licenses), and `ravens/License.md` (the MG-RAVENS Apache-2.0
 notice, Copyright 2020 Triad National Security, LLC). The repository
-code license does not apply to vendored data.
+code license does not apply to vendored data. `pandapower/` holds original
+synthetic data under the repository code license, so it has no license file.
 
 The two BMOPF examples carry different licenses, so `bmopf/License.md` states
 each one: `example_enwl_n1_f2.json` is CC BY 4.0 from the CSIRO Data Collection

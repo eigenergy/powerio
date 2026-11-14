@@ -27,6 +27,7 @@ reader from the document, and each reader refuses the other's profile and
 points at it.
 
 SINCAL profiles are provided by `powerio-tnd` and the `powerio` facade.
+The pandapower three-phase profile is provided by `powerio-tnd` as well.
 This crate owns the multiconductor model and its distribution formats.
 
 ```rust

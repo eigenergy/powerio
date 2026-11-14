@@ -80,6 +80,10 @@ pub mod __internal {
 
     #[doc(hidden)]
     pub use crate::format::goc3::{Goc3Document, Goc3Record, parse_goc3_instance_network};
+    #[doc(hidden)]
+    pub use crate::format::pandapower::{
+        DataFrame, MAX_I_KA, Row, has_three_phase_tables, network_object, read_bus_geo, read_frame,
+    };
 
     use crate::{BalancedNetwork, Generator, Load, OmittedFieldName};
 

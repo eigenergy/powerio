@@ -7,6 +7,24 @@
 - BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
   schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
   `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.
+- Read three-phase pandapower networks, those with `asymmetric_load`,
+  `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
+  under the `pandapower-json` token (#846). A three-phase network with rows
+  in a table only the balanced reader maps (`trafo`, `shunt`, `gen`,
+  `storage`, `dcline`) still reads balanced, as in 0.12.0, when that reader
+  accepts it. The balanced reader warns that it drops the per-phase detail.
+  `powerio batch` skips a three-phase network read without a transformer or
+  switch that joins or splits its buses, and `corpus ingest` reads three-phase
+  networks by the same route. Writing such a network to pandapower JSON
+  returns the retained source bytes of the unchanged module. Any other
+  multiconductor network fails with `EMIT.DIST.PANDAPOWER_UNSUPPORTED`. The reader reports elements it does not
+  map through the `READ.DIST.PANDAPOWER_*` codes. A duplicate index in any
+  mapped table is refused. The 0.12.1 IR schema adds `pandapower-json` to the
+  distribution source formats. This step maps buses, lines, external grids,
+  loads and static generators. Transformers, shunts and switches are reported
+  as unsupported until their steps land, and a report names the
+  connectivity a dropped transformer or switch changes. An element on an
+  out-of-service bus is kept with `in_service` false.
 
 ## 0.12.0
 

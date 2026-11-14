@@ -49,6 +49,11 @@ Direct Rust users of the unreleased SINCAL adapters move from the tx/dist crates
 to tnd. `powerio::dist::parse_sincal` remains available as a facade convenience.
 The published `powerio-sincal-tables` transport identity remains unchanged.
 
+`powerio_tnd::formats::pandapower` reads three-phase pandapower JSON into a
+`MulticonductorNetwork` and hands every other pandapower document to the
+balanced reader. See
+[pandapower three-phase JSON](distribution.md#pandapower-three-phase-json).
+
 SINCAL profile parsing produces a component module. An integrated case requires
 explicit interfaces; voltage levels alone cannot establish a network partition
 or determine which transmission load a feeder replaces. Existing MATPOWER and

@@ -2,8 +2,8 @@
 
 A multiconductor network is the conductor level distribution model, and
 OpenDSS, GridLAB-D, PowerModelsDistribution ENGINEERING and MATHEMATICAL
-JSON, BMOPF JSON, the multiconductor MG-RAVENS JSON profile, and distribution
-CIM all parse to it. When you need a calculation, construct an
+JSON, BMOPF JSON, the multiconductor MG-RAVENS JSON profile, three-phase
+pandapower JSON, and distribution CIM all parse to it. When you need a calculation, construct an
 `McAcPfInstance`, `McAcOpfInstance`, `LinDist3FlowPfInstance`, or
 `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
@@ -225,6 +225,28 @@ and diagnostic, and includes controls that reject malformed output. See
 [`evals/validation/ravens/`](https://github.com/eigenergy/powerio/tree/main/evals/validation/ravens)
 for the revision, commands, and scope; schema validity alone does not establish
 electrical equivalence.
+
+## pandapower three-phase JSON
+
+pandapower JSON has one token, `pandapower-json`, for balanced and three-phase
+networks. A document whose `asymmetric_load`, `asymmetric_sgen` or
+`res_bus_3ph` table has rows is a network for pandapower's `runpp_3ph`, and
+`powerio_tnd::formats::pandapower` reads it here. The facade and the CLI pick
+the reader from the content. Every bus has the phase terminals 1, 2 and 3
+and a grounded neutral 4, lines turn their sequence data into phase
+matrices, an external grid is an ideal source, and loads and static
+generators are constant power, balanced or per phase.
+
+This reading does not map transformers, shunts, switches and the other
+element tables yet, and reports each one it drops. A document with rows in a
+table only the balanced reader maps (`trafo`, `shunt`, `gen`, `storage`,
+`dcline`) keeps reading balanced, as in PowerIO 0.12.0, when that reader
+accepts it. A transformer or a switch that joins or splits buses changes the
+connectivity, so `powerio batch` skips a three-phase network read without
+one. An element on an out-of-service bus is kept with `in_service` false in
+its extras. Writing a three-phase network to `pandapower-json` returns its
+unchanged source; any other multiconductor network is refused with
+`EMIT.DIST.PANDAPOWER_UNSUPPORTED`.
 
 ## PowerModelsDistribution MATHEMATICAL model
 

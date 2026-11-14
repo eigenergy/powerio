@@ -3,8 +3,9 @@
 The typed model uses wire coordinates. Supported formats are OpenDSS ``.dss``,
 PowerModelsDistribution ENGINEERING JSON (``pmd-json``) and MATHEMATICAL JSON
 (``pmd-math-json``), BMOPF JSON (``bmopf-json``), the multiconductor MG-RAVENS
-JSON profile (``ravens-json``), distribution CIM (``cim-dist``, CIM100 RDF/XML), and the
-explicit ``sincal-multiconductor`` profile. Same format emissions can return
+JSON profile (``ravens-json``), distribution CIM (``cim-dist``, CIM100 RDF/XML),
+three-phase pandapower JSON (``pandapower-json``, read only, written as the
+retained source) and the explicit ``sincal-multiconductor`` profile. Same format emissions can return
 retained source bytes. Cross
 format emissions report unsupported fields as diagnostics.
 
@@ -74,8 +75,8 @@ class MulticonductorNetwork:
     @property
     def source_format(self) -> Optional[str]:
         """Format parsed from: ``dss``, ``pmd-json``, ``pmd-math-json``,
-        ``bmopf-json``, ``ravens-json``, ``cim-dist``, or ``sincal``; ``None``
-        for a network built in code."""
+        ``bmopf-json``, ``ravens-json``, ``cim-dist``, ``pandapower-json``, or
+        ``sincal``; ``None`` for a network built in code."""
         return self._inner.source_format()
 
     @property

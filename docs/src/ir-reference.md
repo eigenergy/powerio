@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/0.12.0/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/0.12.1/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -687,7 +687,7 @@ Schema definitions: `MulticonductorNetwork/anyOf/0`, `MulticonductorNetworkBody`
 |---|---|---|---|---|---|
 | `name` | string or null | | | | null |
 | `base_frequency` | float | Hz | | positive | required |
-| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, `sincal`, or null | | | | null |
+| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, `sincal`, `ravens-json`, `pmd-math-json`, `pandapower-json`, or null | | | | null |
 | `buses` | array of `DistBus` | | | `id` unique | required |
 | `linecodes` | array of `DistLineCode` | | | `name` unique | required |
 | `lines` | array of `DistLine` | | | `bus_from`, `bus_to` name buses; `linecode` names a line code | required |

@@ -981,6 +981,87 @@ fn batch_scan_skips_unlowerable_dss_but_explicit_input_fails() {
     );
 }
 
+/// A pandapower `DataFrame` cell in split orientation.
+fn pandapower_frame(columns: &[&str], data: &serde_json::Value) -> serde_json::Value {
+    let rows = data.as_array().map_or(0, Vec::len);
+    let inner = serde_json::json!({
+        "columns": columns, "index": (0..rows).collect::<Vec<_>>(), "data": data
+    });
+    serde_json::json!({
+        "_module": "pandas.core.frame", "_class": "DataFrame", "orient": "split",
+        "_object": inner.to_string(), "is_multiindex": false, "is_multicolumn": false
+    })
+}
+
+#[test]
+fn batch_reads_three_phase_pandapower_multiconductor() {
+    // The balanced reader refuses the fixture (its empty `res_shunt_3ph`),
+    // so it reads multiconductor. Its transformer and closed bus-bus switch
+    // have no three-phase mapping yet, which would leave the LV buses
+    // without their source, so batch skips it. A feeder whose connectivity
+    // the reading maps exports, after the Kron reduction batch reports.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let case = repo_file("tests/data/dist/pandapower/tiny_3ph.json");
+    std::fs::copy(&case, root.join("tiny_3ph.json")).unwrap();
+    std::fs::copy(repo_file("tests/data/case9.m"), root.join("case9.m")).unwrap();
+    let object = serde_json::json!({
+        "f_hz": 50.0,
+        "sn_mva": 1.0,
+        "bus": pandapower_frame(&["vn_kv", "in_service"], &serde_json::json!([[0.4, true], [0.4, true]])),
+        "ext_grid": pandapower_frame(&["bus", "vm_pu", "in_service"], &serde_json::json!([[0, 1.0, true]])),
+        "line": pandapower_frame(
+            &[
+                "from_bus", "to_bus", "length_km", "r_ohm_per_km", "x_ohm_per_km",
+                "c_nf_per_km", "r0_ohm_per_km", "x0_ohm_per_km", "c0_nf_per_km",
+                "max_i_ka", "parallel", "in_service",
+            ],
+            &serde_json::json!([[0, 1, 0.1, 0.207, 0.08, 261.0, 0.828, 0.32, 261.0, 0.27, 1, true]]),
+        ),
+        "asymmetric_load": pandapower_frame(
+            &["bus", "p_a_mw", "p_b_mw", "p_c_mw", "in_service"],
+            &serde_json::json!([[1, 0.02, 0.01, 0.005, true]]),
+        ),
+    });
+    let feeder = serde_json::json!({
+        "_module": "pandapower.auxiliary", "_class": "pandapowerNet", "_object": object
+    });
+    std::fs::write(root.join("feeder_3ph.json"), feeder.to_string()).unwrap();
+    let out_dir = root.join("out");
+
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out_dir.join("case9_bprime.mtx").is_file(), "{stderr}");
+    assert!(
+        !out_dir.join("tiny_3ph_bprime.mtx").exists(),
+        "an islanded network was exported:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("tiny_3ph.json") && stderr.contains("trafo, switch rows"),
+        "no skip warning:\n{stderr}"
+    );
+    assert!(out_dir.join("feeder_3ph_bprime.mtx").is_file(), "{stderr}");
+    assert!(
+        stderr.contains("KRON_REDUCTION_REQUIRED") && stderr.contains("feeder_3ph.json"),
+        "no Kron reduction warning:\n{stderr}"
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out_dir.join("feeder_3ph_meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        meta["matrices"][0]["sddm"],
+        serde_json::json!(true),
+        "{meta}"
+    );
+}
+
 #[test]
 fn batch_scan_with_no_case_files_reports_supported_extensions() {
     let tmp = tempfile::tempdir().unwrap();

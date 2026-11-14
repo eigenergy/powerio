@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/0.12.0/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/0.12.0/schema.json`. That schema, the
+`docs/schema/pio-ir/0.12.1/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/0.12.1/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -180,8 +180,8 @@ bound process memory.
 ## Versions and release series
 
 The header's `version` names the release whose schema the document follows:
-`"0.12.0"` for a document this build writes, described by
-`pio-ir/0.12.0/schema.json`. `powerio::IR_VERSION` is that release and
+`"0.12.1"` for a document this build writes, described by
+`pio-ir/0.12.1/schema.json`. `powerio::IR_VERSION` is that release and
 `powerio::IR_SCHEMA_ID` the `$id` of its schema file. `producer` names the
 software that wrote the document, which need not be PowerIO; the reader reports
 it and ignores it when deciding whether to read the document.
