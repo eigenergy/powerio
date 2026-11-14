@@ -8,6 +8,11 @@
 //! the balanced reader in `powerio-tx`. The `powerio` facade routes the token
 //! here.
 //!
+//! A three-phase document with rows in a table the balanced reader maps and
+//! this reading does not yet (`trafo`, `shunt`, `gen`, `storage`, `dcline`)
+//! reads balanced when the balanced reader accepts it, as in 0.12.0, so no
+//! element it read is lost. Only a document it refuses reads multiconductor.
+//!
 //! The multiconductor reading follows the `runpp_3ph` model of pandapower 3.5.
 //! Every bus has the phase terminals 1, 2 and 3 and an ideally earthed
 //! neutral, the grounded terminal 4. Lines turn their sequence data into
@@ -46,6 +51,12 @@ const MAPPED: [&str; 7] = [
     "asymmetric_sgen",
 ];
 
+/// Tables the balanced reader maps and this reading does not yet.
+const BALANCED_ONLY: [&str; 5] = ["trafo", "shunt", "gen", "storage", "dcline"];
+/// Branch tables whose in-service rows join buses in pandapower. This
+/// reading maps none of them yet.
+const CONNECTING: [&str; 3] = ["trafo", "trafo3w", "impedance"];
+
 type Result<T> = std::result::Result<T, powerio_tx::Error>;
 
 /// A parsed pandapower document: the module of whichever network kind its
@@ -67,15 +78,66 @@ pub enum PandapowerModule {
 /// reader's findings and the source attached.
 pub fn parse(source: Source) -> std::result::Result<PandapowerModule, Error> {
     let source = source.with_format(FormatId::new(TOKEN)?);
-    let three_phase = source.primary_buffer().is_ok_and(|buffer| {
+    let object = source.primary_buffer().ok().and_then(|buffer| {
         std::str::from_utf8(buffer.content_bytes())
-            .is_ok_and(powerio_tx::format::is_three_phase_pandapower)
+            .ok()
+            .and_then(|text| network_object(text).ok())
     });
-    if three_phase {
-        parse_multiconductor(source).map(PandapowerModule::Multiconductor)
-    } else {
-        powerio_tx::parse(source).map(PandapowerModule::Balanced)
+    let three_phase = object
+        .as_ref()
+        .is_some_and(powerio_tx::__internal::has_three_phase_tables);
+    if !three_phase {
+        return powerio_tx::parse(source).map(PandapowerModule::Balanced);
     }
+    // A table only the balanced reader maps keeps the 0.12.0 balanced
+    // reading, unless that reader refuses the document.
+    let balanced_only = object.as_ref().is_some_and(|obj| {
+        BALANCED_ONLY
+            .iter()
+            .any(|name| matches!(read_frame(obj, name), Ok(Some(frame)) if frame.rows().next().is_some()))
+    });
+    if balanced_only && let Ok(module) = powerio_tx::parse(source.clone()) {
+        return Ok(PandapowerModule::Balanced(module));
+    }
+    parse_multiconductor(source).map(PandapowerModule::Multiconductor)
+}
+
+/// The tables of a pandapower document whose rows join or split buses in
+/// pandapower and that the three-phase reading does not map yet: in-service
+/// `trafo`, `trafo3w` and `impedance` rows, and `switch` rows that close a
+/// bus-bus coupling or open a line or transformer. A network read with any of
+/// them has a different connectivity than pandapower solves. Text that is
+/// not a pandapower document has none.
+#[must_use]
+pub fn unmapped_connections(content: &str) -> Vec<&'static str> {
+    network_object(content).map_or_else(|_| Vec::new(), |obj| connections(&obj).0)
+}
+
+/// The connecting tables with rows, and the counts of closed bus-bus and
+/// open element switches.
+fn connections(obj: &Map<String, Value>) -> (Vec<&'static str>, usize, usize) {
+    let mut tables: Vec<&'static str> = CONNECTING
+        .into_iter()
+        .filter(|name| {
+            matches!(read_frame(obj, name), Ok(Some(frame))
+                if frame.rows().any(|row| row.bool_or("in_service", true)))
+        })
+        .collect();
+    let (mut joining, mut opening) = (0, 0);
+    if let Ok(Some(frame)) = read_frame(obj, "switch") {
+        for row in frame.rows() {
+            let closed = row.bool_or("closed", true);
+            match row.get("et").and_then(Value::as_str) {
+                Some("b") if closed => joining += 1,
+                Some("l" | "t" | "t3") if !closed => opening += 1,
+                _ => {}
+            }
+        }
+    }
+    if joining + opening > 0 {
+        tables.push("switch");
+    }
+    (tables, joining, opening)
 }
 
 fn parse_multiconductor(
@@ -106,6 +168,8 @@ struct Reader {
     diagnostics: Vec<Diagnostic>,
     /// The bus id and `vn_kv` of each pandapower bus index.
     buses: HashMap<usize, (String, f64)>,
+    /// The ids of the out-of-service buses.
+    dead_buses: HashSet<String>,
 }
 
 impl Reader {
@@ -174,11 +238,24 @@ impl Reader {
 
     /// The row's columns outside `known` as extras. An out-of-service
     /// element keeps `in_service` false there, as the PMD reader keeps a
-    /// status.
-    fn extras(&mut self, row: &Row<'_>, what: &str, known: &[&str]) -> Extras {
+    /// status. So does an element on an out-of-service bus of `at`, which
+    /// runpp_3ph leaves out with its bus.
+    fn extras(&mut self, row: &Row<'_>, what: &str, known: &[&str], at: &[&str]) -> Extras {
         let mut extras = row.extras_excluding(known);
         extras.remove("in_service");
-        if !row.bool_or("in_service", true) {
+        let dead_bus = at.iter().find(|bus| self.dead_buses.contains(**bus));
+        if row.bool_or("in_service", true)
+            && let Some(bus) = dead_bus
+        {
+            extras.insert("in_service".into(), false.into());
+            self.note(
+                &codes::READ_PANDAPOWER_OUT_OF_SERVICE,
+                format!(
+                    "{what} is on out-of-service bus {bus}, so runpp_3ph leaves it out. It is \
+                     kept with `in_service` false in extras. Other formats emit it in service"
+                ),
+            );
+        } else if !row.bool_or("in_service", true) {
             extras.insert("in_service".into(), false.into());
             self.note(
                 &codes::READ_PANDAPOWER_OUT_OF_SERVICE,
@@ -204,7 +281,10 @@ impl Reader {
             // stays in extras.
             let location = read_bus_geo(row.get("geo"));
             let known: &[&str] = if location.is_some() { &["geo"] } else { &[] };
-            bus.extras = self.extras(&row, &format!("bus {id}"), known);
+            bus.extras = self.extras(&row, &format!("bus {id}"), known, &[]);
+            if !row.bool_or("in_service", true) {
+                self.dead_buses.insert(id.clone());
+            }
             if let Some(location) = location {
                 let inside = location.x.abs() <= 180.0 && location.y.abs() <= 90.0;
                 geographic = Some(geographic.unwrap_or(true) && inside);
@@ -334,7 +414,8 @@ impl Reader {
             let mut known = vec!["from_bus", "to_bus", "length_km", "g_us_per_km"];
             known.extend(SEQUENCE);
             known.extend(["max_i_ka", "parallel"]);
-            line.extras = self.extras(&row, &name, &known);
+            let at = [line.bus_from.clone(), line.bus_to.clone()];
+            line.extras = self.extras(&row, &name, &known, &[&at[0], &at[1]]);
             self.net.lines_mut().push(line);
         }
         if no_zero_sequence > 0 {
@@ -376,7 +457,8 @@ impl Reader {
                     .map(f64::to_radians)
                     .to_vec(),
             );
-            source.extras = self.extras(&row, &name, &["bus", "vm_pu", "va_degree"]);
+            let at = source.bus.clone();
+            source.extras = self.extras(&row, &name, &["bus", "vm_pu", "va_degree"], &[&at]);
             self.note(
                 &codes::READ_PANDAPOWER_APPROXIMATED,
                 format!(
@@ -469,6 +551,7 @@ impl Reader {
                     "bus", "type", "scaling", "p_mw", "q_mvar", "p_a_mw", "q_a_mvar", "p_b_mw",
                     "q_b_mvar", "p_c_mw", "q_c_mvar",
                 ],
+                &[&bus],
             );
             if ZIP.iter().any(|key| row.f_or(key, 0.0) != 0.0) {
                 self.note(
@@ -499,6 +582,7 @@ impl Reader {
     /// Every non-empty table the reader does not map, with one finding per
     /// element table. All result tables share one remark.
     fn report_other_tables(&mut self, obj: &Map<String, Value>) -> Result<()> {
+        let (connecting, joining, opening) = connections(obj);
         let mut results = Vec::new();
         for (key, value) in obj {
             if MAPPED.contains(&key.as_str())
@@ -517,12 +601,44 @@ impl Reader {
                 continue;
             }
             let rows = read_frame(obj, key)?.map_or(0, |frame| frame.rows().count());
-            if rows > 0 {
-                self.note(
-                    &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
-                    format!("`{key}` table ignored ({rows} rows): it has no three-phase mapping"),
-                );
+            if rows == 0 {
+                continue;
             }
+            let effect = if key == "switch" {
+                let mut acts = Vec::new();
+                if joining > 0 {
+                    acts.push(format!(
+                        "{joining} closed bus-bus switch(es) join their buses"
+                    ));
+                }
+                if opening > 0 {
+                    acts.push(format!(
+                        "{opening} open switch(es) disconnect their line or transformer"
+                    ));
+                }
+                if acts.is_empty() {
+                    ". None of them changes the connectivity".to_owned()
+                } else {
+                    format!(
+                        ". In pandapower {}. Here every bus stays separate and every line \
+                         connected, so the connectivity differs",
+                        acts.join(" and ")
+                    )
+                }
+            } else if connecting.contains(&key.as_str()) {
+                ". The buses it joins in pandapower are not joined here, so the connectivity \
+                 differs"
+                    .to_owned()
+            } else {
+                String::new()
+            };
+            self.note(
+                &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
+                format!(
+                    "`{key}` table ignored ({rows} rows): the three-phase reading does not map \
+                     it yet{effect}"
+                ),
+            );
         }
         if !results.is_empty() {
             self.note(
@@ -773,6 +889,7 @@ mod tests {
 
     #[test]
     fn parse_routes_by_the_tables_the_document_fills() {
+        // The balanced reader refuses the fixture's empty `res_shunt_3ph`.
         let module = parse(fixture("dist/pandapower/tiny_3ph.json")).unwrap();
         assert!(matches!(module, PandapowerModule::Multiconductor(_)));
         let module = parse(fixture("pandapower/example.json")).unwrap();
@@ -786,6 +903,37 @@ mod tests {
                 .and_then(Source::format)
                 .map(FormatId::as_str),
             Some(TOKEN)
+        );
+    }
+
+    #[test]
+    fn a_table_only_the_balanced_reader_maps_keeps_the_balanced_reading() {
+        let load = table(json!([{
+            "bus": 0, "p_a_mw": 0.01, "p_b_mw": 0.0, "p_c_mw": 0.0, "in_service": true
+        }]));
+        let three_phase = |extra: Vec<(&'static str, Value)>| {
+            let mut tables = vec![("asymmetric_load", load.clone())];
+            tables.extend(extra);
+            parse(Source::from_memory("case.json", net(tables).into_bytes()).unwrap()).unwrap()
+        };
+        // Nothing the balanced reader maps is lost: three phases.
+        assert!(matches!(
+            three_phase(Vec::new()),
+            PandapowerModule::Multiconductor(_)
+        ));
+        // A shunt the three-phase reading drops keeps the 0.12.0 reading.
+        let shunt = table(json!([{"bus": 0, "q_mvar": 0.003, "p_mw": 0.0, "vn_kv": 0.4}]));
+        let PandapowerModule::Balanced(module) = three_phase(vec![("shunt", shunt)]) else {
+            panic!("a network with a shunt reads balanced");
+        };
+        assert_eq!(module.value().shunts().len(), 1);
+        assert!(
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.message().contains("three-phase (runpp_3ph) network")),
+            "{:?}",
+            module.diagnostics()
         );
     }
 
@@ -906,6 +1054,78 @@ mod tests {
         let module = read(&net(vec![("bus", bus)]));
         assert_eq!(module.value().buses()[0].extras["in_service"], json!(false));
         assert_eq!(codes(&module), vec!["READ.DIST.PANDAPOWER_OUT_OF_SERVICE"]);
+    }
+
+    #[test]
+    fn an_element_on_an_out_of_service_bus_is_out_of_service() {
+        let bus = table(json!([
+            {"vn_kv": 0.4, "in_service": true},
+            {"vn_kv": 0.4, "in_service": false}
+        ]));
+        let load = table(json!([{
+            "bus": 1, "p_a_mw": 0.01, "p_b_mw": 0.0, "p_c_mw": 0.0, "in_service": true
+        }]));
+        let grid = table(json!([{"bus": 0, "vm_pu": 1.0, "in_service": true}]));
+        let module = read(&net(vec![
+            ("bus", bus),
+            ("ext_grid", grid),
+            ("asymmetric_load", load),
+        ]));
+        let network = module.value();
+        assert_eq!(network.loads()[0].extras["in_service"], json!(false));
+        assert!(!network.sources()[0].extras.contains_key("in_service"));
+        let messages: Vec<_> = module
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == "READ.DIST.PANDAPOWER_OUT_OF_SERVICE")
+            .map(Diagnostic::message)
+            .collect();
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(
+            messages[1].starts_with("asymmetric_load_0 is on out-of-service bus 1"),
+            "{}",
+            messages[1]
+        );
+    }
+
+    #[test]
+    fn switches_that_change_the_connectivity_are_named() {
+        let switches = table(json!([
+            {"bus": 0, "element": 1, "et": "b", "closed": true},
+            {"bus": 1, "element": 0, "et": "l", "closed": false},
+            {"bus": 0, "element": 2, "et": "b", "closed": false},
+            {"bus": 1, "element": 0, "et": "l", "closed": true}
+        ]));
+        let text = net(vec![("switch", switches)]);
+        assert_eq!(unmapped_connections(&text), vec!["switch"]);
+        let module = read(&text);
+        assert_eq!(
+            module.diagnostics()[0].message(),
+            "`switch` table ignored (4 rows): the three-phase reading does not map it yet. In \
+             pandapower 1 closed bus-bus switch(es) join their buses and 1 open switch(es) \
+             disconnect their line or transformer. Here every bus stays separate and every \
+             line connected, so the connectivity differs"
+        );
+
+        // Open bus-bus and closed line switches change nothing.
+        let idle = table(json!([
+            {"bus": 0, "element": 2, "et": "b", "closed": false},
+            {"bus": 1, "element": 0, "et": "l", "closed": true}
+        ]));
+        assert_eq!(
+            unmapped_connections(&net(vec![("switch", idle)])),
+            Vec::<&str>::new()
+        );
+        let trafo = table(json!([
+            {"hv_bus": 3, "lv_bus": 0, "in_service": true},
+            {"hv_bus": 3, "lv_bus": 1, "in_service": false}
+        ]));
+        let off = table(json!([{"from_bus": 0, "to_bus": 1, "in_service": false}]));
+        assert_eq!(
+            unmapped_connections(&net(vec![("trafo", trafo), ("impedance", off)])),
+            vec!["trafo"]
+        );
+        assert_eq!(unmapped_connections("{}"), Vec::<&str>::new());
     }
 
     fn one_line() -> Value {
@@ -1151,11 +1371,13 @@ mod tests {
             [
                 (
                     "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED",
-                    "`trafo3w` table ignored (2 rows): it has no three-phase mapping"
+                    "`trafo3w` table ignored (2 rows): the three-phase reading does not map it \
+                     yet. The buses it joins in pandapower are not joined here, so the \
+                     connectivity differs"
                 ),
                 (
                     "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED",
-                    "`ward` table ignored (1 rows): it has no three-phase mapping"
+                    "`ward` table ignored (1 rows): the three-phase reading does not map it yet"
                 ),
                 (
                     "READ.DIST.PANDAPOWER_RETAINED_SOURCE_ONLY",
@@ -1192,14 +1414,17 @@ mod tests {
             .map(Diagnostic::message)
             .collect();
         messages.sort_unstable();
+        let ignored = "table ignored (1 rows): the three-phase reading does not map it yet";
         let mut expected = [
-            "shunt",
-            "shunt_characteristic_table",
-            "switch",
-            "trafo",
-            "trafo_characteristic_table",
-        ]
-        .map(|table| format!("`{table}` table ignored (1 rows): it has no three-phase mapping"));
+            format!("`shunt` {ignored}"),
+            format!("`shunt_characteristic_table` {ignored}"),
+            format!("`switch` {ignored}. None of them changes the connectivity"),
+            format!(
+                "`trafo` {ignored}. The buses it joins in pandapower are not joined here, so \
+                 the connectivity differs"
+            ),
+            format!("`trafo_characteristic_table` {ignored}"),
+        ];
         expected.sort_unstable();
         assert_eq!(messages, expected);
         assert_eq!(module.value().transformers().len(), 0);

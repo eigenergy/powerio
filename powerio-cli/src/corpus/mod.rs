@@ -426,6 +426,33 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
         error,
         panicked,
     };
+    // A three-phase pandapower document takes the facade's route, which
+    // picks the network kind from its tables.
+    let is_json = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"));
+    if is_json
+        && std::fs::read_to_string(path)
+            .is_ok_and(|text| powerio_tx::format::is_three_phase_pandapower(&text))
+    {
+        use powerio::tnd::formats::pandapower::{PandapowerModule, parse};
+        return match catch_panic(|| powerio_core::Source::open(path).and_then(parse)) {
+            Ok(Ok(PandapowerModule::Balanced(parsed))) => {
+                let rendered = powerio_core::render_diagnostics(parsed.diagnostics());
+                Ok(Case::Balanced(Box::new(parsed.into_value()), rendered))
+            }
+            Ok(Ok(PandapowerModule::Multiconductor(parsed))) => {
+                let rendered = powerio_core::render_diagnostics(parsed.diagnostics());
+                Ok(Case::Multiconductor(
+                    Box::new(parsed.into_value()),
+                    rendered,
+                ))
+            }
+            Ok(Err(err)) => Err(unreadable(err.to_string(), false)),
+            Err(message) => Err(unreadable(message, true)),
+        };
+    }
     let balanced_error = match catch_panic(|| crate::module_io::load_balanced_module(path, None)) {
         Ok(Ok(parsed)) => {
             let rendered = powerio_core::render_diagnostics(parsed.diagnostics());
@@ -1473,6 +1500,23 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    #[test]
+    fn a_three_phase_pandapower_case_reads_by_its_tables() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("tests/data");
+        match read_case(&data.join("dist/pandapower/tiny_3ph.json")) {
+            Ok(Case::Multiconductor(net, _)) => assert_eq!(net.buses().len(), 5),
+            Ok(Case::Balanced(..)) => panic!("the fixture read balanced"),
+            Err(unreadable) => panic!("{}", unreadable.error),
+        }
+        assert!(matches!(
+            read_case(&data.join("pandapower/example.json")),
+            Ok(Case::Balanced(..))
+        ));
     }
 
     /// The vocabulary's completeness gate: parse every fixture the readers

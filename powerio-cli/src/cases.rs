@@ -311,7 +311,11 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                     powerio_tx::format::routing::TransmissionFormat::PandapowerJson,
                 ) if powerio_tx::format::is_three_phase_pandapower(&text) => {
                     // A three-phase pandapower network reads multiconductor.
-                    // It then lowers like any other distribution case.
+                    // It then lowers like any other distribution case, unless
+                    // the reading left out a transformer or switch that
+                    // joins or splits its buses: the export would describe
+                    // other islands than pandapower solves.
+                    let unmapped = powerio::tnd::formats::pandapower::unmapped_connections(&text);
                     let source = powerio_core::Source::from_memory(
                         path.to_string_lossy().into_owned(),
                         text.into_bytes(),
@@ -319,6 +323,17 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                     match powerio::tnd::formats::pandapower::parse(source)
                         .with_context(|| format!("parse {}", path.display()))?
                     {
+                        powerio::tnd::formats::pandapower::PandapowerModule::Multiconductor(_)
+                            if !unmapped.is_empty() =>
+                        {
+                            anyhow::bail!(
+                                "lower {} to balanced: the three-phase pandapower reading does not \
+                             map its {} rows yet, so its buses would not connect as pandapower \
+                             connects them",
+                                path.display(),
+                                unmapped.join(", ")
+                            )
+                        }
                         powerio::tnd::formats::pandapower::PandapowerModule::Multiconductor(
                             parsed,
                         ) => lower_to_balanced(parsed, stem, path),

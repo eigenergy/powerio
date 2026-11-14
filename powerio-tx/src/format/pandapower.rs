@@ -32,13 +32,15 @@ pub(crate) fn parse_pandapower_source(
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let obj = &network_object(source)?;
+    // 0.12.0 read a three-phase network here, and this reader keeps doing
+    // so. It names what it drops.
     if has_three_phase_tables(obj) {
-        return Err(bad(
+        warnings.push(
+            &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
             "the network carries asymmetric_load, asymmetric_sgen or res_bus_3ph rows, so it is \
-             a three-phase (runpp_3ph) network. The balanced reader would drop the per-phase \
-             detail. powerio_tnd::formats::pandapower reads it into a MulticonductorNetwork. \
-             `powerio::parse` routes it there by content",
-        ));
+             a three-phase (runpp_3ph) network. The balanced reader drops the per-phase \
+             detail. powerio_tnd::formats::pandapower reads it into a MulticonductorNetwork",
+        );
     }
 
     // Present-but-unparseable would silently rescale the whole per unit
@@ -2189,7 +2191,7 @@ pub fn is_three_phase_pandapower(content: &str) -> bool {
     network_object(content).is_ok_and(|obj| has_three_phase_tables(&obj))
 }
 
-fn has_three_phase_tables(obj: &Map<String, Value>) -> bool {
+pub fn has_three_phase_tables(obj: &Map<String, Value>) -> bool {
     ["asymmetric_load", "asymmetric_sgen", "res_bus_3ph"]
         .iter()
         .any(|name| matches!(read_frame(obj, name), Ok(Some(frame)) if !frame.data.is_empty()))
@@ -2977,7 +2979,7 @@ mod tests {
     }
 
     #[test]
-    fn a_three_phase_network_is_refused() {
+    fn a_three_phase_network_reads_balanced_with_a_warning() {
         for (name, column) in [
             ("asymmetric_load", "p_a_mw"),
             ("asymmetric_sgen", "p_a_mw"),
@@ -2986,10 +2988,16 @@ mod tests {
             let full = pp_frame(&["bus", column], json!([0]), json!([[0, 0.01]]));
             let text = pp_net(vec![bus_table(json!([0])), (name, full)]);
             assert!(is_three_phase_pandapower(&text), "{name}");
-            let msg = err(&text);
+            // 0.12.0 read it, so the balanced reader still does.
+            let parsed = parse_pandapower_json(&text).unwrap();
+            assert_eq!(parsed.network.buses().len(), 1, "{name}");
             assert!(
-                msg.contains("three-phase (runpp_3ph) network"),
-                "{name}: {msg}"
+                parsed
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message().contains("three-phase (runpp_3ph) network")),
+                "{name}: {:?}",
+                parsed.diagnostics
             );
 
             // A table without rows does not make the network three-phase.
