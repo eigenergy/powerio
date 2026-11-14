@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 /// Checks the semantic rules of BMOPF conformance (dsopt-schema
 /// `docs/conformance.md`) and the structural constraints the reader relies
 /// on. `current` says the document states the current schema; a document written
-/// against an earlier version keeps that version's line `s_max` reading.
+/// against an earlier version keeps that version's line `s_max` reading. The
+/// reader has already rewritten an older draft's lowercase enum values to the
+/// schema's tokens, so the checks match UPPER_SNAKE only.
 pub(super) fn report(doc: &Map<String, Value>, diagnostics: &mut Diagnostics, current: bool) {
     let mut check = Check {
         doc,
