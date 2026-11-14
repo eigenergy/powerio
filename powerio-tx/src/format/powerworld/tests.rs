@@ -446,6 +446,91 @@ fn branch_identity_survives_aux_to_aux_through_the_typed_model() {
     assert!(!br.in_service);
 }
 
+fn regulated_buses(net: &crate::network::BalancedNetwork) -> Vec<Option<usize>> {
+    net.generators()
+        .iter()
+        .map(|g| g.regulated_bus.map(|b| b.0))
+        .collect()
+}
+
+/// `GenRegNum` names the bus a machine regulates; the model states it only
+/// when it is not the terminal bus. Absent, empty, and zero regulate the
+/// terminal bus, and the concise vocabulary's `RegBusNum` reads the same.
+#[test]
+fn gen_reg_num_states_a_remote_regulated_bus() {
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum])\n{\n1\n2\n3\n}\n\
+         DATA (Gen, [BusNum, GenID, GenRegNum])\n\
+         {\n1 \"1\" 3\n2 \"1\" 2\n3 \"1\" 0\n3 \"2\" \"\"\n}\n\
+         DATA (Gen, [BusNum, GenID])\n{\n1 \"2\"\n}\n",
+    )
+    .unwrap();
+    assert_eq!(regulated_buses(&net), [Some(3), None, None, None, None]);
+
+    let concise = parse_powerworld(
+        "Bus (BusNum)\n{\n1\n2\n}\n\
+         Gen (BusNum, ID, RegBusNum)\n{\n2 \"1\" 1\n1 \"1\" 1\n}\n",
+    )
+    .unwrap();
+    assert_eq!(regulated_buses(&concise), [Some(1), None]);
+}
+
+/// A regulated bus the case does not declare is dropped with a warning and
+/// the machine regulates its own bus, so a case that names one still reads.
+#[test]
+fn an_unknown_gen_reg_num_is_dropped_with_a_warning() {
+    let parsed = crate::parse_str(
+        "DATA (Bus, [BusNum])\n{\n1\n2\n}\n\
+         DATA (Gen, [BusNum, GenID, GenRegNum])\n{\n1 \"1\" 9\n2 \"1\" 1\n}\n",
+        "powerworld",
+    )
+    .unwrap();
+    assert_eq!(regulated_buses(&parsed.network), [None, Some(1)]);
+    let dropped: Vec<_> = parsed
+        .diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.POWERWORLD.REFERENCE_DROPPED")
+        .collect();
+    assert_eq!(dropped.len(), 1, "{:?}", parsed.render_diagnostics());
+    assert!(
+        dropped[0].message().contains("GenRegNum names bus 9"),
+        "{}",
+        dropped[0].message()
+    );
+}
+
+/// The writer states `GenRegNum` on every row when any machine regulates a
+/// remote bus, beside the cost columns, and the reader reads the same
+/// machines back. A case without a remote regulator writes the plain row.
+#[test]
+fn gen_reg_num_survives_aux_to_aux_through_the_typed_model() {
+    let src = "DATA (Bus, [BusNum])\n{\n1\n2\n3\n}\n\
+         DATA (Gen, [BusNum, GenID, GenStatus, GenMW, GenVoltSet, GenRegNum, GenCostModel, GenFuelCost, GenFixedCost, GenIOB, GenIOC, GenIOD])\n\
+         {\n1 \"1\" \"Closed\" 50 1.02 3 \"Cubic\" 2 10 20 0.5 0\n2 \"1\" \"Open\" 30 1.01 2 \"Cubic\" 1 0 15 0 0\n}\n";
+    let net = parse_powerworld(src).unwrap();
+    assert_eq!(regulated_buses(&net), [Some(3), None]);
+    let out = write_powerworld(&net);
+    assert!(
+        out.text.contains(
+            "DATA (Gen, [BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, \
+             GenVoltSet, GenRegNum, GenMVABase, GenStatus, GenCostModel,"
+        ),
+        "{}",
+        out.text
+    );
+    assert!(out.text.contains(" 1.01 2 100 \"Open\""), "{}", out.text);
+    let again = parse_powerworld(&out.text).unwrap();
+    assert_eq!(again.generators(), net.generators());
+
+    let local = parse_powerworld(
+        "DATA (Bus, [BusNum])\n{\n1\n}\n\
+         DATA (Gen, [BusNum, GenID, GenRegNum])\n{\n1 \"1\" 1\n}\n",
+    )
+    .unwrap();
+    let out = write_powerworld(&local);
+    assert!(!out.text.contains("GenRegNum"), "{}", out.text);
+}
+
 // ---- Loud errors ------------------------------------------------------------
 
 fn read_err(text: &str) -> String {

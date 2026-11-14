@@ -41,6 +41,10 @@ const GEN_IO_D: &str = "GenIOD";
 /// Coefficients a cubic input-output curve holds: the constant plus three
 /// powers of MW.
 const GEN_IO_COEFFICIENTS: usize = 4;
+/// The `Gen` field naming the bus whose voltage the machine regulates, in
+/// the field name vocabulary (`GenRegNum`, which the writer states) and the
+/// concise one (`RegBusNum`).
+const GEN_REG_NUM: &[&str] = &["GenRegNum", "RegBusNum"];
 
 // ---- Reader -----------------------------------------------------------------
 
@@ -153,6 +157,7 @@ pub(in crate::format) fn parse_powerworld_source(
     for r in merged_gens.rows() {
         generators.push(read_gen(r, &bus_labels)?);
     }
+    drop_unknown_regulated_buses(&buses, &mut generators, warnings);
     let mut branches = Vec::new();
     let mut parallel: HashMap<(BusId, BusId), u32> = HashMap::new();
     for r in merged_branches.rows() {
@@ -441,6 +446,33 @@ fn bus_kind(r: &Row) -> BusType {
     }
 }
 
+/// A regulated bus the case does not declare is a dangling pointer, not a
+/// reason to reject the case: the machine reads as regulating its own bus
+/// and the drop is reported (the PSS/E reader treats a missing `IREG` bus
+/// the same way).
+fn drop_unknown_regulated_buses(
+    buses: &[Bus],
+    generators: &mut [Generator],
+    warnings: &mut Diagnostics,
+) {
+    let known: std::collections::HashSet<BusId> = buses.iter().map(|b| b.id).collect();
+    for (index, g) in generators.iter_mut().enumerate() {
+        let Some(regulated) = g.regulated_bus.filter(|b| !known.contains(b)) else {
+            continue;
+        };
+        warnings.push(
+            &codes::READ_POWERWORLD_REFERENCE_DROPPED,
+            format!(
+                "PowerWorld .aux Gen record {} at bus {}: GenRegNum names bus {regulated}, \
+                 which the case does not declare; the machine reads as regulating its own bus",
+                index + 1,
+                g.bus
+            ),
+        );
+        g.regulated_bus = None;
+    }
+}
+
 /// PowerWorld stores no PV/PQ bus type; it follows from the machines. A bus
 /// with an in-service generator regulates voltage (PV) unless it is the slack.
 /// Only buses left at the PQ default are promoted, so an explicit `BusCat`
@@ -603,12 +635,17 @@ fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Resul
 }
 
 // `Generator` has no extras map (a deliberate parse-performance decision; see
-// the `GenCaps` doc), so GenID and the regulation fields are not retained on
-// the typed model. They stay reachable through the generic layer and survive
-// aux → aux via the retained source.
+// the `GenCaps` doc), so GenID and the regulation fields other than the
+// regulated bus are not retained on the typed model. They stay reachable
+// through the generic layer and survive aux → aux via the retained source.
 fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
+    let bus = bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?;
+    // The regulated bus equals the terminal bus unless the machine regulates
+    // a remote bus, and the model states only the remote case. Absent, empty,
+    // and zero (no PowerWorld bus is numbered zero) regulate the terminal bus.
+    let regulated = uid_alias(r, GEN_REG_NUM)?;
     Ok(Generator {
-        bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
+        bus,
         energy_source: GeneratorEnergySource::default(),
         // GenMW is the solved output; complete case exports write the
         // dispatch setpoint instead.
@@ -625,7 +662,7 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         caps: Default::default(),
         voltage_regulation_on: true,
         regulating_terminal: None,
-        regulated_bus: None,
+        regulated_bus: (regulated != 0 && regulated != bus.0).then_some(BusId(regulated)),
         active_power_control: None,
         uid: None,
     })
@@ -795,6 +832,27 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         .generators()
         .iter()
         .any(|g| g.cost.as_ref().is_some_and(|cost| cost.model == 2));
+    // The regulated bus column appears only when a machine regulates a
+    // remote bus; then every row states its regulated bus, its own terminal
+    // bus included.
+    let write_gen_reg = net
+        .generators()
+        .iter()
+        .any(|g| g.regulated_bus.is_some_and(|bus| bus != g.bus));
+    let mut gen_fields = String::from(
+        "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet",
+    );
+    if write_gen_reg {
+        let _ = write!(gen_fields, ", {}", GEN_REG_NUM[0]);
+    }
+    gen_fields.push_str(", GenMVABase, GenStatus");
+    if write_gen_cost {
+        let _ = write!(
+            gen_fields,
+            ", {GEN_COST_MODEL}, {GEN_FUEL_COST}, {GEN_FIXED_COST}, {GEN_IO_B}, {GEN_IO_C}, {GEN_IO_D}"
+        );
+    }
+    gen_fields.push(']');
     block(
         &mut s,
         "Bus",
@@ -872,57 +930,50 @@ pub(crate) fn write_powerworld(net: &BalancedNetwork) -> TextEmission {
         },
     );
 
-    block(
-        &mut s,
-        "Gen",
-        if write_gen_cost {
-            "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus, GenCostModel, GenFuelCost, GenFixedCost, GenIOB, GenIOC, GenIOD]"
-        } else {
-            "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus]"
-        },
-        |rows| {
-            for (i, g) in net.generators().iter().enumerate() {
-                let mut row = format!(
-                    "{} \"{}\" {} {} {} {} {} {} {} {} \"{}\"",
-                    g.bus,
-                    i + 1,
-                    n(g.pg),
-                    n(g.qg),
-                    n(g.pmax),
-                    n(g.pmin),
-                    n(g.qmax),
-                    n(g.qmin),
-                    n(g.vg),
-                    n(g.mbase),
-                    status(g.in_service)
-                );
-                if write_gen_cost {
-                    // Highest order last in the row: the constant rides
-                    // GenFixedCost and the three powers of MW ride
-                    // GenIOB/GenIOC/GenIOD, at a unit fuel price so the
-                    // input-output curve is the cost curve itself.
-                    let mut coefficients = [0.0f64; GEN_IO_COEFFICIENTS];
-                    if let Some(cost) = g.cost.as_ref().filter(|cost| cost.model == 2) {
-                        for (slot, value) in coefficients
-                            .iter_mut()
-                            .zip(cost.coeffs.iter().rev().take(GEN_IO_COEFFICIENTS))
-                        {
-                            *slot = *value;
-                        }
-                    }
-                    let _ = write!(
-                        row,
-                        " \"Cubic\" 1 {} {} {} {}",
-                        n(coefficients[0]),
-                        n(coefficients[1]),
-                        n(coefficients[2]),
-                        n(coefficients[3])
-                    );
-                }
-                rows.push(row);
+    block(&mut s, "Gen", &gen_fields, |rows| {
+        for (i, g) in net.generators().iter().enumerate() {
+            let mut row = format!(
+                "{} \"{}\" {} {} {} {} {} {} {}",
+                g.bus,
+                i + 1,
+                n(g.pg),
+                n(g.qg),
+                n(g.pmax),
+                n(g.pmin),
+                n(g.qmax),
+                n(g.qmin),
+                n(g.vg),
+            );
+            if write_gen_reg {
+                let _ = write!(row, " {}", g.regulated_bus.unwrap_or(g.bus));
             }
-        },
-    );
+            let _ = write!(row, " {} \"{}\"", n(g.mbase), status(g.in_service));
+            if write_gen_cost {
+                // Highest order last in the row: the constant rides
+                // GenFixedCost and the three powers of MW ride
+                // GenIOB/GenIOC/GenIOD, at a unit fuel price so the
+                // input-output curve is the cost curve itself.
+                let mut coefficients = [0.0f64; GEN_IO_COEFFICIENTS];
+                if let Some(cost) = g.cost.as_ref().filter(|cost| cost.model == 2) {
+                    for (slot, value) in coefficients
+                        .iter_mut()
+                        .zip(cost.coeffs.iter().rev().take(GEN_IO_COEFFICIENTS))
+                    {
+                        *slot = *value;
+                    }
+                }
+                let _ = write!(
+                    row,
+                    " \"Cubic\" 1 {} {} {} {}",
+                    n(coefficients[0]),
+                    n(coefficients[1]),
+                    n(coefficients[2]),
+                    n(coefficients[3])
+                );
+            }
+            rows.push(row);
+        }
+    });
 
     block(
         &mut s,

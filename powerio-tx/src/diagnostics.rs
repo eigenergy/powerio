@@ -280,6 +280,8 @@ pub mod codes {
 
         READ_POWERWORLD_VALUE_DEFAULTED = "READ.POWERWORLD.VALUE_DEFAULTED", Warning,
             "a PowerWorld field this binary vintage does not locate was defaulted";
+        READ_POWERWORLD_REFERENCE_DROPPED = "READ.POWERWORLD.REFERENCE_DROPPED", Warning,
+            "a PowerWorld aux regulated bus names a bus the case does not declare";
         READ_POWERWORLD_RETAINED_SOURCE_ONLY = "READ.POWERWORLD.RETAINED_SOURCE_ONLY", Warning,
             "a PowerWorld aux data block survives in the retained source only";
 

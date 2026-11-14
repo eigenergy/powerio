@@ -11,6 +11,15 @@
   terminal bus in files with header words 338, 368, 425, 508, and 537
   (Simulator 17 through 22 layouts). It used to place such a machine on the
   bus it regulates (#868).
+- The `.pwb` and `.aux` readers keep the bus a generator regulates
+  (`GenRegNum`, or `RegBusNum` in the concise aux vocabulary) as the
+  generator's `regulated_bus` when it is not the generator's own bus, in
+  every `.pwb` layout. The `.aux` writer states `GenRegNum` when a generator
+  regulates a remote bus. Remote voltage regulation used to be dropped
+  without a diagnostic, so such a generator read as regulating its own bus.
+  An `.aux` regulated bus the case does not declare is reported as
+  `READ.POWERWORLD.REFERENCE_DROPPED` and the generator reads as regulating
+  its own bus (#868).
 
 ## 0.11.12
 
