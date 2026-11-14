@@ -446,6 +446,396 @@ fn branch_identity_survives_aux_to_aux_through_the_typed_model() {
     assert!(!br.in_service);
 }
 
+// ---- Writing what Simulator loads --------------------------------------------
+
+/// A case in the vocabulary of Simulator's own exports: a slack, a PV bus, an
+/// unnamed PQ bus, and one of each core device, with a phase shifting
+/// transformer.
+const SIMULATOR_VOCABULARY_CASE: &str = "\
+DATA (Bus, [BusNum, BusName, BusNomVolt, AreaNum, ZoneNum, BusSlack, BusVoltLimHigh:1, BusVoltLimLow:1])
+{
+1 \"One\" 230 1 1 \"YES\" 1.05 0.95
+2 \"Two\" 230 1 2 \"NO\" 1.06 0.94
+3 \"\" 115 2 2 \"NO\" 1.1 0.9
+}
+DATA (Load, [BusNum, LoadID, LoadStatus, LoadSMW, LoadSMVR])
+{
+3 \"1\" \"Closed\" 40 10
+}
+DATA (Shunt, [BusNum, ShuntID, SSStatus, SSCMode, SSNMW, SSNMVR])
+{
+3 \"1\" \"Closed\" \"Fixed\" 1.5 20
+}
+DATA (Gen, [BusNum, GenID, GenStatus, GenMW, GenMWMax, GenVoltSet])
+{
+1 \"1\" \"Closed\" 50 80 1.02
+2 \"1\" \"Closed\" 10 30 1.01
+}
+DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR, LineX, LineC, LineAMVA, LineAMVA:1, LineAMVA:2, LineTap, LinePhase])
+{
+1 2 \"1\" \"Line\" \"Closed\" 0.01 0.1 0.02 100 110 120 1 0
+2 3 \"1\" \"Transformer\" \"Open\" 0.002 0.05 0 200 210 220 0.95 3
+}
+";
+
+/// The declared fields of the `object` section of `text`.
+fn written_fields(text: &str, object: &str) -> Vec<String> {
+    parse_aux(text)
+        .unwrap()
+        .data()
+        .find(|d| d.object_type == object)
+        .unwrap_or_else(|| panic!("no {object} section in\n{text}"))
+        .fields
+        .clone()
+}
+
+/// The `field` value of each row of the `object` section of `text`.
+fn written_column(text: &str, object: &str, field: &str) -> Vec<String> {
+    let file = parse_aux(text).unwrap();
+    let d = file.data().find(|d| d.object_type == object).unwrap();
+    let at = d.field_index(field).unwrap();
+    d.rows.iter().map(|r| r.values[at].to_string()).collect()
+}
+
+/// Simulator 24 skips a field it does not define and refuses to create an
+/// object whose required fields are missing. Loading the 0.11.12 writer's
+/// case14 created the buses and branches but no load, shunt, or generator,
+/// and dropped every tap, bus voltage limit, and the slack. These are the
+/// names Simulator's `GetFieldList` defines and its own exports write.
+#[test]
+fn writer_states_the_fields_simulator_defines_and_requires() {
+    let net = parse_powerworld(SIMULATOR_VOCABULARY_CASE).unwrap();
+    let text = write_powerworld(&net).text;
+    assert_eq!(written_fields(&text, "Sim_Solution_Options"), ["SBase"]);
+    assert_eq!(
+        written_fields(&text, "Bus"),
+        [
+            "BusNum",
+            "BusName",
+            "BusNomVolt",
+            "BusPUVolt",
+            "BusAngle",
+            "AreaNum",
+            "ZoneNum",
+            "BusSlack",
+            "BusVoltLim",
+            "BusVoltLimHigh:1",
+            "BusVoltLimLow:1",
+            "BusCat",
+        ]
+    );
+    assert_eq!(
+        written_fields(&text, "Load"),
+        ["BusNum", "LoadID", "LoadStatus", "LoadSMW", "LoadSMVR"]
+    );
+    assert_eq!(
+        written_fields(&text, "Shunt"),
+        [
+            "BusNum", "ShuntID", "SSStatus", "SSCMode", "SSNMW", "SSNMVR"
+        ]
+    );
+    assert_eq!(
+        written_fields(&text, "Gen"),
+        [
+            "BusNum",
+            "GenID",
+            "GenStatus",
+            "GenAGCAble",
+            "GenAVRAble",
+            "GenMW",
+            "GenMVR",
+            "GenMWMax",
+            "GenMWMin",
+            "GenMVRMax",
+            "GenMVRMin",
+            "GenVoltSet",
+            "GenMVABase",
+        ]
+    );
+    // LineTap is enterable only on a transformer, and Simulator reads a row's
+    // fields in order, so the device type comes first.
+    assert_eq!(
+        written_fields(&text, "Branch"),
+        [
+            "BusNum",
+            "BusNum:1",
+            "LineCircuit",
+            "BranchDeviceType",
+            "LineStatus",
+            "LineR",
+            "LineX",
+            "LineC",
+            "LineAMVA",
+            "LineAMVA:1",
+            "LineAMVA:2",
+            "LineTap",
+            "LinePhase",
+        ]
+    );
+    assert_eq!(
+        written_column(&text, "Bus", "BusSlack"),
+        ["YES", "NO", "NO"]
+    );
+    assert_eq!(written_column(&text, "Bus", "BusVoltLim"), ["YES"; 3]);
+    assert_eq!(written_column(&text, "Shunt", "SSCMode"), ["Fixed"]);
+}
+
+/// The new vocabulary reads back to the same typed network.
+#[test]
+// Exact decimal fractions written and parsed back; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn simulator_vocabulary_round_trips_through_the_writer() {
+    let net = parse_powerworld(SIMULATOR_VOCABULARY_CASE).unwrap();
+    let again = parse_powerworld(&write_powerworld(&net).text).unwrap();
+    assert_eq!(again.buses(), net.buses());
+    assert_eq!(again.loads(), net.loads());
+    assert_eq!(again.shunts(), net.shunts());
+    assert_eq!(again.generators(), net.generators());
+    assert_eq!(again.branches(), net.branches());
+    let xf = &again.branches()[1];
+    assert_eq!((xf.tap, xf.shift, xf.rate_c), (0.95, 3.0, 220.0));
+    assert!(!xf.in_service);
+    assert_eq!(again.shunts()[0].g, 1.5);
+    // Fixed is the mode the writer states for every shunt, so it is no extra;
+    // any other mode is kept for the writer to report.
+    assert!(!net.shunts()[0].extras.contains_key("SSCMode"));
+    let discrete =
+        parse_powerworld(&SIMULATOR_VOCABULARY_CASE.replace("\"Fixed\"", "\"Discrete\"")).unwrap();
+    assert_eq!(
+        discrete.shunts()[0]
+            .extras
+            .get("SSCMode")
+            .and_then(|v| v.as_str()),
+        Some("Discrete")
+    );
+}
+
+/// Simulator refuses to create a bus whose BusName is blank, so an unnamed
+/// bus is written under its number, and a name equal to the bus number reads
+/// back as no name.
+#[test]
+fn an_unnamed_bus_is_written_under_its_number_and_reads_back_unnamed() {
+    let net = parse_powerworld(SIMULATOR_VOCABULARY_CASE).unwrap();
+    assert_eq!(net.buses()[2].name, None);
+    let text = write_powerworld(&net).text;
+    assert_eq!(written_column(&text, "Bus", "BusName"), ["One", "Two", "3"]);
+    let again = parse_powerworld(&text).unwrap();
+    assert_eq!(again.buses()[2].name, None);
+    assert_eq!(again.buses()[0].name.as_deref(), Some("One"));
+}
+
+/// AVR is what makes a bus PV in Simulator. A machine on a PQ bus holds its
+/// Mvar output, as in a MATPOWER power flow, and so does one whose
+/// regulation is off.
+#[test]
+fn generator_avr_follows_the_bus_type_and_the_regulation_flag() {
+    let mut net = parse_powerworld(SIMULATOR_VOCABULARY_CASE).unwrap();
+    let text = write_powerworld(&net).text;
+    assert_eq!(written_column(&text, "Gen", "GenAVRAble"), ["YES", "YES"]);
+    assert_eq!(written_column(&text, "Gen", "GenAGCAble"), ["YES", "YES"]);
+
+    net.buses_mut()[1].kind = crate::network::BusType::Pq;
+    let text = write_powerworld(&net).text;
+    assert_eq!(written_column(&text, "Gen", "GenAVRAble"), ["YES", "NO"]);
+
+    net.buses_mut()[1].kind = crate::network::BusType::Pv;
+    net.generators_mut()[0].voltage_regulation_on = false;
+    let text = write_powerworld(&net).text;
+    assert_eq!(written_column(&text, "Gen", "GenAVRAble"), ["NO", "YES"]);
+}
+
+/// Simulator identifies a branch by its two buses in either order plus its
+/// circuit. pegase's 5289 to 3113 and 3113 to 5289 lines, both written as
+/// circuit 1, loaded as one branch, and Simulator logged nothing. A reversed
+/// parallel gets its own circuit, and the positional circuits still read back
+/// as defaults.
+#[test]
+// Exact decimal fractions written and parsed back; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn a_reversed_parallel_branch_gets_its_own_circuit() {
+    let src = "DATA (Bus, [BusNum])\n{\n1\n2\n3\n}\n\
+         DATA (Branch, [BusNum, BusNum:1, LineCircuit, LineR, LineX])\n\
+         {\n2 1 \"1\" 0.01 0.1\n1 2 \"2\" 0.02 0.2\n2 3 \"1\" 0.03 0.3\n}\n";
+    let net = parse_powerworld(src).unwrap();
+    assert!(
+        net.branches()
+            .iter()
+            .all(|b| !b.extras.contains_key("LineCircuit")),
+        "positional circuits are defaults"
+    );
+    let text = write_powerworld(&net).text;
+    assert_eq!(
+        written_column(&text, "Branch", "LineCircuit"),
+        ["1", "2", "1"]
+    );
+    let again = parse_powerworld(&text).unwrap();
+    assert_eq!(again.branches(), net.branches());
+    assert_eq!(again.branches()[1].r, 0.02);
+}
+
+/// Simulator's load, shunt, and generator ids are two characters, and it
+/// truncates a longer one: numbered over the whole table, the 100th load read
+/// as "10" and merged with another load at its bus (ACTIVSg200 from PSS/E lost
+/// 21 of 160 loads). The writer numbers devices per bus, and an id equal to
+/// its per bus position reads back as the default.
+#[test]
+fn device_ids_count_per_bus() {
+    use std::fmt::Write as _;
+
+    let mut src = String::from("DATA (Bus, [BusNum])\n{\n1\n2\n}\n");
+    src.push_str("DATA (Load, [BusNum, LoadID, LoadSMW])\n{\n");
+    for i in 0..120 {
+        // Load ids 1 to 60 at each bus, interleaved.
+        writeln!(src, "{} \"{}\" {i}", 1 + i % 2, i / 2 + 1).unwrap();
+    }
+    src.push_str(
+        "}\nDATA (Gen, [BusNum, GenID, GenMW])\n{\n1 \"1\" 10\n2 \"1\" 20\n1 \"2\" 30\n}\n",
+    );
+    let net = parse_powerworld(&src).unwrap();
+    assert_eq!(net.loads().len(), 120);
+    assert!(
+        net.loads().iter().all(|l| !l.extras.contains_key("LoadID")),
+        "per bus positions are defaults"
+    );
+    let text = write_powerworld(&net).text;
+    let ids = written_column(&text, "Load", "LoadID");
+    assert!(ids.iter().all(|id| id.len() <= 2), "{ids:?}");
+    assert_eq!(ids[118..], ["60", "60"]);
+    assert_eq!(written_column(&text, "Gen", "GenID"), ["1", "1", "2"]);
+    let again = parse_powerworld(&text).unwrap();
+    assert_eq!(again.loads(), net.loads());
+}
+
+/// A bus without a positive nominal voltage, or in area or zone 0, loads in
+/// Simulator with a substituted value, and the writer says so.
+#[test]
+fn values_simulator_substitutes_are_reported() {
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum, BusNomVolt, AreaNum, ZoneNum])\n{\n1 0 1 1\n2 230 0 1\n3 230 1 1\n}\n",
+    )
+    .unwrap();
+    let diagnostics = write_powerworld(&net).render_diagnostics();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.contains("1 bus(es) state no positive nominal voltage")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.contains("1 bus(es) in area or zone 0")),
+        "{diagnostics:?}"
+    );
+}
+
+/// Branch impedances are per unit on the system base, so a case on a base
+/// other than 100 MVA states it where Simulator reads it.
+#[test]
+// Exact decimal fractions written and parsed back; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn the_system_base_is_stated_as_sbase_and_read_back() {
+    let mut net = parse_powerworld(SIMULATOR_VOCABULARY_CASE).unwrap();
+    assert_eq!(net.base_mva(), 100.0);
+    *net.base_mva_mut() = 10.0;
+    let text = write_powerworld(&net).text;
+    assert_eq!(
+        written_column(&text, "Sim_Solution_Options", "SBase"),
+        ["10"]
+    );
+    assert_eq!(parse_powerworld(&text).unwrap().base_mva(), 10.0);
+
+    // The block alone states the base; the comment marker is not needed.
+    let block_only = "DATA (Sim_Solution_Options, [SBase])\n{\n  25\n}\n\
+                      DATA (Bus, [BusNum])\n{\n1\n}\n";
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    let read = super::map::parse_powerworld_source(block_only, None, &mut warnings).unwrap();
+    assert_eq!(read.base_mva(), 25.0);
+    assert_eq!(
+        warnings,
+        crate::diagnostics::Diagnostics::new(),
+        "a block stating only SBase is modeled"
+    );
+}
+
+/// Simulator regulates buses joined by a branch at or below its zero
+/// impedance threshold (0.0002 pu by default) as one group and overrides all
+/// but one set point: pegase's 1043 and 3513, joined by x = 0.0002, solved
+/// 5.6e-5 pu away from MATPOWER. Such a case states the threshold at
+/// Simulator's floor, which reads back without a warning; a branch at or
+/// below the floor is reported.
+#[test]
+fn a_near_zero_impedance_branch_lowers_the_zbr_threshold() {
+    let case = |x: &str| {
+        format!(
+            "DATA (Bus, [BusNum])\n{{\n1\n2\n3\n}}\n\
+             DATA (Branch, [BusNum, BusNum:1, LineCircuit, LineR, LineX])\n\
+             {{\n1 2 \"1\" 0.001 0.01\n2 3 \"1\" 0.00001 {x}\n}}\n"
+        )
+    };
+    let plain = write_powerworld(&parse_powerworld(&case("0.01")).unwrap());
+    assert_eq!(
+        written_fields(&plain.text, "Sim_Solution_Options"),
+        ["SBase"]
+    );
+
+    let small = write_powerworld(&parse_powerworld(&case("0.0002")).unwrap());
+    assert_eq!(
+        written_fields(&small.text, "Sim_Solution_Options"),
+        ["SBase", "ZBRThreshold"]
+    );
+    assert_eq!(
+        written_column(&small.text, "Sim_Solution_Options", "ZBRThreshold"),
+        ["0.00005"]
+    );
+    assert!(
+        !small
+            .render_diagnostics()
+            .iter()
+            .any(|d| d.contains("zero impedance"))
+    );
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    super::map::parse_powerworld_source(&small.text, None, &mut warnings).unwrap();
+    assert_eq!(warnings, crate::diagnostics::Diagnostics::new());
+
+    let tiny = write_powerworld(&parse_powerworld(&case("0.00001")).unwrap());
+    assert!(
+        tiny.render_diagnostics()
+            .iter()
+            .any(|d| d
+                .contains("1 branch(es) at or below Simulator's lowest zero impedance threshold")),
+        "{:?}",
+        tiny.render_diagnostics()
+    );
+
+    // A third party threshold is a Simulator setting the model does not hold.
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    super::map::parse_powerworld_source(
+        "DATA (Sim_Solution_Options, [SBase, ZBRThreshold])\n{\n100 0.001\n}\n\
+         DATA (Bus, [BusNum])\n{\n1\n}\n",
+        None,
+        &mut warnings,
+    )
+    .unwrap();
+    assert_ne!(warnings, crate::diagnostics::Diagnostics::new());
+}
+
+#[test]
+fn a_nonpositive_or_non_numeric_sbase_is_a_read_error() {
+    for bad in ["0", "-100", "abc", "inf"] {
+        let text = format!(
+            "DATA (Sim_Solution_Options, [SBase])\n{{\n  \"{bad}\"\n}}\n\
+             DATA (Bus, [BusNum])\n{{\n1\n}}\n"
+        );
+        match parse_powerworld(&text) {
+            Err(Error::FormatRead { message, .. }) => {
+                assert!(message.contains("SBase"), "{message}");
+            }
+            other => panic!("SBase {bad:?} should be refused, got {other:?}"),
+        }
+    }
+}
+
 // ---- Loud errors ------------------------------------------------------------
 
 fn read_err(text: &str) -> String {
