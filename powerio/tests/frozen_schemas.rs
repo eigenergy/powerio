@@ -4,7 +4,7 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/0.12.0/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/0.12.1/schema.json";
 
 /// The schema files 0.11 releases published, all for documents stating the
 /// integer version 2. This build reads those documents.

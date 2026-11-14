@@ -104,11 +104,11 @@ pub const IR_SCHEMA_NAME: &str = "pio-ir";
 /// The constant names a release at or after the workspace version, and
 /// equals it in a published release. `producer.version` names the software
 /// that wrote a document, which need not be PowerIO.
-pub const IR_VERSION: &str = "0.12.0";
+pub const IR_VERSION: &str = "0.12.1";
 
 /// The `$id` of the schema describing this build's document:
 /// `pio-ir/<IR_VERSION>/schema.json` beneath `https://powerio.dev/schema/`.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.0/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.1/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{
