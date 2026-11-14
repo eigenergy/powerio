@@ -82,11 +82,13 @@ pub mod pipeline;
 mod stated_state;
 pub mod synth;
 
-pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
+pub use ac_jacobian::{
+    PowerFlowJacobian, VoltageCoordinates, calc_bus_power_injection, calc_power_flow_jacobian,
+};
 pub use acopf::{
-    AcBranchData, AcBusData, AcGeneratorData, AcOpfAssemblyOptions, AcOpfPreparation,
-    AcPfAssemblyOptions, AcPfBusData, AcPfGeneratorData, AcPfPreparation, AcStorageData,
-    NodalAcGeneratorData, PreparedAcBusSpecification, build_ac_opf_preparation,
+    AcBranchData, AcBranchFlows, AcBusData, AcGeneratorData, AcOpfAssemblyOptions,
+    AcOpfPreparation, AcPfAssemblyOptions, AcPfBusData, AcPfGeneratorData, AcPfPreparation,
+    AcStorageData, NodalAcGeneratorData, PreparedAcBusSpecification, build_ac_opf_preparation,
     build_ac_pf_preparation,
 };
 pub use dc_operators::{DcOperatorOptions, DcOperators, ReferenceConstrainedSystem};
@@ -133,13 +135,14 @@ pub use matrix::multiconductor::{
     calc_multiconductor_admittance_matrix,
 };
 pub use matrix::{
-    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, IslandPtdf, MatrixStats, Scheme,
-    SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
-    SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
-    calc_adjacency_matrix, calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix,
-    calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_lodf_columns, calc_ptdf, calc_ptdf_by_island,
-    calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options, calc_ptdf_rows,
-    calc_reference_indicator, calc_susceptance_diagonal, calc_unit_vector, calc_weighted_laplacian,
+    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, Grounding, IslandPtdf, MatrixStats,
+    Scheme, SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata,
+    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule,
+    ZeroImpedanceSkips, calc_adjacency_matrix, calc_admittance_matrix, calc_bdoubleprime_matrix,
+    calc_bprime_matrix, calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_lodf_columns, calc_ptdf,
+    calc_ptdf_by_island, calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+    calc_ptdf_rows, calc_reference_indicator, calc_solver_branch_flow_matrix,
+    calc_susceptance_diagonal, calc_unit_vector, calc_weighted_laplacian,
     calc_zero_impedance_skips, check_sddm, ground_at, ground_at_each,
 };
 pub use pipeline::{

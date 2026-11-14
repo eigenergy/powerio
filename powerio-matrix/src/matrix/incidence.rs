@@ -161,8 +161,13 @@ pub fn calc_susceptance_diagonal(b: &[f64]) -> CsMat<f64> {
 /// preparations expose that term through
 /// `DcOpfPreparation::calc_branch_flow_offset`. In the public PowerModels sign
 /// spelling the same flow is `p_branch = -Bf va + b .* shift` with negated
-/// susceptances.
-pub(crate) fn calc_solver_branch_flow_matrix(
+/// susceptances. [`DcOpfMatrices::branch_flow_matrix`](crate::DcOpfMatrices)
+/// is this matrix over a preparation's incidence and weights.
+///
+/// # Panics
+/// Panics if `susceptance_magnitude.len()` is not the incidence column count.
+#[must_use]
+pub fn calc_solver_branch_flow_matrix(
     bus_branch_incidence: &CsMat<f64>,
     susceptance_magnitude: &[f64],
 ) -> CsMat<f64> {

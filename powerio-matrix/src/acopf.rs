@@ -3,13 +3,18 @@
 //! `powerio_prob::build_ac_opf_instance`; it lives here now beside the DC
 //! preparation so every solver formulates over the one shared assembly.
 
+use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
 use powerio_tx::{AngleDifferenceBounds, BalancedNetwork, BusId, IndexedNetwork};
 
 use crate::dcopf::{Units, limits, nodal};
-use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
+use crate::matrix::YbusParts;
+use crate::matrix::triplet::CooBuilder;
+use crate::{
+    AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result, SparseMatrix,
+};
 
 /// Assembly choices that select the numerical content derived from an AC
 /// instance without changing the instance itself. There is no convention
@@ -256,9 +261,36 @@ pub struct AcPfPreparation {
 }
 
 impl AcPfPreparation {
+    /// Dense island labels over this preparation's buses and branch columns:
+    /// labels run `0..k` in order of each island's first dense bus
+    /// ([`powerio_tx::calc_dense_island_labels`]).
+    #[must_use]
+    pub fn calc_island_labels(&self) -> Vec<usize> {
+        powerio_tx::calc_dense_island_labels(
+            self.n_buses,
+            &self.branches.from_bus,
+            &self.branches.to_bus,
+        )
+    }
+
     #[must_use]
     pub fn n_generators(&self) -> usize {
         self.generators.qg.len()
+    }
+
+    /// The bus admittance matrix `Y = G + jB` of this preparation, in dense
+    /// bus order and the preparation's admittance unit: every branch column's
+    /// pi model block ([`AcBranchData::calc_branch_admittance`]) plus the bus
+    /// shunts `buses.g_s + j buses.b_s`. Every diagonal position is stored,
+    /// as an explicit zero where nothing stamps it.
+    ///
+    /// It agrees with [`calc_admittance_matrix`](crate::calc_admittance_matrix)
+    /// over the analysis network, restricted to the prepared buses, but needs
+    /// no network view and no remapping from analysis rows.
+    #[must_use]
+    pub fn calc_admittance_matrix(&self) -> YbusParts {
+        self.branches
+            .calc_admittance_matrix(self.n_buses, &self.buses.g_s, &self.buses.b_s)
     }
 
     #[must_use]
@@ -340,6 +372,181 @@ pub struct AcBranchData {
     pub thermal_limit_active: Vec<bool>,
     /// Whether the instance activates each angle difference bound.
     pub angle_bound_active: Vec<bool>,
+}
+
+/// Terminal branch flows in active branch column order, in the
+/// preparation's power unit: `S_f = pf + j qf` enters the branch at its from
+/// bus and `S_t = pt + j qt` at its to bus.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct AcBranchFlows {
+    pub pf: Vec<f64>,
+    pub qf: Vec<f64>,
+    pub pt: Vec<f64>,
+    pub qt: Vec<f64>,
+}
+
+impl AcBranchData {
+    /// Number of active branch columns.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.g.len()
+    }
+
+    /// Whether the preparation carries no active branch.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.g.is_empty()
+    }
+
+    /// The branch's 2×2 pi model admittance block `[Yff, Yft, Ytf, Ytt]` in
+    /// the preparation's admittance unit, from its series admittance, terminal
+    /// charging, tap and shift columns:
+    ///
+    /// ```text
+    /// Yff = (y + y_fr) / tap²    Yft = -y / conj(t)
+    /// Ytf = -y / t               Ytt = y + y_to
+    /// ```
+    ///
+    /// with `y = g + j b` and `t = tap e^{j shift}`. These are the entries
+    /// [`calc_admittance_matrix`](crate::calc_admittance_matrix) stamps for
+    /// the same branch.
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column.
+    #[must_use]
+    pub fn calc_branch_admittance(&self, branch: usize) -> [Complex64; 4] {
+        let y_series = Complex64::new(self.g[branch], self.b[branch]);
+        let y_fr = Complex64::new(self.g_fr[branch], self.b_fr[branch]);
+        let y_to = Complex64::new(self.g_to[branch], self.b_to[branch]);
+        let tap = self.tap[branch];
+        let a = Complex64::from_polar(tap, self.shift[branch]);
+        let y_ff = (y_series + y_fr) / (tap * tap);
+        let y_tt = y_series + y_to;
+        let y_ft = -y_series / a.conj();
+        let y_tf = -y_series / a;
+        [y_ff, y_ft, y_tf, y_tt]
+    }
+
+    /// The terminal flows of every active branch at the bus voltages
+    /// `vm` (per unit) and `va` (radians), both in dense bus order:
+    ///
+    /// ```text
+    /// S_f = V_f conj(Yff V_f + Yft V_t)
+    /// S_t = V_t conj(Ytf V_f + Ytt V_t)
+    /// ```
+    ///
+    /// over [`Self::calc_branch_admittance`].
+    ///
+    /// # Panics
+    /// Panics if `vm` and `va` differ in length or do not cover every bus a
+    /// branch column names.
+    #[must_use]
+    pub fn calc_branch_flows(&self, vm: &[f64], va: &[f64]) -> AcBranchFlows {
+        assert_eq!(
+            vm.len(),
+            va.len(),
+            "calc_branch_flows: {} magnitudes for {} angles",
+            vm.len(),
+            va.len()
+        );
+        let m = self.len();
+        let mut flows = AcBranchFlows {
+            pf: Vec::with_capacity(m),
+            qf: Vec::with_capacity(m),
+            pt: Vec::with_capacity(m),
+            qt: Vec::with_capacity(m),
+        };
+        for branch in 0..m {
+            let (from, to) = (self.from_bus[branch], self.to_bus[branch]);
+            let vi = Complex64::from_polar(vm[from], va[from]);
+            let vj = Complex64::from_polar(vm[to], va[to]);
+            let (s_from, s_to) =
+                crate::matrix::branch_flows(&self.calc_branch_admittance(branch), vi, vj);
+            flows.pf.push(s_from.re);
+            flows.qf.push(s_from.im);
+            flows.pt.push(s_to.re);
+            flows.qt.push(s_to.im);
+        }
+        flows
+    }
+
+    /// Zero the terminal charging of every near ideal jumper: a branch whose
+    /// series impedance satisfies `|z|² = 1 / (g² + b²) <= max_impedance_squared`.
+    /// The series admittance is kept. Returns the affected branch columns in
+    /// ascending order.
+    ///
+    /// A jumper's charging is a modeling artifact next to its very large
+    /// series admittance, and stamping both can leave a badly conditioned
+    /// admittance matrix. Apply this to a preparation before
+    /// [`AcOpfPreparation::calc_admittance_matrix`] or
+    /// [`AcPfPreparation::calc_admittance_matrix`] so the matrix, the flows of
+    /// [`Self::calc_branch_flows`] and every formulation over these columns
+    /// agree on the edited branches.
+    pub fn clear_jumper_charging(&mut self, max_impedance_squared: f64) -> Vec<usize> {
+        let mut cleared = Vec::new();
+        for branch in 0..self.len() {
+            let admittance_squared =
+                self.g[branch] * self.g[branch] + self.b[branch] * self.b[branch];
+            if admittance_squared > 0.0 && admittance_squared.recip() <= max_impedance_squared {
+                self.g_fr[branch] = 0.0;
+                self.b_fr[branch] = 0.0;
+                self.g_to[branch] = 0.0;
+                self.b_to[branch] = 0.0;
+                cleared.push(branch);
+            }
+        }
+        cleared
+    }
+
+    /// Stamp the bus admittance matrix of these branches and the bus shunts
+    /// `g_s + j b_s` over `n` dense buses, keeping an explicit entry at every
+    /// diagonal position.
+    fn calc_admittance_matrix(&self, n: usize, g_s: &[f64], b_s: &[f64]) -> YbusParts {
+        let m = self.len();
+        let mut g_coo = CooBuilder::with_capacity(n, 4 * m + n);
+        let mut b_coo = CooBuilder::with_capacity(n, 4 * m + n);
+        for branch in 0..m {
+            let (i, j) = (self.from_bus[branch], self.to_bus[branch]);
+            let [y_ii, y_ij, y_ji, y_jj] = self.calc_branch_admittance(branch);
+            g_coo.add(i, i, y_ii.re);
+            b_coo.add(i, i, y_ii.im);
+            g_coo.add(j, j, y_jj.re);
+            b_coo.add(j, j, y_jj.im);
+            g_coo.add(i, j, y_ij.re);
+            b_coo.add(i, j, y_ij.im);
+            g_coo.add(j, i, y_ji.re);
+            b_coo.add(j, i, y_ji.im);
+        }
+        for bus in 0..n {
+            g_coo.add(bus, bus, g_s[bus]);
+            b_coo.add(bus, bus, b_s[bus]);
+        }
+        YbusParts {
+            g: with_every_diagonal(g_coo.finish_csr()),
+            b: with_every_diagonal(b_coo.finish_csr()),
+        }
+    }
+}
+
+/// `matrix` with an explicit zero stored at every diagonal position it
+/// lacks, so a consumer can fill a Jacobian whose pattern includes the
+/// diagonal without searching for it.
+fn with_every_diagonal(matrix: SparseMatrix) -> SparseMatrix {
+    let n = matrix.rows();
+    if (0..n).all(|k| matrix.get(k, k).is_some()) {
+        return matrix;
+    }
+    let mut triplets = sprs::TriMat::with_capacity((n, matrix.cols()), matrix.nnz() + n);
+    for (&value, (row, column)) in &matrix {
+        triplets.add_triplet(row, column, value);
+    }
+    for k in 0..n {
+        if matrix.get(k, k).is_none() {
+            triplets.add_triplet(k, k, 0.0);
+        }
+    }
+    triplets.to_csr()
 }
 
 /// Generator data in generator column order.
@@ -477,9 +684,37 @@ pub struct AcOpfPreparation {
 }
 
 impl AcOpfPreparation {
+    /// Dense island labels over this preparation's buses and branch columns:
+    /// labels run `0..k` in order of each island's first dense bus
+    /// ([`powerio_tx::calc_dense_island_labels`]).
+    #[must_use]
+    pub fn calc_island_labels(&self) -> Vec<usize> {
+        powerio_tx::calc_dense_island_labels(
+            self.n_buses,
+            &self.branches.from_bus,
+            &self.branches.to_bus,
+        )
+    }
+
     #[must_use]
     pub fn n_generators(&self) -> usize {
         self.generators.q.len()
+    }
+
+    /// The bus admittance matrix `Y = G + jB` of this preparation, in dense
+    /// bus order and the preparation's admittance unit: every branch column's
+    /// pi model block ([`AcBranchData::calc_branch_admittance`]) plus the bus
+    /// shunts `buses.g_s + j buses.b_s`, which already hold any self-loop's
+    /// folded stamp. Every diagonal position is stored, as an explicit zero
+    /// where nothing stamps it.
+    ///
+    /// It agrees with [`calc_admittance_matrix`](crate::calc_admittance_matrix)
+    /// over the analysis network, restricted to the prepared buses, but needs
+    /// no network view and no remapping from analysis rows.
+    #[must_use]
+    pub fn calc_admittance_matrix(&self) -> YbusParts {
+        self.branches
+            .calc_admittance_matrix(self.n_buses, &self.buses.g_s, &self.buses.b_s)
     }
 
     #[must_use]

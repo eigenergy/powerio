@@ -34,6 +34,14 @@ pub enum IslandReferencePolicy {
     /// solved and is de-energized. Normalization under this policy picks the
     /// same reference buses.
     PerIsland,
+    /// Keep every reference bus the case states, any number per island and
+    /// whether or not it hosts a generator. A supplied island that states
+    /// none takes the bus of its in-service generator with the largest
+    /// `pmax` (the smallest bus id breaking ties), and an island with no
+    /// in-service generator is de-energized, as under
+    /// [`PerIsland`](Self::PerIsland). Normalization keeps the stated
+    /// references under this policy, as under [`Stated`](Self::Stated).
+    DesignateMissing,
 }
 
 /// One AC island: energized buses joined by in-service branches, closed
@@ -126,8 +134,24 @@ pub struct IslandReferenceReport {
     pub demoted: Vec<BusId>,
     /// Buses of the islands that were de-energized, now typed isolated.
     pub de_energized: Vec<BusId>,
+    /// Each de-energized island with the in-service load it no longer
+    /// serves, in the order the partition lists the islands.
+    pub de_energized_islands: Vec<DeEnergizedIsland>,
     /// One finding per island the assignment changed.
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// An island [`BalancedNetwork::assign_island_references`] de-energized
+/// because no in-service generator supplies it.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct DeEnergizedIsland {
+    /// The island's buses in ascending id order.
+    pub buses: Vec<BusId>,
+    /// Active power of the in-service loads on its buses before the
+    /// assignment, in the network's power unit (MW, or per unit on the MVA
+    /// base for a normalized network).
+    pub unserved_load: f64,
 }
 
 /// The `pmax` order the reference choice uses: a NaN bound never wins, and an
@@ -353,6 +377,7 @@ impl BalancedNetwork {
         let mut designated = Vec::new();
         let mut demoted: Vec<(BusId, BusType)> = Vec::new();
         let mut dead: BTreeSet<BusId> = BTreeSet::new();
+        let mut de_energized_islands = Vec::new();
         let mut diagnostics = Vec::new();
         for island in &partition.islands {
             if !island.is_supplied() {
@@ -369,6 +394,28 @@ impl BalancedNetwork {
                     ),
                 ));
                 dead.extend(island.buses.iter().copied());
+                de_energized_islands.push(DeEnergizedIsland {
+                    buses: island.buses.clone(),
+                    unserved_load: load,
+                });
+                continue;
+            }
+            if policy == IslandReferencePolicy::DesignateMissing {
+                if island.references.is_empty()
+                    && let Some(bus) = largest_generator_bus(self.generators(), &island.generators)
+                {
+                    diagnostics.push(Diagnostic::of(
+                        &codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED,
+                        format!(
+                            "the island of {} bus(es) ({}) states no reference bus; bus {bus} \
+                             hosts its largest pmax in-service generator and was designated the \
+                             reference",
+                            island.buses.len(),
+                            bus_list(&island.buses)
+                        ),
+                    ));
+                    designated.push(bus);
+                }
                 continue;
             }
             let supplied = island.supplied_references(self.generators());
@@ -453,6 +500,7 @@ impl BalancedNetwork {
             designated,
             demoted,
             de_energized: dead.into_iter().collect(),
+            de_energized_islands,
             diagnostics,
         }
     }
@@ -706,6 +754,30 @@ mod tests {
         assert_eq!(partition.islands[0].hvdc, [0]);
         assert_eq!(partition.islands[1].hvdc, [] as [usize; 0]);
         assert_eq!(partition.islands[2].hvdc, [0]);
+    }
+
+    #[test]
+    fn designate_missing_keeps_every_stated_reference() {
+        let mut net = three_islands();
+        // A second stated reference in island A, hosting no generator.
+        net.buses_mut()[1].kind = BusType::Ref;
+        let report = net.assign_island_references(IslandReferencePolicy::DesignateMissing);
+        assert_eq!(kind(&net, 1), BusType::Ref);
+        assert_eq!(kind(&net, 2), BusType::Ref);
+        // Island B states none: its largest pmax generator bus is designated.
+        assert_eq!(report.designated, [BusId(5)]);
+        assert_eq!(kind(&net, 5), BusType::Ref);
+        assert_eq!(report.demoted, [] as [BusId; 0]);
+        // Island C has no generator: de-energized, with its unserved load.
+        assert_eq!(report.de_energized, [BusId(6), BusId(7)]);
+        assert_eq!(report.de_energized_islands.len(), 1);
+        assert_eq!(report.de_energized_islands[0].buses, [BusId(6), BusId(7)]);
+        assert!((report.de_energized_islands[0].unserved_load - 25.0).abs() < 1e-12);
+        assert_eq!(kind(&net, 6), BusType::Isolated);
+        assert!(
+            codes(&report.diagnostics)
+                .contains(&codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED.code)
+        );
     }
 
     #[test]

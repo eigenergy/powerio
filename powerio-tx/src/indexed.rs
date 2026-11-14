@@ -305,6 +305,36 @@ impl<'n> IndexedNetwork<'n> {
             .filter(|(_, b)| b.in_service)
     }
 
+    /// Whether branch row `row` of this view's network enters the AC
+    /// analysis: it is in service, joins two distinct buses that resolve and
+    /// are not typed isolated, and has a series impedance the pi model can
+    /// divide by ([`calc_series_admittance_of`](crate::calc_series_admittance_of)
+    /// returns a finite admittance, the guard every admittance builder
+    /// shares). An out of range row is not one.
+    ///
+    /// This is the branch set an AC preparation keeps as branch columns. A
+    /// DC formula that reads only the reactance can keep a purely resistive
+    /// branch as a zero weight column in addition.
+    #[must_use]
+    pub fn is_analysis_branch(&self, row: usize) -> bool {
+        let Some(branch) = self.net.branches().get(row) else {
+            return false;
+        };
+        if !branch.in_service || branch.from == branch.to {
+            return false;
+        }
+        let energized = |bus| {
+            self.bus_index(bus)
+                .is_some_and(|index| self.net.buses()[index].kind != BusType::Isolated)
+        };
+        energized(branch.from)
+            && energized(branch.to)
+            && matches!(
+                crate::calc_series_admittance_of(branch.r, branch.x, row),
+                Ok(Some(_))
+            )
+    }
+
     /// In-service generators with their index into [`generators`](Self::generators).
     pub fn in_service_gens(&self) -> impl Iterator<Item = (usize, &Generator)> {
         self.net
@@ -492,13 +522,85 @@ impl ConnectivityReport {
     }
 }
 
+/// Dense island labels over `n` buses joined by the edges
+/// `from_bus[e]`–`to_bus[e]`: two buses share a label iff a path of edges
+/// joins them, and labels run `0..k` in order of each island's first bus. A
+/// preparation's branch columns give the islands of the problem it carries
+/// (`DcOpfPreparation::calc_island_labels` and the AC counterparts in
+/// `powerio-matrix`).
+///
+/// # Panics
+/// Panics if `from_bus` and `to_bus` differ in length or name a bus `>= n`.
+#[must_use]
+pub fn calc_dense_island_labels(n: usize, from_bus: &[usize], to_bus: &[usize]) -> Vec<usize> {
+    assert_eq!(
+        from_bus.len(),
+        to_bus.len(),
+        "calc_dense_island_labels: {} from buses for {} to buses",
+        from_bus.len(),
+        to_bus.len()
+    );
+    let mut uf = crate::union_find::UnionFind::new(n);
+    for (&from, &to) in from_bus.iter().zip(to_bus) {
+        uf.union(from, to);
+    }
+    let roots = uf.into_labeling();
+    let mut label_of_root = vec![usize::MAX; n];
+    let mut next = 0;
+    roots
+        .into_iter()
+        .map(|root| {
+            if label_of_root[root] == usize::MAX {
+                label_of_root[root] = next;
+                next += 1;
+            }
+            label_of_root[root]
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{IndexCore, IndexedNetwork};
+    use super::{IndexCore, IndexedNetwork, calc_dense_island_labels};
     use crate::network::{
-        BalancedNetwork, Bus, BusId, BusType, Extras, Hvdc, Impedance, Load, Shunt, Transformer3W,
-        Winding,
+        BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Hvdc, Impedance, Load, Shunt,
+        Transformer3W, Winding,
     };
+
+    #[test]
+    fn analysis_branches_exclude_what_no_preparation_carries() {
+        let mut buses: Vec<Bus> = (1..=4)
+            .map(|id| Bus::new(BusId(id), BusType::Pq, 230.0))
+            .collect();
+        buses[0].kind = BusType::Ref;
+        buses[3].kind = BusType::Isolated;
+        let line = |from, to, r, x| Branch::new(BusId(from), BusId(to), r, x);
+        let mut net = BalancedNetwork::in_memory(
+            "analysis",
+            100.0,
+            buses,
+            vec![
+                line(1, 2, 0.01, 0.1),
+                line(2, 3, 0.0, 0.0),
+                line(2, 2, 0.01, 0.1),
+                line(3, 4, 0.01, 0.1),
+                line(1, 3, 0.01, 0.1),
+            ],
+        );
+        net.branches_mut()[4].in_service = false;
+        let view = IndexedNetwork::new(&net);
+        let rows: Vec<bool> = (0..6).map(|row| view.is_analysis_branch(row)).collect();
+        assert_eq!(rows, [true, false, false, false, false, false]);
+    }
+
+    #[test]
+    fn dense_island_labels_number_islands_by_first_bus() {
+        assert_eq!(
+            calc_dense_island_labels(6, &[4, 1, 5], &[2, 3, 0]),
+            [0, 1, 2, 1, 2, 0]
+        );
+        assert_eq!(calc_dense_island_labels(3, &[], &[]), [0, 1, 2]);
+    }
 
     fn bus(id: usize, kind: BusType) -> Bus {
         Bus {

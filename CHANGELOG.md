@@ -4,6 +4,26 @@
 
 ## 0.12.1
 
+**Matrices and preparations**
+
+- `DcOpfPreparation::calc_bus_branch_incidence`, `calc_matrices`, `calc_branch_flow` and
+  `calc_island_labels` derive the incidence, every DC OPF matrix, branch flows and islands from a
+  preparation already in hand; `calc_solver_branch_flow_matrix` and `Grounding` (the multi-reference
+  index map of `ground_at_each`) are public.
+- `AcOpfPreparation::calc_admittance_matrix` and `AcPfPreparation::calc_admittance_matrix` stamp
+  `Y` in dense bus order with every diagonal stored; `AcBranchData::calc_branch_admittance`,
+  `calc_branch_flows` and `clear_jumper_charging` give the pi model blocks, terminal flows at given
+  voltages, and the jumper charging rule over the prepared columns.
+- `PowerFlowJacobian::from_admittance` and `update_from_voltages` build and refresh the Jacobian
+  from `(G, B, vm, va)`, and `calc_bus_power_injection` gives `S = V conj(Y V)`. The Jacobian fill no
+  longer searches or evaluates trigonometry per entry: on a 78,484 bus case a build takes 6 ms instead
+  of 73 ms and a refresh 1.4 ms instead of 7 ms.
+- `BranchSusceptanceFormula::calc_susceptance_sensitivity_to_series_susceptance`,
+  `IndexedNetwork::is_analysis_branch`, `calc_dense_island_labels`,
+  `correct_angle_difference_bounds_with_pad`, `IslandReferencePolicy::DesignateMissing` (keep every
+  stated reference, designate only where an island has none) and
+  `IslandReferenceReport::de_energized_islands` (with each island's unserved load).
+
 **Distribution**
 
 - BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the

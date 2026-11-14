@@ -193,15 +193,100 @@ pub fn build_dc_opf_preparation(
     Ok(preparation)
 }
 
+impl DcOpfPreparation {
+    /// The signed bus by branch incidence matrix `A` of this preparation,
+    /// `n_buses × n_branches` CSR: column `e` has `+1` at the branch's from
+    /// bus and `-1` at its to bus, in active branch column order. Self-loops
+    /// never reach the preparation, so every column has exactly two entries.
+    ///
+    /// This is the same matrix [`DcOpfMatrices::bus_branch_incidence`]
+    /// carries, read from the arrays the preparation already holds: the cost
+    /// is one pass over the branch columns, with no network indexing and no
+    /// [`DcOperators`](crate::DcOperators) build. Row `i` of the CSR lists
+    /// the `(branch, sign)` pairs at bus `i` in ascending branch order.
+    ///
+    /// # Panics
+    /// Panics if a branch column names a bus `>= n_buses` or joins a bus to
+    /// itself, which no preparation builder produces.
+    #[must_use]
+    pub fn calc_bus_branch_incidence(&self) -> SparseMatrix {
+        let n = self.n_buses;
+        let m = self.n_branches();
+        let (from_bus, to_bus) = (&self.branches.from_bus, &self.branches.to_bus);
+        // A counting sort straight into CSR: one pass counts each bus row,
+        // a second places the columns, which arrive in ascending order.
+        let mut indptr = vec![0_usize; n + 1];
+        for column in 0..m {
+            indptr[from_bus[column] + 1] += 1;
+            indptr[to_bus[column] + 1] += 1;
+        }
+        for bus in 0..n {
+            indptr[bus + 1] += indptr[bus];
+        }
+        let mut next = indptr[..n].to_vec();
+        let mut indices = vec![0_usize; 2 * m];
+        let mut data = vec![0.0; 2 * m];
+        for column in 0..m {
+            for (bus, sign) in [(from_bus[column], 1.0), (to_bus[column], -1.0)] {
+                indices[next[bus]] = column;
+                data[next[bus]] = sign;
+                next[bus] += 1;
+            }
+        }
+        SparseMatrix::new((n, m), indptr, indices, data)
+    }
+
+    /// Dense island labels over this preparation's buses and branch columns:
+    /// labels run `0..k` in order of each island's first dense bus
+    /// ([`powerio_tx::calc_dense_island_labels`]).
+    #[must_use]
+    pub fn calc_island_labels(&self) -> Vec<usize> {
+        powerio_tx::calc_dense_island_labels(
+            self.n_buses,
+            &self.branches.from_bus,
+            &self.branches.to_bus,
+        )
+    }
+
+    /// Every sparse DC OPF matrix of this preparation, as
+    /// [`calc_dc_opf_matrices`] returns them for the instance the
+    /// preparation came from, without preparing it again.
+    #[must_use]
+    pub fn calc_matrices(&self) -> DcOpfMatrices {
+        matrices_from_preparation(self)
+    }
+
+    /// The branch flows at the bus angles `theta` (radians, dense bus order),
+    /// in active branch column order and the preparation's power unit:
+    /// `f = diag(b) Aᵀ theta + branch_flow_offset`, with `b` the positive
+    /// [`DcBranchParameters::susceptance_magnitude`] and the offset from
+    /// [`Self::calc_branch_flow_offset`]. Positive flow runs from the from
+    /// bus to the to bus.
+    ///
+    /// # Panics
+    /// Panics if `theta.len()` is not `n_buses`.
+    #[must_use]
+    pub fn calc_branch_flow(&self, theta: &[f64]) -> Vec<f64> {
+        assert_eq!(
+            theta.len(),
+            self.n_buses,
+            "calc_branch_flow: theta has {} entries for {} buses",
+            theta.len(),
+            self.n_buses
+        );
+        (0..self.n_branches())
+            .map(|branch| {
+                let b = self.branches.susceptance_magnitude[branch];
+                b * (theta[self.branches.from_bus[branch]] - theta[self.branches.to_bus[branch]])
+                    - b * self.branches.shift[branch]
+            })
+            .collect()
+    }
+}
+
 pub(crate) fn matrices_from_preparation(instance: &DcOpfPreparation) -> DcOpfMatrices {
     let n = instance.n_buses;
-    let m = instance.n_branches();
-    let mut incidence = CooBuilder::with_capacity_rect(n, m, 2 * m);
-    for column in 0..m {
-        incidence.add(instance.branches.from_bus[column], column, 1.0);
-        incidence.add(instance.branches.to_bus[column], column, -1.0);
-    }
-    let incidence = incidence.finish_csr();
+    let incidence = instance.calc_bus_branch_incidence();
     let laplacian = calc_weighted_laplacian(&incidence, &instance.branches.susceptance_magnitude);
     let grounded_laplacian = ground_at_each(&laplacian, instance.reference_buses.as_ref());
     let branch_flow_matrix =

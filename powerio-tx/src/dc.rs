@@ -127,6 +127,49 @@ impl BranchSusceptanceFormula {
         -self.calc_branch_susceptance(resistance, reactance, effective_tap)
     }
 
+    /// The derivative of [`calc_branch_susceptance`](Self::calc_branch_susceptance)
+    /// with respect to the branch's series susceptance `b_s = -x/(r² + x²)`,
+    /// holding the series conductance `g = r/(r² + x²)` and the tap fixed.
+    ///
+    /// The series formulas are linear in `b_s`: `1` and, tap adjusted,
+    /// `1/tap`. The reciprocal reactance formulas read `x = -b_s/(g² + b_s²)`,
+    /// so `d(-1/x)/db_s = 1 - (g/b_s)² = 1 - (r/x)²`, divided by the tap for
+    /// [`Self::TapAdjustedReactance`]. A sensitivity that perturbs a branch's
+    /// series susceptance multiplies by this factor to move the DC weight the
+    /// formula assembles.
+    ///
+    /// Non-finite in, non-finite out, as the susceptance itself.
+    #[must_use]
+    pub fn calc_susceptance_sensitivity_to_series_susceptance(
+        self,
+        resistance: f64,
+        reactance: f64,
+        effective_tap: f64,
+    ) -> f64 {
+        let reciprocal_reactance = || {
+            let ratio = resistance / reactance;
+            1.0 - ratio * ratio
+        };
+        match self {
+            Self::SeriesSusceptance | Self::SeriesSusceptanceNoPhaseShift => {
+                if resistance.is_finite() && reactance.is_finite() {
+                    1.0
+                } else {
+                    f64::NAN
+                }
+            }
+            Self::TapAdjustedSeriesSusceptance => {
+                if resistance.is_finite() && reactance.is_finite() && effective_tap.is_finite() {
+                    1.0 / effective_tap
+                } else {
+                    f64::NAN
+                }
+            }
+            Self::ReactanceOnly => reciprocal_reactance(),
+            Self::TapAdjustedReactance => reciprocal_reactance() / effective_tap,
+        }
+    }
+
     /// Whether the selected formula reads the transformer tap, and so whether
     /// the tap can bound or reject a branch.
     #[must_use]
@@ -225,6 +268,50 @@ mod tests {
         let dcp = BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift;
         assert!(dcp.reads_resistance() && !dcp.reads_tap() && !dcp.includes_phase_shifts());
         assert!((dcp.calc_branch_susceptance(0.1, 0.2, f64::NAN) + 4.0).abs() < 1e-12);
+    }
+
+    /// The analytic sensitivity to the series susceptance matches a central
+    /// difference that moves `b_s` with `g` and the tap held fixed.
+    #[test]
+    fn susceptance_sensitivity_matches_central_difference() {
+        let formulas = [
+            BranchSusceptanceFormula::SeriesSusceptance,
+            BranchSusceptanceFormula::TapAdjustedReactance,
+            BranchSusceptanceFormula::ReactanceOnly,
+            BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+            BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+        ];
+        for &(r, x, tap) in &[(0.01, 0.1, 1.0), (0.05, 0.08, 0.97), (0.0, 0.25, 1.05)] {
+            let (g, b_s) = series_admittance_parts(r, x);
+            let at = |b: f64| {
+                let denom = g * g + b * b;
+                (g / denom, -b / denom)
+            };
+            let h = 1e-6 * b_s.abs();
+            let (r_hi, x_hi) = at(b_s + h);
+            let (r_lo, x_lo) = at(b_s - h);
+            for formula in formulas {
+                let fd = (formula.calc_branch_susceptance(r_hi, x_hi, tap)
+                    - formula.calc_branch_susceptance(r_lo, x_lo, tap))
+                    / (2.0 * h);
+                let analytic =
+                    formula.calc_susceptance_sensitivity_to_series_susceptance(r, x, tap);
+                assert!(
+                    (fd - analytic).abs() <= 1e-6 * analytic.abs().max(1.0),
+                    "{formula:?} at r={r} x={x} tap={tap}: fd {fd} vs analytic {analytic}"
+                );
+            }
+        }
+        assert!(
+            BranchSusceptanceFormula::TapAdjustedReactance
+                .calc_susceptance_sensitivity_to_series_susceptance(0.1, f64::NAN, 1.0)
+                .is_nan()
+        );
+        assert!(
+            BranchSusceptanceFormula::SeriesSusceptance
+                .calc_susceptance_sensitivity_to_series_susceptance(f64::INFINITY, 0.1, 1.0)
+                .is_nan()
+        );
     }
 
     /// Public values carry PowerModels signs: negative for an inductive

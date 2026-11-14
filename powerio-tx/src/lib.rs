@@ -147,8 +147,10 @@ pub use geo::{
     to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 pub use hvdc::{HvdcInjections, HvdcTerminalInjection, HvdcTerminalPowers, HvdcTreatment};
-pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
-pub use islands::{Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport};
+pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork, calc_dense_island_labels};
+pub use islands::{
+    DeEnergizedIsland, Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport,
+};
 pub use lcc::{LccConverterState, LccOperatingPoint};
 pub use merge::{
     BusGroup, BusMerge, BusMergeRule, MergeSurvivor, MergedCharging, MergedFlows,
@@ -179,6 +181,7 @@ pub use network::{
 pub use normalize::{
     AngleDifferenceBounds, ClosedSwitchPolicy, NormalizeOptions, NormalizeReport,
     NormalizeSettings, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
-    correct_angle_difference_bounds, stated_angle_difference_bounds,
+    correct_angle_difference_bounds, correct_angle_difference_bounds_with_pad,
+    stated_angle_difference_bounds,
 };
 pub use operations::{BusSubset, Selector, ZeroImpedanceReduction};

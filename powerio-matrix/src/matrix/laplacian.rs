@@ -48,14 +48,20 @@ pub fn ground_at_each(matrix: &CsMat<f64>, refs: &[usize]) -> CsMat<f64> {
 
 /// A sorted, de-duplicated set of grounded indices and the reduced-index map it
 /// induces: drop the grounded rows/columns and shift the survivors down to a
-/// dense `[0, n − k)` range. The PTDF builder shares it, so the row/column
-/// removal lives in one place.
-pub(crate) struct Grounding {
+/// dense `[0, n − k)` range. This is the index map of [`ground_at_each`], so a
+/// solver that factors `ground_at_each(&laplacian, refs)` scatters its reduced
+/// solution back to full bus order through the same `Grounding::new(refs)`.
+/// [`GroundedIndexMap`] is the single-reference special case. The PTDF builder
+/// shares it, so the row/column removal lives in one place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grounding {
     grounds: Vec<usize>,
 }
 
 impl Grounding {
-    pub(crate) fn new(refs: &[usize]) -> Self {
+    /// The grounding of `refs`, in any order and with repeats.
+    #[must_use]
+    pub fn new(refs: &[usize]) -> Self {
         let mut grounds = refs.to_vec();
         // Sorted + de-duplicated so the shift is monotone and a repeated
         // reference doesn't over-count the removal.
@@ -65,18 +71,33 @@ impl Grounding {
     }
 
     /// Number of grounded indices `k`.
-    pub(crate) fn len(&self) -> usize {
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.grounds.len()
     }
 
+    /// Whether nothing is grounded.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.grounds.is_empty()
+    }
+
+    /// The grounded indices, ascending and distinct.
+    #[must_use]
+    pub fn grounded(&self) -> &[usize] {
+        &self.grounds
+    }
+
     /// The largest grounded index, or `None` if nothing is grounded.
-    pub(crate) fn max(&self) -> Option<usize> {
+    #[must_use]
+    pub fn max(&self) -> Option<usize> {
         self.grounds.last().copied()
     }
 
     /// Full index → reduced index, or `None` for a grounded index. The shift is
     /// `i − (number of grounds strictly below i)`.
-    pub(crate) fn reduced(&self, i: usize) -> Option<usize> {
+    #[must_use]
+    pub fn reduced(&self, i: usize) -> Option<usize> {
         // One search, not two: `below` is the count of grounds under `i`, and
         // the entry at that position is `i` itself exactly when `i` is
         // grounded.
@@ -88,10 +109,10 @@ impl Grounding {
         }
     }
 
-    /// Full indices of the surviving rows, reduced index order. Hoists
-    /// [`Self::reduced`] out of a loop that would otherwise call it per
-    /// column.
-    pub(crate) fn full_of_reduced(&self, n: usize) -> Vec<usize> {
+    /// Full indices of the surviving rows of an `n`-wide space, in reduced
+    /// index order: entry `r` is the full index of reduced index `r`.
+    #[must_use]
+    pub fn full_of_reduced(&self, n: usize) -> Vec<usize> {
         (0..n).filter(|&i| self.reduced(i).is_some()).collect()
     }
 }
