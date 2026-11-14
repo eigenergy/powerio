@@ -16,7 +16,9 @@ separate consumers of this model.
 
 `formats::pandapower` reads three-phase pandapower JSON into a
 `MulticonductorNetwork`. It hands every other pandapower document to the
-balanced reader in `powerio-tx`.
+balanced reader in `powerio-tx`, and so a three-phase one with a table only
+that reader maps yet (`trafo`, `shunt`, `gen`, `storage`, `dcline`) when it
+accepts the document.
 
 See the [integration guide](https://eigenergy.github.io/powerio/tnd.html) for the
 boundary rules, migration paths, and planned native/PowerModelsITD support.
