@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.1
+
 **Distribution**
 
 - BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
