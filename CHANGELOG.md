@@ -14,7 +14,7 @@
   of the unchanged module. Any other multiconductor network fails with
   `EMIT.DIST.PANDAPOWER_UNSUPPORTED`. The reader reports elements it does not
   map through the `READ.DIST.PANDAPOWER_*` codes. A duplicate index in any
-  mapped table is refused. The 0.12.0 IR schema adds `pandapower-json` to the
+  mapped table is refused. The 0.12.1 IR schema adds `pandapower-json` to the
   distribution source formats. This step maps buses, lines, external grids,
   loads and static generators. Transformers, shunts and switches are reported
   as unsupported until their steps land.

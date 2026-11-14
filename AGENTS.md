@@ -314,7 +314,7 @@ docs/                         the mdBook guide, the schema archive, release note
   meanings stay unchanged; older readers reject types they do not implement.
   The DTOs in `powerio/src/stored/dto.rs` define the document layout.
   Regenerate the schema named by `IR_SCHEMA_ID`, currently
-  `docs/schema/pio-ir/0.12.0/schema.json`. Every release adds its own
+  `docs/schema/pio-ir/0.12.1/schema.json`. Every release adds its own
   `pio-ir/<release>/schema.json`; `IR_VERSION` is at or after the workspace
   version and equals it in a release. Published schema files, including all
   of `pio-ir/2/`, remain byte-exact.
