@@ -47,6 +47,7 @@ pub(crate) fn parse_bmopf_collecting(
     report_non_numeric_fields(&doc, diags);
     let stated = report_schema_version(&doc, diags);
     let states_current = stated.current;
+    let lowercase_tokens = canonical_tokens(&mut doc);
     super::validate::report(&doc, diags, states_current);
     super::capacitor::lower(&mut doc, diags)?;
     let mut rd = Reader {
@@ -54,13 +55,16 @@ pub(crate) fn parse_bmopf_collecting(
         diagnostics: crate::diagnostics::Diagnostics::new(),
         frequency_stated: false,
         states_current,
-        legacy_spellings: std::collections::BTreeMap::new(),
+        legacy_spellings: if states_current {
+            lowercase_tokens
+        } else {
+            std::collections::BTreeMap::new()
+        },
     };
     if stated.schema_key {
         rd.note_legacy_spelling("meta.$schema");
     }
     rd.document(&doc);
-    rd.note_lowercase_tokens(&doc);
     rd.line_s_max_per_conductor(&doc);
     rd.report_legacy_spellings();
     let found = std::mem::take(&mut rd.diagnostics);
@@ -68,6 +72,256 @@ pub(crate) fn parse_bmopf_collecting(
     super::geo::read(&doc, &mut net, diags);
     crate::model::warn_unresolved_references(&net, diags);
     Ok(net)
+}
+
+const CONFIGURATION: &[&str] = &["WYE", "DELTA", "SINGLE_PHASE"];
+
+/// The tokens of every enum field the schema spells UPPER_SNAKE, with the
+/// note a lowercase spelling of it gets: `(field, accepted tokens, note)`.
+/// The accepted tokens include the older drafts' own (`DSTATCOM`,
+/// `VA_FRACTION`), which the reader maps further.
+type TokenField = (&'static str, &'static [&'static str], &'static str);
+
+const LOAD_TOKENS: &[TokenField] = &[
+    (
+        "model",
+        &[
+            "CONSTANT_POWER",
+            "CONSTANT_CURRENT",
+            "CONSTANT_IMPEDANCE",
+            "ZIP",
+            "EXPONENTIAL",
+        ],
+        "load.model lowercase",
+    ),
+    (
+        "configuration",
+        CONFIGURATION,
+        "load.configuration lowercase",
+    ),
+];
+const GENERATOR_TOKENS: &[TokenField] = &[(
+    "configuration",
+    CONFIGURATION,
+    "generator.configuration lowercase",
+)];
+const CAPACITOR_TOKENS: &[TokenField] = &[(
+    "configuration",
+    CONFIGURATION,
+    "capacitor.configuration lowercase",
+)];
+const IBR_TOKENS: &[TokenField] = &[
+    (
+        "topology",
+        &["SINGLE_PHASE", "THREE_LEG", "FOUR_LEG"],
+        "ibr.topology lowercase",
+    ),
+    (
+        "prime_mover",
+        &["PV", "BATTERY", "GENERIC", "STATCOM", "DSTATCOM"],
+        "ibr.prime_mover lowercase",
+    ),
+    (
+        "dc_control",
+        &["P", "V", "DROOP"],
+        "ibr.dc_control lowercase",
+    ),
+    (
+        "voltage_aggregation",
+        &["PER_PHASE", "AVERAGE"],
+        "ibr.voltage_aggregation lowercase",
+    ),
+];
+const VOLTAGE_REFERENCE: &[&str] = &[
+    "PN_PER_PHASE",
+    "PP_PER_PHASE",
+    "PP_AVERAGED",
+    "PG_AVERAGED",
+    "PN_AVERAGED",
+    "PG_PER_PHASE",
+];
+const VOLT_VAR_TOKENS: &[TokenField] = &[
+    (
+        "voltage_reference",
+        VOLTAGE_REFERENCE,
+        "control_profile.volt_var.voltage_reference lowercase",
+    ),
+    (
+        "q_unit",
+        &["VAR", "PU", "VA_FRACTION"],
+        "control_profile.volt_var.q_unit lowercase",
+    ),
+    (
+        "q_ref",
+        &["VAR_MAX", "VAR_AVAILABLE"],
+        "control_profile.volt_var.q_ref lowercase",
+    ),
+];
+const VOLT_WATT_TOKENS: &[TokenField] = &[
+    (
+        "voltage_reference",
+        VOLTAGE_REFERENCE,
+        "control_profile.volt_watt.voltage_reference lowercase",
+    ),
+    (
+        "p_unit",
+        &["W", "PU", "VA_FRACTION"],
+        "control_profile.volt_watt.p_unit lowercase",
+    ),
+    (
+        "p_ref",
+        &["P_AVAILABLE", "P_MAX", "S_MAX"],
+        "control_profile.volt_watt.p_ref lowercase",
+    ),
+];
+const TRANSFORMER_TOKENS: &[TokenField] = &[
+    (
+        "regulator_type",
+        &["A", "B"],
+        "transformer.regulator_type lowercase",
+    ),
+    (
+        "connection",
+        &["ABBC", "BCAC", "CABA"],
+        "transformer.connection lowercase",
+    ),
+];
+const WINDING_TOKENS: &[TokenField] = &[
+    (
+        "configuration",
+        &["WYE", "DELTA"],
+        "transformer.windings.configuration lowercase",
+    ),
+    (
+        "connection",
+        &["WYE", "DELTA"],
+        "transformer.windings.configuration lowercase",
+    ),
+];
+const WIRE_TOKENS: &[TokenField] = &[(
+    "kind",
+    &["OVERHEAD", "CN_CABLE", "TS_CABLE"],
+    "wire_data.kind lowercase",
+)];
+const GEOMETRY_TOKENS: &[TokenField] = &[(
+    "earth_model",
+    &["MODIFIED_CARSON", "FULL_CARSON", "DERI"],
+    "line_geometry.earth_model lowercase",
+)];
+const DC_POLES: &[&str] = &["POSITIVE", "NEGATIVE", "METALLIC_RETURN"];
+
+/// The number of values rewritten per field note.
+type Rewrites = std::collections::BTreeMap<&'static str, usize>;
+
+/// The tables whose records carry enum values, read at the top level and,
+/// in an older draft's layout, under `extras`.
+const TOKEN_TABLES: [&str; 8] = [
+    "load",
+    "generator",
+    "capacitor",
+    "ibr",
+    "control_profile",
+    "wire_data",
+    "line_geometry",
+    "dc_bus",
+];
+
+/// Rewrites the enum values older drafts spelled lowercase (`constant_power`,
+/// `wye`, `pv`, `droop`, ...) to the schema's UPPER_SNAKE spelling, once,
+/// before any check or table reader sees the document, so every consumer
+/// matches the one canonical token. A value whose uppercase form is no token
+/// of its field is left as stated for the reader to report. Returns the
+/// rewrites per field for the one `READ.BMOPF.SCHEMA_LEGACY` finding; the
+/// tables an older draft kept under `extras` are rewritten too.
+fn canonical_tokens(doc: &mut Map<String, Value>) -> Rewrites {
+    let mut found = Rewrites::new();
+    for name in TOKEN_TABLES {
+        canonical_table_tokens(doc, name, &mut found);
+    }
+    canonical_transformer_tokens(doc.get_mut("transformer"), &mut found);
+    if let Some(Value::Object(extras)) = doc.get_mut("extras") {
+        for name in TOKEN_TABLES {
+            canonical_table_tokens(extras, name, &mut found);
+        }
+        canonical_transformer_tokens(extras.get_mut("transformer"), &mut found);
+    }
+    found
+}
+
+fn canonical_token(value: &mut Value, tokens: &[&str], note: &'static str, found: &mut Rewrites) {
+    if let Value::String(text) = value
+        && text.chars().any(|c| c.is_ascii_lowercase())
+    {
+        let upper = text.to_ascii_uppercase();
+        if tokens.contains(&upper.as_str()) {
+            *text = upper;
+            *found.entry(note).or_default() += 1;
+        }
+    }
+}
+
+fn canonical_fields(record: &mut Map<String, Value>, tokens: &[TokenField], found: &mut Rewrites) {
+    for (field, accepted, note) in tokens {
+        if let Some(value) = record.get_mut(*field) {
+            canonical_token(value, accepted, note, found);
+        }
+    }
+}
+
+fn object_records(table: Option<&mut Value>) -> impl Iterator<Item = &mut Map<String, Value>> {
+    table
+        .and_then(Value::as_object_mut)
+        .into_iter()
+        .flat_map(|items| items.values_mut())
+        .filter_map(Value::as_object_mut)
+}
+
+fn canonical_table_tokens(doc: &mut Map<String, Value>, name: &str, found: &mut Rewrites) {
+    let tokens: &[TokenField] = match name {
+        "load" => LOAD_TOKENS,
+        "generator" => GENERATOR_TOKENS,
+        "capacitor" => CAPACITOR_TOKENS,
+        "ibr" => IBR_TOKENS,
+        "wire_data" => WIRE_TOKENS,
+        "line_geometry" => GEOMETRY_TOKENS,
+        _ => &[],
+    };
+    for record in object_records(doc.get_mut(name)) {
+        canonical_fields(record, tokens, found);
+        match name {
+            "control_profile" => {
+                for (block, tokens) in [
+                    ("volt_var", VOLT_VAR_TOKENS),
+                    ("volt_watt", VOLT_WATT_TOKENS),
+                ] {
+                    if let Some(Value::Object(block)) = record.get_mut(block) {
+                        canonical_fields(block, tokens, found);
+                    }
+                }
+            }
+            "dc_bus" => {
+                if let Some(Value::Object(poles)) = record.get_mut("pole") {
+                    for pole in poles.values_mut() {
+                        canonical_token(pole, DC_POLES, "dc_bus.pole lowercase", found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn canonical_transformer_tokens(subtypes: Option<&mut Value>, found: &mut Rewrites) {
+    for group in object_records(subtypes) {
+        for record in group.values_mut().filter_map(Value::as_object_mut) {
+            canonical_fields(record, TRANSFORMER_TOKENS, found);
+            if let Some(Value::Array(windings)) = record.get_mut("windings") {
+                for winding in windings.iter_mut().filter_map(Value::as_object_mut) {
+                    canonical_fields(winding, WINDING_TOKENS, found);
+                }
+            }
+        }
+    }
 }
 
 /// What a document's `meta` states about the release it was written against.
@@ -915,13 +1169,6 @@ impl Reader<'_> {
                 self.note_legacy_spelling("ibr.cost");
                 extras.entry("energy_cost_rate".to_owned()).or_insert(cost);
             }
-            // Every enum of the schema is UPPER_SNAKE; the DC control mode was `droop`.
-            if let Some(Value::String(mode)) = extras.get_mut("dc_control")
-                && mode.as_str() == "droop"
-            {
-                "DROOP".clone_into(mode);
-                self.note_legacy_spelling("ibr.dc_control droop");
-            }
             self.net.ibrs_mut().push(DistIbr {
                 name: name.clone(),
                 bus: string(o.get("bus")),
@@ -1241,36 +1488,6 @@ impl Reader<'_> {
                      drafts did; read per conductor with the neutral conductor unbounded"
                 ),
             );
-        }
-    }
-
-    /// Notes the lowercase enum values earlier drafts used where the schema
-    /// spells them UPPER_SNAKE: `wire_data.kind` and
-    /// `line_geometry.earth_model`. Both tables are retained as source data,
-    /// so only the spelling is noted.
-    fn note_lowercase_tokens(&mut self, doc: &Map<String, Value>) {
-        if !self.states_current {
-            return;
-        }
-        for (table, field, note) in [
-            ("wire_data", "kind", "wire_data.kind lowercase"),
-            (
-                "line_geometry",
-                "earth_model",
-                "line_geometry.earth_model lowercase",
-            ),
-        ] {
-            let lowercase = doc
-                .get(table)
-                .and_then(Value::as_object)
-                .into_iter()
-                .flat_map(|items| items.values())
-                .filter_map(|item| item.get(field).and_then(Value::as_str))
-                .filter(|value| value.chars().any(|c| c.is_ascii_lowercase()))
-                .count();
-            if lowercase > 0 {
-                *self.legacy_spellings.entry(note).or_default() += lowercase;
-            }
         }
     }
 
