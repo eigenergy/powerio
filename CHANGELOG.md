@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**Distribution**
+
+- BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
+  schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
+  `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.
 - Read three-phase pandapower networks, those with `asymmetric_load`,
   `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
   under the `pandapower-json` token. The balanced reader refuses them (#846).
