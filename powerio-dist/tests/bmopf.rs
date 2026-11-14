@@ -6105,3 +6105,33 @@ fn older_draft_lowercase_enum_tokens_read_as_their_uppercase_twin() {
         }
     }
 }
+
+/// `extras` is free-form: data a user keeps there under a table's name
+/// (`load`, `generator`, `dc_bus`, `wire_data`, ...) is written back exactly as
+/// read and is not reported as an older draft's spelling. Only the tables the
+/// reader types from `extras` are canonicalized.
+#[test]
+fn free_form_extras_are_kept_as_stated() {
+    let mut doc: serde_json::Value = serde_json::from_str(&one_load_document(
+        &serde_json::json!({}),
+        &serde_json::json!({"model": "CONSTANT_POWER"}),
+    ))
+    .unwrap();
+    let extras = serde_json::json!({
+        "load": {"x": {"model": "zip", "configuration": "Wye", "note": "keep"}},
+        "generator": {"g": {"configuration": "delta"}},
+        "dc_bus": {"d": {"pole": {"p": "positive"}}},
+        "wire_data": {"w": {"kind": "overhead"}}
+    });
+    doc["extras"] = extras.clone();
+    let net = parse_bmopf_str(&doc.to_string()).unwrap();
+    assert!(
+        net.diagnostics
+            .iter()
+            .all(|d| d.code() != "READ.BMOPF.SCHEMA_LEGACY"),
+        "{:?}",
+        net.diagnostics
+    );
+    let out: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(out["extras"], extras);
+}

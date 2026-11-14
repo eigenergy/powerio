@@ -195,7 +195,7 @@ const WINDING_TOKENS: &[TokenField] = &[
     (
         "connection",
         &["WYE", "DELTA"],
-        "transformer.windings.configuration lowercase",
+        "transformer.windings.connection lowercase",
     ),
 ];
 const WIRE_TOKENS: &[TokenField] = &[(
@@ -232,15 +232,20 @@ const TOKEN_TABLES: [&str; 8] = [
 /// matches the one canonical token. A value whose uppercase form is no token
 /// of its field is left as stated for the reader to report. Returns the
 /// rewrites per field for the one `READ.BMOPF.SCHEMA_LEGACY` finding; the
-/// tables an older draft kept under `extras` are rewritten too.
+/// tables the reader types from `extras` (`ibr`, `control_profile`, `transformer`)
+/// are rewritten too; the rest of `extras` is left as stated.
 fn canonical_tokens(doc: &mut Map<String, Value>) -> Rewrites {
     let mut found = Rewrites::new();
     for name in TOKEN_TABLES {
         canonical_table_tokens(doc, name, &mut found);
     }
     canonical_transformer_tokens(doc.get_mut("transformer"), &mut found);
+    // `extras` is free-form. Only the tables the reader types from it (the first
+    // draft kept `ibr`, `control_profile` and transformer details there) are
+    // canonicalized; everything else under `extras` is the user's and is written
+    // back as it was read.
     if let Some(Value::Object(extras)) = doc.get_mut("extras") {
-        for name in TOKEN_TABLES {
+        for name in ["ibr", "control_profile"] {
             canonical_table_tokens(extras, name, &mut found);
         }
         canonical_transformer_tokens(extras.get_mut("transformer"), &mut found);
