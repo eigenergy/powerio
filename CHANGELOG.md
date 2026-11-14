@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Distribution**
+
+- BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
+  schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
+  `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.
+
 ## 0.12.0
 
 PowerIO 0.12.0 starts the 0.12.x release series. Before 1.0, the public
