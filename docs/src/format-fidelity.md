@@ -501,7 +501,9 @@ frequency other than 50 Hz are reported as dropped.
 
 ### PowerWorld
 
-`.aux` is read and written, `.pwb` binary cases are read only, and a `.pwd`
+`.aux` is read and written, `.pwb` binary cases are read (the Python package
+writes them through Simulator, see [PowerWorld binary
+cases](python.md#powerworld-binary-cases)), and a `.pwd`
 display file parses to a `GeoLayer`
 ([Geographic and display data](geo-and-display.md)). The writer states the
 system base as Simulator's `SBase` solution option, which the reader reads

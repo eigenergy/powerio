@@ -16,6 +16,7 @@ pip install 'powerio[gridfm]'   # Polars
 pip install 'powerio[all]'      # the three above
 pip install 'powerio[pandas]'   # pandas and PyArrow tables, Python 3.10 or later
 pip install 'powerio[mcp]'      # the MCP server, Python 3.10 or later
+pip install 'powerio[simauto]'  # pywin32, for writing PowerWorld .pwb on Windows
 ```
 
 Importing `powerio` and calling `parse`, `emit`, `serialize`, or `deserialize`
@@ -148,6 +149,38 @@ software that wrote the document separately. `deserialize` reads the documents
 of its own release series and the `"version": 2` documents 0.11 wrote; it
 refuses any other schema or version and reports what it found. PowerIO IR is not a
 grid exchange format, so it does not appear in format discovery.
+
+### PowerWorld binary cases
+
+PowerWorld does not publish the `.pwb` layout, so `emit` does not write it.
+On Windows with PowerWorld Simulator and its SimAuto add-on,
+`powerio.powerworld.write_pwb` writes one through Simulator: it emits the
+module as PowerWorld `.aux`, has Simulator load that text into a new case,
+and has Simulator save the binary case.
+
+```bash
+pip install 'powerio[simauto]'   # pywin32, Windows only
+```
+
+```python
+from powerio import powerworld
+
+result = powerworld.write_pwb(module, "case.pwb")
+result = powerworld.write_pwb(module, "case23.pwb", version=23)  # Simulator 23 layout
+```
+
+The destination is a path, a binary file object, or `None` for an in-memory
+artifact, as with `emit`. The result's diagnostics are the `.aux` emission's,
+and its fidelity is `canonical`. If Simulator's message log reports a field it
+does not define or an object it could not create, nothing is written and
+`powerworld.SimAutoError` (code `BIND.PY.SIMAUTO`) lists those log lines.
+Without `simauto=`, each call starts a SimAuto server and stops it afterward.
+Pass a running pywin32 `pwrworld.SimulatorAuto` dispatch, or an ESA `SAW`, to
+reuse it; its open case is replaced by the written case, which stays open.
+`version=None` saves the running Simulator's own layout. PowerIO's `.pwb`
+reader decodes the Simulator 21 and 23 layouts (`version=21` and `version=23`)
+but not yet Simulator 24's, so pass one of those to read the file back with
+`powerio.parse`.
 
 ## PSS/E contingency analysis files
 
@@ -368,6 +401,9 @@ have a stable diagnostic code, so branch on `.code` rather than on the rendered
 message. A Rust panic inside the extension raises `PowerIOError` with code
 `BIND.PY.PANIC` instead of `pyo3_runtime.PanicException`, and the module is
 left unchanged, because each mutation is built in full before it is installed.
+`powerio.powerworld.SimAutoError`, raised when PowerWorld Simulator is absent or
+refuses a step of a `.pwb` write, also derives from `PowerIOError`, with code
+`BIND.PY.SIMAUTO`.
 
 ## MCP server
 

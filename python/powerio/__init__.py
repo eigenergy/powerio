@@ -175,6 +175,7 @@ __all__ = [
     "from_ppc",
     "parse",
     "parse_geo",
+    "powerworld",
     "resolve_format",
     "serialize",
     "versions",
@@ -2382,3 +2383,6 @@ def diagnostic_record(diagnostic: Diagnostic) -> dict[str, Any]:
 def diagnostic_records(diagnostics: Iterable[Diagnostic]) -> list[dict[str, Any]]:
     """Every diagnostic as a JSON-ready dictionary, in the order given."""
     return [diagnostic_record(item) for item in diagnostics]
+
+
+from . import powerworld  # noqa: E402  (needs emit, defined above)

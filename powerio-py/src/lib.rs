@@ -46,6 +46,8 @@ pub mod codes {
     powerio_core::diagnostic_codes! {
         BIND_PY_PANIC = "BIND.PY.PANIC", Error,
             "a panic was caught at the Python boundary and did not cross it", category = Data;
+        BIND_PY_SIMAUTO = "BIND.PY.SIMAUTO", Error,
+            "PowerWorld Simulator's SimAuto server is absent or refused a step of a .pwb write", category = Output;
     }
 }
 
@@ -5449,6 +5451,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.py().get_type::<pyo3::panic::PanicException>(),
     )?;
     m.add("PANIC_CODE", codes::BIND_PY_PANIC.code)?;
+    m.add("SIMAUTO_CODE", codes::BIND_PY_SIMAUTO.code)?;
     m.add_class::<PyBalancedNetwork>()?;
     m.add_class::<PyBusMerge>()?;
     m.add_class::<PyMulticonductorNetwork>()?;

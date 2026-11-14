@@ -60,6 +60,7 @@ __all__ = [
 ]
 
 PANIC_CODE: str
+SIMAUTO_CODE: str
 
 class PanicException(BaseException):
     """A Rust panic pyo3 caught at the boundary; the wrapper converts it."""
