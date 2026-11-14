@@ -69,7 +69,7 @@ pub const PIO_VERSION_MAJOR: u32 = 0;
 pub const PIO_VERSION_MINOR: u32 = 12;
 
 /// Patch number of the PowerIO release this header was generated from.
-pub const PIO_VERSION_PATCH: u32 = 0;
+pub const PIO_VERSION_PATCH: u32 = 1;
 
 // ---- views -----------------------------------------------------------------
 
