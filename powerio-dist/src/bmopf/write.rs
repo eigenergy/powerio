@@ -12,6 +12,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use serde_json::{Map, Value, json};
 
 use super::profile;
+use super::validate::strictly_positive;
 use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::diagnostics::{Diagnostic, DiagnosticInfo};
@@ -485,8 +486,10 @@ impl Writer {
                     // Writer-owned: this document is powerio's emission, at
                     // the model's frequency, against the version above. A
                     // source `schema_version` names the version that document
-                    // was written against, not this one.
-                    "$schema" | "schema_version" | "frequency" | "case_study_generator" => {}
+                    // was written against, not this one, and `crs` is stated
+                    // from the network's geometry by `geometry`.
+                    "$schema" | "schema_version" | "frequency" | "case_study_generator" | "crs" => {
+                    }
                     "title" | "description" | "license" | "authors" | "data_sources"
                     | "created" | "modified" | "provenance" | "version" => {
                         m.insert(key.clone(), value.clone());
@@ -551,16 +554,9 @@ impl Writer {
     /// required rating or nominal voltage is not positive is dropped whole,
     /// since it cannot be stated validly without it.
     fn enforce_positive_values(&mut self, doc: &mut Map<String, Value>) {
-        fn positive(value: &Value) -> bool {
-            let one = |v: &Value| v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0);
-            one(value)
-                || value
-                    .as_array()
-                    .is_some_and(|a| !a.is_empty() && a.iter().all(one))
-        }
         let drop_fields = |o: &mut Map<String, Value>, keys: &[&str], what: &str, w: &mut Self| {
             for key in keys {
-                if o.get(*key).is_some_and(|v| !positive(v)) {
+                if o.get(*key).is_some_and(|v| !strictly_positive(v)) {
                     let value = o.remove(*key).unwrap_or(Value::Null);
                     w.warn(
                         &C::EMIT_BMOPF_FIELD_DROPPED,
@@ -601,7 +597,7 @@ impl Writer {
                     drop_fields(o, optional, &what, self);
                     let mut invalid = required
                         .iter()
-                        .find(|key| o.get(**key).is_some_and(|v| !positive(v)))
+                        .find(|key| o.get(**key).is_some_and(|v| !strictly_positive(v)))
                         .map(|key| (*key).to_owned());
                     if let Some(Value::Array(windings)) = o.get_mut("windings") {
                         for (idx, winding) in windings.iter_mut().enumerate() {
@@ -613,7 +609,7 @@ impl Writer {
                                 &what,
                                 self,
                             );
-                            if w.get("v_nom").is_some_and(|v| !positive(v)) {
+                            if w.get("v_nom").is_some_and(|v| !strictly_positive(v)) {
                                 invalid.get_or_insert_with(|| format!("winding {idx} v_nom"));
                             }
                         }
@@ -643,17 +639,10 @@ impl Writer {
     /// A capacitor's `v_nom` is required and strictly positive in the
     /// schema; a capacitor without a positive one is dropped and reported.
     fn drop_nonpositive_capacitors(&mut self, doc: &mut Map<String, Value>) {
-        fn positive(value: &Value) -> bool {
-            let one = |v: &Value| v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0);
-            one(value)
-                || value
-                    .as_array()
-                    .is_some_and(|a| !a.is_empty() && a.iter().all(one))
-        }
         if let Some(Value::Object(capacitors)) = doc.get_mut("capacitor") {
             let invalid: Vec<String> = capacitors
                 .iter()
-                .filter(|(_, c)| c.get("v_nom").is_some_and(|v| !positive(v)))
+                .filter(|(_, c)| c.get("v_nom").is_some_and(|v| !strictly_positive(v)))
                 .map(|(name, _)| name.clone())
                 .collect();
             for name in invalid {

@@ -27,6 +27,13 @@ pub const BMOPF_PROPOSAL_SHA256: &str =
 const UPSTREAM_RAW: &str =
     "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/";
 
+/// The dsopt-schema branch the early draft's own `$id` named. The reconciled
+/// schema's `$id` names its release tag instead, so a `meta.$schema` at this
+/// branch's release directory is the early draft. A current document states no
+/// `meta.$schema` at all, so reading such a location as the early draft only
+/// relaxes the draft's line `s_max` rule.
+const POWERIO_DRAFT_BRANCH: &str = "/distribution-system-opt/dsopt-schema/main/";
+
 /// The PowerIO commit whose vendored schema copies releases 0.11.2 and later
 /// stamped into `meta.$schema`.
 const POWERIO_ARCHIVE_COMMIT: &str = "5234df55cd13ad31455697cffbdc16ca50662667";
@@ -151,6 +158,7 @@ impl OlderDraft {
             Some(Self::First)
         } else if directory(Self::PowerIo)
             && (id.contains(POWERIO_ARCHIVE_COMMIT)
+                || id.contains(POWERIO_DRAFT_BRANCH)
                 || POWERIO_DRAFT_COMMITS
                     .iter()
                     .any(|commit| id.contains(commit)))
@@ -229,6 +237,12 @@ mod tests {
             (powerio_archive.as_str(), OlderDraft::PowerIo),
             // The draft permalink PowerIO 0.11.0 and 0.11.1 stamped.
             (powerio_draft.as_str(), OlderDraft::PowerIo),
+            // That draft's own canonical `$id`, at the repository's main
+            // branch before the proposal was reconciled.
+            (
+                "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json",
+                OlderDraft::PowerIo,
+            ),
         ] {
             assert_eq!(OlderDraft::from_schema_id(id), Some(expected), "{id}");
             assert!(!names_current_schema(id), "{id}");

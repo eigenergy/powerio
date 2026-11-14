@@ -170,8 +170,18 @@ The public calculations return generic CSR matrix and vector handles:
 - `pio_calc_branch_flow_dc`
 - `pio_calc_bus_injection_dc`
 
-The branch susceptance formula is named explicitly as
-`series_susceptance`, `tap_adjusted_reactance`, or `reactance_only`.
+The `formula` argument names the branch susceptance formula with one of five
+tokens:
+
+- `series_susceptance` (the default when `formula` is NULL)
+- `series_susceptance_no_phase_shift`
+- `tap_adjusted_reactance`
+- `tap_adjusted_series_susceptance`
+- `reactance_only`
+
+Any other token fails with `REQUEST.CAPI.UNKNOWN_FORMULA`. The
+[branch susceptance formulas](../docs/src/matrices.md#conventions) section of
+the matrices guide gives each formula.
 
 `pio_calc_dc_operators` builds the same operators once as a `PioDcOperators`
 handle whose axes are named: `pio_dc_operators_bus_ids`,

@@ -87,7 +87,7 @@ Added:
   a `PioVersionView` with `major`, `minor`, and `patch` fields.
 
 `pio_version()` still returns the release as text. A prerelease such as
-`0.12.0-rc.1` states its core release, `0.12.0`, in the numbers and the whole
+`1.0.0-rc.1` states its core release, `1.0.0`, in the numbers and the whole
 version in `pio_version()`.
 
 A program compiled against the header of release X.Y.Z works with any library
@@ -137,6 +137,26 @@ unit with an off-nominal winding 1 ratio the difference reached `|Ym|` in
   `magnetizing_connection` string view. Julia: `ThreeWindingTransformer` ends
   with `magnetizing_connection::String`. Python rows carry
   `magnetizing_connection` when it is not `"star_point"`.
+
+## XIIDM and JIIDM signs
+
+An IIDM battery states `targetP`, `targetQ`, and its reactive limits as
+generation, positive into the network. PowerIO storage states `ps` and `qs`
+as withdrawal, positive when charging. 0.11 copied the battery values into
+storage unchanged, so a discharging battery read as charging. 0.12 negates
+them: `ps = -targetP`, `qs = -targetQ`, `qmin = -maxQ`, and `qmax = -minQ`,
+and the writers state the inverse.
+
+A converter station's terminal `q` is the flow from the bus into the station,
+while `Hvdc::qf` and `qt` are injected into the bus. 0.12 reads the terminal
+`q` as the negated `qf` or `qt` and writes the inverse; the
+`reactivePowerSetpoint`, already an injection, is unchanged (#700).
+
+Storage values or HVDC terminal reactive powers read from XIIDM or JIIDM with
+0.11, including PowerIO IR documents 0.11 wrote from those sources, carry the
+opposite sign. Read the original XIIDM or JIIDM file again with 0.12; do not
+negate the values by hand in data that mixes sources, because values read
+from other formats were already correct.
 
 ## Renamed for consistency
 
@@ -200,6 +220,16 @@ Writers report values a target cannot represent rather than silently changing
 the constraint. Sienna and PowerSystems JSON, which need a number, state no
 bound as PowerSystems' `INFINITE_BOUND` (see [Sienna exchange](sienna.md)).
 NaN is not accepted as a usable thermal bound.
+
+PyPSA bounds a passive branch by `s_nom * s_max_pu`, and the readers now do
+the same. PyPSA's default `s_nom` is 0, so a non-extendable line or
+transformer that leaves `s_nom` unset, as power-flow-only networks often do,
+reads as a zero bound, where 0.11 read it as no bound and ignored
+`s_max_pu`. An OPF over such a network holds those flows at zero and is
+usually infeasible. The read reports the count with
+`READ.PYPSA.THERMAL_BOUND_ZERO`. State a positive `s_nom`, with
+`s_max_pu = inf` for no bound. An extendable branch (`s_nom_extendable = True`) is bounded by
+`s_nom_max * s_max_pu`, unbounded by default.
 
 PowerIO IR uses its existing nonfinite encoding: `"Infinity"` in JSON.
 The document version distinguishes 0.11 files, where zero meant no bound,

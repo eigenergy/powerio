@@ -14,13 +14,32 @@
   loads and static generators. Transformers, shunts and switches are reported
   as unsupported until their steps land.
 
-## 0.12.0-rc.1
+## 0.12.0
 
-The release candidate for PowerIO 0.12, which starts the 0.12.x release
-series. Before 1.0, the public numerical types and the outstanding
-conventions and milestone work need a maintainer decision. See
-[From 0.11 to 0.12](docs/src/migration-0.12.md) for every change that needs
-action.
+PowerIO 0.12.0 starts the 0.12.x release series. Before 1.0, the public
+numerical types and the outstanding conventions and milestone work need a
+maintainer decision. See [From 0.11 to 0.12](docs/src/migration-0.12.md) for
+every change that needs action.
+
+**Dynamics**
+
+- Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter,
+  governor and stabilizer models, linked to generators by `(bus, machine id)`
+  with `DynamicStudy::machines()`. As in PSS/E, a later record of one role for
+  a unit replaces the earlier one (`LinkIssue::Replaced`); machine ids match
+  exactly, then case-insensitively when one generator on the bus matches
+  (#871, @sebeich).
+
+**DC formulations**
+
+- Explicit tap-adjusted series-susceptance and PowerModels DCP conventions
+  across DC matrices, instances and bindings; the default is unchanged
+  (#820, @frederikgeth).
+- Behaviour change: DC OPF preparation with the default `series_susceptance`
+  formula (and the other series-admittance formulas) keeps a purely resistive
+  branch (r > 0, x = 0) as a zero-weight row, matching the DC operator
+  builders; it is no longer reported as `ZeroImpedance` or skipped by
+  `skip_zero_impedance` (#820).
 
 **Interoperability**
 
@@ -164,12 +183,36 @@ action.
   `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
   in-service branch over dense bus indices; build a graph with any library
   from it.
+- `powerio-prob`'s SOCWR solution names its branch flows as the other
+  solutions do: the `SocwrOpfValues` fields and the `SocwrOpfSolution`
+  accessors `branch_from_active_power`, `branch_from_reactive_power`,
+  `branch_to_active_power`, and `branch_to_reactive_power` are now
+  `branch_from_active_flow`, `branch_from_reactive_flow`,
+  `branch_to_active_flow`, and `branch_to_reactive_flow`, with no alias. The
+  PowerIO IR keys and the quantity names the C ABI's solution value accessor
+  takes follow; the IR reader still accepts the 0.11 keys.
+  `SocwrOpfSolution::bus_order` and `branch_order` return a `Vec`, as every
+  other solution's do, instead of an iterator, and are `#[must_use]`. See
+  [Renamed for consistency](docs/src/migration-0.12.md#renamed-for-consistency).
+- `powerio-dist` removes every version-bearing BMOPF name:
+  `BmopfSchemaVersion`, `BmopfEmitOptions::schema_version`,
+  `with_schema_version` and `sideload_coordinates`, and
+  `BMOPF_SCHEMA_VERSION`; `BMOPF_PROPOSAL_URL` becomes the function
+  `bmopf_proposal_url()`. The `bmopf-json@<version>` output tokens are refused.
+  **BMOPF** below gives the details.
 - Use numeric zero for a zero flow bound and positive infinity for no bound
   across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
   conventions at import/export and preserve 0.11 IR meanings on read (#841).
   Sienna and PowerSystems JSON state an unlimited required rating as
   PowerSystems' `INFINITE_BOUND` and read it back as unlimited. See
   [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings).
+- The PyPSA readers bound a line or transformer's flow by `s_nom * s_max_pu`,
+  as PyPSA does. 0.11 read `s_nom` alone, ignored `s_max_pu`, and read an
+  absent or zero `s_nom` as no bound; 0.12 reads it as a zero bound and
+  reports the in service branches it holds at zero with
+  `READ.PYPSA.THERMAL_BOUND_ZERO`. An extendable branch
+  (`s_nom_extendable`) is bounded by `s_nom_max * s_max_pu`, unbounded by
+  default, and reported with `READ.PYPSA.VALUE_APPROXIMATED`.
 - Python table rows state a nonfinite value as a float in every table. The
   `hvdc`, `storage`, `static_var_compensators`, `areas`, and distribution
   rows carried the IR's `"Infinity"` and `"-Infinity"` strings in 0.11, while
@@ -195,6 +238,10 @@ action.
   explicit directory selections preserve internal time/scenario values.
 - Inspect bounded ZIP/folder collections and explicitly select independent
   standalone inputs or OpenDSS masters over shared immutable companions.
+- The public `powerio::collection` structs and enums, and the
+  `powerio-archive` `EndRecordRefusal` and `DeclaredSizeFailure` enums, are
+  `#[non_exhaustive]`, so 0.12.x can add fields and variants. Build options
+  from `Default` (or `CollectionCase::new`) and set fields.
 - Add shared `SourceTree` file and directory views with explicit admission limits
   and independent successful-read dependency tracking for each selection (#774).
 - CGMES and SINCAL share bounded ZIP acquisition primitives while preserving

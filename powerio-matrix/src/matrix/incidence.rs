@@ -77,7 +77,7 @@ pub(crate) fn build_incidence(
         // rules bound the reactance, and the series formula bounds the whole
         // impedance magnitude.
         let degenerate = match formula {
-            BranchSusceptanceFormula::SeriesSusceptance => {
+            formula if formula.reads_resistance() => {
                 br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
             }
             _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,
@@ -88,9 +88,8 @@ pub(crate) fn build_incidence(
             }
             continue;
         }
-        // Only `TapAdjustedReactance` divides by the tap, so only it can be
-        // bounded or rejected by one (#324); the other formulas never read
-        // the value.
+        // Only the two tap-reading formulas divide by the tap, so only they
+        // can be bounded or rejected by one (#324).
         let tap = if formula.reads_tap() {
             br.calc_divisible_tap(idx)?
         } else {

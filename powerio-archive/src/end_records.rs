@@ -21,6 +21,7 @@ pub struct DeclaredEntries {
 
 /// Why an archive's end records were refused before opening it.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EndRecordRefusal {
     /// The reader would accept no end record.
     Missing,

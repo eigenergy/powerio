@@ -25,13 +25,12 @@ fn memory() -> Collection {
     Collection::from_files("study!literal.zip", files(), CollectionLimits::default()).unwrap()
 }
 fn case(id: &str) -> CollectionCase {
-    CollectionCase {
-        id: id.into(),
-        containers: vec![],
-        selection: CollectionSelection::file(format!("masters/{id}.dss")).format("dss"),
-        attachments: vec!["notes.bin".into()],
-        reader_options: None,
-    }
+    let mut case = CollectionCase::new(
+        id,
+        CollectionSelection::file(format!("masters/{id}.dss")).format("dss"),
+    );
+    case.attachments = vec!["notes.bin".into()];
+    case
 }
 #[test]
 fn manifest_reproduces_independent_selections_and_rejects_untrusted_controls() {
@@ -196,14 +195,11 @@ fn package_rejects_portable_collisions_and_duplicates() {
 fn manifest_reads_are_bounded_per_call_and_direct_catalogs_obey_host_budgets() {
     let bytes = br#"{"schema":"powerio-collection","version":1,"cases":[]}"#;
     let with_budget = |work_bytes| {
-        Collection::from_files(
-            "empty",
-            [],
-            CollectionLimits {
-                work_bytes,
-                ..CollectionLimits::default()
-            },
-        )
+        Collection::from_files("empty", [], {
+            let mut limits = CollectionLimits::default();
+            limits.work_bytes = work_bytes;
+            limits
+        })
         .unwrap()
     };
     let collection = with_budget(bytes.len() as u64);
@@ -216,14 +212,11 @@ fn manifest_reads_are_bounded_per_call_and_direct_catalogs_obey_host_budgets() {
             .to_string()
             .contains("work limit")
     );
-    let collection = Collection::from_files(
-        "empty",
-        [],
-        CollectionLimits {
-            inspection_bytes: 1,
-            ..CollectionLimits::default()
-        },
-    )
+    let collection = Collection::from_files("empty", [], {
+        let mut limits = CollectionLimits::default();
+        limits.inspection_bytes = 1;
+        limits
+    })
     .unwrap();
     assert!(
         collection

@@ -230,8 +230,11 @@ Every PowerIO 0.11 BMOPF document stored its geometry as a FeatureCollection
 in the permitted `extras.geojson` location: features with `kind`, `id`,
 `bus_from`, and `bus_to`, and a `powerio_geo` member carrying the coordinate
 metadata. The reader still accepts that layer, but only when no bus or line
-carries a typed `geo` field: when both are present the typed slots win and the
-layer is not merged in. Either form is typed into bus locations and line
+carries a typed `geo` field: when both are present the typed slots win, the
+layer is not merged in, and its features are reported as dropped
+(`READ.BMOPF.FIELD_DROPPED`). A `geo` the reader cannot place, because it is
+malformed, names no element, or the coordinate metadata is unreadable, is
+reported the same way. Either form is typed into bus locations and line
 routes on read and re-emitted from the model in the typed slots, never copied
 through, so an edit cannot leave a stale copy behind. PowerIO no longer writes
 the layer.

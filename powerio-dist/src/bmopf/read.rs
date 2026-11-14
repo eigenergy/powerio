@@ -721,8 +721,9 @@ impl Reader<'_> {
                 // `meta` is provenance (license, authors, generator tool),
                 // with no typed slot in the model. Stash it whole, the way the
                 // PMD reader stashes `pmd_settings`; the BMOPF writer owns
-                // `$schema`/`frequency`/`case_study_generator` and folds the
-                // other schema fields back from this stash.
+                // `schema_version`/`frequency`/`case_study_generator`/`crs`,
+                // drops `$schema`, and folds the other schema fields back
+                // from this stash.
                 "meta" => {
                     self.net
                         .extras_mut()
@@ -1217,9 +1218,12 @@ impl Reader<'_> {
         for line in self.net.lines_mut() {
             let Some(limits) = &line.s_max else { continue };
             let conductors = line.terminal_map_from.len();
+            if limits.len() == conductors {
+                continue;
+            }
             let phases =
                 DistBus::new("", line.terminal_map_from.clone()).phase_indices(conventions);
-            if limits.len() == conductors || limits.len() != phases.len() {
+            if limits.len() != phases.len() {
                 continue;
             }
             let mut per_conductor = vec![f64::INFINITY; conductors];
@@ -1245,6 +1249,9 @@ impl Reader<'_> {
     /// `line_geometry.earth_model`. Both tables are retained as source data,
     /// so only the spelling is noted.
     fn note_lowercase_tokens(&mut self, doc: &Map<String, Value>) {
+        if !self.states_current {
+            return;
+        }
         for (table, field, note) in [
             ("wire_data", "kind", "wire_data.kind lowercase"),
             (
@@ -1261,8 +1268,8 @@ impl Reader<'_> {
                 .filter_map(|item| item.get(field).and_then(Value::as_str))
                 .filter(|value| value.chars().any(|c| c.is_ascii_lowercase()))
                 .count();
-            for _ in 0..lowercase {
-                self.note_legacy_spelling(note);
+            if lowercase > 0 {
+                *self.legacy_spellings.entry(note).or_default() += lowercase;
             }
         }
     }

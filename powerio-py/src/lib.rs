@@ -168,7 +168,8 @@ fn parse_formula(s: &str) -> PyResult<BranchSusceptanceFormula> {
     BranchSusceptanceFormula::from_formula_name(s).ok_or_else(|| {
         PyValueError::new_err(format!(
             "unknown branch susceptance formula {s:?}; expected \
-             'series_susceptance', 'tap_adjusted_reactance', or 'reactance_only'"
+             'series_susceptance', 'tap_adjusted_reactance', 'reactance_only', \
+             'tap_adjusted_series_susceptance', or 'series_susceptance_no_phase_shift'"
         ))
     })
 }

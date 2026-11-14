@@ -186,9 +186,9 @@ fi
 echo "=== DC MATPOWER oracle (makeBdc, DC operations, one PTDF check) ==="
 "$PY" evals/validation/validate_dc_matpower.py "${dc_args[@]}" || true
 
-# 4i. PTDF/LODF across all three susceptance formulas, with bridge handling.
+# 4i. PTDF/LODF across four susceptance formulas, with bridge handling.
 #     Small cases only: PTDF and LODF are dense here.
-echo "=== DC MATPOWER oracle (PTDF/LODF, three formulas) ==="
+echo "=== DC MATPOWER oracle (PTDF/LODF, four formulas) ==="
 "$PY" evals/validation/validate_dc_ptdf_lodf.py "${DCCASES[@]}" || true
 
 # 5. Full reader x writer matrix (its own batched process).

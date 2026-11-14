@@ -23,7 +23,7 @@ mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 25
 
 def release(version: str) -> tuple:
     """The core MAJOR.MINOR.PATCH of a release: three numbers without leading
-    zeros, and a prerelease suffix (0.12.0-rc.1 or 0.12.0rc1) is a candidate of
+    zeros, and a prerelease suffix (1.0.0-rc.1 or 1.0.0rc1) is a prerelease of
     that core release."""
     match = re.fullmatch(
         r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-?(?:a|b|rc|alpha|beta)\.?[0-9]+)?",

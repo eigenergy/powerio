@@ -3,7 +3,7 @@
 # one story before anything publishes.
 #
 # The workspace version is MAJOR.MINOR.PATCH with an optional prerelease
-# suffix (0.12.0-rc.1). The suffix names a candidate of the release before it;
+# suffix (1.0.0-rc.1). The suffix marks a prerelease of the core release;
 # everything that states a release number states that core release.
 #
 # - PIO_VERSION_MAJOR, _MINOR, and _PATCH in the Rust source and the
@@ -16,6 +16,7 @@
 #   v<workspace version>.
 # - The published 0.11 schema files keep their exact bytes.
 # - Every publishable crate carries the one workspace version.
+# - `--release` requires `## Unreleased` in CHANGELOG.md to be empty.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -128,15 +129,28 @@ for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-archive/Cargo
         || { echo "$manifest does not take the workspace version" >&2; exit 1; }
 done
 
-# The internal dependency pins publish with the crates, so each must state the
-# workspace version it resolves to.
-while read -r pinned; do
-    if [ "$pinned" != "$workspace_version" ]; then
-        echo "an internal dependency pin says $pinned, the workspace says $workspace_version" >&2
+# The internal dependency requirements publish with the crates, so each must
+# state the workspace version it resolves to. A release states it as an
+# ordinary caret requirement ("0.12.0"); a prerelease pins it exactly
+# ("=1.0.0-rc.1"), so the crates of one prerelease only resolve to each other.
+case "$workspace_version" in
+    *-*) expected_requirement="=$workspace_version" ;;
+    *) expected_requirement="$workspace_version" ;;
+esac
+internal=$(grep -cE '^powerio[a-z-]* = \{ path = ' Cargo.toml || true)
+checked=0
+while read -r requirement; do
+    checked=$((checked + 1))
+    if [ "$requirement" != "$expected_requirement" ]; then
+        echo "an internal dependency requires \"$requirement\", the workspace version $workspace_version needs \"$expected_requirement\"" >&2
         exit 1
     fi
-done < <(grep -E "^powerio[a-z-]* = \{ path = \"[^\"]+\", version = \"$semver\"" Cargo.toml \
-    | grep -oE "version = \"$semver\"" | grep -oE "$semver")
+done < <(grep -E "^powerio[a-z-]* = \{ path = \"[^\"]+\", version = \"=?$semver\"" Cargo.toml \
+    | grep -oE "version = \"=?$semver\"" | cut -d'"' -f2)
+if [ "$checked" -ne "$internal" ]; then
+    echo "$((internal - checked)) internal dependencies in Cargo.toml state no version requirement this check reads" >&2
+    exit 1
+fi
 
 # The changelog and release notes state the workspace version.
 # Final release notes take precedence over a draft for the same version.
@@ -144,6 +158,17 @@ changelog_version=$(grep -m1 -oE "^## $semver\$" CHANGELOG.md | grep -oE "$semve
 if [ "$changelog_version" != "$workspace_version" ]; then
     echo "CHANGELOG.md leads with $changelog_version, the workspace says $workspace_version" >&2
     exit 1
+fi
+# Entries still under `## Unreleased` would ship in this release while missing
+# from its section, which is also the GitHub release body. A release requires
+# that heading to be empty; otherwise this only warns.
+unreleased=$(awk '/^## / { inside = ($0 == "## Unreleased"); next } inside && NF' CHANGELOG.md)
+if [ -n "$unreleased" ]; then
+    if $release; then
+        echo "CHANGELOG.md still has entries under ## Unreleased; move them into ## $workspace_version" >&2
+        exit 1
+    fi
+    echo "warning: CHANGELOG.md has entries under ## Unreleased, which --release refuses" >&2
 fi
 release_notes="docs/release-notes/$workspace_version.md"
 if [ ! -f "$release_notes" ]; then

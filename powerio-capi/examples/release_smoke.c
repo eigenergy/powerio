@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     char header_version[32];
     snprintf(header_version, sizeof header_version, "%d.%d.%d", PIO_VERSION_MAJOR,
              PIO_VERSION_MINOR, PIO_VERSION_PATCH);
-    /* A prerelease such as 0.12.0-rc.1 states its core release in the header. */
+    /* A prerelease such as 1.0.0-rc.1 states its core release in the header. */
     size_t core_len = strlen(header_version);
     CHECK(strncmp(header_version, argv[1], core_len) == 0 &&
               (argv[1][core_len] == '\0' || argv[1][core_len] == '-'),
