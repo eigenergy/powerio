@@ -625,21 +625,25 @@ fn fold_admittance(
         } else {
             branch.shift.to_radians()
         };
-        let (sin, cos) = shift.sin_cos();
-        // The squared norm avoids cancellation between the four Y entries
-        // for a near-unity tap. It is exactly zero for a nominal jumper.
-        let factor = (tap.recip() - cos).powi(2) + sin.powi(2);
-        let (mut g, mut b) = match branch.calc_series_admittance(removed.row)? {
-            Some((g, b)) => (g * factor, b * factor),
-            None if tap == 1.0 && shift == 0.0 => (0.0, 0.0),
+        let series = match branch.calc_series_admittance(removed.row)? {
+            Some((g, b)) => num_complex::Complex64::new(g, b),
+            None if tap == 1.0 && shift == 0.0 => num_complex::Complex64::new(0.0, 0.0),
             None => return Err(Error::ZeroImpedance { row: removed.row }),
         };
-        if charging == MergedCharging::FoldToShunt {
+        let zero = num_complex::Complex64::new(0.0, 0.0);
+        let (from_charging, to_charging) = if charging == MergedCharging::FoldToShunt {
             let terminal = branch.calc_terminal_charging();
-            let inverse_tap_squared = tap.recip().powi(2);
-            g += terminal.g_fr * inverse_tap_squared + terminal.g_to;
-            b += terminal.b_fr * inverse_tap_squared + terminal.b_to;
-        }
+            (
+                num_complex::Complex64::new(terminal.g_fr, terminal.b_fr),
+                num_complex::Complex64::new(terminal.g_to, terminal.b_to),
+            )
+        } else {
+            (zero, zero)
+        };
+        // The one self-loop fold of the pi model.
+        let folded =
+            crate::PiModel::new(series, from_charging, to_charging, tap, shift).calc_folded();
+        let (g, b) = (folded.re, folded.im);
         let (g, b) = (g * scale, b * scale);
         if !g.is_finite() || !b.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: removed.row });

@@ -2586,6 +2586,7 @@ dependencies = [
  "criterion",
  "lexical-core",
  "memchr",
+ "num-complex",
  "powerio-archive",
  "powerio-core",
  "quick-xml",

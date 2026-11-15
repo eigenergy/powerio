@@ -47,10 +47,7 @@ pub use ybus::{YbusParts, calc_admittance_matrix};
 // Crate-internal: the gridfm columnar export and the stated-state balance reuse
 // the per-branch admittance and flow kernels so their branch powers and Y_bus
 // agree with `calc_admittance_matrix` by construction.
-pub(crate) use ybus::{
-    AdmittanceStamp, YbusFlags, branch_admittance, branch_flows, calc_folded_self_loop,
-    calc_pi_admittance,
-};
+pub(crate) use ybus::{AdmittanceStamp, YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 

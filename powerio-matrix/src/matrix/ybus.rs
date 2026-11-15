@@ -91,6 +91,19 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
         } else {
             case.to_radians(br.shift)
         };
+        if i == j {
+            // A self-loop's whole block lands on its one bus, through the
+            // pi model's one fold.
+            let Some(model) = branch_pi_model(br, flags, shift_rad, row_idx)? else {
+                continue;
+            };
+            let folded = model.calc_folded();
+            if !folded.re.is_finite() || !folded.im.is_finite() {
+                return Err(powerio_tx::Error::NonFiniteSusceptance { row: row_idx }.into());
+            }
+            stamp.add_shunt(i, folded);
+            continue;
+        }
         let Some(block) = branch_admittance(br, flags, shift_rad, row_idx)? else {
             // Zero-impedance branch (r² + x² = 0): no admittance to scatter.
             continue;
@@ -131,14 +144,13 @@ impl AdmittanceStamp {
         }
     }
 
-    /// Scatter one branch block `[Yff, Yft, Ytf, Ytt]` between buses `i` and
-    /// `j`. A self-loop (`i == j`) lands its whole block on the diagonal.
+    /// Scatter one branch block `[Yff, Yft, Ytf, Ytt]` between distinct
+    /// buses `i` and `j`. A self-loop is folded by
+    /// [`PiModel::calc_folded`](powerio_tx::PiModel::calc_folded) and stamped
+    /// with [`add_shunt`](Self::add_shunt) instead.
     pub(crate) fn add_branch(&mut self, i: usize, j: usize, block: [Complex64; 4]) {
+        debug_assert_ne!(i, j, "a self-loop is stamped through its fold");
         let [y_ii, y_ij, y_ji, y_jj] = block;
-        if i == j {
-            self.add(i, i, calc_folded_self_loop(block));
-            return;
-        }
         self.add(i, i, y_ii);
         self.add(j, j, y_jj);
         self.add(i, j, y_ij);
@@ -172,41 +184,6 @@ impl AdmittanceStamp {
     }
 }
 
-/// The admittance a self-loop branch adds to its one bus: the sum of its
-/// four block entries, `Yff + Yft + Ytf + Ytt`.
-pub(crate) fn calc_folded_self_loop(block: [Complex64; 4]) -> Complex64 {
-    let [y_ii, y_ij, y_ji, y_jj] = block;
-    y_ii + y_jj + y_ij + y_ji
-}
-
-/// The pi model block `[Yff, Yft, Ytf, Ytt]` of a branch with series
-/// admittance `y_series`, terminal charging `y_fr` and `y_to`, tap magnitude
-/// `tap` and phase shift `shift_rad` (radians), in `makeYbus` form:
-///
-/// ```text
-/// Yff = (y + y_fr) / tap²    Yft = -y / conj(t)
-/// Ytf = -y / t               Ytt = y + y_to
-/// ```
-///
-/// with `t = tap e^{j shift}`. The one place the block is formed: the network
-/// builders reach it through [`branch_admittance`], and the preparations
-/// through `AcBranchData::calc_branch_admittance`.
-pub(crate) fn calc_pi_admittance(
-    y_series: Complex64,
-    y_fr: Complex64,
-    y_to: Complex64,
-    tap: f64,
-    shift_rad: f64,
-) -> [Complex64; 4] {
-    let a = Complex64::from_polar(tap, shift_rad);
-    let a_norm_sqr = tap * tap;
-    let y_ff = (y_series + y_fr) / a_norm_sqr;
-    let y_tt = y_series + y_to;
-    let y_ft = -y_series / a.conj();
-    let y_tf = -y_series / a;
-    [y_ff, y_ft, y_tf, y_tt]
-}
-
 /// The four entries of a branch's 2×2 nodal admittance block, in per-unit:
 /// `[Yff, Yft, Ytf, Ytt]` (= `[y_ii, y_ij, y_ji, y_jj]` in `makeYbus` notation).
 /// A pure function of the branch — no bus indexing, no shunt fold — so the Y_bus
@@ -223,13 +200,37 @@ pub(crate) fn calc_pi_admittance(
 /// [`powerio_tx::Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad value can't
 /// slip a NaN into Y_bus or a Parquet column. [`powerio_tx::Error::DegenerateTap`] when the
 /// tap ratio is one the four admittances cannot be divided by.
-#[allow(clippy::many_single_char_names)]
 pub(crate) fn branch_admittance(
     br: &crate::network::Branch,
     flags: YbusFlags,
     shift_rad: f64,
     row: usize,
 ) -> Result<Option<[Complex64; 4]>> {
+    let Some(model) = branch_pi_model(br, flags, shift_rad, row)? else {
+        return Ok(None);
+    };
+    let out = model.calc_block();
+    // Each input is bounded on its own; the products can still overflow
+    // when several sit near their bound at once.
+    if out.iter().any(|y| !y.re.is_finite() || !y.im.is_finite()) {
+        return Err(powerio_tx::Error::NonFiniteSusceptance { row }.into());
+    }
+    Ok(Some(out))
+}
+
+/// The pi model primitives of a branch under `flags`, bounded: the series
+/// admittance (`Ok(None)` for a zero impedance branch the flags skip), the
+/// terminal charging, the tap magnitude and `shift_rad`. [`branch_admittance`]
+/// forms its block; a self-loop folds it.
+///
+/// # Errors
+/// As [`branch_admittance`].
+pub(crate) fn branch_pi_model(
+    br: &crate::network::Branch,
+    flags: YbusFlags,
+    shift_rad: f64,
+    row: usize,
+) -> Result<Option<powerio_tx::PiModel>> {
     let r = if flags.zero_resistance { 0.0 } else { br.r };
     let x = br.x;
     // Zero impedance in every sense the builder can act on; exact zero used to
@@ -241,33 +242,30 @@ pub(crate) fn branch_admittance(
         }
         return Err(powerio_tx::Error::ZeroImpedance { row }.into());
     };
-    let y_series = Complex64::new(g, b);
 
     let charging = if flags.zero_charging {
         crate::network::BranchCharging::new(0.0, 0.0, 0.0, 0.0)
     } else {
         br.calc_terminal_charging()
     };
-    let y_fr = Complex64::new(charging.g_fr, charging.b_fr);
-    let y_to = Complex64::new(charging.g_to, charging.b_to);
 
-    // A tap of 1e-200 underflows `a_norm_sqr` to zero and scatters +/-Inf
-    // through the four admittances.
-    let tap_mag = if flags.unity_taps {
+    // A tap of 1e-200 underflows `tap²` to zero and scatters +/-Inf through
+    // the four admittances.
+    let tap = if flags.unity_taps {
         1.0
     } else {
         br.calc_divisible_tap(row)?
     };
     // `shift_rad` is supplied already in radians and already zeroed when
-    // `flags.zero_shifts` is set (the caller has the network, so it knows whether
-    // the source angle is degrees or — for a normalized network — radians).
-    let out = calc_pi_admittance(y_series, y_fr, y_to, tap_mag, shift_rad);
-    // Each input is bounded on its own above; the products can still overflow
-    // when several sit near their bound at once.
-    if out.iter().any(|y| !y.re.is_finite() || !y.im.is_finite()) {
-        return Err(powerio_tx::Error::NonFiniteSusceptance { row }.into());
-    }
-    Ok(Some(out))
+    // `flags.zero_shifts` is set (the caller has the network, so it knows
+    // whether the source angle is degrees or, normalized, radians).
+    Ok(Some(powerio_tx::PiModel::new(
+        Complex64::new(g, b),
+        Complex64::new(charging.g_fr, charging.b_fr),
+        Complex64::new(charging.g_to, charging.b_to),
+        tap,
+        shift_rad,
+    )))
 }
 
 /// Complex from/to power injections for one branch at the given bus voltages, in

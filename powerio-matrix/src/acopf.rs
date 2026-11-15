@@ -413,13 +413,14 @@ impl AcBranchData {
     /// Panics if `branch` is not an active branch column.
     #[must_use]
     pub fn calc_branch_admittance(&self, branch: usize) -> [Complex64; 4] {
-        crate::matrix::calc_pi_admittance(
+        powerio_tx::PiModel::new(
             Complex64::new(self.g[branch], self.b[branch]),
             Complex64::new(self.g_fr[branch], self.b_fr[branch]),
             Complex64::new(self.g_to[branch], self.b_to[branch]),
             self.tap[branch],
             self.shift[branch],
         )
+        .calc_block()
     }
 
     /// The derivatives of [`Self::calc_branch_admittance`] for `branch`
@@ -436,13 +437,8 @@ impl AcBranchData {
     pub fn calc_branch_admittance_series_derivative(&self, branch: usize) -> [[Complex64; 4]; 2] {
         let zero = Complex64::new(0.0, 0.0);
         let block = |y_series| {
-            crate::matrix::calc_pi_admittance(
-                y_series,
-                zero,
-                zero,
-                self.tap[branch],
-                self.shift[branch],
-            )
+            powerio_tx::PiModel::new(y_series, zero, zero, self.tap[branch], self.shift[branch])
+                .calc_block()
         };
         [
             block(Complex64::new(1.0, 0.0)),
@@ -1148,14 +1144,15 @@ fn preparation_from_view(
             // A self-loop is not a flow element; its whole pi model block
             // lands on the bus diagonal, folded exactly as
             // `calc_admittance_matrix` folds it.
-            let block = crate::matrix::calc_pi_admittance(
+            let folded = powerio_tx::PiModel::new(
                 Complex64::new(series_g, series_b),
                 Complex64::new(charging.g_fr, charging.b_fr),
                 Complex64::new(charging.g_to, charging.b_to),
                 branch.calc_divisible_tap(source_row)?,
                 case.to_radians(branch.shift),
-            );
-            let folded = crate::matrix::calc_folded_self_loop(block) * y_scale;
+            )
+            .calc_folded()
+                * y_scale;
             g_s[from] += folded.re;
             b_s[from] += folded.im;
             continue;

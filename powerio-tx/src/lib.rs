@@ -65,6 +65,7 @@ pub mod merge;
 pub mod network;
 mod normalize;
 mod operations;
+pub mod pi_model;
 mod thermal_limit;
 mod union_find;
 #[doc(hidden)]
@@ -134,6 +135,7 @@ pub use format::{
     EmitOptions, PwdDisplay, PwdSubstation, SOURCE_FORMAT_NAMES, TargetFormat, emit,
     emit_with_options, parse, parse_format_id, parse_target_format,
 };
+pub use pi_model::PiModel;
 
 #[doc(hidden)]
 pub use format::{
