@@ -164,6 +164,22 @@ pub fn calc_sequence_components(phase: [Complex64; 3]) -> [Complex64; 3] {
     ]
 }
 
+/// The three phase phasors `[a, b, c]` of zero, positive and negative
+/// sequence components `[V₀, V₁, V₂]`: `Va = V₀ + V₁ + V₂`,
+/// `Vb = V₀ + a² V₁ + a V₂`, `Vc = V₀ + a V₁ + a² V₂`, the inverse of
+/// [`calc_sequence_components`]. The GridLAB-D sequence voltage substation
+/// reads it.
+#[must_use]
+pub fn calc_phase_components(sequence: [Complex64; 3]) -> [Complex64; 3] {
+    let (a, a2) = rotation();
+    let [zero, positive, negative] = sequence;
+    [
+        zero + positive + negative,
+        zero + a2 * positive + a * negative,
+        zero + a * positive + a2 * negative,
+    ]
+}
+
 /// The sequence matrix `A⁻¹ Z A` of a three phase matrix (rows and columns
 /// zero, positive, negative), with `A` Fortescue's transform. A transposed
 /// matrix is diagonal here, `diag(z₀, z₁, z₁)`; its off diagonal entries
@@ -280,6 +296,12 @@ mod tests {
             Complex64::new(0.1, 0.4),
             Complex64::new(0.12, 0.5),
         ];
+        for (back, value) in calc_sequence_components(calc_phase_components(sequence))
+            .iter()
+            .zip(sequence)
+        {
+            assert!((back - value).norm() < 1e-12);
+        }
         let row = [0, 1, 2].map(|j| calc_circulant_phase_entry(sequence, 0, j));
         for (back, value) in calc_circulant_sequence_from_phase(row).iter().zip(sequence) {
             assert!((back - value).norm() < 1e-12);

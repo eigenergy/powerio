@@ -70,14 +70,9 @@ impl Reader<'_> {
                 "sequence-voltage substation requires an explicit three-phase SWING bus",
             ));
         }
-        let a = Complex64::from_polar(1.0, 2.0 * std::f64::consts::PI / 3.0);
         let rotation = Complex64::from_polar(1.0, angle);
-        let values = [
-            seq[0] + seq[1] + seq[2],
-            seq[0] + a.conj() * seq[1] + a * seq[2],
-            seq[0] + a * seq[1] + a.conj() * seq[2],
-        ]
-        .map(|v| v * rotation);
+        let values =
+            crate::sequence::calc_phase_components([seq[0], seq[1], seq[2]]).map(|v| v * rotation);
         if values
             .iter()
             .any(|v| !v.re.is_finite() || !v.im.is_finite())
