@@ -8,6 +8,10 @@ use super::{METERS_PER_MILE, ObjectKey, Reader, phase_name};
 use crate::DistLineCode;
 use crate::diagnostics::codes;
 use crate::glm::GlmDialect;
+use crate::shielded_cable::{
+    calc_cable_capacitance, calc_concentric_neutral_gmr, calc_concentric_neutral_radius,
+    calc_tape_shield_radius,
+};
 use num_complex::Complex64;
 use powerio_core::{Diagnostic, Error};
 
@@ -82,7 +86,9 @@ impl Reader<'_> {
                 "PNNL requires a concentric neutral or tape shield on each phase cable",
             ));
         };
-        let (return_path, denominator) = match kind {
+        // The screen's radius and, for a concentric neutral, its strands,
+        // in feet: the capacitance's outer radius and Kersting's strand term.
+        let (return_path, screen) = match kind {
             Kind::Concentric => {
                 let strands = positive("neutral_strands")?;
                 if strands.fract() != 0.0 || strands > f64::from(i16::MAX) {
@@ -91,19 +97,17 @@ impl Reader<'_> {
                     );
                 }
                 let diameter = positive("neutral_diameter")?;
-                let radius = (positive("outer_diameter")? - diameter) / 24.0;
+                let radius =
+                    calc_concentric_neutral_radius(positive("outer_diameter")?, diameter) / 12.0;
                 if radius <= 0.0 {
                     return Err(self.error(wire, "concentric-neutral ring radius must be positive"));
                 }
-                let gmr = (neutral_gmr * strands * radius.powf(strands - 1.0)).powf(1.0 / strands);
+                let gmr = calc_concentric_neutral_gmr(neutral_gmr, strands, radius);
                 let resistance = positive("neutral_resistance")? / strands;
-                let denominator = if self.line_capacitance {
-                    (radius / (positive("conductor_diameter")? / 24.0)).ln()
-                        - (strands * diameter / 24.0 / radius).ln() / strands
-                } else {
-                    1.0
-                };
-                (Some((gmr, resistance, radius)), denominator)
+                (
+                    Some((gmr, resistance, radius)),
+                    Some((radius, Some((strands, diameter / 24.0)))),
+                )
             }
             Kind::Shield => {
                 let diameter = positive("shield_diameter")?;
@@ -111,28 +115,33 @@ impl Reader<'_> {
                 if diameter <= thickness {
                     return Err(self.error(wire, "tape-shield diameter must exceed its thickness"));
                 }
-                let denominator = if self.line_capacitance {
-                    ((diameter - thickness) / positive("conductor_diameter")?).ln()
-                } else {
-                    1.0
-                };
+                // GridLAB-D states the shield's GMR; its capacitance takes
+                // the tape's mean radius.
                 (
                     Some((shield_gmr, positive("shield_resistance")?, shield_gmr)),
-                    denominator,
+                    Some((calc_tape_shield_radius(diameter, thickness) / 12.0, None)),
                 )
             }
-            Kind::Bare => (None, 1.0),
+            Kind::Bare => (None, None),
         };
-        let capacitance = if self.line_capacitance && kind != Kind::Bare {
-            let permittivity = self
-                .real(wire, "insulation_relative_permitivitty")
-                .unwrap_or(1.0);
-            if permittivity <= 0.0 || denominator <= 0.0 || !denominator.is_finite() {
-                return Err(self.error(wire, "cable capacitance requires positive finite permittivity and geometric denominator"));
+        let capacitance = match screen {
+            Some((outer, strands)) if self.line_capacitance => {
+                let permittivity = self
+                    .real(wire, "insulation_relative_permitivitty")
+                    .unwrap_or(1.0);
+                // GridLAB-D's rounded permittivity of free space, F/mile.
+                let capacitance = calc_cable_capacitance(
+                    0.01420e-6 * permittivity,
+                    outer,
+                    positive("conductor_diameter")? / 24.0,
+                    strands,
+                );
+                if permittivity <= 0.0 || !capacitance.is_finite() || capacitance <= 0.0 {
+                    return Err(self.error(wire, "cable capacitance requires positive finite permittivity and geometric denominator"));
+                }
+                capacitance
             }
-            2.0 * std::f64::consts::PI * 0.01420e-6 * permittivity / denominator
-        } else {
-            0.0
+            _ => 0.0,
         };
         Ok(Cable {
             wire,
@@ -226,7 +235,7 @@ impl Reader<'_> {
             wires.push(wire);
         }
         let frequency = self.net.base_frequency();
-        let earth = (100.0 / frequency).ln() / 2.0 + 7.6786;
+        let earth = crate::glm::line_physics::carson_earth(frequency);
         let mut z = vec![vec![Complex64::default(); wires.len()]; wires.len()];
         for (i, &(a, gmr, resistance, _)) in wires.iter().enumerate() {
             for (j, &(b, _, _, ring)) in wires.iter().enumerate().skip(i) {
@@ -244,17 +253,25 @@ impl Reader<'_> {
                 if !distance.is_finite() || distance <= 0.0 || !(1.0 / distance).is_finite() {
                     return Err(self.error(config, "cable primitive distance or GMR is invalid"));
                 }
-                let value = Complex64::new(
-                    if i == j { resistance } else { 0.0 } + 0.001_588_36 * frequency,
-                    0.002_022_37 * frequency * ((1.0 / distance).ln() + earth),
-                );
+                let value = crate::overhead::calc_carson_impedance(distance, earth)
+                    + if i == j { resistance } else { 0.0 };
                 z[i][j] = value;
                 z[j][i] = value;
             }
         }
         let phase_count = phases.len();
-        if !reduce_returns(&mut z, phase_count) {
-            return Err(self.error(config, "cable return reduction is singular or nonfinite"));
+        // Eliminates the zero-voltage returns (rings, shields and N) one at a
+        // time, which keeps the matrix exactly symmetric. Each step takes the
+        // remaining return of largest self impedance, so Arras TS's zero N
+        // diagonal is eliminated last, after the shields have filled it.
+        while z.len() > phase_count {
+            let pivot = (phase_count..z.len())
+                .max_by(|&a, &b| z[a][a].norm().total_cmp(&z[b][b].norm()))
+                .expect("a return remains");
+            let keep: Vec<usize> = (0..z.len()).filter(|&i| i != pivot).collect();
+            z = crate::kron::calc_kron_reduced_impedance(&z, &keep, &[pivot], 0.0).ok_or_else(
+                || self.error(config, "cable return reduction is singular or nonfinite"),
+            )?;
         }
         let mut resistance = vec![vec![0.0; phase_count]; phase_count];
         let mut reactance = resistance.clone();
@@ -286,31 +303,4 @@ impl Reader<'_> {
             format!("configuration {} becomes explicit underground phase matrices for {:?}; PNNL includes separate N, Arras CN/bare omits N and Arras shield uses first-phase neutral self parameters", self.names[&config], self.project.dialect())));
         Ok(code)
     }
-}
-
-// Successive Schur complements eliminate at most four zero-voltage return
-// paths (three rings and N). Invalid/nonfinite pivots fail explicitly.
-fn reduce_returns(z: &mut [Vec<Complex64>], phase_count: usize) -> bool {
-    for k in (phase_count..z.len()).rev() {
-        // Symmetric pivoting also handles Arras TS's zero N diagonal.
-        let pivot_index = (phase_count..=k)
-            .max_by(|&a, &b| z[a][a].norm().total_cmp(&z[b][b].norm()))
-            .unwrap();
-        z.swap(k, pivot_index);
-        for row in z.iter_mut() {
-            row.swap(k, pivot_index);
-        }
-        let pivot = z[k][k];
-        if pivot.norm() == 0.0 || !pivot.re.is_finite() || !pivot.im.is_finite() {
-            return false;
-        }
-        for i in 0..k {
-            for j in i..k {
-                let correction = z[i][k] * z[k][j] / pivot;
-                z[i][j] -= correction;
-                z[j][i] = z[i][j];
-            }
-        }
-    }
-    true
 }

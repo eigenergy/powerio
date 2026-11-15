@@ -7,6 +7,10 @@
 //! GMR and its distance to the cores differ between the two.
 use super::{EPSILON_0, EarthModel, Geometry, MU_0, TWO_PI, bessel_ratio, wire::meters};
 use crate::dss::linecode::LineMatrices;
+use crate::shielded_cable::{
+    calc_cable_capacitance, calc_concentric_neutral_distance, calc_concentric_neutral_gmr,
+    calc_concentric_neutral_radius, calc_tape_shield_radius,
+};
 use num_complex::Complex64 as Complex;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -225,17 +229,16 @@ impl Data {
                 diastrand,
                 gmrstrand,
                 ..
-            } => {
-                let k = k as f64;
-                let radius = 0.5 * (self.diacable - diastrand);
-                (gmrstrand * k * radius.powf(k - 1.0)).powf(1.0 / k)
-            }
-            // Per Kersting, to the centre of the tape.
+            } => calc_concentric_neutral_gmr(
+                gmrstrand,
+                k as f64,
+                calc_concentric_neutral_radius(self.diacable, diastrand),
+            ),
             Screen::TapeShield {
                 diashield,
                 tapelayer,
                 ..
-            } => 0.5 * (diashield - tapelayer),
+            } => calc_tape_shield_radius(diashield, tapelayer),
         }
     }
 
@@ -244,14 +247,10 @@ impl Data {
     fn screen_distance(&self, distance: Option<f64>) -> f64 {
         match self.screen {
             Screen::ConcentricNeutral { k, diastrand, .. } => {
-                let radius = 0.5 * (self.diacable - diastrand);
-                match distance {
-                    None => radius,
-                    Some(d) => {
-                        let k = k as f64;
-                        (d.powf(k) - radius.powf(k)).powf(1.0 / k)
-                    }
-                }
+                let radius = calc_concentric_neutral_radius(self.diacable, diastrand);
+                distance.map_or(radius, |d| {
+                    calc_concentric_neutral_distance(d, k as f64, radius)
+                })
             }
             Screen::TapeShield { .. } => distance.unwrap_or_else(|| self.screen_gmr()),
         }
@@ -374,20 +373,18 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
     // Cable screens are always eliminated, before optional bare neutrals,
     // one conductor at a time and the last first, as OpenDSS does.
     for k in (keep..order).rev() {
-        z = crate::kron::calc_kron_reduced_impedance(
-            &z,
-            &(0..k).collect::<Vec<_>>(),
-            &[k],
-            0.0,
-        )
-        .ok_or("cable reduction has a zero pivot")?;
+        z = crate::kron::calc_kron_reduced_impedance(&z, &(0..k).collect::<Vec<_>>(), &[k], 0.0)
+            .ok_or("cable reduction has a zero pivot")?;
     }
     let mut b = vec![vec![0.0; keep]; keep];
     for (i, row) in b.iter_mut().enumerate().take(phases) {
         let cable = input.wires[i].cable.unwrap();
         let outer = 0.5 * cable.diains;
         let inner = outer - cable.inslayer;
-        row[i] = TWO_PI * EPSILON_0 * cable.epsr * (TWO_PI * frequency) / (outer / inner).ln();
+        // OpenDSS takes the coaxial capacitance over the insulation for both
+        // cable kinds, without Kersting's strand term.
+        row[i] =
+            TWO_PI * frequency * calc_cable_capacitance(EPSILON_0 * cable.epsr, outer, inner, None);
     }
     let result = LineMatrices {
         r: z.iter()

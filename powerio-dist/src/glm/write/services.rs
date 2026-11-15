@@ -586,9 +586,8 @@ fn triplex_geometry(code: &DistLineCode, f: f64) -> Result<Geometry, Error> {
     if code.n_conductors != 3 {
         return Err(fail());
     }
-    let earth = (100.0 / f).ln() / 2.0 + 7.6786;
-    let r_earth = 0.001_588_36 * f;
-    let x_scale = 0.002_022_37 * f;
+    let carson = crate::glm::line_physics::carson_earth(f);
+    let (earth, r_earth, x_scale) = (carson.log_depth, carson.resistance, carson.reactance);
     if (0..3).any(|i| {
         (0..3).any(|j| {
             code.r_series[i][j] != code.r_series[j][i]
@@ -637,8 +636,12 @@ fn triplex_geometry(code: &DistLineCode, f: f64) -> Result<Geometry, Error> {
     ];
     for (i, row) in distances.iter().enumerate() {
         for (j, distance) in row.iter().enumerate() {
-            let r = (r_earth + if i == j { resistance[i] } else { 0.0 }) / METERS_PER_MILE;
-            let x = x_scale * (earth - distance.ln()) / METERS_PER_MILE;
+            // The reader's forward equation, so the round trip compares like
+            // with like.
+            let z = (crate::overhead::calc_carson_impedance(*distance, carson)
+                + if i == j { resistance[i] } else { 0.0 })
+                / METERS_PER_MILE;
+            let (r, x) = (z.re, z.im);
             for (a, b) in [(r, code.r_series[i][j]), (x, code.x_series[i][j])] {
                 if (a - b).abs() > 8.0 * f64::EPSILON * a.abs().max(b.abs()) {
                     return Err(fail());
