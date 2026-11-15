@@ -1021,8 +1021,16 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, clocks: &[f64], buses: &[
     let imported_ends = imported_end_ids(xf);
     let s_base = xf.windings[0].s_rating;
     let stated: Vec<Option<f64>> = clocks.iter().copied().map(Some).collect();
-    let european = crate::cim::clocks_leadlag(&xf.windings, &stated, xf.phases == 3)
-        .is_ok_and(|leadlag| leadlag.is_some());
+    // An absent clock reads as OpenDSS's default convention, so a unit the
+    // default represents states none. Every other unit states its clocks:
+    // one only the European convention represents reads back as such, and
+    // one neither represents (a Y-D-D unit whose deltas roll opposite ways)
+    // states the clocks the reader then refuses precisely, never a layout
+    // that silently reads back under the default.
+    let state_clocks = !matches!(
+        crate::cim::clocks_leadlag(&xf.windings, &stated, xf.phases == 3),
+        Ok(None)
+    );
     short_circuit_count(doc, xf);
     let mut end_ids = Vec::with_capacity(xf.windings.len());
     for (index, winding) in xf.windings.iter().enumerate() {
@@ -1058,9 +1066,7 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, clocks: &[f64], buses: &[
             "PowerTransformerEnd.connectionKind",
             &format!("WindingConnection.{kind}"),
         );
-        // An absent clock reads as OpenDSS's default convention, so only a
-        // unit that needs the European one states its clocks.
-        if european {
+        if state_clocks {
             doc.number(
                 &what,
                 "PowerTransformerEnd.phaseAngleClock",

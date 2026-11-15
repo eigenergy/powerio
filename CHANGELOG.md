@@ -283,7 +283,9 @@
   is refused by both writers. MG-RAVENS reads `phaseAngleClock` instead of reporting it
   unmapped, its writer states each end's clock where it wrote 0, and its vector group carries
   each winding's clock (`Dyn1`, `Dyn11`) instead of a fixed `0`. The CIM `PowerTransformerEnd`
-  form states its clocks when they need the European convention.
+  form states its clocks whenever OpenDSS's default convention does not represent them: the
+  European ones, and clocks neither convention represents (a Y-D-D unit whose deltas roll
+  opposite ways), which the reader then refuses with the winding named.
 - MG-RAVENS equipment the reader keeps untyped while the document states it in service (a
   segment whose wires cannot be calculated, a switch or segment with fewer than two terminals, a
   tank without a datasheet, ends or a clock either convention represents, a delta load with

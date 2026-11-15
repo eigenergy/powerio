@@ -346,3 +346,44 @@ fn end_form_reads_and_refuses_the_clocks_the_tank_form_does() {
         "{error}"
     );
 }
+
+/// A Y-D-D unit whose deltas roll opposite ways: its clocks are 0, 1 and
+/// 11, which neither `leadlag` convention represents together. The end form
+/// states them (never omits them, which would read back with winding 3
+/// shifted 60 degrees), so the reader refuses winding 3 precisely.
+#[test]
+fn end_form_states_clocks_neither_convention_represents_and_the_reader_refuses() {
+    let ydd = r#"{
+      "bus": {
+        "a": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+        "b": {"terminal_names": ["1", "2", "3"]},
+        "c": {"terminal_names": ["1", "2", "3"]}
+      },
+      "voltage_source": {
+        "source": {"v_magnitude": [7200.0, 7200.0, 7200.0, 0.0], "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0], "bus": "a", "terminal_map": ["1", "2", "3", "n"]}
+      },
+      "transformer": {"n_winding": {"t3": {
+        "s_rating": 10000.0,
+        "windings": [
+          {"bus": "a", "terminal_map": ["1", "2", "3", "n"], "v_nom": 12470.0, "configuration": "WYE", "r_winding": 0.01},
+          {"bus": "b", "terminal_map": ["1", "2", "3"], "v_nom": 4160.0, "configuration": "DELTA", "r_winding": 0.02, "delta_roll": 1},
+          {"bus": "c", "terminal_map": ["1", "2", "3"], "v_nom": 480.0, "configuration": "DELTA", "r_winding": 0.03, "delta_roll": -1}
+        ],
+        "x_sc": {"1_2": 0.04, "1_3": 0.05, "2_3": 0.06}
+      }}}
+    }"#;
+    let net = parse_str(ydd, "bmopf-json").unwrap();
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    let clocks: Vec<&str> = out
+        .text
+        .split("<cim:PowerTransformerEnd.phaseAngleClock>")
+        .skip(1)
+        .map(|s| s.split('<').next().unwrap())
+        .collect();
+    assert_eq!(clocks, ["0", "1", "11"], "{}", out.text);
+    let error = parse_str(&out.text, "cim-dist").unwrap_err().to_string();
+    assert!(
+        error.contains("winding 3 phase-angle clock 11 is not represented by its winding layout"),
+        "{error}"
+    );
+}

@@ -394,8 +394,10 @@ degree shift. Other clocks, invalid clocks, inactive tanks or parents, and
 disconnected end terminals are refused. An absent clock is assumed to match
 the layout with a diagnostic. Fresh writing derives the clock from the
 current windings and `leadlag` and reports conflicting retained metadata;
-the `PowerTransformerEnd` form states its clocks only when they need the
-European convention.
+the `PowerTransformerEnd` form states its clocks whenever OpenDSS's default
+convention does not represent them, so a unit neither convention represents
+(a Y-D-D unit whose deltas roll opposite ways) is written with its clocks
+and refused on reading, never read back with a winding shifted.
 
 A transformer whose extras carry
 `cim_form = "tank"` is written as tanks, grouped under the `PowerTransformer`
