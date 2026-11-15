@@ -500,7 +500,7 @@ pub fn calc_delta_direction(transformer: &DistTransformer, winding: usize) -> Re
 
 /// The positive sequence phase shift of a two winding unit, degrees: the
 /// angle by which the first winding's voltage leads the second's
-/// ([`calc_winding_phase_shift`] of winding 1).
+/// (`calc_winding_phase_shift` of winding 1).
 ///
 /// # Errors
 /// Fewer than two windings, or what [`calc_delta_direction`] refuses.
