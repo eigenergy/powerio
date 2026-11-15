@@ -371,11 +371,9 @@ fn describe_branch(source: AnalysisBranchSource) -> String {
     }
 }
 
-/// One in service analysis branch at the stored voltages: its terminal bus
-/// indices and the per unit complex power entering it at each end.
+/// One in service analysis branch at the stored voltages: the per unit
+/// complex power entering it at each end.
 struct TerminalPowers {
-    from: usize,
-    to: usize,
     s_from: Complex64,
     s_to: Complex64,
 }
@@ -419,12 +417,7 @@ fn branch_terminal_powers(
             Err(other) => return Err(other),
         };
         let (s_from, s_to) = branch_flows(&admittance, voltages[from], voltages[to]);
-        powers.push(Some(TerminalPowers {
-            from,
-            to,
-            s_from,
-            s_to,
-        }));
+        powers.push(Some(TerminalPowers { s_from, s_to }));
     }
     Ok(powers)
 }
@@ -542,29 +535,44 @@ pub fn calc_stated_state_mismatch(
     let base_mva = view.base_mva();
     let voltages = stored_voltages(&view);
 
-    // The network side: power drawn into branches and shunts, per unit.
-    let mut drawn = vec![Complex64::new(0.0, 0.0); n];
-    let mut flags = vec![StatedBusFlags::NONE; n];
-    let branch_powers = branch_terminal_powers(&view, net, &voltages)?;
-    for (branch, powers) in view.branches().iter().zip(&branch_powers) {
-        let Some(powers) = powers else {
-            continue;
+    // The network side: the power drawn from each bus into its branches and
+    // shunts, per unit, `S = diag(V) conj(Y_bus V)` through the crate's one
+    // injection over the one `Y_bus`.
+    let sources = analysis_branch_sources(net);
+    let admittance =
+        match crate::calc_admittance_matrix(&view, &crate::matrix::BuildOptions::default()) {
+            Ok(admittance) => admittance,
+            Err(Error::Transmission(powerio_tx::Error::ZeroImpedance { row })) => {
+                let branch = &view.branches()[row];
+                return Err(Error::UnmergedZeroImpedance {
+                    element: describe_branch(sources[row]),
+                    from: branch.from,
+                    to: branch.to,
+                });
+            }
+            Err(other) => return Err(other),
         };
-        drawn[powers.from] += powers.s_from;
-        drawn[powers.to] += powers.s_to;
-        if branch.r.hypot(branch.x) < opts.low_impedance_threshold {
-            flags[powers.from] |= StatedBusFlags::LOW_IMPEDANCE_BRANCH;
-            flags[powers.to] |= StatedBusFlags::LOW_IMPEDANCE_BRANCH;
+    let buses = view.network().buses();
+    let vm: Vec<f64> = buses.iter().map(|bus| bus.vm).collect();
+    let va: Vec<f64> = buses.iter().map(|bus| view.to_radians(bus.va)).collect();
+    let (p_drawn, q_drawn) = crate::calc_bus_power_injection(&admittance, &vm, &va)?;
+    let drawn: Vec<Complex64> = p_drawn
+        .into_iter()
+        .zip(q_drawn)
+        .map(|(p, q)| Complex64::new(p, q))
+        .collect();
+    let mut flags = vec![StatedBusFlags::NONE; n];
+    for branch in view.branches().iter().filter(|branch| branch.in_service) {
+        if branch.r.hypot(branch.x) < opts.low_impedance_threshold
+            && let (Some(from), Some(to)) = (view.bus_index(branch.from), view.bus_index(branch.to))
+        {
+            flags[from] |= StatedBusFlags::LOW_IMPEDANCE_BRANCH;
+            flags[to] |= StatedBusFlags::LOW_IMPEDANCE_BRANCH;
         }
-    }
-    for (idx, voltage) in voltages.iter().enumerate() {
-        let vm2 = voltage.norm_sqr();
-        drawn[idx] += Complex64::new(view.gs()[idx], -view.bs()[idx]) * vm2 / base;
     }
 
     // The device side: stated injections, per unit.
     let mut stated = vec![Complex64::new(0.0, 0.0); n];
-    let buses = view.network().buses();
     for (idx, bus) in buses.iter().enumerate() {
         if bus.kind == BusType::Ref {
             flags[idx] |= StatedBusFlags::REFERENCE;
