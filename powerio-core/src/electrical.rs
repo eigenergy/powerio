@@ -17,6 +17,22 @@ pub fn calc_impedance_base(voltage: f64, power: f64) -> Option<f64> {
     Some(voltage * voltage / power).filter(|base| positive(*base))
 }
 
+/// The admittance base `S / V²` of a voltage base and a power base in
+/// consistent units (volts and volt amperes give siemens, kilovolts and
+/// megavolt amperes give siemens as well), formed as `power / (voltage ·
+/// voltage)`. `None` unless both bases are positive and finite and the
+/// quotient is positive and finite. The one admittance base: dividing by it
+/// takes a susceptance or conductance to per unit as dividing by
+/// [`calc_impedance_base`] takes an impedance.
+#[must_use]
+pub fn calc_admittance_base(voltage: f64, power: f64) -> Option<f64> {
+    let positive = |x: f64| x.is_finite() && x > 0.0;
+    if !positive(voltage) || !positive(power) {
+        return None;
+    }
+    Some(power / (voltage * voltage)).filter(|base| positive(*base))
+}
+
 /// The sine of a power factor's angle, `sin(acos |pf|) = √((1 − |pf|)(1 + |pf|))`,
 /// formed without the cancellation of `1 − pf²` near unity. Reactive power
 /// is `S` times this for an apparent power `S`. `NaN` when `|pf| > 1`.
@@ -116,6 +132,18 @@ mod tests {
         assert_eq!(calc_impedance_base(12.47, 0.0), None);
         assert_eq!(calc_impedance_base(f64::NAN, 1.0), None);
         assert_eq!(calc_impedance_base(1e300, 1e-300), None);
+    }
+
+    #[test]
+    fn admittance_base_needs_positive_finite_bases() {
+        assert_eq!(
+            calc_admittance_base(12.47, 10.0),
+            Some(10.0 / (12.47 * 12.47))
+        );
+        assert_eq!(calc_admittance_base(0.0, 10.0), None);
+        assert_eq!(calc_admittance_base(12.47, -1.0), None);
+        assert_eq!(calc_admittance_base(f64::INFINITY, 1.0), None);
+        assert_eq!(calc_admittance_base(1e300, 1e-300), None);
     }
 
     #[test]

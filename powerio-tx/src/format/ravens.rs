@@ -1045,7 +1045,7 @@ fn write_branch(
     let raw_kv_to = kv_of.get(&branch.to).copied().unwrap_or(1.0);
     let kv = eff_kv(raw_kv_from);
     let z_base = powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN);
-    let y_base = base_mva / (kv * kv);
+    let y_base = powerio_core::electrical::calc_admittance_base(kv, base_mva).unwrap_or(f64::NAN);
 
     let set_name = format!("OpLimbranch{n}");
     let limits = vec![
@@ -1694,7 +1694,8 @@ pub(crate) fn parse_ravens_source(
         // Divide by the writer's own multiplier (not the reciprocal
         // constant): same-constant mul→div round trips bit exactly, mixed
         // constants double-round and break canonical idempotence.
-        let y_base = base_mva / (kv * kv);
+        let y_base =
+            powerio_core::electrical::calc_admittance_base(kv, base_mva).unwrap_or(f64::NAN);
         let mut branch = Branch::new(
             from,
             to,
@@ -2096,7 +2097,7 @@ fn read_transformer(
     let mut branch = Branch::new(from, to, r, x);
     // See the line reader: divide by the writer's multiplier for bit-exact
     // round trips.
-    let y_base = base_mva / (kv * kv);
+    let y_base = powerio_core::electrical::calc_admittance_base(kv, base_mva).unwrap_or(f64::NAN);
     branch.b = (end_f(ends[0], "PowerTransformerEnd.b") + end_f(ends[1], "PowerTransformerEnd.b"))
         / y_base;
     branch.in_service = in_service(obj);

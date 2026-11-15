@@ -110,7 +110,8 @@
 
 - `powerio_core::electrical` (re-exported as `powerio::electrical`, `powerio_tx::electrical` and
   `powerio_dist::electrical`) holds the scalar formulas both network families share:
-  `calc_impedance_base` (`V² / S`, `None` for an unusable base), `calc_power_factor_sine`,
+  `calc_impedance_base` (`V² / S`, `None` for an unusable base) and `calc_admittance_base`
+  (`S / (V · V)`, the same refusals), `calc_power_factor_sine`,
   `calc_reactive_ratio` and `calc_power_factor_coefficients` with
   `calc_reactive_ratio_derivative` and `calc_power_factor_coefficients_derivative`, and the
   voltage power law term `calc_voltage_power_term` (and `calc_voltage_power_terms`) with its
@@ -121,7 +122,23 @@
   evaluation call it. Behaviour changes, each in the last place: a GridLAB-D regulator's
   resistance, an OpenDSS no-load percentage written from a terminal coil shunt, OpenDSS storage
   reactive power (`√(1/pf² − 1)` became `√(1 − pf²)/pf`) and a PSS/E VSC converter's reactive
-  power.
+  power. The admittance bases of the CGMES reader and writer, the balanced MG-RAVENS reader and
+  writer, the Sienna reader (`NATURAL_UNITS`), the BMOPF writer's no-load shunt and the
+  GridLAB-D FBS default core call `calc_admittance_base`, bit for bit as before.
+  A base formed over a zero, negative or nonfinite voltage or power (or whose quotient
+  overflows) is no longer a number: where 0.12.0 formed `V² / S` directly, a zero voltage gave
+  a zero base, a zero power an infinite one and a negative power a negative one. The CGMES and
+  XIIDM writers and the SINCAL balanced writer now refuse a network whose base MVA is not
+  positive and finite (`check_base_mva`), where they wrote the values that base gave; an OpenDSS
+  `VSource` whose impedance base is unusable is refused by name rather than as a nonfinite
+  recalculation; the BMOPF writer omits a transformer's no-load shunt whose admittance base
+  underflows to zero or overflows, as it omits one over a non-positive base. Elsewhere such a
+  base makes the converted value `NaN`, which a later finiteness check refuses where the reader
+  or writer has one: a PMD MATHEMATICAL bus or winding with a zero base voltage or power, a GridLAB-D regulator
+  with a zero rating or voltage, a SINCAL multiconductor transformer or equivalent with a zero
+  rated voltage, the multiconductor to balanced lowering at a zero base voltage, and a UCTE,
+  CGMES or XIIDM reader's element at a zero nominal voltage (each wrote or read zero or an
+  infinity before).
 - `powerio_tx::load_voltage`: `LoadVoltageTerm` (`new`, `calc_power`, `is_below_floor`),
   `Load::calc_voltage_terms` and `Load::calc_power_at` (`LoadPowerAtVoltage`),
   `calc_load_nominal_voltage` and `LoadVoltageError` evaluate a balanced load's voltage model with

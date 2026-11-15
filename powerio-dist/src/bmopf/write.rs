@@ -2848,14 +2848,11 @@ impl Writer {
             .get(1)
             .map(|w| crate::model::winding_coil_voltage(w, t.phases));
         if let Some(voltage) = voltage
-            && voltage.is_finite()
-            && voltage > 0.0
-            && s.is_finite()
-            && s > 0.0
+            && let Some(y_base) =
+                crate::electrical::calc_admittance_base(voltage, s / t.phases.max(1) as f64)
             && loss.is_none_or(|v| v >= 0.0)
             && imag.is_none_or(|v| v >= 0.0)
         {
-            let y_base = s / t.phases.max(1) as f64 / voltage.powi(2);
             o.insert(
                 "no_load_shunt".into(),
                 json!({

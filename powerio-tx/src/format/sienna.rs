@@ -206,7 +206,10 @@ fn parameter_scale(row: &Value, kv: f64) -> Result<f64> {
         .unwrap_or("COMPONENT_BASE")
     {
         "COMPONENT_BASE" => Ok(BASE / base(row)?),
-        "NATURAL_UNITS" => Ok(BASE / positive(kv, "base_voltage")?.powi(2)),
+        "NATURAL_UNITS" => {
+            powerio_core::electrical::calc_admittance_base(positive(kv, "base_voltage")?, BASE)
+                .ok_or_else(|| error("base_voltage gives no finite admittance base"))
+        }
         other => Err(error(format!("unsupported parameter_units {other}"))),
     }
 }

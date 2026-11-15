@@ -189,6 +189,8 @@ fn bus_id(bus: BusId) -> Result<i64> {
 /// Rejects unsupported electrical components/controls and invalid values atomically.
 pub fn write_experimental_balanced(net: &BalancedNetwork) -> Result<ExperimentalBalancedOutput> {
     net.validate().map_err(error)?;
+    // Every ohm value is a per unit value times a base over the system base.
+    net.check_base_mva().map_err(error)?;
     net.validate().map_err(error)?;
     if net.is_normalized() {
         return Err(error(

@@ -5496,7 +5496,8 @@ fn read_branches(
             let kv = mapper.kv(from);
             let z_base =
                 powerio_core::electrical::calc_impedance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
-            let y_base = SYSTEM_MVA / (kv * kv);
+            let y_base =
+                powerio_core::electrical::calc_admittance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
             let mut branch = Branch::new(
                 from,
                 to,

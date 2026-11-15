@@ -4093,6 +4093,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             "network validation failed before CGMES emission: {error}"
         ))
     })?;
+    // Every ohm and siemens value is a per unit value times a base over the
+    // system base; refuse a base none can be formed over.
+    net.check_base_mva()?;
     // A CGMES BaseVoltage states a positive nominal voltage, and a per-unit
     // only case states none. The substitution keeps the per-unit model exact,
     // and the diagnostic below names the buses it applied to.
@@ -6484,7 +6487,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         let kv = w.kv(branch.from)?;
         let z_base =
             powerio_core::electrical::calc_impedance_base(kv, net.base_mva()).unwrap_or(f64::NAN);
-        let y_base = net.base_mva() / (kv * kv);
+        let y_base =
+            powerio_core::electrical::calc_admittance_base(kv, net.base_mva()).unwrap_or(f64::NAN);
         let charging = branch.calc_terminal_charging();
         let emits_as_transformer =
             branch.is_transformer() || source_branch_is_power_transformer(detailed, local_id);

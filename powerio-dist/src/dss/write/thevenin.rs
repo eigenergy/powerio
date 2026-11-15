@@ -41,7 +41,7 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
     {
         let mva3 = kv.powi(2) / positive.im / (1.0 + 1.0 / xr1.powi(2)).sqrt();
         for mva3 in neighbors(mva3).into_iter().filter(|&v| valid(v)) {
-            if short_circuit_positive(kv, mva3, xr1) == positive {
+            if short_circuit_positive(kv, mva3, xr1).is_ok_and(|z| z == positive) {
                 positive_spec = Some((mva3, xr1));
                 break 'positive;
             }

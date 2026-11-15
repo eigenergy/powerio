@@ -8667,6 +8667,9 @@ fn collapse_cross_substation_transformers(
 }
 
 pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
+    // Every ohm and siemens value is a per unit value times a base over the
+    // system base; refuse a base none can be formed over.
+    network.check_base_mva()?;
     let unstated_nominal_voltage = super::unstated_nominal_voltage(network);
     let unbounded_reactive_limits = super::unbounded_reactive_limits(network);
     let mut prepared_network = None;

@@ -36,17 +36,18 @@ enum ImpedanceSpec {
     Sequence,
 }
 
-/// The one impedance base `kV² / MVA` ([`crate::electrical::calc_impedance_base`]).
+/// The impedance base `kV² / MVA` ([`crate::electrical::calc_impedance_base`]).
 /// The parser holds every base positive, so an unusable one only arises by
-/// overflow; it reads as NaN and fails the nonfinite checks downstream.
-fn impedance_base(kv: f64, mva: f64) -> f64 {
-    crate::electrical::calc_impedance_base(kv, mva).unwrap_or(f64::NAN)
+/// overflow, and is refused.
+fn impedance_base(kv: f64, mva: f64) -> Result<f64> {
+    crate::electrical::calc_impedance_base(kv, mva)
+        .ok_or_else(|| "native source impedance base kV² / MVA is not positive and finite".into())
 }
 
 // Shared with the canonical writer's exact inverse of the native MVA form.
-pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Complex64 {
-    let x = impedance_base(kv, mva3) / (1.0 + 1.0 / xr1.powi(2)).sqrt();
-    Complex64::new(x / xr1, x)
+pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Result<Complex64> {
+    let x = impedance_base(kv, mva3)? / (1.0 + 1.0 / xr1.powi(2)).sqrt();
+    Ok(Complex64::new(x / xr1, x))
 }
 
 pub(super) fn short_circuit_zero(
@@ -272,7 +273,7 @@ impl State {
             self.mva1 = factor * self.kv * self.isc1 / 1000.0;
         }
         if matches!(self.spec, ImpedanceSpec::Mva | ImpedanceSpec::Current) {
-            self.z[1] = short_circuit_positive(self.kv, self.mva3, self.xr1);
+            self.z[1] = short_circuit_positive(self.kv, self.mva3, self.xr1)?;
             self.z[2] = self.z[1];
             if matches!(self.spec, ImpedanceSpec::Mva) {
                 self.isc3 = self.mva3 * 1000.0 / (3.0_f64.sqrt() * self.kv);
@@ -281,7 +282,7 @@ impl State {
             self.z[0] = short_circuit_zero(self.kv, self.isc1, factor, self.xr0, self.z[1])?;
         } else {
             if self.pu_written[1] {
-                let base = impedance_base(self.kv, self.base_mva);
+                let base = impedance_base(self.kv, self.base_mva)?;
                 self.z = self.pu_z.map(|v| v * base);
             }
             if self.z[1] == Complex64::default() {
@@ -298,7 +299,7 @@ impl State {
             self.mva1 = factor * self.kv * self.isc1 / 1000.0;
         }
         if !self.pu_written.iter().any(|&v| v) {
-            let base = impedance_base(self.kv, self.base_mva);
+            let base = impedance_base(self.kv, self.base_mva)?;
             self.pu_z = self.z.map(|z| z / base);
         }
         if self
@@ -323,7 +324,7 @@ impl State {
         let quasi = self.quasi_ideal && ratio - 1.0 < 1e-12;
         let mut impedance = vec![vec![Complex64::default(); self.phases]; self.phases];
         let diagonal = if quasi {
-            self.ideal_z * impedance_base(self.kv, self.base_mva)
+            self.ideal_z * impedance_base(self.kv, self.base_mva)?
         } else if self.z[1] == self.z[2] {
             crate::sequence::calc_sequence_self(self.z[1], self.z[0], NATIVE_THIRD)
         } else {
