@@ -137,8 +137,8 @@ pub use opf::{AnalysisBranchSource, PiecewiseLinearCost, PreparedObjective};
 pub use matrix::multiconductor::{
     AugmentedSystem, DistNode, GroundedNeutral, MulticonductorAdmittance, MulticonductorNodeIndex,
     NetworkPrimitives, NodeRef, PassiveFamily, PassivePrimitive, TransformerLeakageBase,
-    TransformerPrimitive, calc_capacitor_primitive_admittance, calc_line_primitive_admittance,
-    calc_multiconductor_admittance_matrix, calc_passive_primitives,
+    TransformerPrimitive, assemble_multiconductor_admittance, calc_capacitor_primitive_admittance,
+    calc_line_primitive_admittance, calc_multiconductor_admittance_matrix, calc_passive_primitives,
     calc_shunt_primitive_admittance, calc_transformer_leakage_impedances,
     calc_transformer_primitive_admittance, calc_transformer_winding_admittance,
     scatter_primitive_admittance,

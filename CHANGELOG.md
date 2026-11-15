@@ -144,6 +144,13 @@
   withdrawal; `SynthesizedLimitWindow::is_stated` whether a window is the default;
   `Grounding::new`, `len` and `is_empty` build and size a grounding; and `PassivePrimitive` (with
   `PassiveFamily::noun`) is one element of `NetworkPrimitives`.
+- `assemble_multiconductor_admittance(network, primitives)` assembles the multiconductor nodal
+  system from a `calc_passive_primitives` list the caller already holds (one that also reads each
+  element's primitive for its port currents lists them once); `calc_multiconductor_admittance_matrix`
+  is that list followed by this assembly. A source terminal that is its own reference (earth, a
+  terminal its bus grounds, or the stated reference terminal) with a nonzero prescribed voltage is
+  now refused; without a stated reference such a terminal was skipped silently. Zero there is
+  still accepted and writes no row.
 - Three phase pandapower: `powerio_tnd::formats::pandapower::{parse, PandapowerModule, TOKEN,
   unmapped_connections}` and `powerio_tx::format::is_three_phase_pandapower`.
 

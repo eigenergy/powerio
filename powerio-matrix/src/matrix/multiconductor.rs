@@ -791,12 +791,29 @@ pub fn calc_passive_primitives(network: &MulticonductorNetwork) -> Result<Networ
 /// terminal, or a line whose terminal maps disagree with its linecode shape.
 /// Everything the builder cannot stamp exactly is a structured diagnostic,
 /// never a silent omission or a fabricated impedance.
-#[allow(clippy::too_many_lines)] // one stamp block per element family
-#[allow(clippy::many_single_char_names)] // n and per conductor y/z/b follow the textbook stamps
 pub fn calc_multiconductor_admittance_matrix(
     network: &MulticonductorNetwork,
 ) -> Result<MulticonductorAdmittance> {
     powerio_dist::require_electrical_readiness(network)?;
+    let primitives = calc_passive_primitives(network)?;
+    assemble_multiconductor_admittance(network, &primitives)
+}
+
+/// [`calc_multiconductor_admittance_matrix`] over element primitives the
+/// caller already holds from [`calc_passive_primitives`] of the same
+/// network: a caller that also reads each element's primitive (for its port
+/// currents) lists them once. The one assembly of the multiconductor nodal
+/// system and its source, ideal transformer and grounded neutral rows.
+///
+/// # Errors
+/// As [`calc_multiconductor_admittance_matrix`], except that the network's
+/// electrical readiness is not checked again.
+#[allow(clippy::too_many_lines)] // one stamp block per element family
+#[allow(clippy::many_single_char_names)] // n and per conductor y/z/b follow the textbook stamps
+pub fn assemble_multiconductor_admittance(
+    network: &MulticonductorNetwork,
+    primitives: &NetworkPrimitives<'_>,
+) -> Result<MulticonductorAdmittance> {
     let index = MulticonductorNodeIndex::build(network)?;
     let n = index.len();
     let mut stamper = Stamper::new(n);
@@ -813,10 +830,10 @@ pub fn calc_multiconductor_admittance_matrix(
     // Lines, shunts, capacitor banks and leakage transformers: the network's
     // one element list, scattered over the node references of its
     // terminals.
-    let mut elements = calc_passive_primitives(network)?;
+    let elements = primitives;
     let transformer_constraints =
         transformer::ideal_wye_constraints(network, &elements.ideal_transformers, &index)?;
-    diagnostics.append(&mut elements.diagnostics);
+    diagnostics.extend(elements.diagnostics.iter().cloned());
     for element in &elements.elements {
         let label = format!("{} `{}`", element.family.noun(), element.name);
         let terminals: Vec<NodeRef> = element
@@ -854,8 +871,11 @@ pub fn calc_multiconductor_admittance_matrix(
             let node = resolve(&source.bus, terminal, &format!("source `{}`", source.name))?;
             let magnitude = source.v_magnitude.get(position).copied().unwrap_or(0.0);
             let angle = source.v_angle.get(position).copied().unwrap_or(0.0);
+            // A terminal that is its own reference (ground, or the stated
+            // reference terminal) has no voltage to prescribe: zero is
+            // already true there, anything else contradicts it.
             if node == reference {
-                if source.reference_terminal.is_some() && magnitude != 0.0 {
+                if magnitude != 0.0 {
                     return Err(Error::Mtx(format!(
                         "source `{}` has a nonzero voltage across electrically identical terminals",
                         source.name
