@@ -167,7 +167,8 @@ fn delta_projection_supported(net: &MulticonductorNetwork) -> bool {
                             .is_some_and(|bus| {
                                 load.terminal_map.iter().all(|t| {
                                     !bus.grounded.contains(t)
-                                        && !matches!(t.as_str(), "4" | "n" | "N")
+                                        && bus.terminal_role(t, net.terminal_conventions())
+                                            == crate::model::TerminalRole::Phase
                                 })
                             }))
         })
@@ -260,11 +261,10 @@ pub(crate) fn emit_pmd_math_json_text(
                 .and_then(|v| v.get("is_kron_reduced"))
                 .and_then(Value::as_bool)
                 == Some(true)
-            && net.buses().iter().all(|b| {
-                b.terminals
-                    .iter()
-                    .all(|t| !matches!(t.as_str(), "4" | "n" | "N"))
-            })
+            && net
+                .buses()
+                .iter()
+                .all(|b| b.neutral_indices(net.terminal_conventions()).is_empty())
             && delta_projection_supported(net);
         (net, retained)
     };

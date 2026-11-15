@@ -327,18 +327,8 @@ impl Writer {
         conventions: Option<&Value>,
     ) {
         let phases = b.phase_indices(conventions).len();
-        let neutral = match conventions {
-            Some(roles) => roles
-                .get("neutral")
-                .and_then(Value::as_array)
-                .is_some_and(|names| {
-                    names.iter().any(|n| {
-                        n.as_str()
-                            .is_some_and(|n| b.terminals.iter().any(|t| t == n))
-                    })
-                }),
-            None => b.terminals.len() > phases,
-        };
+        // The one terminal classification: an earth `0` is not a neutral.
+        let neutral = !b.neutral_indices(conventions).is_empty();
         let mut rules: Vec<(&str, bool, &str)> = Vec::new();
         for key in ["vng_max", "vpn_min", "vpn_max"] {
             rules.push((key, neutral, "needs a neutral terminal"));
@@ -3742,25 +3732,33 @@ fn proposal_provenance(meta: &mut Map<String, Value>) {
     }
 }
 
-/// Labels keep first-seen order and case-sensitive identity.
+/// Labels keep first-seen order and case-sensitive identity. Each label
+/// takes the role the one terminal classification
+/// ([`crate::model::DistBus::terminal_role`]) gives it: neutral when it is a
+/// neutral on any bus, else earth when it is earth on any bus, else phase.
+/// The `earth` list is written only when some label is earth.
 fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
-    let neutral_names: BTreeSet<&String> = net
-        .buses()
-        .iter()
-        .flat_map(|bus| {
-            let phases = bus.phase_indices(None);
-            bus.terminals
-                .iter()
-                .enumerate()
-                .filter_map(move |(index, name)| (!phases.contains(&index)).then_some(name))
-        })
-        .collect();
+    use crate::model::TerminalRole;
+    let named = |role: TerminalRole| -> BTreeSet<&String> {
+        net.buses()
+            .iter()
+            .flat_map(|bus| {
+                bus.terminals
+                    .iter()
+                    .filter(move |name| bus.terminal_role(name, None) == role)
+            })
+            .collect()
+    };
+    let (neutral_names, earth_names) = (named(TerminalRole::Neutral), named(TerminalRole::Earth));
     let mut phase = Vec::new();
     let mut neutral = Vec::new();
+    let mut earth = Vec::new();
     for bus in net.buses() {
         for term in &bus.terminals {
             let labels = if neutral_names.contains(term) {
                 &mut neutral
+            } else if earth_names.contains(term) {
+                &mut earth
             } else {
                 &mut phase
             };
@@ -3769,7 +3767,14 @@ fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
             }
         }
     }
-    (!phase.is_empty() || !neutral.is_empty()).then(|| json!({"phase": phase, "neutral": neutral}))
+    if phase.is_empty() && neutral.is_empty() && earth.is_empty() {
+        return None;
+    }
+    let mut conventions = json!({"phase": phase, "neutral": neutral});
+    if !earth.is_empty() {
+        conventions["earth"] = json!(earth);
+    }
+    Some(conventions)
 }
 
 fn config_str(c: Configuration) -> &'static str {

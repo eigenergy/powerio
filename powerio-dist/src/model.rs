@@ -193,8 +193,9 @@ pub enum TerminalRole {
 ///
 /// The one terminal classification: [`DistBus::phase_indices`],
 /// [`DistBus::neutral_indices`], the WYE neutral of a connection
-/// ([`crate::calc_wye_neutral_position`]), the BMOPF reader and validator,
-/// and the multiconductor to balanced lowering read it.
+/// ([`crate::calc_wye_neutral_position`]), the BMOPF reader, validator and
+/// writer, the PMD MATHEMATICAL writer and the multiconductor to balanced
+/// lowering read it.
 #[must_use]
 pub fn calc_terminal_role<S: AsRef<str>>(
     terminals: &[S],
