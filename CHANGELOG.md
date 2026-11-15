@@ -100,6 +100,11 @@
   `IslandReferenceReport::de_energized_islands` (with each island's unserved load). Island
   partitions, island labels, the preparations' reference coverage check and the multiconductor node
   merge share one component labeling.
+- Fix: the `CANONICALIZE.ISLAND.DE_ENERGIZED` and `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`
+  findings of a normalized network printed its per unit unserved load and HVDC infeed labelled
+  MW (0.25 MW for 25 MW on a 100 MVA base); they now state MW, `base_mva` over
+  `per_unit_base`. `DeEnergizedIsland`'s unserved load keeps the network's own unit. Shipped in
+  0.12.0.
 
 **Shared formulas**
 

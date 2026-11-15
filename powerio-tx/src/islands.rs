@@ -540,20 +540,18 @@ impl BalancedNetwork {
         }
     }
 
+    /// MW per unit of the network's power fields, `base_mva` over the
+    /// [`per_unit_base`](Self::per_unit_base) its powers are divided by: 1,
+    /// or the MVA base for a normalized network, so a finding that states MW
+    /// states MW.
+    fn mw_per_power_unit(&self) -> f64 {
+        self.base_mva() / self.per_unit_base()
+    }
+
     /// The finding for an island no in-service generator supplies, whose
     /// `outcome` completes the sentence. An island an HVDC line still feeds
     /// gets its own code, naming the lines and the power they schedule into
     /// it, since supply counts generators only and that infeed goes too.
-    /// MW per unit of the network's power fields: 1, or the MVA base for a
-    /// normalized network, so a finding that states MW states MW.
-    fn mw_per_power_unit(&self) -> f64 {
-        if self.is_normalized() {
-            self.base_mva()
-        } else {
-            1.0
-        }
-    }
-
     pub(crate) fn unsupplied_island_finding(&self, island: &Island, outcome: &str) -> Diagnostic {
         let size = island.buses.len();
         let buses = bus_list(&island.buses);
