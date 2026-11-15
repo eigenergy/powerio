@@ -1418,7 +1418,7 @@ impl Writer {
     fn shunts(&mut self, net: &MulticonductorNetwork) {
         for c in net.capacitors() {
             let what = format!("capacitor {}", c.name);
-            match capacitor_susceptance(c) {
+            match capacitor_susceptance(net, c) {
                 Ok(bs) => {
                     let n = bs.len();
                     let connections = self.conns(&c.terminal_map, &what);

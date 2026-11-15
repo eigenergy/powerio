@@ -39,8 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diagnostics::Diagnostic;
 use num_complex::Complex64;
 use powerio_dist::{
-    Configuration, DistCapacitor, DistLine, DistLineCode, DistShunt, DistTransformer,
-    MulticonductorNetwork,
+    DistCapacitor, DistLine, DistLineCode, DistShunt, DistTransformer, MulticonductorNetwork,
 };
 use sprs::CsMat;
 
@@ -456,7 +455,8 @@ pub fn calc_shunt_primitive_admittance(shunt: &DistShunt) -> Vec<Vec<Complex64>>
         .collect()
 }
 
-/// A capacitor bank's primitive admittance, siemens, over its terminal map.
+/// A capacitor bank's primitive admittance, siemens, over its terminal map:
+/// `j` times its susceptance ([`powerio_dist::calc_capacitor_susceptance`]).
 ///
 /// Each coil of the bank's connection ([`powerio_dist::calc_element_connection`]:
 /// a WYE coil from each phase to its neutral or to ground, a DELTA coil
@@ -482,52 +482,14 @@ pub fn calc_capacitor_primitive_admittance(
     network: &MulticonductorNetwork,
     capacitor: &DistCapacitor,
 ) -> Result<Option<Vec<Vec<Complex64>>>> {
-    if !matches!(
-        capacitor.configuration,
-        Configuration::Wye | Configuration::Delta | Configuration::SinglePhase
-    ) {
-        return Ok(None);
-    }
-    if !capacitor.q_rated.is_finite() || !capacitor.v_nom.is_finite() || capacitor.v_nom <= 0.0 {
-        return Err(Error::Mtx(format!(
-            "capacitor `{}` states no finite nameplate reactive power at a positive voltage",
-            capacitor.name
-        )));
-    }
-    let terminals = capacitor.terminal_map.len();
-    if capacitor.configuration == Configuration::SinglePhase && terminals != 2 {
-        return Err(Error::Mtx(format!(
-            "single phase capacitor `{}` maps {terminals} terminals",
-            capacitor.name
-        )));
-    }
-    let coils = powerio_dist::calc_element_connection(
-        network,
-        &capacitor.bus,
-        &capacitor.terminal_map,
-        capacitor.configuration,
-        None,
-    )
-    .map_err(|reason| Error::Mtx(format!("capacitor `{}`: {reason}", capacitor.name)))?;
-    let coil_voltage = if capacitor.configuration == Configuration::Wye && terminals > 1 {
-        capacitor.v_nom / 3f64.sqrt()
-    } else {
-        capacitor.v_nom
-    };
-    let y = Complex64::new(
-        0.0,
-        capacitor.q_rated / (coils.len() as f64) / (coil_voltage * coil_voltage),
-    );
-    let mut primitive = vec![vec![Complex64::new(0.0, 0.0); terminals]; terminals];
-    for coil in coils {
-        primitive[coil.from][coil.from] += y;
-        if let Some(to) = coil.to {
-            primitive[to][to] += y;
-            primitive[coil.from][to] -= y;
-            primitive[to][coil.from] -= y;
-        }
-    }
-    Ok(Some(primitive))
+    let susceptance =
+        powerio_dist::calc_capacitor_susceptance(network, capacitor).map_err(Error::Mtx)?;
+    Ok(susceptance.map(|matrix| {
+        matrix
+            .into_iter()
+            .map(|row| row.into_iter().map(|b| Complex64::new(0.0, b)).collect())
+            .collect()
+    }))
 }
 
 /// The passive element family behind a [`PassivePrimitive`].

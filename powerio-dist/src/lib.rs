@@ -91,8 +91,9 @@ pub use cim::{
     source_looks_like_cim_dist,
 };
 pub use connection::{
-    ConnectionChannel, calc_connection_channels, calc_element_connection,
-    calc_wye_neutral_position, lindist3flow_carries_connection, orient_delta_ring,
+    ConnectionChannel, calc_capacitor_susceptance, calc_connection_channels,
+    calc_element_connection, calc_wye_neutral_position, lindist3flow_carries_connection,
+    orient_delta_ring,
 };
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,

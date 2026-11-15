@@ -218,3 +218,75 @@ mod tests {
         assert!(calc_connection_channels(Configuration::Delta, 5, 2, None).is_err());
     }
 }
+
+/// A capacitor bank's susceptance matrix, siemens, over its terminal map.
+///
+/// Each coil of the bank's connection ([`calc_element_connection`]: a WYE
+/// coil from each phase to its neutral or to ground, a DELTA coil between
+/// consecutive terminals or across a two terminal bank, a single phase coil
+/// across its two terminals) carries an equal share of the rated reactive
+/// power at its coil voltage:
+///
+/// ```text
+/// b = q_rated / coils / V²,   V = v_nom / √3 (WYE with more than one terminal), v_nom otherwise
+/// ```
+///
+/// The WYE nameplate is line to line when the bank has an explicit return
+/// or several phases; a one terminal WYE bank states its coil voltage.
+/// `None` for a configuration with no capacitor connection. The one
+/// capacitor stamp: the multiconductor admittance matrix
+/// (`powerio_matrix::calc_capacitor_primitive_admittance`), the PMD and PMD
+/// MATHEMATICAL writers and the LinDist3Flow preparation read it.
+///
+/// # Errors
+/// A nameplate that is not finite with a positive voltage, or a terminal map
+/// its configuration cannot carry (an undeclared bus, an ambiguous WYE
+/// neutral, a single phase bank without two terminals).
+pub fn calc_capacitor_susceptance(
+    network: &MulticonductorNetwork,
+    capacitor: &crate::DistCapacitor,
+) -> Result<Option<crate::model::ConductorMatrix>, String> {
+    if !matches!(
+        capacitor.configuration,
+        Configuration::Wye | Configuration::Delta | Configuration::SinglePhase
+    ) {
+        return Ok(None);
+    }
+    if !capacitor.q_rated.is_finite() || !capacitor.v_nom.is_finite() || capacitor.v_nom <= 0.0 {
+        return Err(format!(
+            "capacitor `{}` states no finite nameplate reactive power at a positive voltage",
+            capacitor.name
+        ));
+    }
+    let terminals = capacitor.terminal_map.len();
+    if capacitor.configuration == Configuration::SinglePhase && terminals != 2 {
+        return Err(format!(
+            "single phase capacitor `{}` maps {terminals} terminals",
+            capacitor.name
+        ));
+    }
+    let coils = calc_element_connection(
+        network,
+        &capacitor.bus,
+        &capacitor.terminal_map,
+        capacitor.configuration,
+        None,
+    )
+    .map_err(|reason| format!("capacitor `{}`: {reason}", capacitor.name))?;
+    let coil_voltage = if capacitor.configuration == Configuration::Wye && terminals > 1 {
+        capacitor.v_nom / 3f64.sqrt()
+    } else {
+        capacitor.v_nom
+    };
+    let y = capacitor.q_rated / (coils.len() as f64) / (coil_voltage * coil_voltage);
+    let mut matrix = vec![vec![0.0; terminals]; terminals];
+    for coil in coils {
+        matrix[coil.from][coil.from] += y;
+        if let Some(to) = coil.to {
+            matrix[to][to] += y;
+            matrix[coil.from][to] -= y;
+            matrix[to][coil.from] -= y;
+        }
+    }
+    Ok(Some(matrix))
+}

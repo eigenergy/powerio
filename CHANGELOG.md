@@ -45,6 +45,15 @@
   with its primitive and `(bus, terminal)` rows, `scatter_primitive_admittance` is the one scatter
   of a primitive into a nodal system, and `MulticonductorNodeIndex::terminals` and
   `resolve_position` expose the flat terminal index underneath the node index.
+- `powerio_dist::calc_capacitor_susceptance(network, capacitor)` is the one capacitor bank stamp
+  (`q_rated / coils / V²` over the coils of `calc_element_connection`):
+  `calc_capacitor_primitive_admittance` is `j` times it, and the PMD and PMD MATHEMATICAL writers
+  and the LinDist3Flow preparation read it where each kept its own. Behaviour changes in those
+  three: a WYE bank's return is the bus's neutral (`calc_wye_neutral_position`) and a WYE bank
+  that maps no neutral returns each phase through ground, where they took the last mapped
+  terminal as the neutral; a refused bank is reported with the stamp's reason; LinDist3Flow's
+  three terminal DELTA bank is `q_rated / 3 / V²` (it was `q_rated / (3 V²)`), which can move it
+  in the last place.
 - `calc_transformer_primitive_admittance(network, transformer)` gives a finite leakage
   transformer's primitive admittance over its physical terminals (`TransformerPrimitive`), the
   OpenDSS `CalcY_Terminal` path: WYE and DELTA windings, fixed taps, the magnetizing branch and
