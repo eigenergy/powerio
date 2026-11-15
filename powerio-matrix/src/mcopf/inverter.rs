@@ -168,7 +168,8 @@ fn curve(
             _ => Err(invalid(&inv.name, "invalid controller voltage reference")),
         })
         .collect::<Result<_>>()?;
-    let epsilon = 2e-3 * knots.iter().sum::<f64>() / (knots.len() as f64) / vb;
+    let epsilon =
+        super::MC_OPF_DROOP_SMOOTHING * knots.iter().sum::<f64>() / (knots.len() as f64) / vb;
     Ok(McOpfDroop {
         monitors: if avg { monitors } else { vec![monitors[k]] },
         knots: knots.iter().map(|v| v / vb).collect(),

@@ -209,6 +209,13 @@ impl McOpfLoadLaw {
     }
 }
 
+/// The softplus width of a prepared droop curve as a share of its mean knot
+/// voltage: `epsilon = MC_OPF_DROOP_SMOOTHING · mean(knots)`, so a knot moved
+/// by `dk` widens every corner by `MC_OPF_DROOP_SMOOTHING · dk / n`. The one
+/// smoothing rule: the preparation sets it and the curve's parameter
+/// sensitivities differentiate it.
+pub const MC_OPF_DROOP_SMOOTHING: f64 = 2e-3;
+
 /// Smooth clipped piecewise-linear controller, with SI-derived per-unit knots.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]

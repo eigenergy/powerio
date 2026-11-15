@@ -131,7 +131,8 @@
 - `McOpfLoadLaw::calc_power` gives a load law's per unit power and voltage slope, and
   `McOpfDroop::calc_control` (`McOpfDroopValue`), `calc_parameter_derivative` and
   `calc_monitored_voltage` the one volt-var and volt-watt curve evaluation with its parameter
-  sensitivities. `McOpfTransformer::calc_physical_tap_derivative` and
+  sensitivities. `MC_OPF_DROOP_SMOOTHING` is the curve's softplus width as a share of its mean
+  knot voltage, the rule the preparation sets and those sensitivities differentiate. `McOpfTransformer::calc_physical_tap_derivative` and
   `calc_tap_multiplier_derivative` are the tap convention's derivatives.
 - `calc_bus_totals` and `calc_bus_hosts` sum an element column onto buses and mark the buses
   that host one; `calc_prepared_bus_specifications` converts an instance's bus specifications to
