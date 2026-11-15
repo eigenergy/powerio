@@ -404,10 +404,11 @@ impl BalancedNetwork {
                     .filter(|load| load.in_service && island.buses.binary_search(&load.bus).is_ok())
                     .map(|load| load.p)
                     .sum();
+                let load_mw = load * self.mw_per_power_unit();
                 diagnostics.push(self.unsupplied_island_finding(
                     island,
                     &format!(
-                        "was de-energized; its {load} MW of in-service load is no longer served"
+                        "was de-energized; its {load_mw} MW of in-service load is no longer served"
                     ),
                 ));
                 dead.extend(island.buses.iter().copied());
@@ -543,6 +544,16 @@ impl BalancedNetwork {
     /// `outcome` completes the sentence. An island an HVDC line still feeds
     /// gets its own code, naming the lines and the power they schedule into
     /// it, since supply counts generators only and that infeed goes too.
+    /// MW per unit of the network's power fields: 1, or the MVA base for a
+    /// normalized network, so a finding that states MW states MW.
+    fn mw_per_power_unit(&self) -> f64 {
+        if self.is_normalized() {
+            self.base_mva()
+        } else {
+            1.0
+        }
+    }
+
     pub(crate) fn unsupplied_island_finding(&self, island: &Island, outcome: &str) -> Diagnostic {
         let size = island.buses.len();
         let buses = bus_list(&island.buses);
@@ -564,6 +575,7 @@ impl BalancedNetwork {
             infeed += if inside(line.to) { line.pt } else { -line.pf };
             lines.push(format!("{}-{}", line.from, line.to));
         }
+        let infeed = infeed * self.mw_per_power_unit();
         Diagnostic::of(
             &codes::CANONICALIZE_ISLAND_HVDC_FED_DE_ENERGIZED,
             format!(
@@ -812,6 +824,39 @@ mod tests {
             codes(&report.diagnostics)
                 .contains(&codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED.code)
         );
+    }
+
+    /// The finding states MW whichever unit the network holds: a normalized
+    /// network's per unit load and HVDC infeed are scaled by its MVA base.
+    #[test]
+    fn island_findings_state_mw_for_a_normalized_network() {
+        let messages = |net: &mut BalancedNetwork| -> Vec<String> {
+            net.assign_island_references(IslandReferencePolicy::DesignateMissing)
+                .diagnostics
+                .iter()
+                .map(|finding| finding.message().to_owned())
+                .collect()
+        };
+        let raw = messages(&mut three_islands());
+        let normalized = messages(&mut three_islands().to_normalized().unwrap());
+        let raw_text = raw.join("\n");
+        let normalized_text = normalized.join("\n");
+        assert!(
+            raw_text.contains("its 25 MW of in-service load"),
+            "{raw_text}"
+        );
+        assert!(
+            normalized_text.contains("its 25 MW of in-service load"),
+            "{normalized_text}"
+        );
+        let infeed = |text: &str| {
+            text.split("schedule ")
+                .nth(1)
+                .and_then(|rest| rest.split(" MW").next())
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap()
+        };
+        assert!((infeed(&raw_text) - infeed(&normalized_text)).abs() < 1e-9);
     }
 
     #[test]
