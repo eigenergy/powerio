@@ -2024,6 +2024,7 @@ impl Writer {
             );
             let mut ends = Vec::new();
             let mut end_infos = Vec::new();
+            let three_phase = xf.phases == 3;
             for (k, w) in xf.windings.iter().enumerate() {
                 let num = k as u64 + 1;
                 let grounded =
@@ -2092,7 +2093,14 @@ impl Writer {
                         }
                     )),
                 );
-                info.insert("TransformerEndInfo.phaseAngleClock".into(), Value::from(0));
+                info.insert(
+                    "TransformerEndInfo.phaseAngleClock".into(),
+                    Value::from(crate::cim::tank_phase_clock(
+                        &xf.windings[0],
+                        w,
+                        three_phase,
+                    )),
+                );
                 let rated_u = self.num(w.v_ref, &what);
                 let rated_s = self.num(w.s_rating, &what);
                 info.insert("TransformerEndInfo.ratedU".into(), rated_u);

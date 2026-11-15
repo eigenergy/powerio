@@ -182,7 +182,9 @@ const LEAKAGE_READING: LeakageReading = LeakageReading::Magnitude;
 /// equal three-phase connections are clock 0; mixed D/Y connections use the
 /// default lagging clock 1. A reversed single-phase neutral pair is clock 6.
 /// Other vector groups need an explicit orientation mapping and are refused.
-fn tank_phase_clock(
+/// The CIM and MG-RAVENS readers and writers all check and write clocks
+/// through this.
+pub(crate) fn tank_phase_clock(
     primary: &crate::DistWinding,
     winding: &crate::DistWinding,
     three_phase: bool,

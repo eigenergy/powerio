@@ -2037,6 +2037,7 @@ impl Mapper<'_> {
                 .map(|items| items.iter().filter_map(Value::as_object).collect())
                 .unwrap_or_default();
             let mut windings = Vec::new();
+            let mut clocks = Vec::new();
             let mut phases = 1usize;
             let mut ok = true;
             for (num, end) in &ends {
@@ -2098,19 +2099,12 @@ impl Mapper<'_> {
                             DistWindingConn::Wye
                         }
                     };
-                if let Some(clock) = einfo
-                    .get("TransformerEndInfo.phaseAngleClock")
-                    .and_then(Value::as_u64)
-                    && clock != 0
-                {
-                    self.warn(
-                        &C::READ_RAVENS_DIST_FIELD_UNMAPPED,
-                        format!(
-                            "transformer tank {name}: end {num} phaseAngleClock {clock} is \
-                         not modeled (the model carries no vector-group shift)"
-                        ),
-                    );
-                }
+                // The clock is checked against the winding layout once
+                // every end is read.
+                clocks.push((
+                    *num,
+                    einfo.get("TransformerEndInfo.phaseAngleClock").cloned(),
+                ));
 
                 let mut map = letters_to_terminals(&letters);
                 if map.is_empty() {
@@ -2167,6 +2161,10 @@ impl Mapper<'_> {
             }
             if !ok {
                 self.keep_untyped(tank, "incomplete ends");
+                continue;
+            }
+            if let Some(why) = clock_mismatch(&windings, &clocks, phases == 3) {
+                self.keep_untyped(tank, &why);
                 continue;
             }
 
@@ -2547,6 +2545,41 @@ impl Mapper<'_> {
             );
         }
     }
+}
+
+/// Why a tank's stated `phaseAngleClock`s cannot be read, if they cannot:
+/// the model expresses a vector group by its winding connections, so each
+/// stated clock must be the one the winding layout represents
+/// ([`crate::cim::tank_phase_clock`], OpenDSS's convention: a delta–wye pair
+/// is clock 1). An absent clock takes the represented one.
+#[allow(clippy::float_cmp)] // clock numbers are discrete
+fn clock_mismatch(
+    windings: &[DistWinding],
+    clocks: &[(u64, Option<Value>)],
+    three_phase: bool,
+) -> Option<String> {
+    let first = windings.first()?;
+    for (winding, (num, stated)) in windings.iter().zip(clocks) {
+        let Some(stated) = stated else {
+            continue;
+        };
+        let represented = crate::cim::tank_phase_clock(first, winding, three_phase);
+        match stated.as_f64() {
+            Some(clock) if clock == represented => {}
+            Some(clock) if clock.fract() == 0.0 && (0.0..12.0).contains(&clock) => {
+                return Some(format!(
+                    "end {num} phaseAngleClock {clock} is not represented by its winding layout \
+                     (clock {represented}); the model has no other vector-group shift"
+                ));
+            }
+            _ => {
+                return Some(format!(
+                    "end {num} phaseAngleClock {stated} is not a clock number"
+                ));
+            }
+        }
+    }
+    None
 }
 
 fn fbool_map(map: &Map<String, Value>, key: &str) -> Option<bool> {

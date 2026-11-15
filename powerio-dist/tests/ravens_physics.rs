@@ -299,3 +299,54 @@ fn source_auxiliary_names_respect_case_insensitive_network_identity() {
         3
     );
 }
+
+/// A delta–wye tank is clock 1 in OpenDSS's convention, the shift the
+/// model's winding connections express. The writer states that clock and
+/// the reader accepts it; a clock the winding layout does not represent is
+/// refused with both clocks named, never read as the layout's.
+#[test]
+fn phase_angle_clock_follows_the_winding_layout() {
+    let dss = "Clear
+New Circuit.c basekv=115 pu=1 phases=3 bus1=src
+New Transformer.sub phases=3 windings=2 buses=[src lv] conns=[delta wye] kvs=[115 4.16] kvas=[5000 5000] xhl=8
+New Load.l bus1=lv.1.2.3 phases=3 kv=4.16 kw=100 kvar=10
+Set VoltageBases=[115 4.16]
+Calcvoltagebases
+Solve
+";
+    let written = parse_dss_str(dss)
+        .emit_value(DistTargetFormat::RavensJson)
+        .text;
+    let mut doc: Value = serde_json::from_str(&written).unwrap();
+    let mut clocks = Vec::new();
+    visit(&mut doc, "TransformerEndInfo", &mut |info| {
+        clocks.push((
+            info["TransformerEndInfo.endNumber"].as_u64().unwrap(),
+            info["TransformerEndInfo.phaseAngleClock"].as_f64().unwrap(),
+        ));
+    });
+    clocks.sort_by_key(|(end, _)| *end);
+    assert_eq!(clocks, [(1, 0.0), (2, 1.0)]);
+    let read = parse_str(&written, "ravens-json").unwrap();
+    assert_eq!(read.transformers().len(), 1, "{:#?}", read.warnings);
+    assert!(
+        !read.warnings.iter().any(|w| w.contains("phaseAngleClock")),
+        "{:#?}",
+        read.warnings
+    );
+
+    visit(&mut doc, "TransformerEndInfo", &mut |info| {
+        if info["TransformerEndInfo.endNumber"].as_u64() == Some(2) {
+            info["TransformerEndInfo.phaseAngleClock"] = json!(11);
+        }
+    });
+    let refused = parse_str(&doc.to_string(), "ravens-json").unwrap();
+    assert_eq!(refused.transformers().len(), 0);
+    assert!(
+        refused.warnings.iter().any(|w| w.contains(
+            "end 2 phaseAngleClock 11 is not represented by its winding layout (clock 1)"
+        )),
+        "{:#?}",
+        refused.warnings
+    );
+}
