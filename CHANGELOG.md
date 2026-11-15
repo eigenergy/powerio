@@ -110,8 +110,13 @@
   `calc_reactive_ratio_derivative` and `calc_power_factor_coefficients_derivative`, and the
   voltage power law term `calc_voltage_power_term` (and `calc_voltage_power_terms`) with its
   ratio floor `LOAD_VOLTAGE_RATIO_FLOOR`. The per unit bases of the BMOPF, PMD, CGMES, UCTE,
-  balanced MG-RAVENS, SINCAL and multiconductor OPF code, every `Q = P tan(acos pf)` of the
-  OpenDSS, GridLAB-D, SINCAL and multiconductor OPF code, and every load law evaluation call it.
+  XIIDM, Sienna, balanced MG-RAVENS, SINCAL, OpenDSS (source, motor), GridLAB-D (regulator) and
+  multiconductor OPF code, every `Q = P tan(acos pf)` of the OpenDSS (load, generator, storage),
+  GridLAB-D, SINCAL, PSS/E (VSC converter) and multiconductor OPF code, and every load law
+  evaluation call it. Behaviour changes, each in the last place: a GridLAB-D regulator's
+  resistance, an OpenDSS no-load percentage written from a terminal coil shunt, OpenDSS storage
+  reactive power (`√(1/pf² − 1)` became `√(1 − pf²)/pf`) and a PSS/E VSC converter's reactive
+  power.
 - `powerio_tx::load_voltage`: `LoadVoltageTerm` (`new`, `calc_power`, `is_below_floor`),
   `Load::calc_voltage_terms` and `Load::calc_power_at` (`LoadPowerAtVoltage`),
   `calc_load_nominal_voltage` and `LoadVoltageError` evaluate a balanced load's voltage model with
@@ -130,9 +135,14 @@
   the factorization used. `calc_edge_laplacian_product` is the matrix free `L x`, and
   `calc_edge_flows` the edge flows at any angles (those of an iterative solve over that product).
 - `McOpfLoadLaw::calc_power` gives a load law's per unit power and voltage slope, and
-  `McOpfDroop::calc_control` (`McOpfDroopValue`), `calc_parameter_derivative` and
-  `calc_monitored_voltage` the one volt-var and volt-watt curve evaluation with its parameter
-  sensitivities. `MC_OPF_DROOP_SMOOTHING` is the curve's softplus width as a share of its mean
+  `McOpfLoadLaw::calc_impedance_admittance` the constant admittance `conj(Σ P + j Σ Q) / nominal²`
+  of a law whose every exponent is two (`calc_load_nominal_admittance`).
+  `McOpfDroop::calc_terms` states a volt-var or volt-watt curve as `McOpfDroopTerms` (a constant
+  and its softplus corners, `McOpfDroopHinge`: coefficient, knot, width), the one statement of the
+  curve a symbolic model builds its expression from; `McOpfDroop::calc_control`
+  (`McOpfDroopValue`) sums those terms, which can move its value in the last place, and
+  `calc_parameter_derivative` and `calc_monitored_voltage` give its parameter sensitivities and
+  monitored voltage. `MC_OPF_DROOP_SMOOTHING` is the curve's softplus width as a share of its mean
   knot voltage, the rule the preparation sets and those sensitivities differentiate. `McOpfTransformer::calc_physical_tap_derivative` and
   `calc_tap_multiplier_derivative` are the tap convention's derivatives.
 - `calc_bus_totals` and `calc_bus_hosts` sum an element column onto buses and mark the buses
@@ -188,7 +198,10 @@
   voltage envelope (`u²` at or below `v_low_pu`, the constant power current transition up to
   `v_min_pu`, `(u/max)²` above `v_max_pu`); a bounded exponential law is its exponential law in
   that envelope and the bounded ZIP law reads the same bands, so a bounded exponential factor can
-  move in the last place. `calc_load_nominal_admittance` is a branch's `conj(S) / V²`.
+  move in the last place. The bounded exponential law's middle band evaluates each exponent with
+  the one term evaluation (`calc_voltage_power_term`), so a non-integer exponent below one follows
+  its tangent below a voltage ratio of `1e-3`. `calc_load_nominal_admittance` is a branch's
+  `conj(S) / V²`.
 - `powerio_core::union_find` (the workspace's one union-find and component labeling:
   `UnionFind` with `new`, `find`, `union`, `union_keep_smaller` and `into_labeling`, and
   `calc_component_labels`) is public, re-exported as `powerio_tx::union_find`, and
@@ -203,18 +216,26 @@
   of a frequency and resistivity) and `calc_potential_coefficient` are the one simplified Carson
   equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
   Geometry, Kron and lowered impedances can move in the last place.
-- `powerio_dist::dense::invert_dense_matrix` also refuses a pivot at most `n ε` times its
-  column's largest original magnitude, and an infinite pivot, the rule the dense PTDF fallback
-  used; that fallback and the OpenDSS source and Line primitive check now call it. A dense
-  inverse that cancels a column to rounding noise is refused as singular, and the OpenDSS
-  primitive check accepts an invertible primitive whose diagonal pivots the native engine meets
-  at an exact zero (a zero self impedance with nonzero mutuals).
+- `powerio_dist::dense::invert_dense_matrix(matrix, singular_pivot, relative_pivot)` refuses a
+  pivot that is NaN or infinite (the one by one case included), `singular_pivot` or smaller, or
+  `relative_pivot` times its column's largest original magnitude or smaller. The dense PTDF
+  fallback calls it with `relative_pivot = n ε`, its own rule (a column cancelled to rounding
+  noise is singular); every other caller passes zero, so only exact singularity is refused. The
+  OpenDSS source and Line primitive check stays the native engine's refusal predicate (the
+  diagonal pivot order of `TcMatrix.Invert`, errors 325 and 183), not an inverse: a primitive with
+  a zero self impedance and nonzero mutuals is refused as OpenDSS refuses it, and one whose pivot
+  is left at rounding noise is accepted as OpenDSS accepts it.
 - `calc_terminal_role` (`TerminalRole`: phase, neutral, earth) is the one terminal
   classification: BMOPF terminal conventions when stated, else `n`/`N` and the fourth of exactly
   `1` to `4` neutral, and ground `0` earth. `DistBus::phase_indices`, the new
   `DistBus::terminal_role` and `neutral_indices`, `calc_wye_neutral_position`, the BMOPF
-  validator's neutral check and centre tap common terminal, and the multiconductor to balanced
-  lowering read it, and `MulticonductorNetwork::terminal_conventions` returns the stated
+  validator's neutral check and centre tap common terminal, the BMOPF writer's neutral bound
+  check and authored terminal conventions, the PMD MATHEMATICAL writer's delta pair and Kron
+  reduction checks, and the multiconductor to balanced lowering read it. The BMOPF writer lists
+  an earth `0` under `earth` in the conventions it authors (it was listed as `neutral`) and no
+  longer counts it as the neutral a `vng_max`, `vpn_min` or `vpn_max` bound needs; the PMD
+  writer calls a `4` neutral only in an exact `1` to `4` set and no longer pairs an earth `0`
+  as a phase, and `MulticonductorNetwork::terminal_conventions` returns the stated
   conventions. Behaviour changes: `phase_indices` no longer counts a terminal `0` as a phase; the
   lowering reads the network's terminal conventions and the four wire `4`; a BMOPF centre tap
   whose secondary maps a `4` its bus neither grounds nor calls neutral takes its last terminal as
@@ -237,14 +258,19 @@
   per sub-load; a non-integer exponent below one follows its tangent below a voltage ratio of
   `1e-3` (`LOAD_VOLTAGE_RATIO_FLOOR`).
 - `powerio_dist::sequence` is the one symmetrical component transform pair:
-  `calc_phase_from_sequence` (with `calc_sequence_self` and `calc_sequence_mutual`),
-  `calc_sequence_from_phase`, `calc_sequence_matrix` and `calc_sequence_components`, read by
-  the OpenDSS line code, line, source and Thevenin code, the pandapower reader, the SINCAL
-  multiconductor writer and the multiconductor to balanced lowering.
+  `calc_phase_from_sequence` (with `calc_sequence_self` and `calc_sequence_mutual`, each taking a
+  `SequenceThird`), `calc_sequence_from_phase`, `calc_sequence_matrix` and
+  `calc_sequence_components`, and for OpenDSS's unequal sequence (`Z1 ≠ Z2`) source its rounded
+  rotation `OPENDSS_ALPHA` with `calc_circulant_phase_entry` and its inverse
+  `calc_circulant_sequence_from_phase`. The OpenDSS line code, line, source reader, source writer
+  and Thevenin code, the pandapower reader, the SINCAL multiconductor writer and the
+  multiconductor to balanced lowering read them. `SequenceThird` states how the reference engine
+  takes the third: OpenDSS `Line` and `LineCode` multiply by `ONE_THIRD` (`Reciprocal`), its
+  `VSource` divides by three (`Divide`). A Line's sequence expansion now multiplies by one third
+  as `Line.RecalcElementData` does (it divided by three), which can move an entry in the last
+  place; the line code, source and pandapower values are unchanged.
   `VoltageSource::calc_line_to_line_voltage` is the one source line to line base (`√3 |V₁|` for
-  three phases, the phasor difference for a split phase pair, the magnitude for one). A line
-  code's sequence expansion now divides by three rather than multiplying by one third, which
-  can move an entry in the last place.
+  three phases, the phasor difference for a split phase pair, the magnitude for one).
 - The GridLAB-D writer's bus nominal voltages are the voltage zones seeded by each source's
   phase magnitude and carried across transformers by `calc_flooded_zone_bases`.
 - `calc_connection_channels` (`ConnectionChannel`) is the one channel rule of a typed connection,
