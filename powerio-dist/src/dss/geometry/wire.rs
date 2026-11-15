@@ -5,6 +5,23 @@ use crate::dss::{
 };
 use std::collections::{HashMap, HashSet};
 
+/// OpenDSS's `ConductorData` ratio of a conductor's AC to its DC resistance,
+/// which completes whichever of the two a source leaves unstated.
+pub(crate) const AC_TO_DC_RESISTANCE: f64 = 1.02;
+
+/// A conductor's `(dc, ac)` resistance from whichever it states: the missing
+/// one is OpenDSS's `ConductorData` default, `rac = 1.02 rdc` (which its CIM
+/// export also writes). `None` when it states neither. The one completion
+/// for a DSS `WireData` and a CIM wire catalog entry.
+pub(crate) fn calc_conductor_resistances(rdc: Option<f64>, rac: Option<f64>) -> Option<(f64, f64)> {
+    match (rdc, rac) {
+        (Some(dc), Some(ac)) => Some((dc, ac)),
+        (Some(dc), None) => Some((dc, dc * AC_TO_DC_RESISTANCE)),
+        (None, Some(ac)) => Some((ac / AC_TO_DC_RESISTANCE, ac)),
+        (None, None) => None,
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub(in crate::dss) struct State {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,14 +73,18 @@ impl State {
         match key {
             "rdc" => {
                 self.rdc = number()?;
-                if self.rac < 0.0 {
-                    self.rac = self.rdc * 1.02;
+                if self.rac < 0.0
+                    && let Some((_, ac)) = calc_conductor_resistances(Some(self.rdc), None)
+                {
+                    self.rac = ac;
                 }
             }
             "rac" => {
                 self.rac = number()?;
-                if self.rdc < 0.0 {
-                    self.rdc = self.rac / 1.02;
+                if self.rdc < 0.0
+                    && let Some((dc, _)) = calc_conductor_resistances(None, Some(self.rac))
+                {
+                    self.rdc = dc;
                 }
             }
             "runits" => self.runits = units(),

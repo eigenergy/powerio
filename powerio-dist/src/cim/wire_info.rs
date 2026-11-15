@@ -8,7 +8,9 @@
 //! CIM states no earth model, so the kernel's OpenDSS defaults apply (Deri's
 //! model, 100 ohm-m), which is how OpenDSS computes the same conductors.
 
-use crate::dss::geometry::{CableData, Screen, Wire, catalog_matrices};
+use crate::dss::geometry::{
+    AC_TO_DC_RESISTANCE, CableData, Screen, Wire, calc_conductor_resistances, catalog_matrices,
+};
 use crate::model::ConductorMatrix;
 use std::collections::BTreeMap;
 
@@ -143,29 +145,22 @@ fn wire(catalog: &Catalog<'_>, x: f64, y: f64, notes: &mut Vec<String>) -> Resul
         .into_iter()
         .find_map(|key| value(key).filter(|v| *v > 0.0));
     let r_dc = value("WireInfo.rDC20").filter(|v| *v > 0.0);
-    // OpenDSS's ConductorData ratio between the two, which its CIM export
-    // also writes.
-    let (r_dc, r_ac) = match (r_dc, r_ac) {
-        (Some(dc), Some(ac)) => (dc, ac),
-        (Some(dc), None) => {
-            notes.push(format!(
-                "{class} {label} states rDC20 but no rAC25, rAC50 or rAC75; the ac resistance \
-                 is 1.02 times rDC20"
-            ));
-            (dc, dc * 1.02)
-        }
-        (None, Some(ac)) => {
-            notes.push(format!(
-                "{class} {label} states an ac resistance but no rDC20; the dc resistance is the \
-                 ac one over 1.02"
-            ));
-            (ac / 1.02, ac)
-        }
-        (None, None) => {
-            return Err(format!(
-                "{class} {label} states no positive rDC20, rAC25, rAC50 or rAC75"
-            ));
-        }
+    // OpenDSS's ConductorData ratio completes the one left unstated.
+    match (r_dc.is_some(), r_ac.is_some()) {
+        (true, false) => notes.push(format!(
+            "{class} {label} states rDC20 but no rAC25, rAC50 or rAC75; the ac resistance \
+             is {AC_TO_DC_RESISTANCE} times rDC20"
+        )),
+        (false, true) => notes.push(format!(
+            "{class} {label} states an ac resistance but no rDC20; the dc resistance is the \
+             ac one over {AC_TO_DC_RESISTANCE}"
+        )),
+        _ => {}
+    }
+    let Some((r_dc, r_ac)) = calc_conductor_resistances(r_dc, r_ac) else {
+        return Err(format!(
+            "{class} {label} states no positive rDC20, rAC25, rAC50 or rAC75"
+        ));
     };
     let cable = match class {
         "WireInfo" | "OverheadWireInfo" => None,

@@ -12,6 +12,7 @@ pub(super) mod direct;
 mod spacing;
 pub(super) mod timeline;
 mod wire;
+pub(crate) use wire::{AC_TO_DC_RESISTANCE, calc_conductor_resistances};
 
 use super::linecode::LineMatrices;
 use num_complex::Complex64 as Complex;
