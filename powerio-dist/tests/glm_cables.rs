@@ -161,11 +161,13 @@ object underground_line {{ name line; phases ABCN; from source; to sink; length 
 }
 
 #[test]
-fn three_phase_returns_reduce_together() {
-    // Pinned against the earlier one-return-at-a-time elimination with
-    // symmetric pivoting: the returns (three screens and N) reduce as one
-    // block, and Arras's tape-shield N, with its zero self term, still
-    // reduces through the inverse's pivoting.
+fn three_phase_returns_reduce_one_at_a_time_by_largest_self_impedance() {
+    // The returns (three screens and N) are eliminated one at a time, each
+    // step taking the remaining return of largest self impedance, which keeps
+    // the matrix exactly symmetric; Arras's tape-shield N, with its zero self
+    // term, goes last, after the shields have filled it. The constants are a
+    // regression pin, the earlier code's output, not an independent
+    // reference.
     let concentric = "neutral_gmr .00208; neutral_resistance 14.8722; neutral_diameter .0641; neutral_strands 13;";
     let tape = "neutral_gmr 0; shield_gmr .0365; shield_resistance 1.7; shield_diameter .88; shield_thickness .005;";
     for (screen, dialect, expected) in [
