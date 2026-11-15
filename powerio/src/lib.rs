@@ -150,6 +150,9 @@ pub use powerio_tx::{
 pub use powerio_tx::{contingency, dynamic, geo, network, version};
 
 pub use powerio_core::diagnostic_codes;
+/// The scalar electrical formulas both network families share: the per unit
+/// impedance base, the power factor relations and the voltage power law.
+pub use powerio_core::electrical;
 /// The common module records and containers. These explicit facade exports
 /// keep ordinary callers out of the component crate paths.
 pub use powerio_core::{

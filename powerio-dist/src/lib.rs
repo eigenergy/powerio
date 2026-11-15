@@ -73,6 +73,10 @@ mod portable_path;
 pub mod ravens;
 pub mod readiness;
 pub mod sequence;
+/// The scalar electrical formulas both network families share, which live
+/// in powerio-core ([`electrical::calc_impedance_base`], the power factor
+/// relations and the voltage power law term).
+pub use powerio_core::electrical;
 pub mod terminal_index;
 #[cfg(test)]
 pub(crate) mod testkit;

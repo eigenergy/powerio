@@ -72,6 +72,10 @@ mod thermal_limit;
 /// powerio-core: [`union_find::UnionFind`] and
 /// [`union_find::calc_component_labels`].
 pub use powerio_core::union_find;
+/// The scalar electrical formulas both network families share, which live
+/// in powerio-core ([`electrical::calc_impedance_base`], the power factor
+/// relations and the voltage power law term).
+pub use powerio_core::electrical;
 #[doc(hidden)]
 pub mod version;
 
