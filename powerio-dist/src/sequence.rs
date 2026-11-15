@@ -143,7 +143,8 @@ pub fn calc_circulant_sequence_from_phase(row: [Complex64; 3]) -> [Complex64; 3]
 /// The positive and zero sequence values `(z₁, z₀)` of a transposed element
 /// from its self and mutual phase entries: `(self − mutual, self + 2 mutual)`.
 /// The one phase to sequence inverse of [`calc_phase_from_sequence`]: the
-/// OpenDSS source writer and the SINCAL multiconductor writer read it.
+/// OpenDSS source and switch writers, the CIM source writer and the SINCAL
+/// multiconductor writer read it.
 #[must_use]
 pub fn calc_sequence_from_phase<T>(own: T, mutual: T) -> (T, T)
 where
@@ -337,18 +338,21 @@ pub fn calc_polygon_chord(phases: usize) -> f64 {
 /// The angle, radians, of phase `phase` (counted from zero) of a balanced
 /// positive sequence set of `phases` phasors whose first phase is at zero:
 /// each phase lags the one before by `2π / phases`, stated in `(−π, π]`
-/// (`0`, `−2π/3`, `+2π/3` for three phases), formed as `−(m · τ / n)` for
-/// `m = phase mod n` with `2m < n` and as `(n − m) · τ / n` otherwise. Zero
-/// for `phases` zero. The one balanced phase rotation: the GridLAB-D nominal
-/// phasors and sequence voltage substation, the multiconductor OPF start
-/// point, the SINCAL multiconductor source writer and the integrated
-/// transmission and distribution coupling read it.
+/// (`0`, `−2π/3`, `+2π/3` for three phases), `+0.0` for `m = phase mod n`
+/// zero, formed as `−(m · τ / n)` for `0 < 2m < n` and as `(n − m) · τ / n`
+/// otherwise. Zero for `phases` zero. The one balanced phase rotation: the
+/// GridLAB-D nominal phasors and sequence voltage substation, the
+/// multiconductor OPF start point, the SINCAL multiconductor source writer
+/// and the integrated transmission and distribution coupling read it.
 #[must_use]
 pub fn calc_balanced_phase_angle(phase: usize, phases: usize) -> f64 {
     if phases == 0 {
         return 0.0;
     }
     let m = phase % phases;
+    if m == 0 {
+        return 0.0;
+    }
     let (n, tau) = (phases as f64, std::f64::consts::TAU);
     if 2 * m < phases {
         -(m as f64 * tau / n)
@@ -527,6 +531,10 @@ mod tests {
         assert_eq!(calc_balanced_phase_angle(4, 3), -TAU / 3.0);
         assert_eq!(calc_balanced_phase_angle(1, 2), PI);
         assert_eq!(calc_balanced_phase_angle(0, 0), 0.0);
+        for phases in 1..=4 {
+            assert!(calc_balanced_phase_angle(0, phases).is_sign_positive());
+            assert!(calc_balanced_phase_angle(phases, phases).is_sign_positive());
+        }
     }
 
     #[test]

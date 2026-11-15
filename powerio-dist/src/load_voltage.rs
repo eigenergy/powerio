@@ -508,7 +508,10 @@ pub fn calc_zip_nominal_power<V: ZipVoltage>(
         ZipLaw::Impedance if coefficient == num_complex::Complex64::default() => {
             num_complex::Complex64::default()
         }
-        ZipLaw::Impedance => voltage.magnitude_squared() / coefficient.conj(),
+        ZipLaw::Impedance => crate::electrical::calc_squared_voltage_impedance(
+            voltage.magnitude_squared(),
+            coefficient.conj(),
+        ),
     }
 }
 
@@ -533,7 +536,9 @@ pub fn calc_zip_coefficient<V: ZipVoltage>(
         ZipLaw::Impedance if power == num_complex::Complex64::default() => {
             num_complex::Complex64::default()
         }
-        ZipLaw::Impedance => magnitude * magnitude / power.conj(),
+        ZipLaw::Impedance => {
+            crate::electrical::calc_squared_voltage_impedance(magnitude * magnitude, power.conj())
+        }
     }
 }
 
@@ -546,5 +551,5 @@ pub fn calc_load_nominal_admittance(
     power: num_complex::Complex64,
     v_nom: f64,
 ) -> num_complex::Complex64 {
-    power.conj() / (v_nom * v_nom)
+    crate::electrical::calc_squared_voltage_admittance(power.conj(), v_nom * v_nom)
 }

@@ -2115,16 +2115,24 @@ pub(super) fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
 }
 
 /// The coil voltage, volts, of an OpenDSS capacitor or reactor bank rated
-/// `kv`: a WYE bank's `kv` is line to line for 2 or 3 phases and its coil
-/// voltage is `kv / √3`; otherwise (one phase, more than three, or any DELTA
-/// bank, whose `kv` is across each branch) the coil voltage is `kv`. The one
-/// OpenDSS bank voltage rule: the shunt and common return bank readers and
-/// the matching writers read it.
+/// `kv`: [`bank_coil_rating`] of `kv · 1e3`. The shunt and common return
+/// bank readers and the matching writers read it.
 pub(super) fn bank_coil_voltage(kv: f64, phases: usize, conn_delta: bool) -> f64 {
+    bank_coil_rating(kv * 1e3, phases, conn_delta)
+}
+
+/// The coil voltage of an OpenDSS capacitor or reactor bank rated
+/// `voltage`, in the unit of `voltage`: a WYE bank's rating is line to line
+/// for 2 or 3 phases and its coil voltage is `voltage / √3`; otherwise (one
+/// phase, more than three, or any DELTA bank, whose rating is across each
+/// branch) the coil voltage is the rating. The one OpenDSS bank voltage
+/// rule: [`bank_coil_voltage`] states it in volts, and the rated `Reactor`
+/// reader in kilovolts, as `Reactor.pas` forms `PhasekV`.
+pub(super) fn bank_coil_rating(voltage: f64, phases: usize, conn_delta: bool) -> f64 {
     if !conn_delta && matches!(phases, 2 | 3) {
-        crate::electrical::calc_wye_phase_voltage(kv * 1e3)
+        crate::electrical::calc_wye_phase_voltage(voltage)
     } else {
-        kv * 1e3
+        voltage
     }
 }
 

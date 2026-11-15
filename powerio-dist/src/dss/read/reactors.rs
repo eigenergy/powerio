@@ -276,12 +276,13 @@ impl Reader<'_> {
         {
             return Err("invalid rated reactor parameters or AC frequency".into());
         }
-        let phase_kv = if phases >= 2.0 {
-            crate::electrical::calc_wye_phase_voltage(kv)
-        } else {
-            kv
-        };
-        let reactance = phase_kv * phase_kv * 1000.0 / (kvar / phases);
+        // The bank coil voltage rule of every OpenDSS shunt bank (this
+        // reader admits only WYE), in kilovolts, and the coil's reactance at
+        // its share of the rated power, `V² / S` in ohms.
+        let phase_kv = super::bank_coil_rating(kv, phases as usize, false);
+        let reactance = crate::electrical::calc_impedance_base(phase_kv, kvar / phases)
+            .map(|kilohms| kilohms * 1000.0)
+            .ok_or("rated reactor impedance base overflows or underflows")?;
         let inductance = reactance / std::f64::consts::TAU / base;
         let impedance =
             num_complex::Complex64::new(resistance, inductance * std::f64::consts::TAU * frequency);

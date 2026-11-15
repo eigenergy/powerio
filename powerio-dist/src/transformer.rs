@@ -749,7 +749,10 @@ pub fn calc_transformer_magnetizing(
         ));
     }
     let v = calc_coil_voltage(transformer, 1) * transformer.windings[1].tap;
-    let ybase = transformer.windings[0].s_rating / (transformer.phases as f64 * v * v);
+    let ybase = crate::electrical::calc_rated_admittance(
+        transformer.windings[0].s_rating / transformer.phases as f64,
+        v,
+    );
     Ok(Some(TransformerMagnetizing {
         winding: 1,
         admittance: Complex64::new(loss / 100.0 * ybase, -imag / 100.0 * ybase),
@@ -774,11 +777,32 @@ pub enum WindingNeutralGrounding {
     Impedance(Complex64),
 }
 
-/// A winding's neutral grounding, OpenDSS's reading of `r_neutral` and
-/// `x_neutral`: unstated when both are omitted, floating for a negative
-/// resistance, solid when both are zero, else the admittance of the stated
-/// impedance. The one neutral grounding rule: the transformer primitive
-/// stamps it and the multiconductor OPF descriptor writes it.
+/// The neutral grounding a winding's `r_neutral` and `x_neutral` state,
+/// OpenDSS's reading: unstated when both are omitted, floating for a
+/// negative resistance, solid when both are zero (an omitted one reads
+/// zero), else the admittance of the stated impedance (`NaN` parts for a
+/// nonfinite one). The one neutral grounding rule:
+/// [`calc_winding_neutral_grounding`] checks it, and the MG-RAVENS and BMOPF
+/// writers and the multiconductor ideal transformer profile read it as
+/// stated.
+#[must_use]
+pub fn calc_stated_neutral_grounding(winding: &DistWinding) -> WindingNeutralGrounding {
+    if winding.r_neutral.is_none() && winding.x_neutral.is_none() {
+        return WindingNeutralGrounding::Unstated;
+    }
+    let r = winding.r_neutral.unwrap_or(0.0);
+    let x = winding.x_neutral.unwrap_or(0.0);
+    if r < 0.0 {
+        WindingNeutralGrounding::Floating
+    } else if r == 0.0 && x == 0.0 {
+        WindingNeutralGrounding::Solid
+    } else {
+        WindingNeutralGrounding::Impedance(Complex64::new(1.0, 0.0) / Complex64::new(r, x))
+    }
+}
+
+/// A winding's neutral grounding, [`calc_stated_neutral_grounding`] checked
+/// for the transformer primitive and the multiconductor OPF descriptor.
 ///
 /// # Errors
 /// A nonfinite neutral impedance, or a DELTA winding that states a solid or
@@ -789,26 +813,21 @@ pub fn calc_winding_neutral_grounding(
 ) -> Result<WindingNeutralGrounding> {
     let name = transformer.name.as_str();
     let w = &transformer.windings[winding];
-    if w.r_neutral.is_none() && w.x_neutral.is_none() {
-        return Ok(WindingNeutralGrounding::Unstated);
-    }
-    let r = w.r_neutral.unwrap_or(0.0);
-    let x = w.x_neutral.unwrap_or(0.0);
-    if !r.is_finite() || !x.is_finite() {
+    let stated = [w.r_neutral, w.x_neutral];
+    if stated.iter().any(Option::is_some) && !stated.iter().flatten().all(|v| v.is_finite()) {
         return Err(invalid(
             name,
             format!("windings[{winding}].neutral impedance"),
             "expected finite resistance and reactance",
         ));
     }
-    let grounding = if r < 0.0 {
-        WindingNeutralGrounding::Floating
-    } else if r == 0.0 && x == 0.0 {
-        WindingNeutralGrounding::Solid
-    } else {
-        WindingNeutralGrounding::Impedance(Complex64::new(1.0, 0.0) / Complex64::new(r, x))
-    };
-    if w.conn == DistWindingConn::Delta && grounding != WindingNeutralGrounding::Floating {
+    let grounding = calc_stated_neutral_grounding(w);
+    if w.conn == DistWindingConn::Delta
+        && !matches!(
+            grounding,
+            WindingNeutralGrounding::Floating | WindingNeutralGrounding::Unstated
+        )
+    {
         return Err(unsupported(
             name,
             "neutral impedance on a delta winding has no physical neutral terminal",

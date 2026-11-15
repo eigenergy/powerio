@@ -5,7 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use powerio_dist::transformer::calc_winding_connection;
+use powerio_dist::transformer::{
+    WindingNeutralGrounding, calc_stated_neutral_grounding, calc_winding_connection,
+};
 use powerio_dist::{DistTransformer, DistWindingConn, MulticonductorNetwork};
 
 use super::{MulticonductorNodeIndex, NodeRef};
@@ -35,8 +37,10 @@ fn validate(transformer: &DistTransformer) -> Result<()> {
         && transformer.windings.iter().all(|w| {
             w.conn == DistWindingConn::Wye
                 && w.r_pct == 0.0
-                && w.r_neutral.is_none_or(|r| r == 0.0)
-                && w.x_neutral.is_none_or(|x| x == 0.0)
+                && matches!(
+                    calc_stated_neutral_grounding(w),
+                    WindingNeutralGrounding::Unstated | WindingNeutralGrounding::Solid
+                )
                 && ((transformer.phases == 1 && w.terminal_map.len() == 1)
                     || w.terminal_map.len() == transformer.phases + 1)
         })

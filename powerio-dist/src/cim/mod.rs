@@ -49,10 +49,11 @@ use std::f64::consts::PI;
 use std::sync::LazyLock;
 
 /// The terminal conventions of the CIM wire coordinate: the terminals that
-/// [`powerio_core::cim::terminal_phase`] writes as the neutral `N` (`4`,
-/// `n`, `N`) are the neutral, every other terminal but ground `0` a phase.
+/// [`powerio_core::cim::terminal_phase`] writes as the neutral `N`
+/// ([`powerio_core::cim::NEUTRAL_TERMINAL_NAMES`]) are the neutral, every
+/// other terminal but ground `0` a phase.
 static WIRE_CONVENTIONS: LazyLock<serde_json::Value> =
-    LazyLock::new(|| serde_json::json!({"neutral": ["4", "n", "N"]}));
+    LazyLock::new(|| serde_json::json!({"neutral": powerio_core::cim::NEUTRAL_TERMINAL_NAMES}));
 
 /// The terminal conventions ([`crate::calc_terminal_role`]) a network read
 /// from distribution CIM or MG-RAVENS states, and the CIM and MG-RAVENS

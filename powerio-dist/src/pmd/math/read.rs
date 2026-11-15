@@ -1902,7 +1902,7 @@ pub(super) fn br2sc_impedance(
         y[j][j] += yij;
     }
     let reduced: Vec<Vec<Complex64>> = (1..n).map(|i| (1..n).map(|j| y[i][j]).collect()).collect();
-    let Some(zb) = invert(&reduced) else {
+    let Some(zb) = super::invert(&reduced) else {
         return zbr.clone();
     };
     let mut out = BTreeMap::new();
@@ -1913,10 +1913,4 @@ pub(super) fn br2sc_impedance(
         }
     }
     out
-}
-
-/// The dense inverse ([`crate::dense::invert_dense_matrix`]); `None` when a
-/// pivot is 1e-300 or smaller.
-fn invert(a: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    crate::dense::invert_dense_matrix(a, crate::dense::DensePivot::Partial, 1e-300, 0.0)
 }

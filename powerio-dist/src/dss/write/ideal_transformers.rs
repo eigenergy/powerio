@@ -53,8 +53,11 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
                     || !is_positive_finite(w.v_ref)
                     || !is_positive_finite(w.tap)
                     || !is_positive_finite(w.s_rating)
-                    || w.r_neutral.is_some_and(|v| v != 0.0)
-                    || w.x_neutral.is_some_and(|v| v != 0.0)
+                    || !matches!(
+                        crate::transformer::calc_stated_neutral_grounding(w),
+                        crate::transformer::WindingNeutralGrounding::Unstated
+                            | crate::transformer::WindingNeutralGrounding::Solid
+                    )
             })
             || t.windings[0].s_rating != b.s_rating
             || !is_positive_finite(r_pct)

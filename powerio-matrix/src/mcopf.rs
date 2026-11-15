@@ -194,6 +194,13 @@ pub struct McOpfLoadLaw {
     pub terms: [Vec<[f64; 2]>; 2],
 }
 impl McOpfLoadLaw {
+    /// A law of active then reactive `[coefficient, exponent]` terms at the
+    /// per unit coil nominal voltage `nominal`.
+    #[must_use]
+    pub fn new(nominal: f64, terms: [Vec<[f64; 2]>; 2]) -> Self {
+        Self { nominal, terms }
+    }
+
     /// The law's per unit active and reactive power at the per unit voltage
     /// magnitude `voltage` (on `V_base`), each with its derivative with
     /// respect to `voltage`: the terms summed by the one power law term

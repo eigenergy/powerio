@@ -15,15 +15,8 @@ impl Writer<'_> {
         load: &DistLoad,
         target: DistLocationTarget,
     ) -> Result<(), Error> {
-        let connections = connections(load)?;
-        let active = phases(
-            &load
-                .terminal_map
-                .iter()
-                .filter(|t| t.as_str() != "n")
-                .cloned()
-                .collect::<Vec<_>>(),
-        )?;
+        let connections = connections(load, self.neutral_last(&load.bus, &load.terminal_map))?;
+        let active = phases(&self.phase_terminals(&load.bus, &load.terminal_map))?;
         let available = self
             .phases
             .get(load.bus.as_str())
@@ -107,10 +100,11 @@ impl Writer<'_> {
     }
 }
 
-fn connections(load: &DistLoad) -> Result<Vec<(&String, &String)>, Error> {
-    // GridLAB-D states a wye neutral as `n`, the last terminal.
+/// The terminal pairs of a load's connections; `neutral_last` states
+/// whether its WYE neutral is its last terminal, where GridLAB-D states it.
+fn connections(load: &DistLoad, neutral_last: bool) -> Result<Vec<(&String, &String)>, Error> {
     let map = load.terminal_map.as_slice();
-    let neutral_last = map.len() >= 2 && map.last().is_some_and(|n| n == "n");
+    let neutral_last = map.len() >= 2 && neutral_last;
     let channels = match load.configuration {
         Configuration::Wye if !neutral_last => None,
         Configuration::Wye => {

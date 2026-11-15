@@ -74,8 +74,20 @@ pub fn calc_earth_return_log_depth(rho: f64, frequency: f64, form: EarthDepthFor
 pub fn calc_carson_impedance(distance: f64, earth: CarsonEarth) -> Complex64 {
     Complex64::new(
         earth.resistance,
-        earth.reactance * (1.0 / distance).ln() + earth.reactance * earth.log_depth,
+        calc_conductor_loop_reactance(earth.reactance, distance)
+            + earth.reactance * earth.log_depth,
     )
+}
+
+/// The free space term of a conductor pair's loop reactance, `ω μ₀ / 2π ·
+/// ln(1 / D)` per unit length, for `reactance` the coefficient `ω μ₀ / 2π`
+/// ([`CarsonEarth::reactance`]) and `distance` the pair's distance (or a
+/// conductor's geometric mean radius). The one free space loop term:
+/// [`calc_carson_impedance`] and the OpenDSS geometry's Deri and full
+/// Carson earth models add their earth correction to it.
+#[must_use]
+pub fn calc_conductor_loop_reactance(reactance: f64, distance: f64) -> f64 {
+    reactance * (1.0 / distance).ln()
 }
 
 /// Maxwell's potential coefficient between two conductors (without the

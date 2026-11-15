@@ -73,8 +73,11 @@ impl<'a> CoilBanks<'a> {
                         .r_neutral
                         .is_some_and(|r| !r.is_finite() || r >= 0.0)
                     || primary.x_neutral.is_some_and(|x| !x.is_finite())
-                    || secondary.r_neutral.is_some_and(|r| r != 0.0)
-                    || secondary.x_neutral.is_some_and(|x| x != 0.0)
+                    || !matches!(
+                        crate::transformer::calc_stated_neutral_grounding(secondary),
+                        crate::transformer::WindingNeutralGrounding::Unstated
+                            | crate::transformer::WindingNeutralGrounding::Solid
+                    )
                     || [primary, secondary].iter().any(|w| {
                         w.conn != DistWindingConn::Wye
                             || !w.v_ref.is_finite()

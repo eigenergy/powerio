@@ -110,3 +110,12 @@ pub(crate) const LOAD_MODEL_CURRENT: &str = "CURRENT";
 pub(crate) fn restore(key: &str, v: &Value) -> f64 {
     super::read::restore_null(key, v)
 }
+
+/// The dense inverse of the PMD MATHEMATICAL reader and writer
+/// ([`crate::dense::invert_dense_matrix`] with partial pivoting); `None`
+/// when a pivot is 1e-300 or smaller.
+pub(crate) fn invert(
+    a: &[Vec<num_complex::Complex64>],
+) -> Option<Vec<Vec<num_complex::Complex64>>> {
+    crate::dense::invert_dense_matrix(a, crate::dense::DensePivot::Partial, 1e-300, 0.0)
+}

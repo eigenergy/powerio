@@ -1796,7 +1796,9 @@ fn sequence_impedance(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
     let (Some((rs, rm)), Some((xs, xm))) = (parts("rs"), parts("xs")) else {
         return None;
     };
-    Some((rs - rm, xs - xm, rs + 2.0 * rm, xs + 2.0 * xm))
+    let (r1, r0) = crate::sequence::calc_sequence_from_phase(rs, rm);
+    let (x1, x0) = crate::sequence::calc_sequence_from_phase(xs, xm);
+    Some((r1, x1, r0, x0))
 }
 
 /// The sequence values a CIM read stated, while the `rs`/`xs` matrices are

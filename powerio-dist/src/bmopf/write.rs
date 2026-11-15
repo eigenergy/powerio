@@ -2514,7 +2514,9 @@ impl Writer {
                 );
                 wj.insert("s_rating".into(), self.num(w.s_rating, "winding s_rating"));
                 wj.insert("tap_ratio".into(), self.num(w.tap, "winding tap_ratio"));
-                if w.r_neutral.is_some_and(|r| r < 0.0) {
+                if crate::transformer::calc_stated_neutral_grounding(w)
+                    == crate::transformer::WindingNeutralGrounding::Floating
+                {
                     self.warn(&C::EMIT_BMOPF_FIELD_DROPPED, format!("transformer {} winding {idx}: open OpenDSS neutral has no internal impedance branch; neutral impedance fields omitted", t.name));
                 } else {
                     // The schema takes nonnegative winding neutral fields,
@@ -2733,7 +2735,9 @@ impl Writer {
             let resistance = format!("r_neutral_{side}");
             let reactance = format!("x_neutral_{side}");
             self.transformer_neutral_field(o, t, &resistance, winding.r_neutral);
-            if winding.r_neutral.is_some_and(|r| r < 0.0) {
+            if crate::transformer::calc_stated_neutral_grounding(winding)
+                == crate::transformer::WindingNeutralGrounding::Floating
+            {
                 if let Some(x) = winding.x_neutral {
                     self.warn(&C::EMIT_BMOPF_TRANSFORMER_NEUTRAL_DROPPED,
                         format!("transformer {}: {reactance}={x} omitted with the open neutral encoded by negative {resistance}", t.name));

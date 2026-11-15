@@ -26,7 +26,7 @@ struct ShortCircuit {
 // Derive candidates from typed sequence values and accept only exact forward
 // reconstruction; no source property or feeder identity participates.
 fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortCircuit> {
-    use crate::dss::source::{short_circuit_positive, short_circuit_zero};
+    use crate::dss::source::{short_circuit_level, short_circuit_positive, short_circuit_zero};
     let valid = |v: f64| v.is_finite() && v > 0.0;
     if ![zero.re, zero.im, positive.re, positive.im]
         .into_iter()
@@ -39,8 +39,7 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
         .into_iter()
         .filter(|&v| valid(v))
     {
-        let mva3 = kv.powi(2)
-            / positive.im
+        let mva3 = short_circuit_level(kv, 1.0, positive.im)
             / crate::electrical::calc_impedance_ratio_divisor(
                 xr1,
                 crate::electrical::ImpedanceRatioForm::OpenDssReactanceOverResistance,
@@ -57,7 +56,7 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
         .into_iter()
         .filter(|&v| valid(v))
     {
-        let mva1 = 3.0 * kv.powi(2) / (2.0 * positive + zero).norm();
+        let mva1 = short_circuit_level(kv, 3.0, (2.0 * positive + zero).norm());
         for mva1 in neighbors(mva1).into_iter().filter(|&v| valid(v)) {
             let factor = crate::electrical::SQRT_3;
             let isc1 = crate::electrical::calc_line_current(mva1 * 1000.0, kv, factor);

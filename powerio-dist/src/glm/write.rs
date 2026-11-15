@@ -160,6 +160,39 @@ fn unsupported(message: impl Into<String>) -> Error {
 }
 
 impl Writer<'_> {
+    /// Whether an element's WYE neutral at `bus`
+    /// ([`crate::calc_wye_neutral_position`] over the network's terminal
+    /// roles) is the last terminal of `terminal_map`, where GridLAB-D
+    /// states it, and is a neutral the bus carries (an earth return is
+    /// not GridLAB-D's `N`). An ambiguous neutral or an undeclared bus is
+    /// not.
+    fn neutral_last(&self, bus: &str, terminal_map: &[String]) -> bool {
+        let (Some(declared), Some(last)) = (self.net.bus(bus), terminal_map.last()) else {
+            return false;
+        };
+        declared.terminals.contains(last)
+            && declared.terminal_role(last, self.net.terminal_conventions())
+                == crate::TerminalRole::Neutral
+            && crate::calc_wye_neutral_position(self.net, bus, terminal_map)
+                .is_ok_and(|neutral| neutral == Some(terminal_map.len() - 1))
+    }
+
+    /// The terminals of `terminal_map` whose role on `bus`
+    /// ([`crate::calc_terminal_role`]) is a phase; every terminal when the
+    /// bus is undeclared.
+    fn phase_terminals(&self, bus: &str, terminal_map: &[String]) -> Vec<String> {
+        let conventions = self.net.terminal_conventions();
+        let declared = self.net.bus(bus);
+        terminal_map
+            .iter()
+            .filter(|t| {
+                declared
+                    .is_none_or(|b| b.terminal_role(t, conventions) == crate::TerminalRole::Phase)
+            })
+            .cloned()
+            .collect()
+    }
+
     // Native NR derives this limit from nominal_voltage times the module's
     // fractional criterion. A fixed nanovolt threshold can prevent convergence
     // on a large feeder. Keep the qualified FBS absolute setting unchanged.
@@ -690,7 +723,7 @@ impl Writer<'_> {
                 continue;
             }
             if load.configuration != Configuration::Wye
-                || load.terminal_map.last().map(String::as_str) != Some("n")
+                || !self.neutral_last(&load.bus, &load.terminal_map)
             {
                 return Err(unsupported(format!(
                     "load {} requires an additional connection model",

@@ -1449,13 +1449,15 @@ impl DssWriter {
             if let Some(((rs, rm), (xs, xm))) =
                 self.take_seq_pair(&mut extras, "pmd_rs", "pmd_xs", &what)
             {
+                let (r1, r0) = crate::sequence::calc_sequence_from_phase(rs, rm);
+                let (x1, x0) = crate::sequence::calc_sequence_from_phase(xs, xm);
                 let _ = write!(
                     s,
                     " c0=0 c1=0 r0={} r1={} x0={} x1={}",
-                    num((rs + 2.0 * rm) / 0.001),
-                    num((rs - rm) / 0.001),
-                    num((xs + 2.0 * xm) / 0.001),
-                    num((xs - xm) / 0.001)
+                    num(r0 / 0.001),
+                    num(r1 / 0.001),
+                    num(x0 / 0.001),
+                    num(x1 / 0.001)
                 );
             }
             s.push_str(&self.extras_tail("line", &sw.name, &extras));

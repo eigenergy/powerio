@@ -2596,7 +2596,7 @@ fn sc2br_impedance(
             zb[j][i] = zb[i][j];
         }
     }
-    let Some(y) = invert(&zb) else {
+    let Some(y) = super::invert(&zb) else {
         // A singular reduced matrix has no star equivalent; the pairs are
         // carried as stated, PMD's pseudo-inverse giving the same for the
         // nonsingular part is not reproduced here.
@@ -2627,12 +2627,6 @@ fn sc2br_impedance(
             ((i, j), z)
         })
         .collect()
-}
-
-/// The dense inverse ([`crate::dense::invert_dense_matrix`]); `None` when a
-/// pivot is 1e-300 or smaller.
-fn invert(a: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    crate::dense::invert_dense_matrix(a, crate::dense::DensePivot::Partial, 1e-300, 0.0)
 }
 
 /// A stashed PMD matrix (array of columns) or a plain row major array.

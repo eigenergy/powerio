@@ -76,10 +76,13 @@ impl Writer<'_> {
                     || w.s_rating <= 0.0
                     || !w.r_pct.is_finite()
                     || w.r_pct < 0.0
-                    || w.r_neutral.is_some_and(|r| r != 0.0)
-                    || w.x_neutral.is_some_and(|x| x != 0.0)
+                    || !matches!(
+                        crate::transformer::calc_stated_neutral_grounding(w),
+                        crate::transformer::WindingNeutralGrounding::Unstated
+                            | crate::transformer::WindingNeutralGrounding::Solid
+                    )
                     || w.terminal_map.len() != t.phases + 1
-                    || w.terminal_map.last().is_none_or(|n| n != "n")
+                    || !self.neutral_last(&w.bus, &w.terminal_map)
                 {
                     return Err(fail());
                 }

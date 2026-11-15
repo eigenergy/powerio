@@ -3,6 +3,8 @@
 //! term. Each is the one implementation the transmission, distribution,
 //! composition and matrix crates call.
 
+use std::ops::Div;
+
 /// The impedance base `V² / S` of a voltage base and a power base in
 /// consistent units (volts and volt amperes give ohms, kilovolts and
 /// megavolt amperes give ohms as well). `None` unless both bases are
@@ -12,6 +14,26 @@
 #[must_use]
 pub fn calc_impedance_base(voltage: f64, power: f64) -> Option<f64> {
     calc_branch_impedance_base(voltage, voltage, power)
+}
+
+/// The factor `Z_base(from) / Z_base(to)` that takes a per unit impedance
+/// on the base `(from_voltage, from_power)` to the base `(to_voltage,
+/// to_power)`, each base by [`calc_impedance_base`]; with the bases swapped
+/// it takes a per unit admittance from `from` to `to`. `None` when either
+/// base is unusable. The one per unit rebase: the SINCAL balanced
+/// transformer's series impedance, the PSS/E `CM=2` magnetizing admittance
+/// and the integrated transmission and distribution transformer lowering
+/// read it.
+#[must_use]
+pub fn calc_impedance_rebase(
+    from_voltage: f64,
+    from_power: f64,
+    to_voltage: f64,
+    to_power: f64,
+) -> Option<f64> {
+    Some(
+        calc_impedance_base(from_voltage, from_power)? / calc_impedance_base(to_voltage, to_power)?,
+    )
 }
 
 /// The impedance base `V₁ V₂ / S` of a branch between two voltage bases at
@@ -27,7 +49,42 @@ pub fn calc_branch_impedance_base(from_voltage: f64, to_voltage: f64, power: f64
     if !positive(from_voltage) || !positive(to_voltage) || !positive(power) {
         return None;
     }
-    Some(from_voltage * to_voltage / power).filter(|base| positive(*base))
+    Some(calc_squared_voltage_impedance(
+        from_voltage * to_voltage,
+        power,
+    ))
+    .filter(|base| positive(*base))
+}
+
+/// The impedance `V² / S` that draws the power `power` at a voltage whose
+/// squared magnitude is `voltage_squared`, formed as `voltage_squared /
+/// power`, for a real or a complex power (`|V|² / conj(S)` takes
+/// `conj(S)`). With an impedance in place of the power it is the power that
+/// impedance draws, the same quotient. Unchecked: the caller states what an
+/// unusable voltage or power means. The one voltage squared over a power:
+/// [`calc_branch_impedance_base`] (over `V₁ V₂`) and the distribution ZIP
+/// coefficient and nominal power conversions read it.
+#[must_use]
+pub fn calc_squared_voltage_impedance<T>(voltage_squared: f64, power: T) -> T
+where
+    f64: Div<T, Output = T>,
+{
+    voltage_squared / power
+}
+
+/// The admittance `S / V²` that draws the power `power` at a voltage whose
+/// squared magnitude is `voltage_squared`, formed as `power /
+/// voltage_squared`, for a real or a complex power (`conj(S) / |V|²` takes
+/// `conj(S)`). Unchecked, as [`calc_squared_voltage_impedance`]. The one
+/// power over voltage squared: [`calc_rated_admittance`] is it at
+/// `voltage · voltage`, and the distribution load's nominal admittance
+/// reads it.
+#[must_use]
+pub fn calc_squared_voltage_admittance<T>(power: T, voltage_squared: f64) -> T
+where
+    T: Div<f64, Output = T>,
+{
+    power / voltage_squared
 }
 
 /// The admittance base `S / V²` of a voltage base and a power base in
@@ -50,12 +107,13 @@ pub fn calc_admittance_base(voltage: f64, power: f64) -> Option<f64> {
 /// `power / (voltage · voltage)` in consistent units: a susceptance from a
 /// rated reactive power (a capacitor bank or a shunt section in Mvar at
 /// kilovolts), a conductance from an active power. The one power over
-/// voltage squared: [`calc_admittance_base`], the capacitor stamp, the
-/// BMOPF capacitor lowering, the OpenDSS common return bank and the CGMES
-/// and PSS/E shunt and SVC conversions read it.
+/// voltage squared at a real power ([`calc_squared_voltage_admittance`]):
+/// [`calc_admittance_base`], the capacitor stamp, the BMOPF capacitor
+/// lowering, the OpenDSS common return bank and the CGMES and PSS/E shunt
+/// and SVC conversions read it.
 #[must_use]
 pub fn calc_rated_admittance(power: f64, voltage: f64) -> f64 {
-    power / (voltage * voltage)
+    calc_squared_voltage_admittance(power, voltage * voltage)
 }
 
 /// The power an admittance draws at `voltage`, `admittance · V²`, formed as
@@ -296,6 +354,18 @@ pub fn calc_voltage_power_term(coefficient: f64, exponent: f64, ratio: f64) -> (
     }
 }
 
+/// One voltage power law term `c x^γ` over the log voltage ratio
+/// `ℓ = ln x`, formed as `c e^{γ ℓ}`, with its derivative `γ c e^{γ ℓ}` with
+/// respect to `ℓ`: [`calc_voltage_power_term`] on the positive voltage
+/// domain a log voltage lift defines, where no floor is needed. The one log
+/// voltage term evaluation: the multiconductor OPF load parameter
+/// sensitivity over its log voltage coordinate reads it.
+#[must_use]
+pub fn calc_log_voltage_power_term(coefficient: f64, exponent: f64, log_ratio: f64) -> (f64, f64) {
+    let value = coefficient * (exponent * log_ratio).exp();
+    (value, exponent * value)
+}
+
 /// The sum of voltage power law terms `[coefficient, exponent]` at the
 /// voltage ratio `x`, with its derivative with respect to `x`, each term by
 /// [`calc_voltage_power_term`].
@@ -408,5 +478,8 @@ mod tests {
         assert_eq!(calc_voltage_power_term(3.0, 0.0, 0.0), (3.0, 0.0));
         let (v, d) = calc_voltage_power_terms(&[[1.0, 2.0], [0.5, 1.0]], 0.5);
         assert!((v - 0.5).abs() < 1e-15 && (d - 1.5).abs() < 1e-15);
+        let (v, d) = calc_log_voltage_power_term(2.0, 1.5, 0.9_f64.ln());
+        assert!((v - 2.0 * 0.9_f64.powf(1.5)).abs() < 1e-15);
+        assert!((d - 1.5 * v).abs() < 1e-15);
     }
 }

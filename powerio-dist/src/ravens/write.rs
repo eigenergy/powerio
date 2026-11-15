@@ -2044,8 +2044,9 @@ impl Writer {
             let mut end_infos = Vec::new();
             for (k, w) in xf.windings.iter().enumerate() {
                 let num = k as u64 + 1;
-                let grounded =
-                    w.conn == DistWindingConn::Wye && !w.r_neutral.is_some_and(|r| r < 0.0);
+                let grounded = w.conn == DistWindingConn::Wye
+                    && crate::transformer::calc_stated_neutral_grounding(w)
+                        != crate::transformer::WindingNeutralGrounding::Floating;
                 let mut end = identified(
                     "TransformerTankEnd",
                     &format!("{}_End_{num}", xf.name),
@@ -2532,7 +2533,9 @@ fn wrap_angle(a: f64) -> f64 {
 fn vector_group(xf: &DistTransformer, clocks: &[f64]) -> String {
     let mut out = String::new();
     for (k, w) in xf.windings.iter().enumerate() {
-        let grounded = w.conn == DistWindingConn::Wye && !w.r_neutral.is_some_and(|r| r < 0.0);
+        let grounded = w.conn == DistWindingConn::Wye
+            && crate::transformer::calc_stated_neutral_grounding(w)
+                != crate::transformer::WindingNeutralGrounding::Floating;
         let letter = match (k, w.conn) {
             (0, DistWindingConn::Delta) => "D",
             (0, DistWindingConn::Wye) => "Y",

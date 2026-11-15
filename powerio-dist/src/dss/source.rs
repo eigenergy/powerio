@@ -57,6 +57,27 @@ fn impedance_base(kv: f64, mva: f64) -> Result<f64> {
         .ok_or_else(|| "native source impedance base kV² / MVA is not positive and finite".into())
 }
 
+/// The native short circuit relation between a source's line to line
+/// voltage `kv`, an impedance magnitude and a short circuit current,
+/// `kV · 1000 / factor / x` (`factor` √3 for a three phase quantity, one or
+/// √3 for a single phase one as the source's phases state): the current of
+/// an impedance magnitude (`Isc3` over `|Z1|`, `Isc1` over `|Zs|`), and the
+/// impedance magnitude of a current, the same quotient (three times `kv`
+/// gives `3 |Zs|`, `VSource`'s zero sequence quadratic). The pinned engine's
+/// order: `kVBase * 1000.0 / factor / x`.
+pub(super) fn short_circuit_quotient(kv: f64, factor: f64, x: f64) -> f64 {
+    kv * 1000.0 / factor / x
+}
+
+/// The short circuit level, MVA, of an impedance magnitude `z` at `kv` with
+/// `scale` times the voltage squared: `scale · kV² / |Z|`
+/// ([`crate::electrical::calc_squared_voltage_impedance`], the `V² / S`
+/// quotient read as `S = V² / Z`), `scale` one for `MVAsc3` over `|Z1|` and
+/// three for `MVAsc1` over `|2 Z1 + Z0|`.
+pub(super) fn short_circuit_level(kv: f64, scale: f64, z: f64) -> f64 {
+    crate::electrical::calc_squared_voltage_impedance(scale * kv.powi(2), z)
+}
+
 // Shared with the canonical writer's exact inverse of the native MVA form.
 pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Result<Complex64> {
     let (r, x) = crate::electrical::calc_impedance_from_ratio(
@@ -77,7 +98,7 @@ pub(super) fn short_circuit_zero(
     let (r, x) = (positive.re, positive.im);
     let quadratic = 1.0 + xr0.powi(2);
     let linear = 4.0 * (r + x * xr0);
-    let constant = 4.0 * (r * r + x * x) - (3.0 * kv * 1000.0 / factor / isc1).powi(2);
+    let constant = 4.0 * (r * r + x * x) - short_circuit_quotient(3.0 * kv, factor, isc1).powi(2);
     let discriminant = linear * linear - 4.0 * quadratic * constant;
     if discriminant < 0.0 {
         return Err("source short-circuit profile has no real zero-sequence resistance".into());
@@ -301,14 +322,13 @@ impl State {
             if self.z[1] == Complex64::default() {
                 return Err("native source Z1 cannot be zero".into());
             }
-            self.isc3 =
-                crate::electrical::calc_wye_phase_voltage(self.kv * 1000.0) / self.z[1].norm();
+            self.isc3 = short_circuit_quotient(self.kv, SQRT_3, self.z[1].norm());
             if self.phases == 1 {
                 self.z[0] = self.z[1];
                 self.z[2] = self.z[1];
             }
             let zs = crate::sequence::calc_sequence_self(self.z[1], self.z[0], NATIVE_THIRD);
-            self.isc1 = self.kv * 1000.0 / factor / zs.norm();
+            self.isc1 = short_circuit_quotient(self.kv, factor, zs.norm());
             self.mva3 = apparent_power(self.kv, self.isc3, SQRT_3);
             self.mva1 = apparent_power(self.kv, self.isc1, factor);
         }

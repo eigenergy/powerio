@@ -157,8 +157,11 @@ fn center<'a>(
                 || !w.s_rating.is_finite()
                 || w.s_rating <= 0.0
                 || w.s_rating != primary_winding.s_rating
-                || w.r_neutral.is_some_and(|r| r != 0.0)
-                || w.x_neutral.is_some_and(|x| x != 0.0)
+                || !matches!(
+                    crate::transformer::calc_stated_neutral_grounding(w),
+                    crate::transformer::WindingNeutralGrounding::Unstated
+                        | crate::transformer::WindingNeutralGrounding::Solid
+                )
         })
     {
         return Err(fail());

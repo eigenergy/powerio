@@ -169,7 +169,10 @@ impl Geometry {
                 ),
             );
         }
-        Complex::new(0.0, omega_mu / TWO_PI * (1.0 / distance).ln()) + self.earth(i, j, frequency)
+        Complex::new(
+            0.0,
+            crate::overhead::calc_conductor_loop_reactance(omega_mu / TWO_PI, distance),
+        ) + self.earth(i, j, frequency)
     }
 
     fn earth(&self, i: usize, j: usize, frequency: f64) -> Complex {

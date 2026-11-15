@@ -809,11 +809,11 @@ fn write_shunt(
     let mut obj = identified("LinearShuntCompensator", &name, shunt.uid.as_deref());
     obj.insert(
         "LinearShuntCompensator.bPerSection".into(),
-        jnum(shunt.b / (eff * eff)),
+        jnum(crate::electrical::calc_rated_admittance(shunt.b, eff)),
     );
     obj.insert(
         "LinearShuntCompensator.gPerSection".into(),
-        jnum(shunt.g / (eff * eff)),
+        jnum(crate::electrical::calc_rated_admittance(shunt.g, eff)),
     );
     obj.insert("ShuntCompensator.normalSections".into(), Value::from(1u64));
     obj.insert("ShuntCompensator.maximumSections".into(), Value::from(1u64));
@@ -1549,12 +1549,19 @@ pub(crate) fn parse_ravens_source(
             "ShuntCompensator.sections",
             f_or(obj, "ShuntCompensator.normalSections", 1.0),
         );
-        // `(eff * eff)` groups as the writer's divisor so the multiply mirrors
-        // the divide bit exactly (sections is 1.0 on written documents).
+        // `calc_rated_power` squares `eff` as the writer's
+        // `calc_rated_admittance` does, so the multiply mirrors the divide
+        // bit exactly (sections is 1.0 on written documents).
         let mut shunt = Shunt::new(
             bus,
-            f_or(obj, "LinearShuntCompensator.gPerSection", 0.0) * sections * (eff * eff),
-            f_or(obj, "LinearShuntCompensator.bPerSection", 0.0) * sections * (eff * eff),
+            crate::electrical::calc_rated_power(
+                f_or(obj, "LinearShuntCompensator.gPerSection", 0.0) * sections,
+                eff,
+            ),
+            crate::electrical::calc_rated_power(
+                f_or(obj, "LinearShuntCompensator.bPerSection", 0.0) * sections,
+                eff,
+            ),
         );
         shunt.in_service = in_service(obj);
         shunt.uid = mrid(obj);
