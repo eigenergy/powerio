@@ -225,7 +225,7 @@ fn positive_admittance(
         return Err(format_error("rated shunt losses exceed apparent power"));
     }
     let power_factor = loss / rated;
-    let reactive_factor = ((1.0 - power_factor) * (1.0 + power_factor)).sqrt();
+    let reactive_factor = powerio_core::electrical::calc_power_factor_sine(power_factor);
     // MVA / kV² is already siemens. Divide in stages to avoid squaring Un.
     let scale = current / volts / volts;
     let sign = if table == "ShuntReactor" { -1.0 } else { 1.0 };
@@ -314,14 +314,14 @@ impl RatedShuntInput {
             y[0][1] = -branch;
             y[1][0] = -branch;
         } else {
-            for i in 0..3 {
-                for j in 0..3 {
-                    let value = (self.zero - self.positive) / 3.0
-                        + if i == j {
-                            self.positive
-                        } else {
-                            Complex64::new(0.0, 0.0)
-                        };
+            let phase = powerio_dist::sequence::calc_phase_from_sequence(
+                3,
+                self.positive,
+                self.zero,
+                powerio_dist::sequence::SequenceThird::DivideFirst,
+            );
+            for (i, row) in phase.iter().enumerate() {
+                for (j, &value) in row.iter().enumerate() {
                     y[i][j] = value;
                     if self.grounded {
                         y[i][3] -= value;

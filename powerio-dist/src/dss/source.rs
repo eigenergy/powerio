@@ -340,15 +340,23 @@ impl State {
                             // Native sequence setters compute Xm as Xs-X1;
                             // short-circuit setters use (X0-X1)/3. Their
                             // rounding differs in ill-conditioned networks.
-                            let mut mutual = crate::sequence::calc_sequence_mutual(
-                                self.z[1],
-                                self.z[0],
-                                NATIVE_THIRD,
-                            );
-                            if matches!(self.spec, ImpedanceSpec::Sequence) {
-                                mutual.im = diagonal.im - self.z[1].im;
-                            }
-                            mutual
+                            let reactance_third = if matches!(self.spec, ImpedanceSpec::Sequence) {
+                                crate::sequence::SequenceThird::SelfLessPositive
+                            } else {
+                                NATIVE_THIRD
+                            };
+                            Complex64::new(
+                                crate::sequence::calc_sequence_mutual(
+                                    self.z[1].re,
+                                    self.z[0].re,
+                                    NATIVE_THIRD,
+                                ),
+                                crate::sequence::calc_sequence_mutual(
+                                    self.z[1].im,
+                                    self.z[0].im,
+                                    reactance_third,
+                                ),
+                            )
                         } else if self.phases == 3 {
                             // OpenDSS's rounded rotation (`OPENDSS_ALPHA`).
                             crate::sequence::calc_circulant_phase_entry(self.z, i, j)

@@ -287,8 +287,14 @@
   and Thevenin code, the pandapower reader, the SINCAL multiconductor writer and the
   multiconductor to balanced lowering read them. `SequenceThird` states how the reference engine
   takes the third: OpenDSS `LineCode` multiplies by its rounded `OneThird` (`Reciprocal`), its
-  `Line` and `VSource` divide by three (`Divide`). The line code, line, source and pandapower
-  values are unchanged.
+  `Line` and `VSource` divide by three (`Divide`), a `VSource` given its sequence impedances
+  takes the mutual reactance as the self reactance less `X1` (`SelfLessPositive`), and the
+  SINCAL multiconductor line and rated shunt readers divide each sequence value before
+  combining them so a large finite value does not overflow (`DivideFirst`). The line code, line,
+  source, pandapower and SINCAL line values are unchanged; a SINCAL three phase rated shunt's
+  self admittance was the mutual `(Y0 − Y1) / 3` plus `Y1` and is now `2 (Y1 / 3) + Y0 / 3`, its
+  mutual `Y0 / 3 − Y1 / 3`, which can move them in the last place. The rated shunt's reactive
+  factor is `calc_power_factor_sine`.
   `VoltageSource::calc_line_to_line_voltage` is the one source line to line base (`√3 |V₁|` for
   three phases, the phasor difference for a split phase pair, the magnitude for one).
 - The GridLAB-D writer's bus nominal voltages are the voltage zones seeded by each source's

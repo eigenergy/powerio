@@ -14,10 +14,11 @@ use num_complex::Complex64;
 
 use crate::VoltageSource;
 
-/// How a sequence to phase expansion takes its third. The two spellings
-/// are the same transform and can differ in the last place; the reference
-/// engine uses both, so a reader reproducing it names the one its element
-/// class uses.
+/// How a sequence to phase expansion takes its third. The spellings are
+/// the same transform and can differ in the last place (and, for
+/// [`SequenceThird::DivideFirst`], in where a large finite value
+/// overflows); the reference engines use several, so a reader reproducing
+/// one names the order its element class uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SequenceThird {
@@ -30,18 +31,15 @@ pub enum SequenceThird {
     /// alone (`CalcMatricesFromZ1Z0` multiplies by its local
     /// `OneThird := 1.0 / 3.0`).
     Reciprocal,
-}
-
-impl SequenceThird {
-    fn apply<T>(self, value: T) -> T
-    where
-        T: Mul<f64, Output = T> + Div<f64, Output = T>,
-    {
-        match self {
-            Self::Divide => value / 3.0,
-            Self::Reciprocal => value * (1.0 / 3.0),
-        }
-    }
+    /// Divide each sequence value by three before combining them, self
+    /// `2 (z₁ / 3) + z₀ / 3` and mutual `z₀ / 3 − z₁ / 3`, so no
+    /// intermediate sum of two large finite values overflows: the SINCAL
+    /// multiconductor line and rated shunt readers.
+    DivideFirst,
+    /// The self entry divided by three as [`SequenceThird::Divide`] and the
+    /// mutual entry as that self entry less `z₁`: OpenDSS `VSource` given
+    /// its sequence impedances (`Xm := Xs − X1` in `RecalcElementData`).
+    SelfLessPositive,
 }
 
 /// The self (diagonal) phase entry of a transposed element:
@@ -51,7 +49,11 @@ pub fn calc_sequence_self<T>(positive: T, zero: T, third: SequenceThird) -> T
 where
     T: Copy + Add<Output = T> + Mul<f64, Output = T> + Div<f64, Output = T>,
 {
-    third.apply(positive * 2.0 + zero)
+    match third {
+        SequenceThird::Divide | SequenceThird::SelfLessPositive => (positive * 2.0 + zero) / 3.0,
+        SequenceThird::Reciprocal => (positive * 2.0 + zero) * (1.0 / 3.0),
+        SequenceThird::DivideFirst => (positive / 3.0) * 2.0 + zero / 3.0,
+    }
 }
 
 /// The mutual (off diagonal) phase entry of a transposed element:
@@ -59,9 +61,14 @@ where
 #[must_use]
 pub fn calc_sequence_mutual<T>(positive: T, zero: T, third: SequenceThird) -> T
 where
-    T: Copy + Sub<Output = T> + Mul<f64, Output = T> + Div<f64, Output = T>,
+    T: Copy + Add<Output = T> + Sub<Output = T> + Mul<f64, Output = T> + Div<f64, Output = T>,
 {
-    third.apply(zero - positive)
+    match third {
+        SequenceThird::Divide => (zero - positive) / 3.0,
+        SequenceThird::Reciprocal => (zero - positive) * (1.0 / 3.0),
+        SequenceThird::DivideFirst => zero / 3.0 - positive / 3.0,
+        SequenceThird::SelfLessPositive => calc_sequence_self(positive, zero, third) - positive,
+    }
 }
 
 /// The `n × n` phase matrix of a transposed element from its positive and
@@ -241,6 +248,22 @@ mod tests {
         assert_eq!(divide, (2.0 * a + b) / 3.0);
         assert_eq!(reciprocal, (2.0 * a + b) * (1.0 / 3.0));
         assert!((divide - reciprocal).abs() <= f64::EPSILON);
+        // Dividing first keeps a large finite expansion finite.
+        let large = f64::MAX / 2.0;
+        assert!(calc_sequence_self(large, large, SequenceThird::Divide).is_infinite());
+        let first = calc_sequence_self(large, large, SequenceThird::DivideFirst);
+        assert_eq!(first, (large / 3.0) * 2.0 + large / 3.0);
+        assert_eq!(
+            calc_sequence_mutual(-large, large, SequenceThird::DivideFirst),
+            large / 3.0 - -large / 3.0
+        );
+        // OpenDSS VSource's sequence setters take the mutual as Xs − X1.
+        let own = calc_sequence_self(a, b, SequenceThird::SelfLessPositive);
+        assert_eq!(own, divide);
+        assert_eq!(
+            calc_sequence_mutual(a, b, SequenceThird::SelfLessPositive),
+            own - a
+        );
         let sequence = [
             Complex64::new(0.3, 1.2),
             Complex64::new(0.1, 0.4),
