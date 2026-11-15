@@ -68,14 +68,14 @@ mod normalize;
 mod operations;
 pub mod pi_model;
 mod thermal_limit;
-/// The workspace's one union-find and component labeling, which lives in
-/// powerio-core: [`union_find::UnionFind`] and
-/// [`union_find::calc_component_labels`].
-pub use powerio_core::union_find;
 /// The scalar electrical formulas both network families share, which live
 /// in powerio-core ([`electrical::calc_impedance_base`], the power factor
 /// relations and the voltage power law term).
 pub use powerio_core::electrical;
+/// The workspace's one union-find and component labeling, which lives in
+/// powerio-core: [`union_find::UnionFind`] and
+/// [`union_find::calc_component_labels`].
+pub use powerio_core::union_find;
 #[doc(hidden)]
 pub mod version;
 
