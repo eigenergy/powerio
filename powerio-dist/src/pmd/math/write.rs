@@ -2321,6 +2321,23 @@ impl Writer {
     /// base, an ideal transformer scales it by its nominal ratio, and the
     /// stated bases seed the flood.
     ///
+    /// This is not `McAcPfInstance::calc_inferred_load_nominal_voltages`
+    /// (powerio-prob), and the two share only their zone labeling
+    /// (`powerio_core::union_find::calc_component_labels`). Here the zones
+    /// are over the lowered MATHEMATICAL buses (internal buses included),
+    /// joined by every MATHEMATICAL branch and by every switch, open or
+    /// closed, as PMD joins them; a zone's base is a stated base
+    /// (`settings.vbases_default`, a read document's `pmd_vbase`) carried
+    /// across transformer edges by `tm_nom` (divided by √3 for a DELTA
+    /// lowering), in kV per bus, with a warned load or 1 kV fallback for an
+    /// island no seed reaches. The inference never crosses a transformer:
+    /// its zones join network buses by lines and closed switches only, and
+    /// each zone is anchored by the nameplates in it (winding, capacitor and
+    /// load ratings, else a source's prescribed magnitude), which must agree
+    /// within one percent, and it answers in volts per load branch. Sharing
+    /// the flood would change either result, and this one must reproduce
+    /// PMD's.
+    ///
     /// # Errors
     /// A bus no stated base reaches: the network has an island the settings
     /// do not cover.

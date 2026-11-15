@@ -411,6 +411,18 @@ impl McAcPfInstance {
     /// to neutral level, a delta load's (or a single phase load across two
     /// phase terminals) its line to line level.
     ///
+    /// This is not the PMD MATHEMATICAL writer's `calc_voltage_bases`
+    /// reproduction (powerio-dist), and the two share only their zone
+    /// labeling (`powerio_core::union_find::calc_component_labels`). The
+    /// writer floods a stated base (`settings.vbases_default` or a read
+    /// document's `pmd_vbase`) across transformers by their nominal ratio,
+    /// over the lowered buses joined by every branch and every switch,
+    /// open or closed, as PMD does, and falls back to a load's rating or
+    /// 1 kV for an island no seed reaches. Here no level crosses a
+    /// transformer, an open switch splits a zone, and every zone is anchored
+    /// by its own nameplates or source, never by a neighbour's base. Sharing
+    /// the flood would change either result.
+    ///
     /// # Errors
     /// An element naming an unknown bus, an anchor that is not finite and
     /// positive, two anchors of one zone further apart than one percent, or
