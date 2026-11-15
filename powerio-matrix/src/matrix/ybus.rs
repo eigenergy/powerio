@@ -284,7 +284,95 @@ pub(crate) fn branch_flows(
     vi: Complex64,
     vj: Complex64,
 ) -> (Complex64, Complex64) {
-    let i_from = y[0] * vi + y[1] * vj;
-    let i_to = y[2] * vi + y[3] * vj;
+    let (i_from, i_to) = branch_currents(y, vi, vj);
     (vi * i_from.conj(), vj * i_to.conj())
+}
+
+/// The terminal currents `I_from = Yff vi + Yft vj` and `I_to = Ytf vi + Ytt vj`
+/// of one branch block: the one current [`branch_flows`] and
+/// [`branch_flow_partials`] read.
+fn branch_currents(y: &[Complex64; 4], vi: Complex64, vj: Complex64) -> (Complex64, Complex64) {
+    (y[0] * vi + y[1] * vj, y[2] * vi + y[3] * vj)
+}
+
+/// The partials of [`branch_flows`]' `(S_from, S_to)` with respect to the
+/// polar terminal voltages, each ordered `[d/dva_from, d/dvm_from, d/dva_to,
+/// d/dvm_to]`, at `vi = vm_from e^{j va_from}` and `vj = vm_to e^{j va_to}`.
+/// With `dV/dva = j V` and `dV/dvm = V / vm`:
+///
+/// ```text
+/// dS_f/dva_f = j vi conj(Yft vj)         dS_f/dva_t = -j vi conj(Yft vj)
+/// dS_f/dvm_f = v̂i conj(I_f) + vi conj(Yff v̂i)   dS_f/dvm_t = vi conj(Yft v̂j)
+/// dS_t/dva_f = -j vj conj(Ytf vi)        dS_t/dva_t = j vj conj(Ytf vi)
+/// dS_t/dvm_f = vj conj(Ytf v̂i)          dS_t/dvm_t = v̂j conj(I_t) + vj conj(Ytt v̂j)
+/// ```
+///
+/// with `v̂ = e^{j va}`.
+pub(crate) fn branch_flow_partials(
+    y: &[Complex64; 4],
+    (vm_from, va_from): (f64, f64),
+    (vm_to, va_to): (f64, f64),
+) -> ([Complex64; 4], [Complex64; 4]) {
+    let [yff, yft, ytf, ytt] = *y;
+    let vhat_i = Complex64::from_polar(1.0, va_from);
+    let vhat_j = Complex64::from_polar(1.0, va_to);
+    let vi = vhat_i * vm_from;
+    let vj = vhat_j * vm_to;
+    let (i_from, i_to) = branch_currents(y, vi, vj);
+    let j = Complex64::i();
+    let from = [
+        j * vi * (yft * vj).conj(),
+        vhat_i * i_from.conj() + vi * (yff * vhat_i).conj(),
+        -j * vi * (yft * vj).conj(),
+        vi * (yft * vhat_j).conj(),
+    ];
+    let to = [
+        -j * vj * (ytf * vi).conj(),
+        vj * (ytf * vhat_i).conj(),
+        j * vj * (ytf * vi).conj(),
+        vhat_j * i_to.conj() + vj * (ytt * vhat_j).conj(),
+    ];
+    (from, to)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The analytic flow partials match central differences of the flows.
+    #[test]
+    fn flow_partials_match_central_differences() {
+        let y = powerio_tx::PiModel::new(
+            Complex64::new(2.0, -9.0),
+            Complex64::new(0.0, 0.04),
+            Complex64::new(0.001, 0.05),
+            1.03,
+            0.08,
+        )
+        .calc_block();
+        let point = [1.02, 0.11, 0.97, -0.07];
+        let flows = |p: [f64; 4]| {
+            branch_flows(
+                &y,
+                Complex64::from_polar(p[0], p[1]),
+                Complex64::from_polar(p[2], p[3]),
+            )
+        };
+        let (from, to) = branch_flow_partials(&y, (point[0], point[1]), (point[2], point[3]));
+        // Partial order [va_f, vm_f, va_t, vm_t] against point [vm_f, va_f, vm_t, va_t].
+        for (k, coordinate) in [1usize, 0, 3, 2].into_iter().enumerate() {
+            let h = 1e-6;
+            let (mut hi, mut lo) = (point, point);
+            hi[coordinate] += h;
+            lo[coordinate] -= h;
+            let ((fh, th), (fl, tl)) = (flows(hi), flows(lo));
+            let (df, dt) = ((fh - fl) / (2.0 * h), (th - tl) / (2.0 * h));
+            assert!(
+                (df - from[k]).norm() < 1e-6,
+                "from {k}: {df} vs {}",
+                from[k]
+            );
+            assert!((dt - to[k]).norm() < 1e-6, "to {k}: {dt} vs {}", to[k]);
+        }
+    }
 }

@@ -489,6 +489,31 @@ impl AcBranchData {
         flows
     }
 
+    /// The partials of branch column `branch`'s terminal powers
+    /// ([`Self::calc_branch_flows`]) with respect to the polar voltages of its
+    /// two buses, at `vm` (per unit) and `va` (radians) in dense bus order:
+    /// `(dS_from, dS_to)`, each ordered `[d/dva_from, d/dvm_from, d/dva_to,
+    /// d/dvm_to]`, with `S = p + j q`. The branch flow Jacobian `dSbr/dV` row
+    /// by row, over the same pi model block and terminal currents.
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column or `vm`/`va` do not
+    /// cover its buses.
+    #[must_use]
+    pub fn calc_branch_flow_partials(
+        &self,
+        branch: usize,
+        vm: &[f64],
+        va: &[f64],
+    ) -> ([Complex64; 4], [Complex64; 4]) {
+        let (from, to) = (self.from_bus[branch], self.to_bus[branch]);
+        crate::matrix::branch_flow_partials(
+            &self.calc_branch_admittance(branch),
+            (vm[from], va[from]),
+            (vm[to], va[to]),
+        )
+    }
+
     /// Zero the terminal charging of every near ideal jumper: a branch whose
     /// series impedance satisfies `|z|² = 1 / (g² + b²) <= max_impedance_squared`.
     /// The series admittance is kept. Returns the affected branch columns in
