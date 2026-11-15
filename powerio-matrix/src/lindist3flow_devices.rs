@@ -1,7 +1,5 @@
 //! Device, objective, and nodal-balance preparation for LinDist3Flow.
 
-use std::collections::BTreeMap;
-
 use num_complex::Complex64;
 use powerio_dist::{Configuration, DistLoad, DistLoadVoltageModel};
 use powerio_prob::{LinDist3FlowOpfInstance, ObjectiveTerm};
@@ -159,10 +157,6 @@ fn invalid(reason: impl Into<String>) -> Error {
     }
 }
 
-fn node_key(bus: &str, terminal: &str) -> (String, String) {
-    (bus.to_ascii_lowercase(), terminal.to_owned())
-}
-
 /// Build the physical-channel incidence matrix for a typed connection.
 ///
 /// # Errors
@@ -200,7 +194,7 @@ pub fn lindist3flow_connection_incidence(
 }
 
 fn resolve_nodes(
-    positions: &BTreeMap<(String, String), usize>,
+    positions: &powerio_dist::MulticonductorTerminalIndex,
     bus: &str,
     terminals: &[String],
     family: &str,
@@ -209,14 +203,11 @@ fn resolve_nodes(
     terminals
         .iter()
         .map(|terminal| {
-            positions
-                .get(&node_key(bus, terminal))
-                .copied()
-                .ok_or_else(|| {
-                    invalid(format!(
-                        "{family} `{name}` names unknown terminal `{bus}/{terminal}`"
-                    ))
-                })
+            positions.resolve(bus, terminal).ok_or_else(|| {
+                invalid(format!(
+                    "{family} `{name}` names unknown terminal `{bus}/{terminal}`"
+                ))
+            })
         })
         .collect()
 }
@@ -555,12 +546,14 @@ pub fn build_lindist3flow_device_data(
     network_data: &LinDist3FlowNetworkData,
 ) -> Result<LinDist3FlowDeviceData> {
     let network = instance.network();
-    let positions = network_data
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(position, node)| (node_key(&node.node.bus, &node.node.terminal), position))
-        .collect::<BTreeMap<_, _>>();
+    // The network data's nodes are powerio-dist's flat terminal index.
+    let positions = powerio_dist::MulticonductorTerminalIndex::build(network)
+        .map_err(|error| invalid(error.to_string()))?;
+    if positions.len() != network_data.nodes.len() {
+        return Err(invalid(
+            "the network data does not index this instance's terminals".to_owned(),
+        ));
+    }
     let dispatch_cost = uses_dispatch_cost(instance)?;
 
     let mut loads = Vec::with_capacity(network.loads().len());

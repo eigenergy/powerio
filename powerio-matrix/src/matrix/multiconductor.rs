@@ -50,12 +50,15 @@ pub enum NodeRef {
     Ground,
 }
 
-/// The dense node indexing of one multiconductor network.
+/// The dense node indexing of one multiconductor network, over powerio-dist's
+/// flat terminal index (so bus names compare ASCII case insensitively, as
+/// every multiconductor calculation reads them).
 #[derive(Clone, Debug)]
 pub struct MulticonductorNodeIndex {
     nodes: Vec<DistNode>,
-    position: BTreeMap<(String, String), usize>,
-    grounded: BTreeSet<(String, String)>,
+    terminals: powerio_dist::MulticonductorTerminalIndex,
+    /// Flat terminal position to dense row; `None` for a grounded terminal.
+    dense_of_terminal: Vec<Option<usize>>,
 }
 
 impl MulticonductorNodeIndex {
@@ -63,20 +66,28 @@ impl MulticonductorNodeIndex {
     /// with terminal `0` and explicitly grounded terminals excluded from the
     /// unknowns. Closed switches merge their paired terminals into one
     /// node — the first spelling encountered names the merged node.
+    ///
+    /// # Errors
+    /// A duplicated bus or terminal identity, or a closed switch naming a
+    /// terminal its buses do not declare.
     pub fn build(network: &MulticonductorNetwork) -> Result<Self> {
+        let terminals = powerio_dist::MulticonductorTerminalIndex::build(network)
+            .map_err(|error| Error::Mtx(error.to_string()))?;
         // Components over provisional slots, one per ungrounded terminal.
-        let mut provisional: Vec<(String, String)> = Vec::new();
-        let mut slot: BTreeMap<(String, String), usize> = BTreeMap::new();
-        let mut grounded: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut grounded = vec![false; terminals.len()];
+        let mut slot: Vec<Option<usize>> = vec![None; terminals.len()];
+        let mut provisional: Vec<usize> = Vec::new();
         for bus in network.buses() {
             for terminal in &bus.terminals {
-                let key = (bus.id.clone(), terminal.clone());
+                let Some(position) = terminals.resolve(&bus.id, terminal) else {
+                    continue;
+                };
                 if terminal == "0" || bus.grounded.contains(terminal) {
-                    grounded.insert(key);
+                    grounded[position] = true;
                     continue;
                 }
-                slot.insert(key.clone(), provisional.len());
-                provisional.push(key);
+                slot[position] = Some(provisional.len());
+                provisional.push(position);
             }
         }
 
@@ -92,21 +103,19 @@ impl MulticonductorNodeIndex {
                 .iter()
                 .zip(switch.terminal_map_to.iter())
             {
-                let from_key = (switch.bus_from.clone(), from.clone());
-                let to_key = (switch.bus_to.clone(), to.clone());
-                match (slot.get(&from_key), slot.get(&to_key)) {
-                    (Some(&a), Some(&b)) => {
+                let from = terminals.resolve(&switch.bus_from, from);
+                let to = terminals.resolve(&switch.bus_to, to);
+                let slot_of = |position: Option<usize>| position.and_then(|p| slot[p]);
+                let grounded_at = |position: Option<usize>| position.is_some_and(|p| grounded[p]);
+                match (slot_of(from), slot_of(to)) {
+                    (Some(a), Some(b)) => {
                         joined_from.push(a);
                         joined_to.push(b);
                     }
                     // A closed switch onto ground grounds the other side's
                     // whole finished group.
-                    (Some(&a), None) if grounded.contains(&to_key) => {
-                        ground_touched.push(a);
-                    }
-                    (None, Some(&b)) if grounded.contains(&from_key) => {
-                        ground_touched.push(b);
-                    }
+                    (Some(a), None) if grounded_at(to) => ground_touched.push(a),
+                    (None, Some(b)) if grounded_at(from) => ground_touched.push(b),
                     _ => {
                         return Err(Error::Mtx(format!(
                             "switch `{}` names a terminal its buses do not declare",
@@ -129,24 +138,24 @@ impl MulticonductorNodeIndex {
         // Dense rows: one per surviving group, in provisional (table) order.
         let mut dense_of_label: BTreeMap<usize, usize> = BTreeMap::new();
         let mut nodes = Vec::new();
-        let mut position = BTreeMap::new();
+        let mut dense_of_terminal = vec![None; terminals.len()];
         for (index, &label) in labels.iter().enumerate() {
             // A group that touched ground through a switch is grounded whole.
             if grounded_labels.contains(&label) {
-                grounded.insert(provisional[index].clone());
                 continue;
             }
+            let position = provisional[index];
             let dense = *dense_of_label.entry(label).or_insert_with(|| {
-                let (bus, terminal) = provisional[index].clone();
+                let (bus, terminal) = terminals.terminals()[position].clone();
                 nodes.push(DistNode { bus, terminal });
                 nodes.len() - 1
             });
-            position.insert(provisional[index].clone(), dense);
+            dense_of_terminal[position] = Some(dense);
         }
         Ok(Self {
             nodes,
-            position,
-            grounded,
+            terminals,
+            dense_of_terminal,
         })
     }
 
@@ -172,14 +181,8 @@ impl MulticonductorNodeIndex {
     /// declare.
     #[must_use]
     pub fn resolve(&self, bus: &str, terminal: &str) -> Option<NodeRef> {
-        let key = (bus.to_owned(), terminal.to_owned());
-        if let Some(&dense) = self.position.get(&key) {
-            return Some(NodeRef::Node(dense));
-        }
-        if self.grounded.contains(&key) {
-            return Some(NodeRef::Ground);
-        }
-        None
+        let position = self.terminals.resolve(bus, terminal)?;
+        Some(self.dense_of_terminal[position].map_or(NodeRef::Ground, NodeRef::Node))
     }
 }
 
@@ -326,13 +329,42 @@ impl Stamper {
 
     /// Accumulate an element's primitive admittance over the node references
     /// of its terminals, in the primitive's terminal order.
-    fn add_primitive(&mut self, terminals: &[NodeRef], primitive: &[Vec<Complex64>]) {
-        for (row, &from) in terminals.iter().enumerate() {
-            for (column, &to) in terminals.iter().enumerate() {
-                self.add(from, to, primitive[row][column]);
-            }
+    fn add_primitive(&mut self, terminals: &[NodeRef], primitive: &[Vec<Complex64>]) -> Result<()> {
+        scatter_primitive_admittance(terminals, primitive, |from, to, value| {
+            self.add(from, to, value);
+        })
+    }
+}
+
+/// Scatter an element's primitive admittance onto the system positions of
+/// its terminals: `add(terminals[r], terminals[c], primitive[r][c])` for every
+/// entry, in row major order. The one scatter of a primitive into a nodal
+/// system: [`calc_multiconductor_admittance_matrix`] reads it over its node
+/// references, and a caller indexing terminals its own way reads it over
+/// its positions.
+///
+/// # Errors
+/// A primitive that is not square over `terminals`.
+pub fn scatter_primitive_admittance<T: Copy>(
+    terminals: &[T],
+    primitive: &[Vec<Complex64>],
+    mut add: impl FnMut(T, T, Complex64),
+) -> Result<()> {
+    if primitive.len() != terminals.len()
+        || primitive.iter().any(|row| row.len() != terminals.len())
+    {
+        return Err(Error::Mtx(format!(
+            "a primitive admittance of {} rows does not match its {} terminals",
+            primitive.len(),
+            terminals.len()
+        )));
+    }
+    for (row, &from) in terminals.iter().enumerate() {
+        for (column, &to) in terminals.iter().enumerate() {
+            add(from, to, primitive[row][column]);
         }
     }
+    Ok(())
 }
 
 /// The primitive admittance of a line, siemens, over its terminals in the
@@ -586,7 +618,7 @@ pub fn calc_multiconductor_admittance_matrix(
                     resolve(&line.bus_to, terminal, &format!("line `{}`", line.name))
                 }))
                 .collect::<Result<_>>()?;
-        stamper.add_primitive(&terminals, &primitive);
+        stamper.add_primitive(&terminals, &primitive)?;
     }
 
     // Shunt elements: their stated admittance matrix across their terminals.
@@ -596,7 +628,7 @@ pub fn calc_multiconductor_admittance_matrix(
             .iter()
             .map(|terminal| resolve(&shunt.bus, terminal, &format!("shunt `{}`", shunt.name)))
             .collect::<Result<_>>()?;
-        stamper.add_primitive(&terminals, &calc_shunt_primitive_admittance(shunt));
+        stamper.add_primitive(&terminals, &calc_shunt_primitive_admittance(shunt))?;
     }
 
     // Capacitor banks: nameplate reactive power at nameplate voltage.
@@ -613,7 +645,7 @@ pub fn calc_multiconductor_admittance_matrix(
             })
             .collect::<Result<_>>()?;
         match calc_capacitor_primitive_admittance(capacitor)? {
-            Some(primitive) => stamper.add_primitive(&terminals, &primitive),
+            Some(primitive) => stamper.add_primitive(&terminals, &primitive)?,
             None => diagnostics.push(Diagnostic::of(
                 &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
                 format!(

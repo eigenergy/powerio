@@ -136,6 +136,7 @@ pub use matrix::multiconductor::{
     AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
     calc_capacitor_primitive_admittance, calc_line_primitive_admittance,
     calc_multiconductor_admittance_matrix, calc_shunt_primitive_admittance,
+    scatter_primitive_admittance,
 };
 pub use matrix::{
     BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, Grounding, IslandPtdf, MatrixStats,

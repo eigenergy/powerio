@@ -5,7 +5,7 @@
 //! voltage phasor reference. Sparse matrices and affine/SOC preparation remain
 //! in `powerio-matrix`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, Error};
 use powerio_dist::{
@@ -979,36 +979,23 @@ struct Edge {
     conductor: usize,
 }
 
-fn node_key(bus: &str, terminal: &str) -> (String, String) {
-    (bus.to_ascii_lowercase(), terminal.to_owned())
-}
-
 #[allow(clippy::too_many_lines)]
 fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopology, String> {
-    let mut nodes = Vec::new();
-    let mut positions = BTreeMap::new();
-    let mut bus_ids = BTreeSet::new();
+    // The nodes are powerio-dist's flat terminal index, which also refuses a
+    // duplicated bus (case insensitively) or terminal.
+    let positions =
+        powerio_dist::MulticonductorTerminalIndex::build(network).map_err(|e| e.to_string())?;
+    let nodes: Vec<LinDist3FlowNode> = positions
+        .terminals()
+        .iter()
+        .map(|(bus, terminal)| LinDist3FlowNode {
+            bus: bus.clone(),
+            terminal: terminal.clone(),
+        })
+        .collect();
     let mut bus_positions = BTreeMap::new();
     for bus in network.buses() {
-        if !bus_ids.insert(bus.id.to_ascii_lowercase()) {
-            return Err(format!(
-                "bus identity `{}` is duplicated case-insensitively",
-                bus.id
-            ));
-        }
         bus_positions.insert(bus.id.to_ascii_lowercase(), bus_positions.len());
-        let mut terminals = BTreeSet::new();
-        for terminal in &bus.terminals {
-            if !terminals.insert(terminal.clone()) {
-                return Err(format!("bus `{}` repeats terminal `{terminal}`", bus.id));
-            }
-            let node = LinDist3FlowNode {
-                bus: bus.id.clone(),
-                terminal: terminal.clone(),
-            };
-            positions.insert(node_key(&node.bus, &node.terminal), nodes.len());
-            nodes.push(node);
-        }
     }
     if nodes.is_empty() {
         return Err("the network has no retained bus terminals".to_owned());
@@ -1052,16 +1039,16 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
             .zip(&line.terminal_map_to)
             .enumerate()
         {
-            let from = *positions
-                .get(&node_key(&line.bus_from, from_terminal))
+            let from = positions
+                .resolve(&line.bus_from, from_terminal)
                 .ok_or_else(|| {
                     format!(
                         "line `{}` names undeclared from terminal `{}/{from_terminal}`",
                         line.name, line.bus_from
                     )
                 })?;
-            let to = *positions
-                .get(&node_key(&line.bus_to, to_terminal))
+            let to = positions
+                .resolve(&line.bus_to, to_terminal)
                 .ok_or_else(|| {
                     format!(
                         "line `{}` names undeclared to terminal `{}/{to_terminal}`",
@@ -1103,14 +1090,12 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
             .push(&source.name);
         source_bus_roots.push(bus);
         for terminal in &source.terminal_map {
-            let node = *positions
-                .get(&node_key(&source.bus, terminal))
-                .ok_or_else(|| {
-                    format!(
-                        "voltage source `{}` names undeclared terminal `{}/{terminal}`",
-                        source.name, source.bus
-                    )
-                })?;
+            let node = positions.resolve(&source.bus, terminal).ok_or_else(|| {
+                format!(
+                    "voltage source `{}` names undeclared terminal `{}/{terminal}`",
+                    source.name, source.bus
+                )
+            })?;
             source_nodes
                 .entry(components.find(node))
                 .or_default()
@@ -1302,10 +1287,18 @@ fn propagated_reference(
     instance: &McAcOpfInstance,
     topology: &LinDist3FlowTopology,
 ) -> Result<LinDist3FlowReferenceState, Error> {
-    let mut positions = BTreeMap::new();
-    for (position, node) in topology.nodes.iter().enumerate() {
-        positions.insert(node_key(&node.bus, &node.terminal), position);
+    let positions = powerio_dist::MulticonductorTerminalIndex::build(instance.network())
+        .map_err(|error| invalid_reference(error.to_string()))?;
+    if positions.len() != topology.nodes.len() {
+        return Err(invalid_reference(
+            "the topology does not index this instance's terminals".to_owned(),
+        ));
     }
+    let position = |node: &LinDist3FlowNode| {
+        positions.resolve(&node.bus, &node.terminal).ok_or_else(|| {
+            invalid_reference(format!("unknown node `{}/{}`", node.bus, node.terminal))
+        })
+    };
     let mut values = vec![None; topology.nodes.len()];
     for source in instance.network().sources() {
         if source.v_magnitude.len() != source.terminal_map.len()
@@ -1317,14 +1310,12 @@ fn propagated_reference(
             )));
         }
         for (terminal_position, terminal) in source.terminal_map.iter().enumerate() {
-            let node = *positions
-                .get(&node_key(&source.bus, terminal))
-                .ok_or_else(|| {
-                    invalid_reference(format!(
-                        "voltage source `{}` names unknown terminal `{}/{terminal}`",
-                        source.name, source.bus
-                    ))
-                })?;
+            let node = positions.resolve(&source.bus, terminal).ok_or_else(|| {
+                invalid_reference(format!(
+                    "voltage source `{}` names unknown terminal `{}/{terminal}`",
+                    source.name, source.bus
+                ))
+            })?;
             let magnitude = source.v_magnitude[terminal_position];
             let angle = source.v_angle[terminal_position];
             if !valid_phasor(magnitude, angle) {
@@ -1339,13 +1330,13 @@ fn propagated_reference(
 
     let mut adjacency = vec![Vec::new(); topology.nodes.len()];
     for conductor in &topology.conductors {
-        let parent = positions[&node_key(&conductor.parent.bus, &conductor.parent.terminal)];
-        let child = positions[&node_key(&conductor.child.bus, &conductor.child.terminal)];
+        let parent = position(&conductor.parent)?;
+        let child = position(&conductor.child)?;
         adjacency[parent].push(child);
         adjacency[child].push(parent);
     }
     for root in &topology.roots {
-        let root = positions[&node_key(&root.bus, &root.terminal)];
+        let root = position(root)?;
         let mut stack = vec![root];
         let mut visited = vec![false; topology.nodes.len()];
         visited[root] = true;

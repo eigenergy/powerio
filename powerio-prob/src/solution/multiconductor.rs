@@ -37,40 +37,27 @@ fn source_terminal_count(network: &MulticonductorNetwork) -> usize {
         .sum()
 }
 
-/// Bus-and-terminal to flat column position, built once per solution on
-/// first keyed access so repeated reads never rescan the bus table.
+/// Bus-and-terminal to flat column position, built once per solution so
+/// repeated reads never rescan the bus table: powerio-dist's one flat
+/// terminal index.
 #[derive(Clone, Debug, Default)]
-struct TerminalIndex {
-    position: std::collections::BTreeMap<(String, String), usize>,
-}
+struct TerminalIndex(powerio_dist::MulticonductorTerminalIndex);
 
 impl TerminalIndex {
     fn build(network: &MulticonductorNetwork) -> Result<Self, Error> {
-        let mut position = std::collections::BTreeMap::new();
-        let mut offset = 0usize;
-        for row in network.buses() {
-            for (column, terminal) in row.terminals.iter().enumerate() {
-                if position
-                    .insert((row.id.clone(), terminal.clone()), offset + column)
-                    .is_some()
-                {
-                    return Err(Error::new(
-                        &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
-                        format!("bus `{}`: duplicate terminal identity `{terminal}`", row.id),
-                    ));
-                }
-            }
-            offset += row.terminals.len();
-        }
-        Ok(Self { position })
+        powerio_dist::MulticonductorTerminalIndex::build(network)
+            .map(Self)
+            .map_err(|error| {
+                Error::new(
+                    &codes::BUILD_OPERATING_POINT_IDENTITY_UNKNOWN,
+                    error.to_string(),
+                )
+            })
     }
 }
 
 fn terminal_position(index: &TerminalIndex, bus: &str, terminal: &str) -> Option<usize> {
-    index
-        .position
-        .get(&(bus.to_owned(), terminal.to_owned()))
-        .copied()
+    index.0.resolve(bus, terminal)
 }
 
 macro_rules! shared_mc_solution_accessors {

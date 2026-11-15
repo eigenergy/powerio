@@ -69,6 +69,7 @@ pub mod pmd;
 mod portable_path;
 pub mod ravens;
 pub mod readiness;
+pub mod terminal_index;
 #[cfg(test)]
 pub(crate) mod testkit;
 mod transform_audit;
@@ -114,5 +115,6 @@ pub use readiness::{
     ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
     require_electrical_readiness,
 };
+pub use terminal_index::{MulticonductorTerminalIndex, TerminalIndexError};
 
 mod load_voltage;
