@@ -223,6 +223,106 @@ pub struct McOpfDroop {
     /// Positive softplus smoothing width in per-unit voltage.
     pub epsilon: f64,
 }
+/// The value and slope of a smoothed droop curve, and the response of both
+/// to a parameter direction ([`McOpfDroop::calc_parameter_derivative`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct McOpfDroopValue {
+    /// The control power, per unit.
+    pub value: f64,
+    /// Its derivative with respect to the monitored voltage, per unit.
+    pub slope: f64,
+}
+
+/// `[softplus(z), sigmoid(z), sigmoid'(z), softplus(z) − z sigmoid(z)]`,
+/// in the entropy form that neither cancels nor overflows when saturated.
+fn smooth_hinge(z: f64) -> [f64; 4] {
+    let e = (-z.abs()).exp();
+    let sigma = if z >= 0.0 { 1.0 / (1.0 + e) } else { e / (1.0 + e) };
+    [
+        z.max(0.0) + e.ln_1p(),
+        sigma,
+        e / (1.0 + e).powi(2),
+        e.ln_1p() + z.abs() * e / (1.0 + e),
+    ]
+}
+
+impl McOpfDroop {
+    /// The mean monitored voltage magnitude: `|V_p − V_n|` over the monitor
+    /// pairs (`V_n = 0` for ground), averaged, from per unit terminal
+    /// voltages indexed like the preparation's terminals.
+    #[must_use]
+    pub fn calc_monitored_voltage(&self, voltage: &[num_complex::Complex64]) -> f64 {
+        let total: f64 = self
+            .monitors
+            .iter()
+            .map(|&(p, n)| (voltage[p] - n.map_or(num_complex::Complex64::new(0.0, 0.0), |n| voltage[n])).norm())
+            .sum();
+        total / self.monitors.len() as f64
+    }
+
+    /// The curve's control power at the monitored voltage `voltage` and its
+    /// slope: the piecewise linear curve through `(knots, values)` with each
+    /// corner smoothed by a softplus of width `epsilon`,
+    ///
+    /// ```text
+    /// c(v) = values₀ + Σⱼ sⱼ ε (softplus((v − kⱼ)/ε) − softplus((v − kⱼ₊₁)/ε)),
+    /// sⱼ = (valuesⱼ₊₁ − valuesⱼ) / (kⱼ₊₁ − kⱼ).
+    /// ```
+    ///
+    /// The one droop evaluation: the OPF residual, its validation and its
+    /// parameter sensitivities read it.
+    #[must_use]
+    pub fn calc_control(&self, voltage: f64) -> McOpfDroopValue {
+        let mut value = self.values[0];
+        let mut slope = 0.0;
+        for j in 0..self.knots.len().saturating_sub(1) {
+            let s = (self.values[j + 1] - self.values[j]) / (self.knots[j + 1] - self.knots[j]);
+            let a = smooth_hinge((voltage - self.knots[j]) / self.epsilon);
+            let b = smooth_hinge((voltage - self.knots[j + 1]) / self.epsilon);
+            value += s * self.epsilon * (a[0] - b[0]);
+            slope += s * (a[1] - b[1]);
+        }
+        McOpfDroopValue { value, slope }
+    }
+
+    /// The directional derivative of [`calc_control`](Self::calc_control)
+    /// along a change `(d_knots, d_values, d_epsilon)` of the curve's
+    /// parameters, at a fixed monitored voltage: the change of the control
+    /// power (`value`) and of its voltage slope (`slope`).
+    ///
+    /// # Panics
+    /// When `d_knots` or `d_values` is shorter than the curve.
+    #[must_use]
+    pub fn calc_parameter_derivative(
+        &self,
+        voltage: f64,
+        d_knots: &[f64],
+        d_values: &[f64],
+        d_epsilon: f64,
+    ) -> McOpfDroopValue {
+        let (knots, values, epsilon) = (&self.knots, &self.values, self.epsilon);
+        let mut value = d_values[0];
+        let mut slope = 0.0;
+        for j in 0..knots.len().saturating_sub(1) {
+            let width = knots[j + 1] - knots[j];
+            let s = (values[j + 1] - values[j]) / width;
+            let ds = (d_values[j + 1] - d_values[j] - s * (d_knots[j + 1] - d_knots[j])) / width;
+            let z = [(voltage - knots[j]) / epsilon, (voltage - knots[j + 1]) / epsilon];
+            let [a, b] = z.map(smooth_hinge);
+            let hinge = epsilon * (a[0] - b[0]);
+            let dh = d_epsilon * (a[3] - b[3]) - d_knots[j] * a[1] + d_knots[j + 1] * b[1];
+            let dz = [
+                (-d_knots[j] - z[0] * d_epsilon) / epsilon,
+                (-d_knots[j + 1] - z[1] * d_epsilon) / epsilon,
+            ];
+            value += ds * hinge + s * dh;
+            slope += ds * (a[1] - b[1]) + s * (a[2] * dz[0] - b[2] * dz[1]);
+        }
+        McOpfDroopValue { value, slope }
+    }
+}
+
 /// One two-terminal coil; a missing negative terminal means physical ground.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -1665,4 +1765,54 @@ fn device_current_caps(
         return Ok((coils, None));
     }
     Ok((coils, neutral))
+}
+
+#[cfg(test)]
+mod evaluation_tests {
+    use super::*;
+
+    #[test]
+    fn a_load_law_sums_its_terms_with_their_voltage_slope() {
+        let law = McOpfLoadLaw {
+            nominal: 0.5,
+            terms: [vec![[1.0, 2.0], [0.5, 0.0]], vec![[0.2, 1.0]]],
+        };
+        let [(p, dp), (q, dq)] = law.calc_power(0.4);
+        assert!((p - (0.64 + 0.5)).abs() < 1e-15);
+        assert!((dp - 2.0 * 0.8 / 0.5).abs() < 1e-15);
+        assert!((q - 0.16).abs() < 1e-15 && (dq - 0.4).abs() < 1e-15);
+    }
+
+    #[test]
+    fn a_droop_curve_and_its_derivatives_match_finite_differences() {
+        let curve = McOpfDroop {
+            monitors: vec![(0, None)],
+            knots: vec![0.95, 0.98, 1.02, 1.05],
+            values: vec![0.4, 0.0, 0.0, -0.4],
+            epsilon: 0.005,
+        };
+        let h = 1e-7;
+        for v in [0.9, 0.97, 1.0, 1.03, 1.1] {
+            let c = curve.calc_control(v);
+            let fd = (curve.calc_control(v + h).value - curve.calc_control(v - h).value) / (2.0 * h);
+            assert!((c.slope - fd).abs() < 1e-5, "{v}: {} {fd}", c.slope);
+        }
+        assert!((curve.calc_control(0.9).value - 0.4).abs() < 1e-4);
+        assert!((curve.calc_control(1.1).value + 0.4).abs() < 1e-4);
+        let (dk, dv, de) = ([0.0, 0.01, 0.0, -0.02], [0.1, 0.0, 0.0, 0.05], 0.001);
+        let moved = |t: f64| McOpfDroop {
+            monitors: curve.monitors.clone(),
+            knots: curve.knots.iter().zip(dk).map(|(k, d)| k + t * d).collect(),
+            values: curve.values.iter().zip(dv).map(|(k, d)| k + t * d).collect(),
+            epsilon: curve.epsilon + t * de,
+        };
+        for v in [0.96, 0.99, 1.04] {
+            let d = curve.calc_parameter_derivative(v, &dk, &dv, de);
+            let (plus, minus) = (moved(h).calc_control(v), moved(-h).calc_control(v));
+            assert!((d.value - (plus.value - minus.value) / (2.0 * h)).abs() < 1e-5);
+            assert!((d.slope - (plus.slope - minus.slope) / (2.0 * h)).abs() < 1e-3);
+        }
+        let voltage = [num_complex::Complex64::new(1.01, 0.0)];
+        assert!((curve.calc_monitored_voltage(&voltage) - 1.01).abs() < 1e-15);
+    }
 }
