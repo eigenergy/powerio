@@ -120,11 +120,16 @@ impl Reader<'_> {
             let potential = self.geometry_potential(spacing, &labels, &conductors)?;
             // Singular or nonfinite inputs fail instead of fabricating
             // capacitance.
-            let capacitance = crate::dense::invert_dense_matrix(&potential, 0.0, 0.0)
-                .filter(|inverse| inverse.iter().flatten().all(|v| v.is_finite()))
-                .ok_or_else(|| {
-                    self.error(config, "geometry potential matrix is singular or nonfinite")
-                })?;
+            let capacitance = crate::dense::invert_dense_matrix(
+                &potential,
+                crate::dense::DensePivot::Partial,
+                0.0,
+                0.0,
+            )
+            .filter(|inverse| inverse.iter().flatten().all(|v| v.is_finite()))
+            .ok_or_else(|| {
+                self.error(config, "geometry potential matrix is singular or nonfinite")
+            })?;
             let factor =
                 2.0 * std::f64::consts::PI.powi(2) * self.net.base_frequency() * 0.014_240e-6
                     / METERS_PER_MILE;

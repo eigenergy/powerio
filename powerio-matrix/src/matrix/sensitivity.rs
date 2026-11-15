@@ -1608,8 +1608,13 @@ fn dense_to_csr_with_drop(
 #[allow(clippy::cast_precision_loss)]
 fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
     let rows: Vec<Vec<f64>> = a.chunks(n.max(1)).take(n).map(<[f64]>::to_vec).collect();
-    powerio_dist::dense::invert_dense_matrix(&rows, 0.0, n as f64 * f64::EPSILON)
-        .map(|inverse| inverse.concat())
+    powerio_dist::dense::invert_dense_matrix(
+        &rows,
+        powerio_dist::dense::DensePivot::Partial,
+        0.0,
+        n as f64 * f64::EPSILON,
+    )
+    .map(|inverse| inverse.concat())
 }
 
 /// Dense lower-triangular Cholesky `A = L Lᵀ` for a small SPD matrix, stored

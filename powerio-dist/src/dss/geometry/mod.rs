@@ -284,8 +284,13 @@ impl Geometry {
                 potential[j][i] = potential[i][j];
             }
         }
-        let inverse = crate::dense::invert_dense_matrix(&potential, 0.0, 0.0)
-            .ok_or("geometry potential matrix is singular")?;
+        let inverse = crate::dense::invert_dense_matrix(
+            &potential,
+            crate::dense::DensePivot::Partial,
+            0.0,
+            0.0,
+        )
+        .ok_or("geometry potential matrix is singular")?;
         let keep = self.kept_conductors();
         // Native reduction retains the phase block of the inverted full
         // potential matrix; it does not Kron-reduce that admittance.

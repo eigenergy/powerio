@@ -213,7 +213,16 @@
   `powerio_tx::geo::calc_haversine_km` with `EARTH_RADIUS_KM` is the one great circle distance.
   `UnionFind::union` keeps its first argument's representative.
 - `powerio_dist::dense::invert_dense_matrix` is the one small dense inverse (real `f64` or complex
-  `Complex64`, the `DenseScalar` trait) and
+  `Complex64`, the `DenseScalar` trait with `magnitude`, `unscaled_magnitude`, `is_finite`,
+  `reciprocal` and `ratio_quotient`). Its `DensePivot` states the elimination order:
+  `Partial` (Gauss-Jordan with row pivoting, every inverse the model uses) or
+  `OpenDssDiagonal` (OpenDSS's `TcMatrix.Invert` sweep on the largest unused diagonal entry,
+  with its `Cabs` magnitude and ratio complex division). The OpenDSS source and Line primitive
+  check (errors 325 and 183) is that elimination in `OpenDssDiagonal` order, with the same
+  refusals as 0.12.0 (a zero self impedance with nonzero mutuals is refused, a pivot at rounding
+  noise accepted, an elimination that turns nonfinite refused) and one more: a self impedance
+  whose magnitude is infinite is refused as nonfinite, where a one conductor element with an
+  infinite impedance passed the check. And
   `powerio_dist::kron::calc_kron_reduced_impedance` the one Kron reduction, behind the line and
   switch series admittances, the open line Schur complement, both geometry readers, the PMD
   leakage round trip, neutral Kron reduction and the multiconductor to balanced lowering.
