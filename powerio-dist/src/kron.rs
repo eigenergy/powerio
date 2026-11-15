@@ -146,7 +146,7 @@ fn action(component: impl Into<String>, action: impl Into<String>) -> NeutralKro
 }
 
 fn conventions(network: &MulticonductorNetwork) -> Option<&Value> {
-    network.extras().get("bmopf_terminal_conventions")
+    network.terminal_conventions()
 }
 
 fn override_for_bus<'a>(options: &'a NeutralKronOptions, bus: &str) -> Option<&'a str> {

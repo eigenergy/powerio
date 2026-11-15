@@ -749,7 +749,7 @@ fn check_supported_slice(
     let network = instance.network();
     check_objective(instance, diagnostics);
     check_device_shapes(instance, diagnostics);
-    let conventions = network.extras().get("bmopf_terminal_conventions");
+    let conventions = network.terminal_conventions();
     for (row, bus) in network.buses().iter().enumerate() {
         if bus.phase_indices(conventions).len() != bus.terminals.len() {
             diagnostics.push(finding(

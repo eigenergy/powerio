@@ -722,7 +722,7 @@ impl Writer {
     /// PMD's `_get_tight_absolute_voltage_magnitude_bounds` reads them.
     fn bus_bounds(&self, bus: &DistBus, net: &MulticonductorNetwork) -> (Vec<f64>, Vec<f64>) {
         let n = bus.terminals.len();
-        let phases = bus.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+        let phases = bus.phase_indices(net.terminal_conventions());
         let mut vmin = vec![0.0; n];
         let mut vmax = vec![INF; n];
         for (k, &i) in phases.iter().enumerate() {
@@ -875,7 +875,9 @@ impl Writer {
             let zbase: Vec<f64> = vnom
                 .iter()
                 .zip(&snom)
-                .map(|(v, s)| powerio_core::electrical::calc_impedance_base(*v, *s).unwrap_or(f64::NAN))
+                .map(|(v, s)| {
+                    powerio_core::electrical::calc_impedance_base(*v, *s).unwrap_or(f64::NAN)
+                })
                 .collect();
             let pairs = crate::model::pair_keys(nrw);
             let x_sc: Vec<f64> = pairs

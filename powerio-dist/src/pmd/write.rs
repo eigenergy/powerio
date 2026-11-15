@@ -663,7 +663,7 @@ impl Writer {
             o.insert("grounded".into(), json!(grounded));
             o.insert("status".into(), Self::status(&b.extras));
             self.bus_coordinates(&mut o, b, net);
-            let phase_indices = b.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+            let phase_indices = b.phase_indices(net.terminal_conventions());
             for (key, scalar, phases, default) in [
                 ("vm_lb", b.v_min, &b.v_min_phase, 0.0),
                 ("vm_ub", b.v_max, &b.v_max_phase, f64::INFINITY),

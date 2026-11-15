@@ -108,10 +108,9 @@ pub fn lindist3flow_carries_connection(
 }
 
 /// The position of a WYE connection's explicit neutral in an element's
-/// terminal map: the one mapped terminal that the bus's terminal
-/// conventions (the network's `bmopf_terminal_conventions`, else the
-/// `n` and four wire `4` spellings, [`crate::DistBus::phase_indices`]) do
-/// not list as a phase, or ground terminal `0`. `None` when every mapped
+/// terminal map: the one mapped terminal whose role on the bus
+/// ([`crate::calc_terminal_role`] over the network's terminal conventions)
+/// is not a phase, ground terminal `0` included. `None` when every mapped
 /// terminal is a phase.
 ///
 /// # Errors
@@ -125,16 +124,14 @@ pub fn calc_wye_neutral_position(
     let declared = network
         .bus(bus)
         .ok_or_else(|| format!("bus `{bus}` is not declared"))?;
-    let phases: Vec<&str> = declared
-        .phase_indices(network.extras().get("bmopf_terminal_conventions"))
-        .into_iter()
-        .map(|index| declared.terminals[index].as_str())
-        .filter(|terminal| *terminal != "0")
-        .collect();
+    let conventions = network.terminal_conventions();
     let mut nonphase = terminal_map
         .iter()
         .enumerate()
-        .filter(|(_, terminal)| !phases.contains(&terminal.as_str()))
+        .filter(|(_, terminal)| {
+            !declared.terminals.contains(terminal)
+                || declared.terminal_role(terminal, conventions) != crate::TerminalRole::Phase
+        })
         .map(|(position, _)| position);
     let neutral = nonphase.next();
     if nonphase.next().is_some() {

@@ -873,7 +873,7 @@ impl<'a> Reader<'a> {
                 extras,
                 ..DistBus::default()
             };
-            let phases = out.phase_indices(self.net.extras().get("bmopf_terminal_conventions"));
+            let phases = out.phase_indices(self.net.terminal_conventions());
             let bound = |key: &str, open: f64| -> (Option<f64>, Option<Vec<f64>>) {
                 let values = bus.floats(key);
                 let phase_values: Vec<f64> = phases

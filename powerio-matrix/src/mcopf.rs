@@ -203,8 +203,7 @@ impl McOpfLoadLaw {
     pub fn calc_power(&self, voltage: f64) -> [(f64, f64); 2] {
         let ratio = voltage / self.nominal;
         self.terms.each_ref().map(|terms| {
-            let (value, slope) =
-                powerio_core::electrical::calc_voltage_power_terms(terms, ratio);
+            let (value, slope) = powerio_core::electrical::calc_voltage_power_terms(terms, ratio);
             (value, slope / self.nominal)
         })
     }
@@ -238,7 +237,11 @@ pub struct McOpfDroopValue {
 /// in the entropy form that neither cancels nor overflows when saturated.
 fn smooth_hinge(z: f64) -> [f64; 4] {
     let e = (-z.abs()).exp();
-    let sigma = if z >= 0.0 { 1.0 / (1.0 + e) } else { e / (1.0 + e) };
+    let sigma = if z >= 0.0 {
+        1.0 / (1.0 + e)
+    } else {
+        e / (1.0 + e)
+    };
     [
         z.max(0.0) + e.ln_1p(),
         sigma,
@@ -256,7 +259,10 @@ impl McOpfDroop {
         let total: f64 = self
             .monitors
             .iter()
-            .map(|&(p, n)| (voltage[p] - n.map_or(num_complex::Complex64::new(0.0, 0.0), |n| voltage[n])).norm())
+            .map(|&(p, n)| {
+                (voltage[p] - n.map_or(num_complex::Complex64::new(0.0, 0.0), |n| voltage[n]))
+                    .norm()
+            })
             .sum();
         total / self.monitors.len() as f64
     }
@@ -308,7 +314,10 @@ impl McOpfDroop {
             let width = knots[j + 1] - knots[j];
             let s = (values[j + 1] - values[j]) / width;
             let ds = (d_values[j + 1] - d_values[j] - s * (d_knots[j + 1] - d_knots[j])) / width;
-            let z = [(voltage - knots[j]) / epsilon, (voltage - knots[j + 1]) / epsilon];
+            let z = [
+                (voltage - knots[j]) / epsilon,
+                (voltage - knots[j + 1]) / epsilon,
+            ];
             let [a, b] = z.map(smooth_hinge);
             let hinge = epsilon * (a[0] - b[0]);
             let dh = d_epsilon * (a[3] - b[3]) - d_knots[j] * a[1] + d_knots[j + 1] * b[1];
@@ -759,7 +768,7 @@ fn validate_profile(
 fn prepare_terminals(net: &MulticonductorNetwork) -> Result<(Vec<McOpfTerminal>, Positions)> {
     let mut terminals = Vec::new();
     let mut positions = BTreeMap::new();
-    let conventions = net.extras().get("bmopf_terminal_conventions");
+    let conventions = net.terminal_conventions();
     for bus in net.buses() {
         extras(
             &bus.id,
@@ -830,7 +839,7 @@ impl Context<'_> {
             .bus(bus_id)
             .ok_or_else(|| invalid(name, "unknown bus"))?;
         let phases: Vec<&str> = bus
-            .phase_indices(self.net.extras().get("bmopf_terminal_conventions"))
+            .phase_indices(self.net.terminal_conventions())
             .into_iter()
             .map(|i| bus.terminals[i].as_str())
             .filter(|t| *t != "0")
@@ -889,7 +898,7 @@ fn prepare_sources(ctx: &Context<'_>, vb: f64, terminals: &mut [McOpfTerminal]) 
         let bus = net
             .bus(&src.bus)
             .ok_or_else(|| invalid(&src.name, "unknown source bus"))?;
-        let phases = bus.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+        let phases = bus.phase_indices(net.terminal_conventions());
         for (k, terminal) in bus.terminals.iter().enumerate() {
             if !phases.contains(&k)
                 && !terminals[ctx.positions[&(bus.id.clone(), terminal.clone())]].grounded
@@ -965,7 +974,7 @@ fn prepare_voltage_limits(
 ) -> Result<Vec<McOpfVoltageLimit>> {
     let net = ctx.net;
     let positions = ctx.positions;
-    let conventions = net.extras().get("bmopf_terminal_conventions");
+    let conventions = net.terminal_conventions();
     let selected = instance.constraints();
     let mut voltage_limits = Vec::new();
     for bus in net.buses() {
@@ -1647,7 +1656,7 @@ fn prepare_angles(ctx: &Context<'_>, instance: &McAcOpfInstance) -> Result<Vec<M
             continue;
         }
         if let Some([lower, upper]) = window(&bus.id, &bus.extras)? {
-            let phase = bus.phase_indices(ctx.net.extras().get("bmopf_terminal_conventions"));
+            let phase = bus.phase_indices(ctx.net.terminal_conventions());
             let nominal: Vec<f64> = bus
                 .extras
                 .get("va_nom")
@@ -1794,7 +1803,8 @@ mod evaluation_tests {
         let h = 1e-7;
         for v in [0.9, 0.97, 1.0, 1.03, 1.1] {
             let c = curve.calc_control(v);
-            let fd = (curve.calc_control(v + h).value - curve.calc_control(v - h).value) / (2.0 * h);
+            let fd =
+                (curve.calc_control(v + h).value - curve.calc_control(v - h).value) / (2.0 * h);
             assert!((c.slope - fd).abs() < 1e-5, "{v}: {} {fd}", c.slope);
         }
         assert!((curve.calc_control(0.9).value - 0.4).abs() < 1e-4);
@@ -1803,7 +1813,12 @@ mod evaluation_tests {
         let moved = |t: f64| McOpfDroop {
             monitors: curve.monitors.clone(),
             knots: curve.knots.iter().zip(dk).map(|(k, d)| k + t * d).collect(),
-            values: curve.values.iter().zip(dv).map(|(k, d)| k + t * d).collect(),
+            values: curve
+                .values
+                .iter()
+                .zip(dv)
+                .map(|(k, d)| k + t * d)
+                .collect(),
             epsilon: curve.epsilon + t * de,
         };
         for v in [0.96, 0.99, 1.04] {

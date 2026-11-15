@@ -21,8 +21,7 @@ use crate::model::{
     DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
     DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference,
-    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
-    pair_keys,
+    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, pair_keys,
 };
 
 pub(crate) fn parse_bmopf_collecting(
@@ -2156,7 +2155,12 @@ impl Reader<'_> {
                 x_neutral: first_float(o.get("x_neutral_to")),
             },
         ];
-        expand_center_tap_windings(subtype, &mut windings, self.net.buses());
+        expand_center_tap_windings(
+            subtype,
+            &mut windings,
+            self.net.buses(),
+            self.net.terminal_conventions(),
+        );
         if subtype == "center_tap"
             && let Some(w) = windings.get(1)
             && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses(), bus_index)
@@ -2687,12 +2691,17 @@ fn open_delta_pairs_of(connection: &str) -> Option<((u8, u8), (u8, u8))> {
     }
 }
 
-fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, buses: &[DistBus]) {
+fn expand_center_tap_windings(
+    subtype: &str,
+    windings: &mut Vec<DistWinding>,
+    buses: &[DistBus],
+    conventions: Option<&Value>,
+) {
     if subtype != "center_tap" || windings[1].terminal_map.len() < 3 {
         return;
     }
     let to = windings.pop().expect("secondary winding exists");
-    let neutral_idx = center_tap_neutral_index(&to, buses);
+    let neutral_idx = center_tap_neutral_index(&to, buses, conventions);
     let canonical = neutral_idx == 1;
     let common = to
         .terminal_map
@@ -2735,8 +2744,16 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, bu
     windings.push(other_half);
 }
 
-fn center_tap_neutral_index(to: &DistWinding, buses: &[DistBus]) -> usize {
-    if let Some(bus) = buses.iter().find(|bus| bus.id == to.bus)
+/// The secondary's common terminal: the first one its bus grounds, else the
+/// first whose role on the bus is neutral ([`crate::calc_terminal_role`]),
+/// else the last.
+fn center_tap_neutral_index(
+    to: &DistWinding,
+    buses: &[DistBus],
+    conventions: Option<&Value>,
+) -> usize {
+    let bus = buses.iter().find(|bus| bus.id == to.bus);
+    if let Some(bus) = bus
         && let Some((idx, _)) = to
             .terminal_map
             .iter()
@@ -2745,9 +2762,12 @@ fn center_tap_neutral_index(to: &DistWinding, buses: &[DistBus]) -> usize {
     {
         return idx;
     }
+    let terminals = bus.map_or(to.terminal_map.as_slice(), |bus| bus.terminals.as_slice());
     to.terminal_map
         .iter()
-        .position(|term| term.eq_ignore_ascii_case("n") || term == "4")
+        .position(|term| {
+            crate::calc_terminal_role(terminals, term, conventions) == crate::TerminalRole::Neutral
+        })
         .unwrap_or_else(|| to.terminal_map.len() - 1)
 }
 

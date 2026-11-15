@@ -107,33 +107,42 @@ pub struct DistBus {
 }
 
 impl DistBus {
-    /// Phase positions in terminal order, using explicit BMOPF roles when supplied.
+    /// The role of one of this bus's terminals ([`calc_terminal_role`] over
+    /// the bus's terminal names).
+    #[must_use]
+    pub fn terminal_role(
+        &self,
+        terminal: &str,
+        conventions: Option<&serde_json::Value>,
+    ) -> TerminalRole {
+        calc_terminal_role(&self.terminals, terminal, conventions)
+    }
+
+    /// Phase positions in terminal order: the terminals whose
+    /// [`calc_terminal_role`] is [`TerminalRole::Phase`], using explicit BMOPF
+    /// roles when supplied.
     #[must_use]
     pub fn phase_indices(&self, conventions: Option<&serde_json::Value>) -> Vec<usize> {
-        let numeric_four = self.terminals.len() == 4
-            && ["1", "2", "3", "4"]
-                .iter()
-                .all(|t| self.terminals.iter().any(|v| v == t));
+        self.role_indices(TerminalRole::Phase, conventions)
+    }
+
+    /// Neutral positions in terminal order: the terminals whose
+    /// [`calc_terminal_role`] is [`TerminalRole::Neutral`].
+    #[must_use]
+    pub fn neutral_indices(&self, conventions: Option<&serde_json::Value>) -> Vec<usize> {
+        self.role_indices(TerminalRole::Neutral, conventions)
+    }
+
+    fn role_indices(
+        &self,
+        role: TerminalRole,
+        conventions: Option<&serde_json::Value>,
+    ) -> Vec<usize> {
         self.terminals
             .iter()
             .enumerate()
-            .filter_map(|(index, terminal)| {
-                let nonphase = if let Some(roles) = conventions {
-                    ["neutral", "earth"].iter().any(|role| {
-                        roles
-                            .get(role)
-                            .and_then(serde_json::Value::as_array)
-                            .is_some_and(|names| {
-                                names
-                                    .iter()
-                                    .any(|name| name.as_str() == Some(terminal.as_str()))
-                            })
-                    })
-                } else {
-                    terminal.eq_ignore_ascii_case("n") || (numeric_four && terminal == "4")
-                };
-                (!nonphase).then_some(index)
-            })
+            .filter(|(_, terminal)| self.terminal_role(terminal, conventions) == role)
+            .map(|(index, _)| index)
             .collect()
     }
 
@@ -159,6 +168,65 @@ impl DistBus {
             location: None,
             extras: Extras::new(),
         }
+    }
+}
+
+/// The role a terminal plays on its bus ([`calc_terminal_role`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TerminalRole {
+    /// A phase conductor.
+    Phase,
+    /// A neutral conductor.
+    Neutral,
+    /// Earth: ground terminal `0`, or a terminal the conventions call earth.
+    Earth,
+}
+
+/// The role of `terminal` among a bus's `terminals`. With BMOPF terminal
+/// conventions (the `terminal_conventions` block, whose `neutral` and
+/// `earth` lists name terminals) a named terminal takes the role it is
+/// named in and every other terminal is a phase. Without conventions `n` or
+/// `N` is neutral, and so is `4` when the terminals are exactly `1` to `4`
+/// (the four wire spelling OpenDSS and PowerModelsDistribution share), and
+/// every other terminal is a phase. Ground terminal `0` is earth either way.
+///
+/// The one terminal classification: [`DistBus::phase_indices`],
+/// [`DistBus::neutral_indices`], the WYE neutral of a connection
+/// ([`crate::calc_wye_neutral_position`]), the BMOPF reader and validator,
+/// and the multiconductor to balanced lowering read it.
+#[must_use]
+pub fn calc_terminal_role<S: AsRef<str>>(
+    terminals: &[S],
+    terminal: &str,
+    conventions: Option<&serde_json::Value>,
+) -> TerminalRole {
+    if terminal == "0" {
+        return TerminalRole::Earth;
+    }
+    if let Some(roles) = conventions {
+        let named = |role: &str| {
+            roles
+                .get(role)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|names| names.iter().any(|name| name.as_str() == Some(terminal)))
+        };
+        return if named("neutral") {
+            TerminalRole::Neutral
+        } else if named("earth") {
+            TerminalRole::Earth
+        } else {
+            TerminalRole::Phase
+        };
+    }
+    let numeric_four = terminals.len() == 4
+        && ["1", "2", "3", "4"]
+            .iter()
+            .all(|t| terminals.iter().any(|v| v.as_ref() == *t));
+    if terminal.eq_ignore_ascii_case("n") || (numeric_four && terminal == "4") {
+        TerminalRole::Neutral
+    } else {
+        TerminalRole::Phase
     }
 }
 
@@ -1062,6 +1130,14 @@ dist_table_accessors! {
 }
 
 impl MulticonductorNetwork {
+    /// The network's BMOPF terminal conventions (the
+    /// `bmopf_terminal_conventions` extra), which [`calc_terminal_role`]
+    /// reads; `None` when the source stated none.
+    #[must_use]
+    pub fn terminal_conventions(&self) -> Option<&serde_json::Value> {
+        self.tables.extras.get("bmopf_terminal_conventions")
+    }
+
     /// Hz.
     #[must_use]
     pub fn base_frequency(&self) -> f64 {
@@ -1414,6 +1490,25 @@ pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_roles_follow_the_conventions_or_the_spellings() {
+        let four = ["1", "2", "3", "4"];
+        assert_eq!(calc_terminal_role(&four, "4", None), TerminalRole::Neutral);
+        assert_eq!(calc_terminal_role(&["1", "4"], "4", None), TerminalRole::Phase);
+        assert_eq!(calc_terminal_role(&["a", "N"], "N", None), TerminalRole::Neutral);
+        assert_eq!(calc_terminal_role(&["1"], "0", None), TerminalRole::Earth);
+        let conventions = serde_json::json!({"neutral": ["x"], "earth": ["g"]});
+        let names = ["1", "x", "g", "n"];
+        let role = |t| calc_terminal_role(&names, t, Some(&conventions));
+        assert_eq!(role("x"), TerminalRole::Neutral);
+        assert_eq!(role("g"), TerminalRole::Earth);
+        assert_eq!(role("n"), TerminalRole::Phase);
+        let bus = DistBus::new("b", names.iter().map(|t| (*t).to_owned()).collect());
+        assert_eq!(bus.phase_indices(Some(&conventions)), vec![0, 3]);
+        assert_eq!(bus.neutral_indices(Some(&conventions)), vec![1]);
+        assert_eq!(bus.neutral_indices(None), vec![3]);
+    }
 
     #[test]
     fn multiconductor_json_uses_only_final_nonfinite_spellings() {

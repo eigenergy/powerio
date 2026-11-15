@@ -330,7 +330,7 @@ fn normalized_note(note: String) -> String {
 struct LoweringState<'a> {
     net: &'a MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,
-    neutral_terminals: BTreeSet<String>,
+    neutral_terminals: ReferenceTerminals,
     /// Every multiconductor bus (lowercase) to its balanced bus: merged
     /// members map to their canonical bus's ID.
     bus_ids: BTreeMap<String, BusId>,
@@ -1307,7 +1307,7 @@ fn source_extra(key: &str, value: &str) -> BalancedExtras {
 fn active_positions(
     terminals: &[String],
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Vec<usize> {
     terminals
         .iter()
@@ -1321,7 +1321,7 @@ fn active_positions(
 fn neutral_positions(
     terminals: &[String],
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Vec<usize> {
     terminals
         .iter()
@@ -1337,7 +1337,7 @@ fn same_active_phase_order(
     from_terminals: &[String],
     to_bus: Option<&DistBus>,
     to_terminals: &[String],
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> bool {
     let from: Vec<_> = from_terminals
         .iter()
@@ -1780,7 +1780,7 @@ fn switch_merge_blockers(
     net: &MulticonductorNetwork,
     index: usize,
     sw: &powerio_dist::DistSwitch,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Vec<Diagnostic> {
     let path = format!("/switches/{index}");
     let mut blockers = Vec::new();
@@ -1881,17 +1881,28 @@ fn switch_merge_blockers(
     blockers
 }
 
-fn global_neutral_terminals(net: &MulticonductorNetwork) -> BTreeSet<String> {
-    net.buses()
-        .iter()
-        .flat_map(|bus| bus.grounded.iter().cloned())
-        .collect()
+/// What [`is_neutral_terminal`] reads beyond a terminal's bus: the
+/// network's terminal conventions and every terminal name it grounds.
+struct ReferenceTerminals {
+    conventions: Option<serde_json::Value>,
+    grounded: BTreeSet<String>,
+}
+
+fn global_neutral_terminals(net: &MulticonductorNetwork) -> ReferenceTerminals {
+    ReferenceTerminals {
+        conventions: net.terminal_conventions().cloned(),
+        grounded: net
+            .buses()
+            .iter()
+            .flat_map(|bus| bus.grounded.iter().cloned())
+            .collect(),
+    }
 }
 
 fn active_terminal_count(
     terminals: &[String],
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> usize {
     terminals
         .iter()
@@ -1899,15 +1910,25 @@ fn active_terminal_count(
         .count()
 }
 
+/// Whether the lowering treats a terminal as a reference conductor rather
+/// than an active phase: its role on the bus is not a phase
+/// ([`powerio_dist::calc_terminal_role`]; without its bus, by the name
+/// alone), over the network's terminal conventions, its bus grounds it, or
+/// the network grounds a terminal of that name anywhere (a materialized
+/// OpenDSS neutral keeps one name).
 fn is_neutral_terminal(
     terminal: &str,
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> bool {
-    terminal == "0"
-        || terminal.eq_ignore_ascii_case("n")
+    let conventions = neutral_terminals.conventions.as_ref();
+    let role = match bus {
+        Some(bus) => bus.terminal_role(terminal, conventions),
+        None => powerio_dist::calc_terminal_role(&[terminal], terminal, conventions),
+    };
+    role != powerio_dist::TerminalRole::Phase
         || bus.is_some_and(|b| b.grounded.iter().any(|g| g == terminal))
-        || neutral_terminals.contains(terminal)
+        || neutral_terminals.grounded.contains(terminal)
 }
 
 fn check_phase_reference(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
@@ -1960,7 +1981,7 @@ fn check_transformers(net: &MulticonductorNetwork, report: &mut MulticonductorTo
 fn classify_transformer<'net>(
     net: &'net MulticonductorNetwork,
     transformer: &'net powerio_dist::DistTransformer,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Result<[&'net powerio_dist::DistWinding; 2], String> {
     use powerio_dist::DistWindingConn;
     if transformer.phases != 3 {

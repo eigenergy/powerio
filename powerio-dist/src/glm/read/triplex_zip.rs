@@ -53,7 +53,9 @@ impl Reader<'_> {
                 } else {
                     Complex64::new(
                         apparent * pf.abs(),
-                        apparent * powerio_core::electrical::calc_power_factor_sine(pf) * pf.signum(),
+                        apparent
+                            * powerio_core::electrical::calc_power_factor_sine(pf)
+                            * pf.signum(),
                     )
                 };
                 if !power.re.is_finite() || !power.im.is_finite() {

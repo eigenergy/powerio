@@ -20,8 +20,8 @@ use crate::model::{
     ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, DistWinding,
     DistWindingConn, Extras, MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
-    VoltVarControl, VoltWattControl, VoltageSource,
-    open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
+    VoltVarControl, VoltWattControl, VoltageSource, open_delta_connection, open_delta_pairable,
+    pair_keys, winding_phase_pair,
 };
 
 /// Untyped classes that belong to the BMOPF ecosystem. The schema declares
@@ -3687,7 +3687,6 @@ fn winding_base(w: &DistWinding) -> Option<f64> {
 fn base_impedance(v_ref: f64, s: f64) -> Option<f64> {
     powerio_core::electrical::calc_impedance_base(v_ref, s)
 }
-
 
 /// The `delta_roll` of a DELTA winding: the one delta orientation
 /// ([`crate::transformer::calc_delta_direction`]), so a unit that states no

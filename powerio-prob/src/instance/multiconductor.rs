@@ -461,7 +461,7 @@ impl McAcPfInstance {
         let zone =
             powerio_dist::voltage_zones::calc_voltage_zone_labels(network).map_err(unresolved)?;
 
-        let conventions = network.extras().get("bmopf_terminal_conventions");
+        let conventions = network.terminal_conventions();
         let phase_to_phase = |position: usize, terminals: &[String]| {
             let bus = &network.buses()[position];
             let phases: std::collections::BTreeSet<_> = bus

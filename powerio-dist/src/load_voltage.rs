@@ -79,10 +79,9 @@ impl DistLoadVoltageModel {
                         let terms = self
                             .component_terms(phase, component == 1)?
                             .expect("an unbounded law has power law terms");
-                        *out = powerio_core::electrical::calc_voltage_power_terms(
-                            &terms, voltage_pu,
-                        )
-                        .0;
+                        *out =
+                            powerio_core::electrical::calc_voltage_power_terms(&terms, voltage_pu)
+                                .0;
                     }
                 }
                 value

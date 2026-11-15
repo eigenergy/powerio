@@ -118,7 +118,8 @@ pub use model::{
     DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
     DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
-    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, find_unresolved_references,
+    TerminalRole, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
+    calc_terminal_role, find_unresolved_references,
 };
 pub use readiness::{
     ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
