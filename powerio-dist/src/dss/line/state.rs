@@ -149,7 +149,13 @@ impl State {
             self.sequence.values[5] = self.sequence.values[4];
         }
         let sequence = |positive: f64, zero: f64| {
-            crate::sequence::calc_phase_from_sequence(self.n, positive, zero)
+            // OpenDSS Line.RecalcElementData multiplies by ONE_THIRD.
+            crate::sequence::calc_phase_from_sequence(
+                self.n,
+                positive,
+                zero,
+                crate::sequence::SequenceThird::Reciprocal,
+            )
         };
         self.matrices = LineMatrices {
             r: sequence(self.sequence.values[0], self.sequence.values[2]),

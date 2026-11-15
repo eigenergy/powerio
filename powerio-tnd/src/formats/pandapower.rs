@@ -656,10 +656,15 @@ impl Reader {
 /// The phase matrix of a symmetric element from its zero and positive
 /// sequence values, times `scale`: self `(z0 + 2 z1)/3`, mutual `(z0 - z1)/3`.
 fn fortescue(zero: f64, positive: f64, scale: f64) -> ConductorMatrix {
-    powerio_dist::sequence::calc_phase_from_sequence(3, positive, zero)
-        .into_iter()
-        .map(|row| row.into_iter().map(|value| value * scale).collect())
-        .collect()
+    powerio_dist::sequence::calc_phase_from_sequence(
+        3,
+        positive,
+        zero,
+        powerio_dist::sequence::SequenceThird::Divide,
+    )
+    .into_iter()
+    .map(|row| row.into_iter().map(|value| value * scale).collect())
+    .collect()
 }
 
 fn terminals(names: &[&str]) -> Vec<String> {

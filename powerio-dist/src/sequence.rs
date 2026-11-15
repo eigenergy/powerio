@@ -14,41 +14,113 @@ use num_complex::Complex64;
 
 use crate::VoltageSource;
 
+/// How a sequence to phase expansion takes its third. The two spellings
+/// are the same transform and can differ in the last place; the reference
+/// engine uses both, so a reader reproducing it names the one its element
+/// class uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SequenceThird {
+    /// Divide by three: OpenDSS `VSource` (`(2 Z1 + Z0) / 3`), and every
+    /// reader that follows no engine's rounding.
+    Divide,
+    /// Multiply by the rounded reciprocal `1.0 / 3.0`: OpenDSS `Line` and
+    /// `LineCode` (`CmulReal(..., ONE_THIRD)` in `RecalcElementData` and
+    /// `CalcMatricesFromZ1Z0`).
+    Reciprocal,
+}
+
+impl SequenceThird {
+    fn apply<T>(self, value: T) -> T
+    where
+        T: Mul<f64, Output = T> + Div<f64, Output = T>,
+    {
+        match self {
+            Self::Divide => value / 3.0,
+            Self::Reciprocal => value * (1.0 / 3.0),
+        }
+    }
+}
+
 /// The self (diagonal) phase entry of a transposed element:
-/// `(2 z₁ + z₀) / 3`.
+/// `(2 z₁ + z₀) / 3`, the third taken as `third` states.
 #[must_use]
-pub fn calc_sequence_self<T>(positive: T, zero: T) -> T
+pub fn calc_sequence_self<T>(positive: T, zero: T, third: SequenceThird) -> T
 where
     T: Copy + Add<Output = T> + Mul<f64, Output = T> + Div<f64, Output = T>,
 {
-    (positive * 2.0 + zero) / 3.0
+    third.apply(positive * 2.0 + zero)
 }
 
 /// The mutual (off diagonal) phase entry of a transposed element:
-/// `(z₀ − z₁) / 3`.
+/// `(z₀ − z₁) / 3`, the third taken as `third` states.
 #[must_use]
-pub fn calc_sequence_mutual<T>(positive: T, zero: T) -> T
+pub fn calc_sequence_mutual<T>(positive: T, zero: T, third: SequenceThird) -> T
 where
-    T: Copy + Sub<Output = T> + Div<f64, Output = T>,
+    T: Copy + Sub<Output = T> + Mul<f64, Output = T> + Div<f64, Output = T>,
 {
-    (zero - positive) / 3.0
+    third.apply(zero - positive)
 }
 
 /// The `n × n` phase matrix of a transposed element from its positive and
 /// zero sequence values ([`calc_sequence_self`] on the diagonal,
 /// [`calc_sequence_mutual`] off it). The one sequence to phase expansion:
-/// the OpenDSS line code and line readers and the pandapower reader read
-/// it, for impedance, resistance, reactance and susceptance alike.
+/// the OpenDSS line code, line and source readers and the pandapower reader
+/// read it, for impedance, resistance, reactance and susceptance alike.
 #[must_use]
-pub fn calc_phase_from_sequence<T>(n: usize, positive: T, zero: T) -> Vec<Vec<T>>
+pub fn calc_phase_from_sequence<T>(
+    n: usize,
+    positive: T,
+    zero: T,
+    third: SequenceThird,
+) -> Vec<Vec<T>>
 where
     T: Copy + Add<Output = T> + Sub<Output = T> + Mul<f64, Output = T> + Div<f64, Output = T>,
 {
-    let mutual = calc_sequence_mutual(positive, zero);
-    let own = calc_sequence_self(positive, zero);
+    let mutual = calc_sequence_mutual(positive, zero, third);
+    let own = calc_sequence_self(positive, zero, third);
     (0..n)
         .map(|i| (0..n).map(|j| if i == j { own } else { mutual }).collect())
         .collect()
+}
+
+/// OpenDSS's rotation operator `DSSGlobals.CALPHA`, `-0.5 + j 0.866025`:
+/// rounded to six places, unlike Fortescue's exact `a`. The reference
+/// engine's unequal sequence (`Z1 ≠ Z2`) source matrix uses it; replacing
+/// it with `sin 120°` changes those impedances.
+pub const OPENDSS_ALPHA: Complex64 = Complex64::new(-0.5, 0.866_025);
+
+/// Entry `(i, j)`, `i ≠ j`, of the three phase circulant matrix of an
+/// element with unequal sequence impedances `[z₀, z₁, z₂]` as OpenDSS
+/// `VSource` forms it: `(z₀ + z₁ α^((j−i) mod 3) + z₂ α^((i−j) mod 3)) / 3`
+/// with [`OPENDSS_ALPHA`]. The diagonal is `(z₂ + z₁ + z₀) / 3`.
+/// [`calc_circulant_sequence_from_phase`] is its inverse.
+#[must_use]
+pub fn calc_circulant_phase_entry(sequence: [Complex64; 3], i: usize, j: usize) -> Complex64 {
+    let [zero, positive, negative] = sequence;
+    if i == j {
+        return (negative + positive + zero) / 3.0;
+    }
+    (zero
+        + positive * OPENDSS_ALPHA.powu(((j + 3 - i) % 3) as u32)
+        + negative * OPENDSS_ALPHA.powu(((i + 3 - j) % 3) as u32))
+        / 3.0
+}
+
+/// The sequence impedances `[z₀, z₁, z₂]` of a three phase circulant matrix
+/// from its first row `[z₀₀, z₀₁, z₀₂]`, the inverse of
+/// [`calc_circulant_phase_entry`] over the same [`OPENDSS_ALPHA`].
+#[must_use]
+pub fn calc_circulant_sequence_from_phase(row: [Complex64; 3]) -> [Complex64; 3] {
+    let first_rotation = OPENDSS_ALPHA - 1.0;
+    let second_rotation = OPENDSS_ALPHA * OPENDSS_ALPHA - 1.0;
+    let upper_delta = 3.0 * (row[1] - row[0]);
+    let lower_delta = 3.0 * (row[2] - row[0]);
+    let denominator = first_rotation * first_rotation - second_rotation * second_rotation;
+    let positive = (upper_delta * first_rotation - lower_delta * second_rotation) / denominator;
+    let negative = (lower_delta * first_rotation - upper_delta * second_rotation) / denominator;
+    let zero = 3.0 * row[0] - positive - negative;
+    [zero, positive, negative]
 }
 
 /// The positive and zero sequence values `(z₁, z₀)` of a transposed element
@@ -151,15 +223,31 @@ mod tests {
     #[test]
     fn the_transform_pair_inverts() {
         let (positive, zero) = (Complex64::new(0.1, 0.4), Complex64::new(0.3, 1.2));
-        let matrix = calc_phase_from_sequence(3, positive, zero);
+        let matrix = calc_phase_from_sequence(3, positive, zero, SequenceThird::Divide);
         let (p, z) = calc_sequence_from_phase(matrix[0][0], matrix[0][1]);
         assert!((p - positive).norm() < 1e-15 && (z - zero).norm() < 1e-15);
         let seq = calc_sequence_matrix(&matrix);
         assert!((seq[0][0] - zero).norm() < 1e-14);
         assert!((seq[1][1] - positive).norm() < 1e-14);
         assert!(seq[0][1].norm() < 1e-14 && seq[1][2].norm() < 1e-14);
-        let real = calc_phase_from_sequence(2, 1.0, 4.0);
+        let real = calc_phase_from_sequence(2, 1.0, 4.0, SequenceThird::Reciprocal);
         assert_eq!(real, vec![vec![2.0, 1.0], vec![1.0, 2.0]]);
+        // The two thirds are the same transform, apart in the last place.
+        let (a, b) = (0.7_f64, 0.1784_f64);
+        let divide = calc_sequence_self(a, b, SequenceThird::Divide);
+        let reciprocal = calc_sequence_self(a, b, SequenceThird::Reciprocal);
+        assert_eq!(divide, (2.0 * a + b) / 3.0);
+        assert_eq!(reciprocal, (2.0 * a + b) * (1.0 / 3.0));
+        assert!((divide - reciprocal).abs() <= f64::EPSILON);
+        let sequence = [
+            Complex64::new(0.3, 1.2),
+            Complex64::new(0.1, 0.4),
+            Complex64::new(0.12, 0.5),
+        ];
+        let row = [0, 1, 2].map(|j| calc_circulant_phase_entry(sequence, 0, j));
+        for (back, value) in calc_circulant_sequence_from_phase(row).iter().zip(sequence) {
+            assert!((back - value).norm() < 1e-12);
+        }
     }
 
     #[test]

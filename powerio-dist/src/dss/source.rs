@@ -25,6 +25,10 @@ pub(super) struct ResolvedSource {
     pub base_mva: f64,
 }
 
+/// The native `VSource` takes its sequence third by division
+/// (`RecalcElementData`: `(2.0 * X1 + X0) / 3.0`).
+const NATIVE_THIRD: crate::sequence::SequenceThird = crate::sequence::SequenceThird::Divide;
+
 #[derive(Clone, Copy)]
 enum ImpedanceSpec {
     Mva,
@@ -32,9 +36,16 @@ enum ImpedanceSpec {
     Sequence,
 }
 
+/// The one impedance base `kV² / MVA` ([`crate::electrical::calc_impedance_base`]).
+/// The parser holds every base positive, so an unusable one only arises by
+/// overflow; it reads as NaN and fails the nonfinite checks downstream.
+fn impedance_base(kv: f64, mva: f64) -> f64 {
+    crate::electrical::calc_impedance_base(kv, mva).unwrap_or(f64::NAN)
+}
+
 // Shared with the canonical writer's exact inverse of the native MVA form.
 pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Complex64 {
-    let x = kv.powi(2) / mva3 / (1.0 + 1.0 / xr1.powi(2)).sqrt();
+    let x = impedance_base(kv, mva3) / (1.0 + 1.0 / xr1.powi(2)).sqrt();
     Complex64::new(x / xr1, x)
 }
 
@@ -270,7 +281,7 @@ impl State {
             self.z[0] = short_circuit_zero(self.kv, self.isc1, factor, self.xr0, self.z[1])?;
         } else {
             if self.pu_written[1] {
-                let base = self.kv.powi(2) / self.base_mva;
+                let base = impedance_base(self.kv, self.base_mva);
                 self.z = self.pu_z.map(|v| v * base);
             }
             if self.z[1] == Complex64::default() {
@@ -281,13 +292,13 @@ impl State {
                 self.z[0] = self.z[1];
                 self.z[2] = self.z[1];
             }
-            let zs = (2.0 * self.z[1] + self.z[0]) / 3.0;
+            let zs = crate::sequence::calc_sequence_self(self.z[1], self.z[0], NATIVE_THIRD);
             self.isc1 = self.kv * 1000.0 / factor / zs.norm();
             self.mva3 = 3.0_f64.sqrt() * self.kv * self.isc3 / 1000.0;
             self.mva1 = factor * self.kv * self.isc1 / 1000.0;
         }
         if !self.pu_written.iter().any(|&v| v) {
-            let base = self.kv.powi(2) / self.base_mva;
+            let base = impedance_base(self.kv, self.base_mva);
             self.pu_z = self.z.map(|z| z / base);
         }
         if self
@@ -312,19 +323,16 @@ impl State {
         let quasi = self.quasi_ideal && ratio - 1.0 < 1e-12;
         let mut impedance = vec![vec![Complex64::default(); self.phases]; self.phases];
         let diagonal = if quasi {
-            self.ideal_z * self.kv.powi(2) / self.base_mva
+            self.ideal_z * impedance_base(self.kv, self.base_mva)
         } else if self.z[1] == self.z[2] {
-            (2.0 * self.z[1] + self.z[0]) / 3.0
+            crate::sequence::calc_sequence_self(self.z[1], self.z[0], NATIVE_THIRD)
         } else {
-            (self.z[2] + self.z[1] + self.z[0]) / 3.0
+            crate::sequence::calc_circulant_phase_entry(self.z, 0, 0)
         };
         for (i, row) in impedance.iter_mut().enumerate() {
             row[i] = diagonal;
         }
         if !quasi {
-            // DSSGlobals.CALPHA uses this rounded coefficient. Replacing it
-            // with sin(120 degrees) changes unequal-sequence impedances.
-            let alpha = Complex64::new(-0.5, 0.866_025);
             for (i, row) in impedance.iter_mut().enumerate() {
                 for (j, value) in row.iter_mut().enumerate() {
                     if i != j {
@@ -332,19 +340,18 @@ impl State {
                             // Native sequence setters compute Xm as Xs-X1;
                             // short-circuit setters use (X0-X1)/3. Their
                             // rounding differs in ill-conditioned networks.
-                            Complex64::new(
-                                (self.z[0].re - self.z[1].re) / 3.0,
-                                if matches!(self.spec, ImpedanceSpec::Sequence) {
-                                    diagonal.im - self.z[1].im
-                                } else {
-                                    (self.z[0].im - self.z[1].im) / 3.0
-                                },
-                            )
+                            let mut mutual = crate::sequence::calc_sequence_mutual(
+                                self.z[1],
+                                self.z[0],
+                                NATIVE_THIRD,
+                            );
+                            if matches!(self.spec, ImpedanceSpec::Sequence) {
+                                mutual.im = diagonal.im - self.z[1].im;
+                            }
+                            mutual
                         } else if self.phases == 3 {
-                            (self.z[0]
-                                + self.z[1] * alpha.powu(((j + 3 - i) % 3) as u32)
-                                + self.z[2] * alpha.powu(((i + 3 - j) % 3) as u32))
-                                / 3.0
+                            // OpenDSS's rounded rotation (`OPENDSS_ALPHA`).
+                            crate::sequence::calc_circulant_phase_entry(self.z, i, j)
                         } else {
                             Complex64::default()
                         };

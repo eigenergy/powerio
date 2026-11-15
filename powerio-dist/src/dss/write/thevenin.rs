@@ -71,6 +71,9 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
     })
 }
 
+/// The native `VSource` takes its sequence third by division.
+const NATIVE_THIRD: crate::sequence::SequenceThird = crate::sequence::SequenceThird::Divide;
+
 fn neighbors(value: f64) -> [f64; 17] {
     let mut result = [value; 17];
     let (mut up, mut down) = (value, value);
@@ -92,11 +95,11 @@ fn sequence(diagonal: f64, mutual: f64, reactance: bool) -> Option<(f64, f64)> {
         for positive in neighbors(positive_guess) {
             if zero.is_finite()
                 && positive.is_finite()
-                && crate::sequence::calc_sequence_self(positive, zero) == diagonal
+                && crate::sequence::calc_sequence_self(positive, zero, NATIVE_THIRD) == diagonal
                 && (if reactance {
                     diagonal - positive
                 } else {
-                    crate::sequence::calc_sequence_mutual(positive, zero)
+                    crate::sequence::calc_sequence_mutual(positive, zero, NATIVE_THIRD)
                 }) == mutual
             {
                 return Some((zero, positive));

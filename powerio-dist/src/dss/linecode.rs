@@ -241,7 +241,13 @@ impl State {
 }
 
 fn sequence_matrix(n: usize, positive: f64, zero: f64) -> Vec<Vec<f64>> {
-    crate::sequence::calc_phase_from_sequence(n, positive, zero)
+    // OpenDSS LineCode.CalcMatricesFromZ1Z0 multiplies by OneThird.
+    crate::sequence::calc_phase_from_sequence(
+        n,
+        positive,
+        zero,
+        crate::sequence::SequenceThird::Reciprocal,
+    )
 }
 
 // DSS C-API 87d85c2 ParserDel.ParseAsSymMatrix starts with zeros, then
