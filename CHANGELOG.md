@@ -193,7 +193,12 @@
   `powerio_dist::overhead::calc_carson_impedance` (over a `CarsonEarth`, the earth return terms
   of a frequency and resistivity) and `calc_potential_coefficient` are the one simplified Carson
   equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
-  Geometry, Kron and lowered impedances can move in the last place.
+  The GridLAB-D overhead, underground and triplex readers and the triplex writer build its
+  Carson coefficients in one place, the underground reader eliminates its cable returns through
+  the one Kron reduction, and the concentric neutral ring, its equivalent GMR and distance, the
+  tape shield radius and the cable capacitance are each one calculation behind the OpenDSS
+  `CNData` and `TSData` line constants and the GridLAB-D underground reader. Geometry, cable,
+  Kron and lowered impedances can move in the last place.
 - `powerio_dist::dense::invert_dense_matrix` also refuses a pivot at most `n ε` times its
   column's largest original magnitude, and an infinite pivot, the rule the dense PTDF fallback
   used; that fallback and the OpenDSS source and Line primitive check now call it. A dense
@@ -265,10 +270,32 @@
   A neutral phase the segment's terminals do not state is Kron reduced. A position no phase
   names a wire for leaves the impedance unknown, so the segment stays refused
   (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or untyped in MG-RAVENS), now with the position named.
-- MG-RAVENS reads a transformer end's `phaseAngleClock` as the vector group shift its winding
-  connections represent (a delta–wye pair is clock 1, as in distribution CIM) instead of
-  reporting it unmapped, and keeps a tank whose clock its windings do not represent untyped with
-  both clocks named. The writer states that clock, where it wrote 0 for every end.
+  The MG-RAVENS `IEEE13_Assets` example names no neutral wire on ten of its eleven segments,
+  which stay refused; its complete segment matches OpenDSS to 2e-5 (the exporter's 1609.3 m
+  mile), and the same conductors stated completely match to 1e-9.
+- Transformer phase clocks in distribution CIM and MG-RAVENS are the vector group shift the
+  physics stamps (the delta orientation of `powerio_dist::transformer`), read and written. A
+  delta–wye unit is clock 1 when the high voltage winding leads (OpenDSS's default `leadlag`)
+  and clock 11 when the low voltage winding leads: a source stating `leadlag=euro` or `lead`
+  (Dy11), or a step-up unit whose first winding is the low voltage delta, was written as clock
+  1. Both readers read clock 11 on a delta–wye unit as `leadlag` euro, where they refused it,
+  and refuse any other clock with the represented clock named; a unit with an unknown `leadlag`
+  is refused by both writers. MG-RAVENS reads `phaseAngleClock` instead of reporting it
+  unmapped, its writer states each end's clock where it wrote 0, and its vector group carries
+  each winding's clock (`Dyn1`, `Dyn11`) instead of a fixed `0`. The CIM `PowerTransformerEnd`
+  form states its clocks when they need the European convention.
+- MG-RAVENS equipment the reader keeps untyped while the document states it in service (a
+  segment whose wires cannot be calculated, a switch or segment with fewer than two terminals, a
+  tank without a datasheet, ends or a clock either convention represents, a delta load with
+  unresolvable branches, an X/Y phase) is blocked as
+  `READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`: numerical use and conversion to another format
+  refuse it, as they refuse a CIM segment without impedance, instead of writing the feeder
+  without it. Converting the MG-RAVENS `IEEE13_Assets` example to OpenDSS succeeded with ten of
+  its eleven segments missing. The MG-RAVENS round trip keeps the equipment.
+- MG-RAVENS reports a single phase wye load stating `grounded` false whose neutral no
+  equipment but such loads reaches (`READ.RAVENS_DIST.VALUE_CONFLICT`): its neutral floats, so
+  it does not draw its stated power. The load is kept as stated; the CIM reader grounds such a
+  load with its own finding.
 - Read three-phase pandapower networks, those with `asymmetric_load`,
   `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
   under the `pandapower-json` token (#846). A three-phase network with rows

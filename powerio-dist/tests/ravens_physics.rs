@@ -370,6 +370,23 @@ Solve
         assert_eq!(shift(&read), degrees, "{kvs} {leadlag}");
     }
 
+    // An unknown convention has no clock: both writers refuse the network
+    // rather than drop the unit or guess its shift.
+    let mut unknown = parse_dss_str(&deck("115 4.16", ""));
+    unknown.transformers_mut()[0]
+        .extras
+        .insert("leadlag".into(), json!("sideways"));
+    for target in [DistTargetFormat::RavensJson, DistTargetFormat::CimDist] {
+        let error = powerio_dist::emit(
+            &powerio_core::PioModule::new((*unknown).clone()),
+            target,
+            powerio_core::Destination::memory("out").unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("leadlag"), "{target:?}: {error}");
+    }
+
     let mut doc: Value = serde_json::from_str(
         &parse_dss_str(&deck("115 4.16", ""))
             .emit_value(DistTargetFormat::RavensJson)

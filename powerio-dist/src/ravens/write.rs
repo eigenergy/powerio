@@ -54,6 +54,7 @@ pub(crate) fn emit_ravens_json_text(
     net: &MulticonductorNetwork,
 ) -> Result<TextEmission, powerio_core::Error> {
     validate_transformer_bases(net)?;
+    crate::cim::require_phase_clocks(net)?;
     let returns = super::neutral::prepare(net)?;
     let prepared = super::source::prepare(returns.as_ref())?;
     let net = prepared.as_ref();
@@ -2011,7 +2012,9 @@ impl Writer {
                 continue;
             }
             // The clocks state the vector group shift the physics stamps,
-            // `leadlag` included; a unit whose shift is unknown is refused.
+            // `leadlag` included. `require_phase_clocks` has refused a unit
+            // whose shift is unknown; a direct caller still never gets a
+            // wrong clock.
             let three_phase = xf.phases == 3;
             let clocks = match (0..xf.windings.len())
                 .map(|k| crate::cim::tank_phase_clock(xf, k, three_phase))

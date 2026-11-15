@@ -186,10 +186,10 @@ is refused.
 | `ConnectivityNode`, `Terminal.phases` | buses, with the terminals the equipment uses; a `Ground` at a node grounds the conductors its phase code names |
 | `ACLineSegment` with `ACLineSegmentPhase` | lines, every conductor in `sequenceNumber` order, the neutral included; each end's `Terminal.phases` is its own map, so a lateral landing on another phase keeps both |
 | `PerLengthPhaseImpedance` | line codes in ohm/m and S/m |
-| `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus |
+| `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus; a single phase load stating `grounded` false whose neutral nothing but such loads reaches is kept as stated with a `READ.RAVENS_DIST.VALUE_CONFLICT` finding, since its neutral floats (the CIM reader grounds it) |
 | `LinearShuntCompensator` | shunt banks; `Yn` is a wye bank whose neutral is grounded, `Y` one on an ungrounded neutral |
 | the `Switch` classes with `SwitchPhase` | switches with their state |
-| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit; each end's `phaseAngleClock` must be the clock its winding connections represent, as in distribution CIM below, or the tank stays untyped with both clocks named, and the writer states that clock |
+| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit; each end's `phaseAngleClock` is the vector group shift, as in distribution CIM below (clock 11 on a delta–wye unit reads as `leadlag` euro), or the tank stays untyped with the represented clock named; the writer states each end's clock and the vector group (`Dyn1`, `Dyn11`) |
 | `EnergySource` | voltage sources; a source whose phasors are not one balanced set is written as one single phase `EnergySource` per conductor with the same phasors |
 | `RotatingMachine`, `PowerElectronicsConnection` | generators and inverter based resources |
 
@@ -197,7 +197,11 @@ A segment with a `PerLengthPhaseImpedance` takes it. A segment without one,
 on a `WireSpacingInfo`, takes the impedance of its wires, calculated as the
 CIM reader does (see [Wire catalog lines](#wire-catalog-lines)). A segment
 whose wires cannot be calculated stays untyped at its source path with the
-reason, and the catalog records stay untyped as well.
+reason, and the catalog records stay untyped as well. In-service equipment
+kept untyped this way (a segment, switch, tank or load the reader cannot
+type) round trips to MG-RAVENS, and conversion to any other format refuses
+it (`READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`) rather than writing the
+feeder without it.
 
 Voltage limits follow the upstream converter's line-to-line base, including
 single-phase equipment. PowerIO converts them to phase-to-ground bounds in the
@@ -342,8 +346,12 @@ than phases reduces its neutrals; one the terminals state stays a conductor.
 A position no phase names leaves the impedance unknown (an unstated neutral
 changes every phase entry), and the segment is refused with the position
 named: `READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or an untyped segment in
-MG-RAVENS. The MG-RAVENS `IEEE13_Assets` example is such a document: it
-names no wire for the neutral of ten of its eleven segments.
+MG-RAVENS; either way conversion to another format refuses it. The
+MG-RAVENS `IEEE13_Assets` example, as XML or JSON, is such a document: it
+names no wire for the neutral of ten of its eleven segments. Its one
+complete segment (`692675`, concentric neutral) matches OpenDSS to 2e-5,
+the difference of the exporter's 1609.3 m mile; the same conductors stated
+completely, neutral included, match OpenDSS to 1e-9.
 
 Without a `BaseFrequency`, distribution CIM reads at 60 Hz in both CIM16 and
 CIM100, with a `READ.CIM_DIST.VALUE_DEFAULTED` finding. The namespace identifies
@@ -375,13 +383,18 @@ from test losses, a loss of 0 states nothing, and a nonzero loss that
 disagrees with the end resistances is reported
 (`READ.CIM_DIST.VALUE_CONFLICT`).
 
-Tank phase clocks are validated against the represented winding layout:
-aligned connections use clock 0, the supported three-phase D/Y lagging
-connection uses clock 1, and reversed single-phase center-tap halves use
-clock 6. Other vector groups (including clock 11), invalid clocks, inactive
-tanks or parents, and disconnected end terminals are refused. An absent clock
-is assumed to match the layout with a diagnostic. Fresh writing derives the
-clock from the current windings and reports conflicting retained metadata.
+Tank phase clocks are the vector group shift the physics stamps
+(`powerio_dist::transformer`'s delta orientation): aligned connections are
+clock 0, a three-phase D/Y unit is clock 1 when the high voltage winding
+leads (OpenDSS's default `leadlag`) and clock 11 when the low voltage
+winding leads, and reversed single-phase center-tap halves are clock 6. A
+D/Y unit stating clock 11 reads with `leadlag` euro, so it stamps the -30
+degree shift. Other clocks, invalid clocks, inactive tanks or parents, and
+disconnected end terminals are refused. An absent clock is assumed to match
+the layout with a diagnostic. Fresh writing derives the clock from the
+current windings and `leadlag` and reports conflicting retained metadata;
+the `PowerTransformerEnd` form states its clocks only when they need the
+European convention.
 
 A transformer whose extras carry
 `cim_form = "tank"` is written as tanks, grouped under the `PowerTransformer`
@@ -417,7 +430,8 @@ maps back exactly, so write, read, write is byte stable. The output is not
 fully qualified against external producer corpora. The committed synthetic
 tank cases are checked against native OpenDSS grounded admittance stamps and
 loaded coil phasors by `evals/validation/validate_cim_tanks.py`, including fresh
-CIM writing and a clock-1/clock-11 control. This does not establish support for
+CIM writing, a clock-1/clock-11 control and a clock 11 tank read as
+`leadlag` euro. This does not establish support for
 producer dialects outside the documented electrical profile.
 
 ### Distribution CIM status

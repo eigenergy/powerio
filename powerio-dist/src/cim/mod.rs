@@ -214,6 +214,21 @@ pub(crate) fn tank_phase_clock(
     }
 }
 
+/// Refuse a network holding a transformer whose phase clocks are unknown
+/// (an unknown `leadlag` convention on a delta–wye unit): the CIM and
+/// MG-RAVENS writers state every winding's clock, and dropping the unit
+/// would disconnect the feeder.
+pub(crate) fn require_phase_clocks(
+    net: &crate::MulticonductorNetwork,
+) -> Result<(), powerio_core::Error> {
+    for transformer in net.transformers() {
+        for winding in 1..transformer.windings.len() {
+            crate::transformer::calc_winding_phase_shift(transformer, winding)?;
+        }
+    }
+    Ok(())
+}
+
 /// A stated clock the winding layout cannot represent under either
 /// `leadlag` convention.
 #[derive(Clone, Copy, Debug, PartialEq)]
