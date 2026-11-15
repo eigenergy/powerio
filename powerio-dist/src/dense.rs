@@ -112,8 +112,10 @@ pub enum DensePivot {
     /// error: no unused diagonal entry is nonzero, so a zero self impedance
     /// with nonzero mutuals is refused although row pivoting inverts it,
     /// while a pivot left at rounding noise is accepted. It refuses as well
-    /// a pivot that is not finite and an unused entry an elimination makes
-    /// nonfinite.
+    /// an unused entry an elimination makes nonfinite. A pivot whose
+    /// unscaled magnitude overflows to infinity (any entry above about
+    /// `1.34e154`) is taken, as the engine takes it (`RMY = inf` is a
+    /// nonzero pivot); a NaN entry is never selected.
     OpenDssDiagonal,
 }
 
@@ -124,13 +126,16 @@ pub(crate) enum DenseRefusal {
     /// (including an exact zero and, under
     /// [`DensePivot::OpenDssDiagonal`], no nonzero unused diagonal entry).
     Singular,
-    /// A pivot, or an entry a later pivot reads, is not finite.
+    /// A pivot ([`DensePivot::Partial`]), or an entry a later pivot reads,
+    /// is not finite.
     NonFinite,
 }
 
 /// The inverse of a small dense square matrix by Gauss-Jordan elimination
 /// in the `pivot` order ([`DensePivot`]). `None` when a pivot's magnitude is
-/// NaN or infinite, `singular_pivot` or smaller, or `relative_pivot` times
+/// NaN, infinite (under [`DensePivot::Partial`]; under
+/// [`DensePivot::OpenDssDiagonal`] an infinite unscaled magnitude is a
+/// pivot), `singular_pivot` or smaller, or `relative_pivot` times
 /// the largest original magnitude in its column or smaller. Each caller
 /// states the pivot its quantity is singular at: an absolute
 /// `singular_pivot` (ohms for a series impedance, a dimensionless
@@ -180,7 +185,9 @@ pub(crate) fn eliminate_dense_matrix<T: DenseScalar>(
         })
         .collect();
     let check = |magnitude: f64, column: usize| {
-        if !magnitude.is_finite() {
+        // OpenDSS takes a pivot whose `Cabs` overflowed: only the floor
+        // refuses it.
+        if !magnitude.is_finite() && (pivot == DensePivot::Partial || magnitude.is_nan()) {
             Err(DenseRefusal::NonFinite)
         } else if magnitude <= floors[column] {
             Err(DenseRefusal::Singular)
@@ -376,7 +383,8 @@ mod tests {
         // A pivot left at rounding noise is nonzero, so the engine accepts it.
         let noisy = [vec![1.0, 1.0], vec![1.0, 1.0 + f64::EPSILON]];
         assert!(invert_dense_matrix(&noisy, DensePivot::OpenDssDiagonal, 0.0, 0.0).is_some());
-        // A one by one infinity or NaN is refused.
+        // A pivot whose unscaled magnitude overflows is taken, as the
+        // engine takes it, at every size; a NaN is never a pivot.
         assert_eq!(
             eliminate_dense_matrix(
                 &[vec![f64::INFINITY]],
@@ -384,8 +392,16 @@ mod tests {
                 0.0,
                 0.0
             ),
-            Err(DenseRefusal::NonFinite)
+            Ok(vec![vec![0.0]])
         );
+        let huge = c(1e200, 1.0);
+        assert!(huge.unscaled_magnitude().is_infinite());
+        assert!(
+            invert_dense_matrix(&[vec![huge]], DensePivot::OpenDssDiagonal, 0.0, 0.0).is_some()
+        );
+        let two = vec![vec![huge, c(1.0, 0.0)], vec![c(1.0, 0.0), c(1.0, 1.0)]];
+        assert!(invert_dense_matrix(&two, DensePivot::OpenDssDiagonal, 0.0, 0.0).is_some());
+        assert!(invert_dense_matrix(&two, DensePivot::Partial, 0.0, 0.0).is_some());
         assert_eq!(
             eliminate_dense_matrix(&[vec![f64::NAN]], DensePivot::OpenDssDiagonal, 0.0, 0.0),
             Err(DenseRefusal::Singular)
