@@ -127,7 +127,8 @@
 - `GroundedLaplacianFactor::from_edges` grounds the given buses (and every bus no edge touches)
   and factors the reduced weighted Laplacian of an edge list once, with the PTDF builder's sparse
   factorization; `solve` gives the DC angles, `calc_edge_flows` the edge flows and `solver_path`
-  the factorization used. `calc_edge_laplacian_product` is the matrix free `L x`.
+  the factorization used. `calc_edge_laplacian_product` is the matrix free `L x`, and
+  `calc_edge_flows` the edge flows at any angles (those of an iterative solve over that product).
 - `McOpfLoadLaw::calc_power` gives a load law's per unit power and voltage slope, and
   `McOpfDroop::calc_control` (`McOpfDroopValue`), `calc_parameter_derivative` and
   `calc_monitored_voltage` the one volt-var and volt-watt curve evaluation with its parameter

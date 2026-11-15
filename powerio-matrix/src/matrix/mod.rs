@@ -40,8 +40,9 @@ pub use powerio_tx::BranchSusceptanceFormula;
 pub use sensitivity::{
     GroundedLaplacianFactor, IslandPtdf, SensitivityMatrices, SensitivityMatrixMetadata,
     SensitivityMetadata, SensitivityOptions, SensitivitySolver, SensitivitySolverPath,
-    calc_edge_laplacian_product, calc_lodf, calc_lodf_columns, calc_ptdf, calc_ptdf_by_island,
-    calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options, calc_ptdf_rows,
+    calc_edge_flows, calc_edge_laplacian_product, calc_lodf, calc_lodf_columns, calc_ptdf,
+    calc_ptdf_by_island, calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+    calc_ptdf_rows,
 };
 pub use ybus::{YbusParts, calc_admittance_matrix};
 // Crate-internal: the gridfm columnar export and the stated-state balance reuse

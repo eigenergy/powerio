@@ -979,14 +979,11 @@ impl GroundedLaplacianFactor {
         theta
     }
 
-    /// The flow `w (θ_a − θ_b)` of each edge at angles `theta`, the one DC
-    /// flow from angles.
+    /// The flow `w (θ_a − θ_b)` of each edge at angles `theta`
+    /// ([`calc_edge_flows`] over this factor's edges).
     #[must_use]
     pub fn calc_edge_flows(&self, theta: &[f64]) -> Vec<f64> {
-        crate::matrix::calc_dc_branch_flow(
-            theta,
-            self.edges.iter().map(|&(a, b, w)| ((a, b), w, 0.0)),
-        )
+        calc_edge_flows(&self.edges, theta)
     }
 
     /// The factorization that solved the reduced matrix.
@@ -994,6 +991,18 @@ impl GroundedLaplacianFactor {
     pub fn solver_path(&self) -> SensitivitySolverPath {
         self.factor.path()
     }
+}
+
+/// The flow `w (θ_a − θ_b)` of each edge `(a, b, w)` of an edge list at the
+/// angles `theta`, the one DC flow from angles, for angles from a
+/// [`GroundedLaplacianFactor`] or from an iterative solve over
+/// [`calc_edge_laplacian_product`].
+///
+/// # Panics
+/// When an edge names a bus outside `theta`.
+#[must_use]
+pub fn calc_edge_flows(edges: &[(usize, usize, f64)], theta: &[f64]) -> Vec<f64> {
+    crate::matrix::calc_dc_branch_flow(theta, edges.iter().map(|&(a, b, w)| ((a, b), w, 0.0)))
 }
 
 /// The weighted Laplacian product `L x` of an edge list, `L = A diag(w) Aᵀ`:
