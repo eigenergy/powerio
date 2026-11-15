@@ -13,8 +13,9 @@ use powerio_dist::{
     DistTransformer, DistWinding, DistWindingConn, MulticonductorNetwork, VoltageSource,
 };
 use powerio_matrix::{
-    NodeRef, PassiveFamily, calc_multiconductor_admittance_matrix, calc_passive_primitives,
-    calc_transformer_leakage_impedances, calc_transformer_winding_admittance,
+    NodeRef, PassiveFamily, TransformerLeakageBase, calc_multiconductor_admittance_matrix,
+    calc_passive_primitives, calc_transformer_leakage_impedances,
+    calc_transformer_primitive_admittance, calc_transformer_winding_admittance,
 };
 
 fn dense(matrix: &powerio_matrix::SparseMatrix) -> Vec<Vec<f64>> {
@@ -324,8 +325,11 @@ fn unsupported_stamps_are_structured_diagnostics() {
         vec![1.0, 1.0, 1.0],
         1,
     ));
+    // Leakage stated, but a three winding unit that is no BMOPF centre tap
+    // has no primitive.
     let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
-    assert!(error.to_string().contains("outside the ideal WYE"));
+    assert_eq!(error.code().code, "BUILD.MULTI.PHYSICS_UNSUPPORTED");
+    assert!(error.to_string().contains("3 windings"), "{error}");
 }
 
 #[test]
@@ -384,7 +388,7 @@ fn a_parsed_micro_feeder_assembles_end_to_end() {
 }
 
 #[test]
-fn transformer_leakage_requires_a_series_equation() {
+fn a_leakage_transformer_stamps_its_primitive() {
     let mut net = MulticonductorNetwork::default();
     net.buses_mut().push(DistBus::new("p", strings(&["1"])));
     net.buses_mut().push(DistBus::new("s", strings(&["1"])));
@@ -397,8 +401,148 @@ fn transformer_leakage_requires_a_series_equation() {
         vec![2.0],
         1,
     ));
-    let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
-    assert_eq!(error.code().code, "BUILD.MULTI.PHYSICS_UNSUPPORTED");
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
+    // A one terminal winding grounds its coil: y = S / (j xsc V²) at the
+    // primary, scaled by the turns ratio across.
+    let y = num_complex::Complex64::new(0.0, 0.02 * 7200.0 * 7200.0 / 25000.0).finv();
+    let ratio = 7200.0 / 240.0;
+    let g = dense(system.conductance());
+    let b = dense(system.susceptance());
+    let expected = [[y, -y * ratio], [-y * ratio, y * ratio * ratio]];
+    for i in 0..2 {
+        for j in 0..2 {
+            let scale = expected[1][1].norm();
+            assert!((g[i][j] - expected[i][j].re).abs() < 1e-12 * scale);
+            assert!((b[i][j] - expected[i][j].im).abs() < 1e-12 * scale);
+        }
+    }
+    assert_eq!(system.augmented().labels, [] as [String; 0]);
+}
+
+#[test]
+fn a_solidly_grounded_leakage_neutral_is_an_exact_row() {
+    let mut net = MulticonductorNetwork::default();
+    net.buses_mut()
+        .push(DistBus::new("p", strings(&["1", "n"])));
+    net.buses_mut()
+        .push(DistBus::new("s", strings(&["1", "n"])));
+    let mut primary = DistWinding::new(
+        "p",
+        strings(&["1", "n"]),
+        DistWindingConn::Wye,
+        7200.0,
+        25000.0,
+    );
+    primary.r_pct = 0.5;
+    primary.r_neutral = Some(0.0);
+    primary.x_neutral = Some(0.0);
+    let mut secondary = DistWinding::new(
+        "s",
+        strings(&["1", "n"]),
+        DistWindingConn::Wye,
+        240.0,
+        25000.0,
+    );
+    secondary.r_pct = 0.5;
+    net.transformers_mut().push(DistTransformer::new(
+        "t",
+        vec![primary, secondary],
+        vec![2.0],
+        1,
+    ));
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
+    assert_eq!(system.augmented().labels, ["transformer:t:neutral:p.n"]);
+    let NodeRef::Node(neutral) = system.index().resolve("p", "n").unwrap() else {
+        panic!("the neutral is an unknown")
+    };
+    let row = dense(&system.augmented().constraint_re);
+    assert_eq!(row[0][neutral], 1.0);
+    assert_eq!(row[0].iter().filter(|value| **value != 0.0).count(), 1);
+    // The passive system is exactly the primitive's scatter.
+    let primitive = calc_transformer_primitive_admittance(&net.transformers()[0]).unwrap();
+    let g = dense(system.conductance());
+    for (r, &(bus, terminal)) in primitive.terminals.iter().enumerate() {
+        for (c, &(bus_c, terminal_c)) in primitive.terminals.iter().enumerate() {
+            let (NodeRef::Node(i), NodeRef::Node(j)) = (
+                system.index().resolve(bus, terminal).unwrap(),
+                system.index().resolve(bus_c, terminal_c).unwrap(),
+            ) else {
+                panic!()
+            };
+            assert_eq!(g[i][j], primitive.primitive[r][c].re);
+        }
+    }
+}
+
+#[test]
+fn every_leakage_base_states_one_physical_impedance() {
+    use num_complex::Complex64;
+
+    let mut first = DistWinding::new(
+        "p",
+        strings(&["1", "2", "3", "0"]),
+        DistWindingConn::Wye,
+        12_470.0,
+        300_000.0,
+    );
+    first.r_pct = 0.5;
+    let mut second = DistWinding::new(
+        "s",
+        strings(&["1", "2", "3"]),
+        DistWindingConn::Delta,
+        480.0,
+        150_000.0,
+    );
+    second.r_pct = 0.7;
+    let transformer = DistTransformer::new("t", vec![first, second], vec![6.0], 3);
+    let nameplate =
+        calc_transformer_leakage_impedances(&transformer, &TransformerLeakageBase::Nameplate)
+            .unwrap();
+    // The same unit on BMOPF phase bases (three coils each) with a power
+    // base equal to the first rating: identical ohms at the first winding.
+    let phase = calc_transformer_leakage_impedances(
+        &transformer,
+        &TransformerLeakageBase::WindingPhase {
+            power_base: 300_000.0,
+            phases: vec![3.0, 3.0],
+        },
+    )
+    .unwrap();
+    let v2 = 12_470.0f64.powi(2);
+    let ohms_nameplate = nameplate[0][1] * v2 / 300_000.0;
+    let ohms_phase = phase[0][1] * v2 / (300_000.0 / 3.0);
+    // Per phase ohms are three times the three phase base's: the n-winding
+    // resistances and the reactance both carry the phase count.
+    assert!((ohms_phase - ohms_nameplate * 3.0).norm() < 1e-9 * ohms_phase.norm());
+
+    let mut regulator = DistTransformer::new(
+        "r",
+        vec![
+            DistWinding::new("p", strings(&["1", "n"]), DistWindingConn::Wye, 2400.0, 5e5),
+            DistWinding::new("s", strings(&["1", "n"]), DistWindingConn::Wye, 2400.0, 5e5),
+        ],
+        vec![0.0],
+        1,
+    );
+    regulator.windings[1].tap = 1.05;
+    for (key, value) in [
+        ("r_series_from", 0.5),
+        ("x_series_from", 2.0),
+        ("r_series_to", 0.25),
+        ("x_series_to", 0.5),
+    ] {
+        regulator
+            .extras
+            .insert(key.into(), serde_json::json!(value));
+    }
+    let stated =
+        calc_transformer_leakage_impedances(&regulator, &TransformerLeakageBase::StatedOhms)
+            .unwrap();
+    let n = 1.0 / 1.05;
+    assert_eq!(
+        stated[0][1],
+        Complex64::new(0.5 + n * n * 0.25, 2.0 + n * n * 0.5)
+    );
 }
 
 #[test]
@@ -693,7 +837,9 @@ fn a_two_winding_leakage_inverts_to_one_series_admittance() {
     let mut second = DistWinding::new("s", strings(&["1"]), DistWindingConn::Wye, 240.0, 50000.0);
     second.r_pct = 2.0;
     let transformer = DistTransformer::new("t", vec![first, second], vec![8.0], 1);
-    let leakage = calc_transformer_leakage_impedances(&transformer).unwrap();
+    let leakage =
+        calc_transformer_leakage_impedances(&transformer, &TransformerLeakageBase::Nameplate)
+            .unwrap();
     // The second winding's resistance is referred to the first's rating.
     let expected = Complex64::new(0.01 + 0.02 * 25000.0 / 50000.0, 0.08);
     assert!((leakage[0][1] - expected).norm() < 1e-15);

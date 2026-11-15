@@ -11,17 +11,28 @@
 //! mappings remain valid after source row reordering.
 //!
 //! The passive admittance carries lines (series and both shunt halves from
-//! the linecode), shunts, and capacitor banks. Ideal equipment — two winding
-//! transformer coupling and voltage sources — enters the augmented system as
-//! exact constraint rows over the node voltages with their coupled ideal
-//! currents. Ideal WYE windings retain explicit floating or grounded neutral
-//! terminals. Transformer leakage, non-WYE connections, implicit neutral
-//! impedances, core shunts and tap decisions return an unsupported-physics
-//! error before assembly.
+//! the linecode), shunts, capacitor banks, and every transformer that states
+//! leakage: its terminal primitive
+//! ([`calc_transformer_primitive_admittance`]) carries WYE and DELTA
+//! windings, fixed taps, the magnetizing branch and finite neutral
+//! impedances, for two winding units, the BMOPF centre tap and the BMOPF
+//! single phase autotransformer. A solidly grounded transformer neutral
+//! enters the augmented system as an exact zero voltage row. Ideal equipment
+//! — a two winding transformer stating no leakage and voltage sources —
+//! enters the augmented system as exact constraint rows over the node
+//! voltages with their coupled ideal currents. Ideal WYE windings retain
+//! explicit floating or grounded neutral terminals; an ideal unit with a
+//! non-WYE connection, neutral impedances, a core shunt or tap bounds, and a
+//! leakage unit outside the primitive's shapes, return an unsupported
+//! physics error before assembly. Tap bounds on a leakage unit are decision
+//! data the nodal system does not read: it stamps the stated fixed tap.
 
 mod transformer;
 
-pub use transformer::{calc_transformer_leakage_impedances, calc_transformer_winding_admittance};
+pub use transformer::{
+    TransformerLeakageBase, TransformerPrimitive, calc_transformer_leakage_impedances,
+    calc_transformer_primitive_admittance, calc_transformer_winding_admittance,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -793,6 +804,35 @@ pub fn calc_multiconductor_admittance_matrix(
         stamper.add_primitive(&terminals, &element.primitive)?;
     }
 
+    // Transformers stating leakage: each one's terminal primitive, scattered
+    // the same way. A solidly grounded neutral is an exact zero voltage row
+    // below, once per node.
+    let mut grounded_neutrals: Vec<(String, usize)> = Vec::new();
+    for transformer in network
+        .transformers()
+        .iter()
+        .filter(|transformer| !transformer::states_no_leakage(transformer))
+    {
+        let element = calc_transformer_primitive_admittance(transformer)?;
+        let label = format!("transformer `{}`", element.name);
+        let terminals: Vec<NodeRef> = element
+            .terminals
+            .iter()
+            .map(|&(bus, terminal)| resolve(bus, terminal, &label))
+            .collect::<Result<_>>()?;
+        stamper.add_primitive(&terminals, &element.primitive)?;
+        for &(bus, terminal) in &element.grounded {
+            if let NodeRef::Node(dense) = resolve(bus, terminal, &label)?
+                && !grounded_neutrals.iter().any(|(_, node)| *node == dense)
+            {
+                grounded_neutrals.push((
+                    format!("transformer:{}:neutral:{bus}.{terminal}", element.name),
+                    dense,
+                ));
+            }
+        }
+    }
+
     // Ideal equipment: constraint rows over the node voltages, collected as
     // triplets until the row count is known.
     let mut constraint_re: Vec<(usize, usize, f64)> = Vec::new();
@@ -851,6 +891,16 @@ pub fn calc_multiconductor_admittance_matrix(
         rhs_re.push(0.0);
         rhs_im.push(0.0);
         labels.push(constraint.label);
+        rows += 1;
+    }
+
+    // A solidly grounded transformer neutral: v = 0, its transpose the
+    // neutral's ground current.
+    for (label, dense) in grounded_neutrals {
+        constraint_re.push((rows, dense, 1.0));
+        rhs_re.push(0.0);
+        rhs_im.push(0.0);
+        labels.push(label);
         rows += 1;
     }
 

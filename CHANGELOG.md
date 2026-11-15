@@ -41,7 +41,24 @@
   `calc_capacitor_primitive_admittance` give a multiconductor line's, shunt's and capacitor bank's
   primitive admittance over its terminals; `calc_multiconductor_admittance_matrix` scatters exactly
   these. A line's series and shunt halves now enter the nodal sum together, which can move an
-  entry in the last place.
+  entry in the last place. `calc_passive_primitives` lists every line, shunt and capacitor bank
+  with its primitive and `(bus, terminal)` rows, `scatter_primitive_admittance` is the one scatter
+  of a primitive into a nodal system, and `MulticonductorNodeIndex::terminals` and
+  `resolve_position` expose the flat terminal index underneath the node index.
+- `calc_transformer_primitive_admittance` gives a finite leakage transformer's primitive
+  admittance over its physical terminals (`TransformerPrimitive`), the OpenDSS `CalcY_Terminal`
+  path: WYE and DELTA windings, fixed taps, the magnetizing branch and finite neutral impedances,
+  for two winding units of one to three phases, the BMOPF centre tap and the BMOPF single phase
+  autotransformer, with each solidly grounded neutral listed. `calc_multiconductor_admittance_matrix`
+  now stamps every transformer that states leakage instead of refusing it, and writes a solidly
+  grounded neutral as an exact zero voltage row of the augmented system; a two winding unit that
+  states no leakage is an ideal constraint as before. A single phase autotransformer stating its
+  series impedance in its extras now stamps that impedance; it was read as an ideal ratio.
+- `calc_transformer_leakage_impedances` takes a `TransformerLeakageBase`: OpenDSS nameplate
+  percentages, a BMOPF n-winding unit's phase bases, or a regulator's stated ohms. It is the one
+  leakage derivation behind `calc_transformer_winding_admittance`, the transformer primitive and the
+  multiconductor OPF transformer descriptor, whose n-winding and regulator leakage can move in the
+  last place. A fixed regulator's stated series resistance or reactance must be nonnegative.
 - `AcOpfAssemblyOptions::with_synthesized_limit_window` and the same on `DcOpfAssemblyOptions`
   take a `SynthesizedLimitWindow`: `Stated` (the default, as before) or `SelectedBounds`, which
   synthesizes an unrated branch's limit over the selected angle difference bounds, PowerModels'

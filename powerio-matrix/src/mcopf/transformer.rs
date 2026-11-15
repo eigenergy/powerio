@@ -3,6 +3,7 @@ use super::{
     Configuration, Context, Deserialize, McAcOpfAssemblyOptions, McOpfBranch, McOpfShunt,
     McOpfTerminal, Result, Serialize, caps, extras, finite, invalid, unsupported,
 };
+use crate::matrix::multiconductor::TransformerLeakageBase;
 use powerio_dist::DistWindingConn;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -135,7 +136,7 @@ struct TransformerProfile<'a> {
     sb: f64,
 }
 type TerminalRatings = (Option<Vec<f64>>, Option<f64>);
-type WindingGeometry = (Vec<super::CoilPairs>, Vec<f64>, Vec<f64>);
+type WindingGeometry = (Vec<super::CoilPairs>, Vec<f64>);
 
 pub(super) fn prepare(
     ctx: &Context<'_>,
@@ -188,21 +189,13 @@ pub(super) fn prepare(
         if m < 2 || t.xsc_pct.len() != m * (m - 1) / 2 {
             return Err(invalid(&t.name, "invalid winding/leakage dimensions"));
         }
-        let (maps, mut noms, mut resistances) = winding_geometry(ctx, t, subtype, nw)?;
+        let (maps, mut noms) = winding_geometry(ctx, t, subtype, nw)?;
         let phases = maps[0].len();
         if maps.iter().any(|p| p.len() != phases) {
             return Err(invalid(&t.name, "all windings must have equal coil count"));
         }
         if regulator {
-            prepare_regulator(
-                ctx,
-                t,
-                &maps,
-                &mut noms,
-                &mut resistances,
-                branches,
-                terminals,
-            )?;
+            prepare_regulator(ctx, t, &maps, &mut noms, branches, terminals)?;
         }
         let profile = TransformerProfile {
             t,
@@ -214,7 +207,7 @@ pub(super) fn prepare(
             ib,
             sb,
         };
-        let mut tx = leakage_descriptor(&profile, &maps, &noms, &resistances)?;
+        let mut tx = leakage_descriptor(&profile, &maps, &noms)?;
         prepare_ports(&profile, ctx, &maps, &mut tx, shunts)?;
         for row in &tx.equations {
             for (_, c) in row.voltage.iter().chain(&row.current) {
@@ -449,7 +442,6 @@ fn winding_geometry(
 ) -> Result<WindingGeometry> {
     let mut maps = Vec::new();
     let mut noms = Vec::new();
-    let mut resistances = Vec::new();
     for (j, w) in t.windings.iter().enumerate() {
         finite(&t.name, &[w.v_ref, w.s_rating, w.r_pct, w.tap])?;
         if w.v_ref <= 0.0 || w.s_rating <= 0.0 || w.tap <= 0.0 || w.r_pct < 0.0 {
@@ -506,16 +498,10 @@ fn winding_geometry(
         } else {
             w.v_ref
         };
-        let base = if nw {
-            nominal.powi(2) * winding_base_phases(w, n) / w.s_rating
-        } else {
-            nominal.powi(2) / w.s_rating
-        };
         noms.push(nominal * w.tap);
-        resistances.push(w.r_pct / 100.0 * base * w.tap.powi(2));
         maps.push(pairs);
     }
-    Ok((maps, noms, resistances))
+    Ok((maps, noms))
 }
 
 fn prepare_regulator(
@@ -523,7 +509,6 @@ fn prepare_regulator(
     t: &powerio_dist::DistTransformer,
     maps: &[super::CoilPairs],
     noms: &mut Vec<f64>,
-    resistances: &mut Vec<f64>,
     branches: &mut Vec<McOpfBranch>,
     terminals: &[McOpfTerminal],
 ) -> Result<()> {
@@ -549,10 +534,6 @@ fn prepare_regulator(
         return Err(invalid(&t.name, "nonpositive effective regulator ratio"));
     }
     *noms = vec![ratio, 1.0];
-    *resistances = vec![
-        extra_number(t, "r_series_from", 0.0)?,
-        extra_number(t, "r_series_to", 0.0)?,
-    ];
     let bond = if let Some(meta) = t.extras.get("bmopf_open_delta") {
         let k = meta["shared"]
             .as_u64()
@@ -600,7 +581,6 @@ fn leakage_descriptor(
     profile: &TransformerProfile<'_>,
     maps: &[super::CoilPairs],
     noms: &[f64],
-    resistances: &[f64],
 ) -> Result<McOpfTransformer> {
     let TransformerProfile {
         t,
@@ -613,7 +593,6 @@ fn leakage_descriptor(
     let m = t.windings.len();
     let ratios: Vec<_> = noms.iter().map(|n| n / noms[0]).collect();
     let mut zpair = vec![vec![[0.0, 0.0]; m]; m];
-    let mut index = 0;
     let ref_base = if nw {
         (noms[0] / t.windings[0].tap).powi(2) * winding_base_phases(&t.windings[0], phases)
             / extra_number(t, "bmopf_power_base", t.windings[0].s_rating)?
@@ -623,40 +602,38 @@ fn leakage_descriptor(
     if ref_base <= 0.0 {
         return Err(invalid(&t.name, "nonpositive transformer power base"));
     }
-    // An OpenDSS style unit's pairwise leakage is the one derivation in
-    // `calc_transformer_leakage_impedances`, per unit on the first winding's
-    // rating, scaled here to the first winding's ohmic base over the bus
-    // base. A regulator states its series impedance in its own extras, and
-    // an n-winding BMOPF unit states each resistance on its winding's phase
-    // base and the reactance on its power base, so those keep their own
-    // referral below.
-    if !nw && !regulator {
-        let leakage = crate::matrix::multiconductor::calc_transformer_leakage_impedances(t)
-            .map_err(|error| invalid(&t.name, error))?;
-        let scale = ref_base * t.windings[0].tap.powi(2) / zb;
-        for (a, row) in zpair.iter_mut().enumerate() {
-            for (b, value) in row.iter_mut().enumerate() {
-                *value = [leakage[a][b].re * scale, leakage[a][b].im * scale];
-            }
+    // The pairwise leakage is the one derivation in
+    // `calc_transformer_leakage_impedances`, referred to the first winding on
+    // the base the unit states it in: OpenDSS nameplate percentages, an
+    // n-winding BMOPF unit's phase bases, or a regulator's stated ohms. A
+    // per unit result scales to the first winding's ohmic base over the bus
+    // base; stated ohms divide by the bus base.
+    let base = if regulator {
+        TransformerLeakageBase::StatedOhms
+    } else if nw {
+        TransformerLeakageBase::WindingPhase {
+            power_base: extra_number(t, "bmopf_power_base", t.windings[0].s_rating)?,
+            phases: t
+                .windings
+                .iter()
+                .zip(maps)
+                .map(|(w, map)| winding_base_phases(w, map.len()))
+                .collect(),
         }
-    }
-    for a in 0..m {
-        for b in a + 1..m {
-            if !nw && !regulator {
-                continue;
-            }
-            let x = if regulator {
-                extra_number(t, "x_series_from", 0.0)?
-                    + extra_number(t, "x_series_to", 0.0)? / ratios[1].powi(2)
+    } else {
+        TransformerLeakageBase::Nameplate
+    };
+    let leakage = crate::matrix::multiconductor::calc_transformer_leakage_impedances(t, &base)
+        .map_err(|error| invalid(&t.name, error))?;
+    let scale = ref_base * t.windings[0].tap.powi(2) / zb;
+    for (a, row) in zpair.iter_mut().enumerate() {
+        for (b, value) in row.iter_mut().enumerate() {
+            let z = leakage[a][b];
+            *value = if regulator {
+                [z.re / zb, z.im / zb]
             } else {
-                t.xsc_pct[index] / 100.0 * ref_base * t.windings[0].tap.powi(2)
+                [z.re * scale, z.im * scale]
             };
-            zpair[a][b] = [
-                (resistances[a] / ratios[a].powi(2) + resistances[b] / ratios[b].powi(2)) / zb,
-                x / zb,
-            ];
-            zpair[b][a] = zpair[a][b];
-            index += 1;
         }
     }
     let mut tx = McOpfTransformer {
