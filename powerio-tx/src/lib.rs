@@ -121,7 +121,7 @@ pub use contingency::{
     SubsystemSelector, SubsystemSet, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason,
     UnresolvedReason,
 };
-pub use dc::BranchSusceptanceFormula;
+pub use dc::{BranchSusceptanceFormula, DcBranchColumn};
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};
 pub use format::routing::{

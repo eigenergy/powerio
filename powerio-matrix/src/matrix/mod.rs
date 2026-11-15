@@ -26,10 +26,12 @@ pub use bdoubleprime::calc_bdoubleprime_matrix;
 pub use bprime::calc_bprime_matrix;
 pub(crate) use incidence::{
     IncidenceParts, assemble_bus_branch_incidence, assemble_bus_indicator, build_incidence,
-    calc_dc_branch_flow, calc_dc_flow_offset, calc_dc_phase_shift_withdrawal,
+    calc_bus_scatter, calc_dc_branch_flow, calc_dc_branch_flow_into, calc_dc_flow_offset,
+    calc_dc_phase_shift_withdrawal,
 };
 pub use incidence::{calc_diagonal, calc_solver_branch_flow_matrix, calc_susceptance_diagonal};
 pub use lacpf::calc_lacpf_matrix;
+pub(crate) use laplacian::ground_with;
 pub use laplacian::{
     GroundedIndexMap, Grounding, calc_reference_indicator, calc_unit_vector,
     calc_weighted_laplacian, ground_at, ground_at_each,
@@ -52,9 +54,14 @@ pub(crate) use ybus::{
 
 use sprs::CsMat;
 
-// The bound the matrix and instance builders share; it lives beside the DC
-// formula because both are properties of the branch primitives.
-pub(crate) use powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE;
+/// The product `a x` of a CSR matrix and a dense vector, each row summed in
+/// its stored column order. The one sparse matrix-vector product the crate's
+/// builders share.
+pub(crate) fn calc_csr_product(a: &CsMat<f64>, x: &[f64]) -> Vec<f64> {
+    a.outer_iterator()
+        .map(|row| row.iter().map(|(j, &v)| v * x[j]).sum())
+        .collect()
+}
 
 /// Which MATPOWER fast decoupled scheme to use.
 ///

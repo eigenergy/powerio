@@ -488,39 +488,21 @@ pub(crate) fn preparation_from_view(
             // DC flow, and its shift injection cancels at its own bus.
             continue;
         }
-        // Match the operator/incidence denominator guard. A purely resistive
-        // branch has zero DC coupling in series-admittance models, but 1/x
-        // models cannot divide by its reactance. Keep zero-weight branch rows.
-        let denominator = if options.formula.reads_resistance() {
-            branch.r.hypot(branch.x)
-        } else {
-            branch.x.abs()
-        };
-        if denominator < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE {
+        // The one DC column rule. A purely resistive branch keeps its
+        // zero-weight row under the series formulas.
+        let Some(column) =
+            options
+                .formula
+                .calc_dc_column(branch, source_row, case.network().is_normalized())?
+        else {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
             return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
-        }
-        // Only tap-reading formulas can be bounded by a tap (#324).
-        let tap = if options.formula.reads_tap() {
-            branch.calc_divisible_tap(source_row)?
-        } else {
-            1.0
         };
-        let branch_b = options
-            .formula
-            .calc_solver_edge_weight(branch.r, branch.x, tap)
-            * b_scale;
-        if !branch_b.is_finite() {
-            return Err(powerio_tx::Error::NonFiniteSusceptance { row: source_row }.into());
-        }
-        let shift_rad = if options.formula.includes_phase_shifts() {
-            case.to_radians(branch.shift)
-        } else {
-            0.0
-        };
+        let branch_b = column.weight * b_scale;
+        let shift_rad = column.shift;
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
         let (amin, amax) =

@@ -34,6 +34,19 @@ pub(crate) fn series_admittance_parts(r: f64, x: f64) -> (f64, f64) {
     (r / denom, -x / denom)
 }
 
+/// One branch's column of a DC network model, from
+/// [`BranchSusceptanceFormula::calc_dc_column`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct DcBranchColumn {
+    /// The internal positive factor weight, the negation of the public
+    /// PowerModels susceptance, per unit on the network base.
+    pub weight: f64,
+    /// The phase shift the column carries, radians; zero when the formula
+    /// carries no phase shift injections. Not checked for finiteness.
+    pub shift: f64,
+}
+
 /// Rule for the DC branch susceptance `b`.
 ///
 /// The public `b` follows PowerModels: it is negative for an inductive
@@ -168,6 +181,72 @@ impl BranchSusceptanceFormula {
             Self::ReactanceOnly => reciprocal_reactance(),
             Self::TapAdjustedReactance => reciprocal_reactance() / effective_tap,
         }
+    }
+
+    /// The phase shift a DC column under this formula carries, radians: the
+    /// branch's stated `shift` (degrees, or radians in a normalized network)
+    /// when the formula carries phase shift injections, else zero. The one
+    /// phase shift rule every DC builder reads.
+    #[must_use]
+    pub fn calc_phase_shift_radians(self, shift: f64, normalized: bool) -> f64 {
+        if !self.includes_phase_shifts() {
+            0.0
+        } else if normalized {
+            shift
+        } else {
+            shift.to_radians()
+        }
+    }
+
+    /// The DC column of one branch under this formula: its positive factor
+    /// weight ([`calc_solver_edge_weight`](Self::calc_solver_edge_weight)) and
+    /// its phase shift ([`calc_phase_shift_radians`](Self::calc_phase_shift_radians)).
+    /// The one place a branch becomes a DC column; every DC builder (the
+    /// incidence factor, the DC operators, the DC OPF preparation) reads it
+    /// and keeps only its own skip-or-refuse policy and error wording.
+    ///
+    /// `Ok(None)` for a degenerate impedance: the denominator the formula
+    /// divides by is under [`MIN_DIVISIBLE_MAGNITUDE`], `hypot(r, x)` for a
+    /// formula that reads the resistance and `|x|` otherwise, so a value the
+    /// formula never reads cannot reject a branch (#324). A formally nonzero
+    /// impedance below the bound would give a finite weight big enough to
+    /// annihilate every real branch sharing a bus with it.
+    ///
+    /// # Errors
+    /// [`Error::DegenerateTap`](crate::Error::DegenerateTap) when the formula
+    /// divides by a tap it cannot divide by, and
+    /// [`Error::NonFiniteSusceptance`](crate::Error::NonFiniteSusceptance)
+    /// when the weight is not finite (a NaN reactance slips past the bound
+    /// and would poison the whole Laplacian). `row` only labels the error.
+    pub fn calc_dc_column(
+        self,
+        branch: &crate::Branch,
+        row: usize,
+        normalized: bool,
+    ) -> crate::Result<Option<DcBranchColumn>> {
+        let denominator = if self.reads_resistance() {
+            branch.r.hypot(branch.x)
+        } else {
+            branch.x.abs()
+        };
+        if denominator < MIN_DIVISIBLE_MAGNITUDE {
+            return Ok(None);
+        }
+        // Only the tap-reading formulas divide by the tap, so only they can
+        // be bounded or rejected by one (#324).
+        let tap = if self.reads_tap() {
+            branch.calc_divisible_tap(row)?
+        } else {
+            1.0
+        };
+        let weight = self.calc_solver_edge_weight(branch.r, branch.x, tap);
+        if !weight.is_finite() {
+            return Err(crate::Error::NonFiniteSusceptance { row });
+        }
+        Ok(Some(DcBranchColumn {
+            weight,
+            shift: self.calc_phase_shift_radians(branch.shift, normalized),
+        }))
     }
 
     /// Whether the selected formula reads the transformer tap, and so whether

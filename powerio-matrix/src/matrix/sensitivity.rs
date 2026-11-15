@@ -324,7 +324,7 @@ pub fn calc_ptdf_rows(
     let (inc, g) = (&selected.inc, &selected.g);
     let (n, m) = (inc.n(), inc.m());
     check_selection("branch", branches, m)?;
-    let (from, to) = endpoints(&inc.a, m);
+    let (from, to) = (&inc.from, &inc.to);
     let full_of = g.full_of_reduced(n);
     let mut builder = CooBuilder::new_rect(branches.len(), n);
     for (chunk_index, chunk) in branches.chunks(SPARSE_SOLVE_BLOCK).enumerate() {
@@ -600,7 +600,7 @@ fn build_parts(
             let ptdf = (want != Want::Lodf)
                 .then(|| dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance));
             let lodf = (want != Want::Ptdf)
-                .then(|| lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance));
+                .then(|| lodf_from_dense_with_drop(&dense, &inc, options.drop_tolerance));
             Ok(BuiltParts {
                 ptdf,
                 lodf,
@@ -682,7 +682,7 @@ pub(crate) fn for_each_ptdf_lodf_entry(
                 let (ptdf, ptdf_dropped) =
                     dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
                 let (lodf, lodf_dropped) =
-                    lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
+                    lodf_from_dense_with_drop(&dense, &inc, options.drop_tolerance);
                 let ptdf_meta = matrix_metadata(&ptdf, ptdf_dropped);
                 let lodf_meta = matrix_metadata(&lodf, lodf_dropped);
                 for (&v, (row, col)) in &ptdf {
@@ -748,19 +748,17 @@ fn matrix_metadata(matrix: &CsMat<f64>, dropped_entries: usize) -> SensitivityMa
 
 fn lodf_from_dense_with_drop(
     ptdf: &[f64],
-    a: &CsMat<f64>,
-    m: usize,
-    n: usize,
+    inc: &IncidenceParts,
     drop_tolerance: f64,
 ) -> (CsMat<f64>, usize) {
-    // Branch endpoints (dense bus indices), recovered from the incidence.
-    let (from, to) = endpoints(a, m);
+    let (n, m) = (inc.n(), inc.m());
+    let (from, to) = (&inc.from, &inc.to);
 
     // Outaging a bridge redistributes nothing, so its column is structurally
     // zero. The magnitude test this replaces let a near bridge at
     // `delta(k,k) = 1 - 1.1e-9` through, amplifying its column to ~1e9 with
     // about seven digits gone.
-    let is_bridge = bridges(&from, &to, n);
+    let is_bridge = bridges(from, to, n);
 
     // Denominator `1 − (PTDF[k, from_k] − PTDF[k, to_k])` and the islanding
     // decision, once per outage column instead of once per entry.
@@ -1056,7 +1054,7 @@ impl<'a> Probe<'a> {
         let x: Vec<f64> = (0..a.rows())
             .map(|i| ((i as f64 + 1.0) * 0.618_033_988_749_895).fract() * 2.0 - 1.0)
             .collect();
-        let b = mat_vec(a, &x);
+        let b = crate::matrix::calc_csr_product(a, &x);
         let a_norm = a
             .outer_iterator()
             .map(|row| row.data().iter().map(|v| v.abs()).sum::<f64>())
@@ -1076,7 +1074,7 @@ impl<'a> Probe<'a> {
         if x.iter().any(|v| !v.is_finite()) {
             return false;
         }
-        let ax = mat_vec(self.a, &x);
+        let ax = crate::matrix::calc_csr_product(self.a, &x);
         let residual = self
             .b
             .iter()
@@ -1096,12 +1094,6 @@ impl<'a> Probe<'a> {
             && residual <= BACKWARD_ERROR_TRUST * scale
             && forward <= FORWARD_ERROR_TRUST * exact_norm
     }
-}
-
-fn mat_vec(a: &CsMat<f64>, x: &[f64]) -> Vec<f64> {
-    a.outer_iterator()
-        .map(|row| row.iter().map(|(j, &v)| v * x[j]).sum())
-        .collect()
 }
 
 /// A factorization of the grounded DC bus susceptance matrix that solves
@@ -1194,7 +1186,6 @@ fn ptdf_column_entries(
     let n = inc.n();
     let m = inc.m();
     let nr = n - g.len();
-    let (from, to) = endpoints(&inc.a, m);
 
     let mut nnz = 0usize;
     let mut dropped = 0usize;
@@ -1203,7 +1194,11 @@ fn ptdf_column_entries(
         .enumerate()
         .filter_map(|(position, &bus)| g.reduced(bus).map(|reduced| (position, reduced)))
         .collect();
-    let mut theta = vec![0.0; nr];
+    // Angles over every bus, zero at the grounded ones, and the flows they
+    // drive through the crate's one DC flow kernel (no phase shift).
+    let full_of = g.full_of_reduced(n);
+    let mut theta = vec![0.0; n];
+    let mut flows = Vec::with_capacity(m);
     for chunk in solved.chunks(SPARSE_SOLVE_BLOCK) {
         let mut block = faer::Mat::<f64>::zeros(nr, chunk.len());
         for (col, &(_, reduced)) in chunk.iter().enumerate() {
@@ -1211,11 +1206,11 @@ fn ptdf_column_entries(
         }
         solver.solve_block(block.as_mut());
         for (col, &(position, _)) in chunk.iter().enumerate() {
-            for (r, slot) in theta.iter_mut().enumerate() {
-                *slot = block[(r, col)];
+            for (r, &bus) in full_of.iter().enumerate() {
+                theta[bus] = block[(r, col)];
             }
-            for branch in 0..m {
-                let v = branch_flow(branch, &from, &to, &inc.b, g, &theta);
+            unshifted_flows(inc, &theta, &mut flows);
+            for (branch, &v) in flows.iter().enumerate() {
                 if v.abs() > options.drop_tolerance {
                     ptdf_entry(branch, position, v)?;
                     nnz += 1;
@@ -1247,15 +1242,17 @@ fn lodf_column_entries(
     let n = inc.n();
     let m = inc.m();
     let nr = n - g.len();
-    let (from, to) = endpoints(&inc.a, m);
+    let (from, to) = (&inc.from, &inc.to);
 
     // Same rule as the dense path: a bridge redistributes nothing, decided on
     // the topology rather than on how close the denominator came to zero.
-    let is_bridge = bridges(&from, &to, n);
+    let is_bridge = bridges(from, to, n);
 
     let mut nnz = 0usize;
     let mut dropped = 0usize;
-    let mut theta = vec![0.0; nr];
+    let full_of = g.full_of_reduced(n);
+    let mut theta = vec![0.0; n];
+    let mut flows = Vec::with_capacity(m);
     for (chunk_index, chunk) in outages.chunks(SPARSE_SOLVE_BLOCK).enumerate() {
         let start = chunk_index * SPARSE_SOLVE_BLOCK;
         // A bridge's column is its diagonal alone, so only the other outages
@@ -1286,19 +1283,20 @@ fn lodf_column_entries(
                 nnz += 1;
                 continue;
             }
-            for (r, slot) in theta.iter_mut().enumerate() {
-                *slot = block[(r, next)];
+            for (r, &bus) in full_of.iter().enumerate() {
+                theta[bus] = block[(r, next)];
             }
             next += 1;
-            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, g, &theta);
+            unshifted_flows(inc, &theta, &mut flows);
+            let denom = 1.0 - flows[outage];
             let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
-            for branch in 0..m {
+            for (branch, &flow) in flows.iter().enumerate() {
                 let v = if branch == outage {
                     -1.0
                 } else if islands {
                     0.0
                 } else {
-                    branch_flow(branch, &from, &to, &inc.b, g, &theta) / denom
+                    flow / denom
                 };
                 if branch == outage || v.abs() > options.drop_tolerance {
                     lodf_entry(branch, position, v)?;
@@ -1336,20 +1334,22 @@ fn ensure_finite_susceptances(inc: &IncidenceParts) -> Result<()> {
     Ok(())
 }
 
-fn branch_flow(
-    branch: usize,
-    from: &[usize],
-    to: &[usize],
-    b: &[f64],
-    g: &Grounding,
-    theta: &[f64],
-) -> f64 {
-    let theta_from = g.reduced(from[branch]).map_or(0.0, |i| theta[i]);
-    let theta_to = g.reduced(to[branch]).map_or(0.0, |i| theta[i]);
-    b[branch] * (theta_from - theta_to)
+/// The DC flows `b (theta_from - theta_to)` of every incidence column at the
+/// full bus angles `theta`, with no phase shift: the crate's one DC flow
+/// kernel over the factor's own endpoints and weights.
+fn unshifted_flows(inc: &IncidenceParts, theta: &[f64], flows: &mut Vec<f64>) {
+    crate::matrix::calc_dc_branch_flow_into(
+        theta,
+        inc.from
+            .iter()
+            .copied()
+            .zip(inc.to.iter().copied())
+            .zip(inc.b.iter().copied())
+            .map(|(endpoints, weight)| (endpoints, weight, 0.0)),
+        flows,
+    );
 }
 
-/// Branch endpoints from the signed incidence: `+1` row is from, `−1` is to.
 /// Which branches are bridges of the graph the columns describe: an edge whose
 /// removal disconnects its endpoints.
 ///
@@ -1425,19 +1425,6 @@ fn bridges(from: &[usize], to: &[usize], n: usize) -> Vec<bool> {
         }
     }
     is_bridge
-}
-
-fn endpoints(a: &CsMat<f64>, m: usize) -> (Vec<usize>, Vec<usize>) {
-    let mut from = vec![0usize; m];
-    let mut to = vec![0usize; m];
-    for (&v, (bus, branch)) in a.iter() {
-        if v > 0.0 {
-            from[branch] = bus;
-        } else {
-            to[branch] = bus;
-        }
-    }
-    (from, to)
 }
 
 fn densify(a: &CsMat<f64>, n: usize) -> Vec<f64> {

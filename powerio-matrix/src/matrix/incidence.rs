@@ -28,6 +28,10 @@ pub(crate) struct IncidenceParts {
     /// Source-network branch indices for the accepted incidence columns.
     /// Entries align with columns of `a` and `b`; filtered branches are absent.
     pub(crate) branch_indices: Vec<usize>,
+    /// Dense from bus of each column, the `+1` row of `a`.
+    pub(crate) from: Vec<usize>,
+    /// Dense to bus of each column, the `-1` row of `a`.
+    pub(crate) to: Vec<usize>,
 }
 
 impl IncidenceParts {
@@ -69,41 +73,19 @@ pub(crate) fn build_incidence(
             bus_id: br.to,
             element_index: idx,
         })?;
-        // Zero impedance in every sense the selected formula can act on:
-        // `x = 1e-300` gives a finite weight of `1e300` that annihilates
-        // every real branch sharing a diagonal with it. The guard reads only
-        // the denominator the selected formula divides by, so a value the
-        // formula never reads cannot reject a branch (#324): the reciprocal
-        // rules bound the reactance, and the series formula bounds the whole
-        // impedance magnitude.
-        let degenerate = match formula {
-            formula if formula.reads_resistance() => {
-                br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
-            }
-            _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,
-        };
-        if i == j || degenerate {
-            if i != j && degenerate && !opts.skip_zero_impedance {
+        if i == j {
+            continue;
+        }
+        // The one DC column rule: a degenerate impedance is `None`, a tap
+        // or weight the formula cannot use is an error. The shift is not
+        // part of the incidence factor.
+        let Some(column) = formula.calc_dc_column(br, idx, case.network().is_normalized())? else {
+            if !opts.skip_zero_impedance {
                 return Err(powerio_tx::Error::ZeroImpedance { row: idx }.into());
             }
             continue;
-        }
-        // Only the two tap-reading formulas divide by the tap, so only they
-        // can be bounded or rejected by one (#324).
-        let tap = if formula.reads_tap() {
-            br.calc_divisible_tap(idx)?
-        } else {
-            1.0
         };
-        // The incidence parts carry the internal positive factor weight (the
-        // Laplacian edge weight a sparse solver factors); public PowerModels
-        // sign results are the DC operator surface's to emit.
-        let b_e = formula.calc_solver_edge_weight(br.r, br.x, tap);
-        // A NaN reactance slips past the guard above and poisons the whole
-        // Laplacian.
-        if !b_e.is_finite() {
-            return Err(powerio_tx::Error::NonFiniteSusceptance { row: idx }.into());
-        }
+        let b_e = column.weight;
         cols.push(Column {
             i,
             j,
@@ -116,11 +98,15 @@ pub(crate) fn build_incidence(
     let a = assemble_bus_branch_incidence(n, cols.iter().map(|col| (col.i, col.j)));
     let b = cols.iter().map(|col| col.b_e).collect();
     let branch_indices = cols.iter().map(|col| col.branch_index).collect();
+    let from = cols.iter().map(|col| col.i).collect();
+    let to = cols.iter().map(|col| col.j).collect();
 
     Ok(IncidenceParts {
         a,
         b,
         branch_indices,
+        from,
+        to,
     })
 }
 
@@ -218,34 +204,60 @@ pub(crate) fn calc_dc_branch_flow(
     theta: &[f64],
     columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
 ) -> Vec<f64> {
-    columns
-        .map(|((from, to), weight, shift)| {
-            weight * (theta[from] - theta[to]) + calc_dc_flow_offset(weight, shift)
-        })
-        .collect()
+    let mut flows = Vec::new();
+    calc_dc_branch_flow_into(theta, columns, &mut flows);
+    flows
+}
+
+/// [`calc_dc_branch_flow`] into a reused buffer, which it clears first: the
+/// form a builder evaluating many angle vectors (the PTDF and LODF columns)
+/// calls so each column allocates nothing.
+pub(crate) fn calc_dc_branch_flow_into(
+    theta: &[f64],
+    columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
+    flows: &mut Vec<f64>,
+) {
+    flows.clear();
+    flows.extend(columns.map(|((from, to), weight, shift)| {
+        weight * (theta[from] - theta[to]) + calc_dc_flow_offset(weight, shift)
+    }));
+}
+
+/// The incidence product `A x` over `n` buses, one per `((from, to), x)`
+/// column: each column's value leaves at its from bus (`+x`) and arrives at
+/// its to bus (`-x`). A self-loop column is empty, so its value cancels at its
+/// own bus. The one scatter of a branch vector onto buses in the crate:
+/// [`calc_dc_phase_shift_withdrawal`] and `DcOperators::calc_bus_injection_dc`
+/// both read it.
+pub(crate) fn calc_bus_scatter(
+    n: usize,
+    columns: impl Iterator<Item = ((usize, usize), f64)>,
+) -> Vec<f64> {
+    let mut buses = vec![0.0; n];
+    for ((from, to), value) in columns {
+        if from == to {
+            continue;
+        }
+        buses[from] += value;
+        buses[to] -= value;
+    }
+    buses
 }
 
 /// The nodal phase shift withdrawal `A (-w .* shift)` over `n` buses, one
 /// per `((from, to), w, shift)` column with `w` the positive factor weight:
-/// each column's flow offset ([`calc_dc_flow_offset`]) leaves at its from bus
-/// and arrives at its to bus. A self-loop's offset cancels at its own bus.
-/// The one phase shift scatter in the crate: the DC preparation's `p_shift`,
-/// `DcOpfPreparation::calc_phase_shift_withdrawal` and
-/// `DcOperators::calc_bus_phase_shift_injection` all read it.
+/// each column's flow offset ([`calc_dc_flow_offset`]) scattered by
+/// [`calc_bus_scatter`]. The one phase shift withdrawal in the crate: the DC
+/// preparation's `p_shift`, `DcOpfPreparation::calc_phase_shift_withdrawal`
+/// and `DcOperators::calc_bus_phase_shift_injection` all read it.
 pub(crate) fn calc_dc_phase_shift_withdrawal(
     n: usize,
     columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
 ) -> Vec<f64> {
-    let mut withdrawal = vec![0.0; n];
-    for ((from, to), weight, shift) in columns {
-        let offset = calc_dc_flow_offset(weight, shift);
-        if offset == 0.0 || from == to {
-            continue;
-        }
-        withdrawal[from] += offset;
-        withdrawal[to] -= offset;
-    }
-    withdrawal
+    calc_bus_scatter(
+        n,
+        columns.map(|(endpoints, weight, shift)| (endpoints, calc_dc_flow_offset(weight, shift))),
+    )
 }
 
 /// Sparse diagonal matrix from `values` (square, `len × len`).
@@ -263,9 +275,10 @@ pub fn calc_susceptance_diagonal(b: &[f64]) -> CsMat<f64> {
     calc_diagonal(b)
 }
 
-/// Calculate the branch flow matrix used by solver preparations,
-/// `Diagonal(w) * Aᵀ`, shape `m × n`, where `w` contains positive factor
-/// weights.
+/// Calculate the branch flow matrix `Diagonal(w) * Aᵀ`, shape `m × n`. Solver
+/// preparations pass positive factor weights; `DcOperators` passes the public
+/// PowerModels susceptances for its public `Bf`. The one branch flow matrix
+/// assembly in the crate.
 ///
 /// A complete affine branch flow also adds `-b * shift`; problem
 /// preparations expose that term through
