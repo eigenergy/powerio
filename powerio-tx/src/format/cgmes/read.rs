@@ -5494,7 +5494,8 @@ fn read_branches(
             };
             let store = mapper.store;
             let kv = mapper.kv(from);
-            let z_base = powerio_core::electrical::calc_impedance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
+            let z_base =
+                powerio_core::electrical::calc_impedance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
             let y_base = SYSTEM_MVA / (kv * kv);
             let mut branch = Branch::new(
                 from,
@@ -5525,7 +5526,8 @@ fn read_branches(
                 continue;
             };
             let kv = mapper.kv(from);
-            let z_base = powerio_core::electrical::calc_impedance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
+            let z_base =
+                powerio_core::electrical::calc_impedance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
             let mut branch = Branch::new(
                 from,
                 to,
