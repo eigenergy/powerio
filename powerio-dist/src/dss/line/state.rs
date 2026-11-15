@@ -149,12 +149,14 @@ impl State {
             self.sequence.values[5] = self.sequence.values[4];
         }
         let sequence = |positive: f64, zero: f64| {
-            // OpenDSS Line.RecalcElementData multiplies by ONE_THIRD.
+            // OpenDSS Line.RecalcElementData divides by three
+            // (`Zs := (Ztemp + Cmplx(R0, X0)) / 3`); only LineCode
+            // multiplies by its rounded `OneThird`.
             crate::sequence::calc_phase_from_sequence(
                 self.n,
                 positive,
                 zero,
-                crate::sequence::SequenceThird::Reciprocal,
+                crate::sequence::SequenceThird::Divide,
             )
         };
         self.matrices = LineMatrices {

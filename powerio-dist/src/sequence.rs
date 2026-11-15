@@ -21,12 +21,14 @@ use crate::VoltageSource;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SequenceThird {
-    /// Divide by three: OpenDSS `VSource` (`(2 Z1 + Z0) / 3`), and every
-    /// reader that follows no engine's rounding.
+    /// Divide by three: OpenDSS `Line` (`RecalcElementData`:
+    /// `Zs := (Ztemp + Cmplx(R0, X0)) / 3`) and `VSource`
+    /// (`(2.0 * X1 + X0) / 3.0`), and every reader that follows no engine's
+    /// rounding.
     Divide,
-    /// Multiply by the rounded reciprocal `1.0 / 3.0`: OpenDSS `Line` and
-    /// `LineCode` (`CmulReal(..., ONE_THIRD)` in `RecalcElementData` and
-    /// `CalcMatricesFromZ1Z0`).
+    /// Multiply by the rounded reciprocal `1.0 / 3.0`: OpenDSS `LineCode`
+    /// alone (`CalcMatricesFromZ1Z0` multiplies by its local
+    /// `OneThird := 1.0 / 3.0`).
     Reciprocal,
 }
 

@@ -28,6 +28,21 @@ fn copy_before_solve_keeps_the_sources_stored_matrix() {
 }
 
 #[test]
+fn line_sequence_expansion_divides_by_three_as_line_pas_does() {
+    // Line.RecalcElementData forms `Zs := (Ztemp + Cmplx(R0, X0)) / 3` and
+    // `Zm := (Cmplx(R0, X0) - Cmplx(R1, X1)) / 3` (DSS C-API 0.14.5); only
+    // LineCode multiplies by a rounded `OneThird`, which would give
+    // 0.09813333333333332 and 0.06666666666666665 here.
+    let raw = read("New Circuit.c\nNew Line.a\nNew Line.b r1=0.1 r0=0.3");
+    let mut a = resolve(&raw, point(&raw, "a")).unwrap();
+    let a = a.primitive(60.0).unwrap();
+    assert_eq!(a.r[0][0].to_bits(), 0.098_133_333_333_333_34_f64.to_bits());
+    let mut b = resolve(&raw, point(&raw, "b")).unwrap();
+    let b = b.primitive(60.0).unwrap();
+    assert_eq!(b.r[0][1].to_bits(), 0.066_666_666_666_666_67_f64.to_bits());
+}
+
+#[test]
 fn copied_line_leaves_destination_buses_units_and_switch_flag() {
     let raw = read(
         "New Circuit.c\nNew Line.a bus1=first bus2=second switch=yes\nNew Line.b bus1=feed bus2=end units=km like=a",

@@ -277,10 +277,9 @@
   `calc_circulant_sequence_from_phase`. The OpenDSS line code, line, source reader, source writer
   and Thevenin code, the pandapower reader, the SINCAL multiconductor writer and the
   multiconductor to balanced lowering read them. `SequenceThird` states how the reference engine
-  takes the third: OpenDSS `Line` and `LineCode` multiply by `ONE_THIRD` (`Reciprocal`), its
-  `VSource` divides by three (`Divide`). A Line's sequence expansion now multiplies by one third
-  as `Line.RecalcElementData` does (it divided by three), which can move an entry in the last
-  place; the line code, source and pandapower values are unchanged.
+  takes the third: OpenDSS `LineCode` multiplies by its rounded `OneThird` (`Reciprocal`), its
+  `Line` and `VSource` divide by three (`Divide`). The line code, line, source and pandapower
+  values are unchanged.
   `VoltageSource::calc_line_to_line_voltage` is the one source line to line base (`√3 |V₁|` for
   three phases, the phasor difference for a split phase pair, the magnitude for one).
 - The GridLAB-D writer's bus nominal voltages are the voltage zones seeded by each source's
