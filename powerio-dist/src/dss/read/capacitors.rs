@@ -90,11 +90,7 @@ impl Reader<'_> {
         {
             return Err("bank needs one positive finite AC kvar/kV rating".into());
         }
-        let voltage = if phases == 2 || phases == 3 {
-            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
-        } else {
-            kv * 1e3
-        };
+        let voltage = super::bank_coil_voltage(kv, phases, false);
         let b = crate::electrical::calc_rated_admittance(kvar[0] * 1e3 / phases as f64, voltage)
             * (self.net.base_frequency() / base);
         if !b.is_finite() || b <= 0.0 {

@@ -18,6 +18,14 @@ fn ideal(t: &DistTransformer) -> bool {
         })
 }
 
+/// One ohm as a percentage on winding `w`'s tapped base, `100 / Z_base` with
+/// `Z_base` the impedance base of `v_ref · tap` at `s_rating`; `NaN` when that
+/// base is unusable.
+fn one_ohm_pct(w: &crate::model::DistWinding) -> f64 {
+    crate::electrical::calc_impedance_base(w.v_ref * w.tap, w.s_rating)
+        .map_or(f64::NAN, |base| 100.0 / base)
+}
+
 pub(super) fn used_names(net: &MulticonductorNetwork) -> BTreeSet<String> {
     net.buses()
         .iter()
@@ -37,7 +45,7 @@ pub(super) fn validate(net: &MulticonductorNetwork) -> Result<(), String> {
             .buses()
             .iter()
             .find(|bus| bus.id.eq_ignore_ascii_case(&b.bus));
-        let r_pct = 100.0 * b.s_rating / (b.v_ref * b.tap).powi(2);
+        let r_pct = one_ohm_pct(b);
         if t.phases != 1
             || t.windings.iter().any(|w| {
                 w.conn != DistWindingConn::Wye
@@ -106,7 +114,7 @@ impl DssWriter {
         let secondary = &mut projected.windings[1];
         secondary.bus.clone_from(&name);
         secondary.terminal_map = vec!["1".into(), if grounded_return { "0" } else { "2" }.into()];
-        secondary.r_pct = 100.0 * b.s_rating / (b.v_ref * b.tap).powi(2);
+        secondary.r_pct = one_ohm_pct(b);
         projected
             .extras
             .insert("ppm_antifloat".into(), serde_json::json!(0.0));

@@ -434,7 +434,10 @@ pub(super) fn transformer(
     if magnitude == 0.0 {
         return Err(row.bad("uk", "zero impedance transformer"));
     }
-    let secondary_scale = (un2 / kv(network, ports[1])).powi(2) * network.base_mva() / sn;
+    // The nameplate per unit on `Un2` at `Sn` over the system per unit on
+    // the secondary bus base.
+    let secondary_scale =
+        impedance_base(un2, sn) / impedance_base(kv(network, ports[1]), network.base_mva());
     let mut branch = Branch::new(
         ports[0],
         ports[1],
@@ -477,12 +480,8 @@ pub(super) fn transformer(
     let loss_mw = row.nonnegative("Vfe")? / 1000.0;
     let no_load_mva = sn * row.nonnegative("i0")? / 100.0;
     let magnetizing_mvar = quadrature(no_load_mva, loss_mw, "transformer no-load loss")?;
-    let y_scale = (kv(network, ports[1]) / un2 / secondary).powi(2) / network.base_mva();
-    let g = finite(loss_mw * y_scale / 2.0, "transformer core conductance")?;
-    let b = finite(
-        -magnetizing_mvar * y_scale / 2.0,
-        "transformer core susceptance",
-    )?;
+    let bus_base = impedance_base(kv(network, ports[1]), network.base_mva());
+    let (g, b) = core_admittance(loss_mw, magnetizing_mvar, un2 * secondary, bus_base)?;
     branch.charging = Some(BranchCharging::new(g, b, g, b));
     branch.b = 2.0 * b;
     branch.rate_a = sn;
@@ -524,14 +523,40 @@ pub(super) fn capacitor(
         "capacitor loss",
     )?;
     let reactive = quadrature(current, loss, "capacitor apparent power")?;
-    let scale = (kv(network, bus) / row.positive("Un")?).powi(2);
+    // The nameplate admittance at `Un`, as the power it draws at the bus base.
+    let (un, bus_kv) = (row.positive("Un")?, kv(network, bus));
+    let at_bus = |power: f64| {
+        powerio_core::electrical::calc_rated_power(
+            powerio_core::electrical::calc_rated_admittance(power, un),
+            bus_kv,
+        )
+    };
     let mut shunt = Shunt::new(
         bus,
-        finite(loss * scale, "capacitor G")?,
-        finite(reactive * scale, "capacitor B")?,
+        finite(at_bus(loss), "capacitor G")?,
+        finite(at_bus(reactive), "capacitor B")?,
     );
     shunt.uid = Some(uid.to_owned());
     Ok(shunt)
+}
+
+/// A transformer's core conductance and susceptance, half at each end: its
+/// no-load loss and magnetizing power as admittances at the tapped winding
+/// voltage `winding_kv` (`calc_rated_admittance`), in per unit on the bus
+/// impedance base `bus_base`.
+fn core_admittance(
+    loss_mw: f64,
+    magnetizing_mvar: f64,
+    winding_kv: f64,
+    bus_base: f64,
+) -> Result<(f64, f64)> {
+    let per_unit = |power: f64| {
+        powerio_core::electrical::calc_rated_admittance(power, winding_kv) * bus_base / 2.0
+    };
+    Ok((
+        finite(per_unit(loss_mw), "transformer core conductance")?,
+        finite(-per_unit(magnetizing_mvar), "transformer core susceptance")?,
+    ))
 }
 
 /// The one per unit impedance base (`powerio_core::electrical`), `NaN` for an

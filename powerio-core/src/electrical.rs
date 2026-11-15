@@ -7,14 +7,27 @@
 /// consistent units (volts and volt amperes give ohms, kilovolts and
 /// megavolt amperes give ohms as well). `None` unless both bases are
 /// positive and finite and the quotient is finite; the caller states what an
-/// unusable base means for its own quantity.
+/// unusable base means for its own quantity. The same quantity as
+/// [`calc_branch_impedance_base`] with one voltage at both ends.
 #[must_use]
 pub fn calc_impedance_base(voltage: f64, power: f64) -> Option<f64> {
+    calc_branch_impedance_base(voltage, voltage, power)
+}
+
+/// The impedance base `V₁ V₂ / S` of a branch between two voltage bases at
+/// a power base, formed as `from_voltage · to_voltage / power`, in
+/// consistent units: the base on which a line joining two nominal voltages
+/// (an IIDM line between voltage levels) states its per unit series
+/// impedance. With `from_voltage == to_voltage` it is
+/// [`calc_impedance_base`]. `None` unless all three bases are positive and
+/// finite and the quotient is positive and finite.
+#[must_use]
+pub fn calc_branch_impedance_base(from_voltage: f64, to_voltage: f64, power: f64) -> Option<f64> {
     let positive = |x: f64| x.is_finite() && x > 0.0;
-    if !positive(voltage) || !positive(power) {
+    if !positive(from_voltage) || !positive(to_voltage) || !positive(power) {
         return None;
     }
-    Some(voltage * voltage / power).filter(|base| positive(*base))
+    Some(from_voltage * to_voltage / power).filter(|base| positive(*base))
 }
 
 /// The admittance base `S / V²` of a voltage base and a power base in

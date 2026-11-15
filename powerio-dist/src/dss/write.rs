@@ -3072,11 +3072,7 @@ fn shunt_kvar(
     b_phase: f64,
     kv: f64,
 ) -> f64 {
-    let v_ref = if conn_delta || !matches!(phases, 2 | 3) {
-        kv * 1e3
-    } else {
-        crate::electrical::calc_wye_phase_voltage(kv * 1e3)
-    };
+    let v_ref = super::read::bank_coil_voltage(kv, phases, conn_delta);
     if let Some(saved) = extras_f64(&sh.extras, "kvar")
         && super::read::kvar_shunt_matrix(
             &sh.terminal_map,
@@ -3093,17 +3089,15 @@ fn shunt_kvar(
         // entry. An edit to typed B must not be overwritten by stale metadata.
         return saved;
     }
-    if conn_delta {
-        let b_branch = delta_branch_abs(&sh.b, edges).unwrap_or(b_phase.abs());
-        b_branch * (kv * 1e3) * (kv * 1e3) * edges.len() as f64 / 1e3
+    let (b_coil, coils) = if conn_delta {
+        (
+            delta_branch_abs(&sh.b, edges).unwrap_or(b_phase.abs()),
+            edges.len(),
+        )
     } else {
-        let v_phase = if matches!(phases, 2 | 3) {
-            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
-        } else {
-            kv * 1e3
-        };
-        b_phase.abs() * v_phase * v_phase * phases as f64 / 1e3
-    }
+        (b_phase.abs(), phases)
+    };
+    crate::electrical::calc_rated_power(b_coil, v_ref) * coils as f64 / 1e3
 }
 
 fn load_voltage_bounds(model: &DistLoadVoltageModel, extras: &mut Extras) -> Option<f64> {

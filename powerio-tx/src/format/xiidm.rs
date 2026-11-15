@@ -3832,8 +3832,8 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         b * section_count as f64,
                         vec![ShuntBlock::with_admittance(
                             maximum,
-                            g * nominal * nominal,
-                            b * nominal * nominal,
+                            powerio_core::electrical::calc_rated_power(g, nominal),
+                            powerio_core::electrical::calc_rated_power(b, nominal),
                         )],
                     )
                 } else if !equipment.shunt_sections.is_empty() {
@@ -3854,8 +3854,8 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         .map(|(g, b)| {
                             ShuntBlock::with_admittance(
                                 1,
-                                g * nominal * nominal,
-                                b * nominal * nominal,
+                                powerio_core::electrical::calc_rated_power(*g, nominal),
+                                powerio_core::electrical::calc_rated_power(*b, nominal),
                             )
                         })
                         .collect();
@@ -3866,8 +3866,11 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         equipment.id
                     )));
                 };
-                let mut shunt =
-                    Shunt::new(bus1, g_si * nominal * nominal, b_si * nominal * nominal);
+                let mut shunt = Shunt::new(
+                    bus1,
+                    powerio_core::electrical::calc_rated_power(g_si, nominal),
+                    powerio_core::electrical::calc_rated_power(b_si, nominal),
+                );
                 shunt.uid = Some(equipment.id.clone());
                 shunt.in_service = connected1;
                 shunt.section_count = assigned_section_count;
@@ -5660,8 +5663,13 @@ fn read_line_attributes(
 ) -> Result<Branch> {
     let r = required_f64(attrs, "r")?;
     let x = required_f64(attrs, "x")?;
-    let scale = DEFAULT_BASE_MVA / (nominal_v1 * nominal_v2);
-    let mut branch = Branch::new(from, to, r * scale, x * scale);
+    let zbase = powerio_core::electrical::calc_branch_impedance_base(
+        nominal_v1,
+        nominal_v2,
+        DEFAULT_BASE_MVA,
+    )
+    .unwrap_or(f64::NAN);
+    let mut branch = Branch::new(from, to, r / zbase, x / zbase);
     let denominator = r * r + x * x;
     let y_real = if denominator == 0.0 {
         0.0
@@ -12473,7 +12481,7 @@ fn write_shunt(
     let metadata = index.metadata(&component);
     let conductance_omitted =
         index.is_omitted(&component, OmittedFieldName::ShuntConductancePerSection);
-    let scale = level.nominal_kv * level.nominal_kv;
+    let kv = level.nominal_kv;
     let Some(control) = &shunt.control else {
         let assigned_section_count = shunt
             .section_count
@@ -12488,11 +12496,14 @@ fn write_shunt(
         let conductance = if conductance_omitted {
             String::new()
         } else {
-            format!(" gPerSection=\"{}\"", number(shunt.g / scale))
+            format!(
+                " gPerSection=\"{}\"",
+                number(powerio_core::electrical::calc_rated_admittance(shunt.g, kv))
+            )
         };
         output.push_str(&format!(
             "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
-            number(shunt.b / scale),
+            number(powerio_core::electrical::calc_rated_admittance(shunt.b, kv)),
         ));
         return;
     };
@@ -12505,11 +12516,14 @@ fn write_shunt(
         let conductance = if conductance_omitted {
             String::new()
         } else {
-            format!(" gPerSection=\"{}\"", number(shunt.g / scale))
+            format!(
+                " gPerSection=\"{}\"",
+                number(powerio_core::electrical::calc_rated_admittance(shunt.g, kv))
+            )
         };
         output.push_str(&format!(
             "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
-            number(shunt.b / scale),
+            number(powerio_core::electrical::calc_rated_admittance(shunt.b, kv)),
         ));
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
@@ -12559,11 +12573,14 @@ fn write_shunt(
         let conductance = if conductance_omitted {
             String::new()
         } else {
-            format!(" gPerSection=\"{}\"", number(block.g / scale))
+            format!(
+                " gPerSection=\"{}\"",
+                number(powerio_core::electrical::calc_rated_admittance(block.g, kv))
+            )
         };
         output.push_str(&format!(
             "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"{}\"/>\n",
-            number(block.b / scale),
+            number(powerio_core::electrical::calc_rated_admittance(block.b, kv)),
             block.steps,
         ));
     } else {
@@ -12573,11 +12590,14 @@ fn write_shunt(
                 let conductance = if conductance_omitted {
                     String::new()
                 } else {
-                    format!(" g=\"{}\"", number(block.g / scale))
+                    format!(
+                        " g=\"{}\"",
+                        number(powerio_core::electrical::calc_rated_admittance(block.g, kv))
+                    )
                 };
                 output.push_str(&format!(
                     "          <iidm:section{conductance} b=\"{}\"/>\n",
-                    number(block.b / scale),
+                    number(powerio_core::electrical::calc_rated_admittance(block.b, kv)),
                 ));
             }
         }
@@ -13294,8 +13314,14 @@ fn write_line(
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
-    let r = branch.r * from.base_kv * to.base_kv / index.base_mva;
-    let x = branch.x * from.base_kv * to.base_kv / index.base_mva;
+    let zbase = powerio_core::electrical::calc_branch_impedance_base(
+        from.base_kv,
+        to.base_kv,
+        index.base_mva,
+    )
+    .unwrap_or(f64::NAN);
+    let r = branch.r * zbase;
+    let x = branch.x * zbase;
     let denominator = r * r + x * x;
     let y_real = if denominator == 0.0 {
         0.0

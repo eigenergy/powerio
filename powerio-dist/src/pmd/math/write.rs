@@ -900,8 +900,10 @@ impl Writer {
                 },
                 |(loss, imag)| (loss / 100.0, imag / 100.0),
             );
-            let g_sh = noloadloss * snom[0] / (vnom[0] * vnom[0]);
-            let b_sh = -(cmag * snom[0]) / (vnom[0] * vnom[0]);
+            // PMD's `_build_loss_model!`: `noloadloss * snom / vnom²` and
+            // `-(imag * snom) / vnom²`.
+            let g_sh = crate::electrical::calc_rated_admittance(noloadloss * snom[0], vnom[0]);
+            let b_sh = -crate::electrical::calc_rated_admittance(cmag * snom[0], vnom[0]);
             // Refer everything to the internal side: PMD divides by the
             // nominal voltages in kV, so the internal side is the 1 kV base.
             let ratios: Vec<f64> = vnom
@@ -2550,8 +2552,8 @@ impl LossChains {
         let (v, s, ratio) = (self.vnom[0], self.snom[0], self.ratios[0]);
         Rc::new(move |pu: f64, base: f64| {
             let g_sh = (pu / base) / (ratio * ratio);
-            let pct = g_sh * v * v / s * 100.0;
-            let g_sh = pct / 100.0 * s / (v * v);
+            let pct = crate::electrical::calc_rated_power(g_sh, v) / s * 100.0;
+            let g_sh = crate::electrical::calc_rated_admittance(pct / 100.0 * s, v);
             g_sh * ratio * ratio * base
         })
     }
@@ -2561,8 +2563,8 @@ impl LossChains {
         let (v, s, ratio) = (self.vnom[0], self.snom[0], self.ratios[0]);
         Rc::new(move |pu: f64, base: f64| {
             let b_sh = (pu / base) / (ratio * ratio);
-            let pct = -b_sh * v * v / s * 100.0;
-            let b_sh = -(pct / 100.0 * s) / (v * v);
+            let pct = crate::electrical::calc_rated_power(-b_sh, v) / s * 100.0;
+            let b_sh = -crate::electrical::calc_rated_admittance(pct / 100.0 * s, v);
             b_sh * ratio * ratio * base
         })
     }

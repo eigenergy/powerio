@@ -1313,8 +1313,8 @@ impl<'a> Reader<'a> {
                 let v1 = windings[0].v_ref;
                 let g_sh = y_sh.re / (ratios[0] * ratios[0]);
                 let b_sh = y_sh.im / (ratios[0] * ratios[0]);
-                let noloadloss = g_sh * v1 * v1 / s_rating;
-                let cmag = -b_sh * v1 * v1 / s_rating;
+                let noloadloss = crate::electrical::calc_rated_power(g_sh, v1) / s_rating;
+                let cmag = crate::electrical::calc_rated_power(-b_sh, v1) / s_rating;
                 if noloadloss.abs() > 0.0 {
                     extras.insert("%noloadloss".into(), json!(noloadloss * 100.0));
                 }

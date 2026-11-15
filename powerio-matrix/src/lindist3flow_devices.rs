@@ -342,13 +342,13 @@ fn load_channel_power(
     Ok(LinDist3FlowComplexAffinePower {
         active: global_affine(
             p_nom * alpha_p,
-            p_nom * alpha_z / v_nom.powi(2),
+            powerio_core::electrical::calc_rated_admittance(p_nom * alpha_z, v_nom),
             &winding,
             terminal_nodes,
         ),
         reactive: global_affine(
             q_nom * beta_p,
-            q_nom * beta_z / v_nom.powi(2),
+            powerio_core::electrical::calc_rated_admittance(q_nom * beta_z, v_nom),
             &winding,
             terminal_nodes,
         ),

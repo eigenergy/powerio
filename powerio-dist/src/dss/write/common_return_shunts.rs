@@ -75,12 +75,8 @@ impl DssWriter {
                 typed_kv: None,
             },
         );
-        let voltage = if phases == 2 || phases == 3 {
-            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
-        } else {
-            kv * 1e3
-        };
-        let kvar = b * voltage.powi(2) * phases as f64 / 1e3;
+        let voltage = crate::dss::read::bank_coil_voltage(kv, phases, false);
+        let kvar = crate::electrical::calc_rated_power(b, voltage) * phases as f64 / 1e3;
         self.check_name("capacitor", &shunt.name);
         let returns = vec![shunt.terminal_map[phases].clone(); phases];
         let mut line = format!(

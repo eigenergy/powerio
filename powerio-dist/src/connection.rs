@@ -293,14 +293,19 @@ pub fn calc_capacitor_susceptance(
 /// lowering and the OpenDSS common return capacitor bank read it.
 ///
 /// # Panics
-/// A coil terminal outside `terminal_count`, or fewer susceptances than
-/// coils.
+/// A coil terminal outside `terminal_count`, or a number of susceptances
+/// other than the number of coils.
 #[must_use]
 pub fn calc_coil_susceptance_matrix(
     terminal_count: usize,
     coils: &[ConnectionChannel],
     susceptance: &[f64],
 ) -> crate::model::ConductorMatrix {
+    assert_eq!(
+        coils.len(),
+        susceptance.len(),
+        "one susceptance per capacitor coil"
+    );
     let mut matrix = vec![vec![0.0; terminal_count]; terminal_count];
     for (coil, &y) in coils.iter().zip(susceptance) {
         matrix[coil.from][coil.from] += y;

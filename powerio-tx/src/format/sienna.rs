@@ -521,7 +521,7 @@ pub(super) fn read(
     let mut shunts = Vec::new();
     for row in rows(root, "FixedAdmittance")? {
         let bus = bus_ref(row, "bus", &ids)?;
-        let scale = shunts::scale(row, by_bus[&bus].base_kv)?;
+        let kv = shunts::natural_kv(row, by_bus[&bus].base_kv)?;
         // The writer states a transformer's secondary-terminal charging as a
         // FixedAdmittance on the to bus, since the schema carries one
         // magnetizing shunt per two-winding transformer. The ext marker folds
@@ -547,8 +547,8 @@ pub(super) fn read(
                 let mut charging = branch
                     .charging
                     .unwrap_or_else(|| BranchCharging::from_total_b(branch.b));
-                charging.g_to += number(&row["Y"], "real")? * scale / BASE;
-                charging.b_to += number(&row["Y"], "imag")? * scale / BASE;
+                charging.g_to += shunts::rated_power(number(&row["Y"], "real")?, kv) / BASE;
+                charging.b_to += shunts::rated_power(number(&row["Y"], "imag")?, kv) / BASE;
                 branch.charging = Some(charging);
                 branch.b = charging.calc_total_b();
                 continue;
@@ -562,8 +562,8 @@ pub(super) fn read(
         }
         let mut sh = Shunt::new(
             bus,
-            number(&row["Y"], "real")? * scale,
-            number(&row["Y"], "imag")? * scale,
+            shunts::rated_power(number(&row["Y"], "real")?, kv),
+            shunts::rated_power(number(&row["Y"], "imag")?, kv),
         );
         sh.uid = uid("FixedAdmittance", row)?;
         sh.in_service = available(row)?;

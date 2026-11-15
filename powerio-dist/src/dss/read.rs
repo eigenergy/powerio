@@ -1398,15 +1398,7 @@ impl Reader<'_> {
                 spec.default_kvar
             });
         let kv = self.f64_or(props, "kv", spec.class, &obj.name, spec.default_kv);
-        // A wye bank's kv is line to line for 2 or 3 phases, line to neutral
-        // otherwise. A delta bank's kv is line to line across each branch.
-        let v_ref = if conn_delta {
-            kv * 1e3
-        } else if phases == 2 || phases == 3 {
-            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
-        } else {
-            kv * 1e3
-        };
+        let v_ref = bank_coil_voltage(kv, phases, conn_delta);
         // `kvar_shunt_matrix` divides by `v_ref * v_ref`; a positive but tiny
         // `v_ref` can square to zero (or a non-finite) and turn the admittance
         // into an infinity, so reject the squared value here too.
@@ -2122,6 +2114,25 @@ pub(super) fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
     }
 }
 
+/// The coil voltage, volts, of an OpenDSS capacitor or reactor bank rated
+/// `kv`: a WYE bank's `kv` is line to line for 2 or 3 phases and its coil
+/// voltage is `kv / √3`; otherwise (one phase, more than three, or any DELTA
+/// bank, whose `kv` is across each branch) the coil voltage is `kv`. The one
+/// OpenDSS bank voltage rule: the shunt and common return bank readers and
+/// the matching writers read it.
+pub(super) fn bank_coil_voltage(kv: f64, phases: usize, conn_delta: bool) -> f64 {
+    if !conn_delta && matches!(phases, 2 | 3) {
+        crate::electrical::calc_wye_phase_voltage(kv * 1e3)
+    } else {
+        kv * 1e3
+    }
+}
+
+/// The susceptance matrix of an OpenDSS shunt bank of `kvar` at coil voltage
+/// `v_ref` over `map`: each coil (a DELTA branch of [`delta_edges`], or a
+/// WYE phase to ground) carries an equal share of the rated power,
+/// `calc_rated_admittance(b_sign · kvar · 1e3 / coils, v_ref)`, stamped by
+/// [`crate::connection::calc_coil_susceptance_matrix`].
 pub(super) fn kvar_shunt_matrix(
     map: &[String],
     phases: usize,
@@ -2131,26 +2142,27 @@ pub(super) fn kvar_shunt_matrix(
     b_sign: f64,
 ) -> Option<ConductorMatrix> {
     let dim = map.len();
-    let mut susceptance = vec![vec![0.0; dim]; dim];
-    if conn_delta {
+    let coils: Vec<crate::connection::ConnectionChannel> = if conn_delta {
         let edges = delta_edges(dim, phases);
         if edges.is_empty() || map.iter().any(|t| t == "0") {
             return None;
         }
-        let b_branch = b_sign * kvar * 1e3 / edges.len() as f64 / (v_ref * v_ref);
-        for (from, to) in edges {
-            susceptance[from][from] += b_branch;
-            susceptance[to][to] += b_branch;
-            susceptance[from][to] -= b_branch;
-            susceptance[to][from] -= b_branch;
-        }
+        edges
+            .into_iter()
+            .map(|(from, to)| crate::connection::ConnectionChannel { from, to: Some(to) })
+            .collect()
     } else {
-        let b_phase = b_sign * kvar * 1e3 / phases as f64 / (v_ref * v_ref);
-        for (idx, row) in susceptance.iter_mut().enumerate().take(phases) {
-            row[idx] = b_phase;
-        }
-    }
-    Some(susceptance)
+        (0..phases.min(dim))
+            .map(|from| crate::connection::ConnectionChannel { from, to: None })
+            .collect()
+    };
+    let b =
+        crate::electrical::calc_rated_admittance(b_sign * kvar * 1e3 / coils.len() as f64, v_ref);
+    Some(crate::connection::calc_coil_susceptance_matrix(
+        dim,
+        &coils,
+        &vec![b; coils.len()],
+    ))
 }
 
 fn bus_spec(v: Option<&Value>, fallback: &str) -> BusSpec {

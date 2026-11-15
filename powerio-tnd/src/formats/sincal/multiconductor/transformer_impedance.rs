@@ -91,11 +91,10 @@ fn decode(
             ));
         }
     }
-    let volts_squared = connection.rated_ll_volts[1].powi(2);
-    let impedance_base = finite(volts_squared / connection.rated_va, "impedance base")?;
-    if impedance_base <= 0.0 {
-        return Err(format_error("transformer impedance base underflows"));
-    }
+    let secondary_volts = connection.rated_ll_volts[1];
+    let impedance_base =
+        powerio_core::electrical::calc_impedance_base(secondary_volts, connection.rated_va)
+            .ok_or_else(|| format_error("transformer impedance base overflows or underflows"))?;
     let magnitude = nonnegative(row, "uk")? / 100.0;
     let resistance = nonnegative(row, "ur")? / 100.0;
     let series_secondary_ohm = checked(Complex64::new(
@@ -113,12 +112,15 @@ fn decode(
         "no-load VA",
     )?;
     let no_load_secondary_siemens = checked(Complex64::new(
-        core_watts / volts_squared,
-        -quadrature(
-            no_load_va,
-            core_watts,
-            "no-load core loss Vfe exceeds apparent power from i0 and Sn",
-        )? / volts_squared,
+        powerio_core::electrical::calc_rated_admittance(core_watts, secondary_volts),
+        -powerio_core::electrical::calc_rated_admittance(
+            quadrature(
+                no_load_va,
+                core_watts,
+                "no-load core loss Vfe exceeds apparent power from i0 and Sn",
+            )?,
+            secondary_volts,
+        ),
     ))?;
     let zero_sequence = zero_sequence(row, &connection, series_secondary_ohm)?;
     Ok(NominalTransformerInput {
