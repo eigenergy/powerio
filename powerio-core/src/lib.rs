@@ -3,12 +3,14 @@
 //! This crate owns source buffers, diagnostics, operation errors, the generic
 //! [`PioModule`], repeated value containers, and output destinations. It does
 //! not own electrical network, calculation, matrix, or dynamic value types;
-//! [`electrical`] holds only the scalar formulas both network families share.
+//! [`electrical`] holds only the scalar formulas both network families share
+//! and [`dense`] the one small dense elimination kernel they share.
 
 mod bounded;
 pub mod cim;
 pub mod codes;
 mod component_id;
+pub mod dense;
 mod diagnostic;
 pub mod electrical;
 mod error;

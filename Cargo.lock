@@ -2466,6 +2466,7 @@ version = "0.12.1"
 dependencies = [
  "errno",
  "libc",
+ "num-complex",
  "schemars",
  "serde",
  "serde_json",

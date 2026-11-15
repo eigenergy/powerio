@@ -1766,7 +1766,7 @@ fn solve_loop(
         .collect();
     let size = members.len() - 1;
     let mut matrix = vec![0.0; size * size];
-    let mut rhs: Vec<f64> = members[1..].iter().map(|&node| injection[node]).collect();
+    let rhs: Vec<f64> = members[1..].iter().map(|&node| injection[node]).collect();
     for &index in link_indices {
         let (from, to, x) = links[index];
         let conductance = 1.0 / x;
@@ -1782,7 +1782,7 @@ fn solve_loop(
             }
         }
     }
-    let angle = solve_dense(&mut matrix, &mut rhs, size)?;
+    let angle = solve_dense(&matrix, &rhs, size)?;
     let theta = |node: usize| match position[&node] {
         0 => 0.0,
         p => angle[p - 1],
@@ -1798,48 +1798,25 @@ fn solve_loop(
     )
 }
 
-/// Gaussian elimination with partial pivoting on a dense row major system.
-fn solve_dense(matrix: &mut [f64], rhs: &mut [f64], size: usize) -> Option<Vec<f64>> {
+/// The solution of a dense row major system through the one dense inverse
+/// ([`powerio_core::dense::invert_dense_matrix`], partial pivoting). `None`
+/// when a pivot is not finite or is at most `1e-13` times the system's
+/// largest entry.
+fn solve_dense(matrix: &[f64], rhs: &[f64], size: usize) -> Option<Vec<f64>> {
     let largest = matrix.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-    let floor = largest * 1e-13;
-    for column in 0..size {
-        let pivot = (column..size).max_by(|&a, &b| {
-            matrix[a * size + column]
-                .abs()
-                .total_cmp(&matrix[b * size + column].abs())
-        })?;
-        if matrix[pivot * size + column].abs() <= floor
-            || !matrix[pivot * size + column].is_finite()
-        {
-            return None;
-        }
-        if pivot != column {
-            for k in 0..size {
-                matrix.swap(pivot * size + k, column * size + k);
-            }
-            rhs.swap(pivot, column);
-        }
-        let diagonal = matrix[column * size + column];
-        for row in column + 1..size {
-            let factor = matrix[row * size + column] / diagonal;
-            if factor == 0.0 {
-                continue;
-            }
-            for k in column..size {
-                matrix[row * size + k] -= factor * matrix[column * size + k];
-            }
-            rhs[row] -= factor * rhs[column];
-        }
-    }
-    let mut solution = vec![0.0; size];
-    for row in (0..size).rev() {
-        let mut value = rhs[row];
-        for k in row + 1..size {
-            value -= matrix[row * size + k] * solution[k];
-        }
-        solution[row] = value / matrix[row * size + row];
-    }
-    Some(solution)
+    let rows: Vec<Vec<f64>> = matrix.chunks(size.max(1)).map(<[f64]>::to_vec).collect();
+    let inverse = powerio_core::dense::invert_dense_matrix(
+        &rows,
+        powerio_core::dense::DensePivot::Partial,
+        largest * 1e-13,
+        0.0,
+    )?;
+    Some(
+        inverse
+            .iter()
+            .map(|row| row.iter().zip(rhs).map(|(a, b)| a * b).sum())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
