@@ -4133,19 +4133,24 @@ fn convert_transformer_magnetizing_admittance(
             }
 
             // An admittance rebase from the winding base at the nominal
-            // voltage (MAG1's watts are per unit on one watt, 1e-6 MVA) to
-            // the system base at the bus voltage.
-            let rebase = |power| {
-                powerio_core::electrical::calc_impedance_rebase(
-                    bus_base_kv,
-                    system_base,
-                    nominal,
-                    power,
-                )
-                .unwrap_or(f64::NAN)
-            };
-            let g = mag_g * rebase(1e-6);
-            let y = mag_b * rebase(winding_base);
+            // voltage (MAG1's watts are per unit on one watt) to the system
+            // base at the bus voltage.
+            let g = powerio_core::electrical::calc_impedance_rebase(
+                mag_g,
+                bus_base_kv,
+                1_000_000.0 * system_base,
+                nominal,
+                1.0,
+                powerio_core::electrical::RebaseOrder::InversePowerRatio,
+            );
+            let y = powerio_core::electrical::calc_impedance_rebase(
+                mag_b,
+                bus_base_kv,
+                system_base,
+                nominal,
+                winding_base,
+                powerio_core::electrical::RebaseOrder::PowerRatio,
+            );
             let b = powerio_core::electrical::calc_quadrature(y.abs(), g);
             if b.is_nan() {
                 warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(

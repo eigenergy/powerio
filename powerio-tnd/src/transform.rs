@@ -1030,12 +1030,13 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             let base_to = self.base_volts(&low.bus);
             let tap = (high.v_ref * high.tap / base_from) / (low.v_ref * low.tap / base_to);
             let z_scale = powerio_core::electrical::calc_impedance_rebase(
+                1.0,
                 high.v_ref,
                 high.s_rating,
                 base_from,
                 self.options.base_mva * 1_000_000.0,
-            )
-            .unwrap_or(f64::NAN);
+                powerio_core::electrical::RebaseOrder::PowerRatio,
+            );
             // The pair's nameplate leakage on the first winding's rating
             // (each winding's %R referred from its own rating), and the
             // connection shift of the one delta orientation.

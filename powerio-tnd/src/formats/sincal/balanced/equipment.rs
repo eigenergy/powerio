@@ -437,12 +437,13 @@ pub(super) fn transformer(
     // The nameplate per unit on `Un2` at `Sn` over the system per unit on
     // the secondary bus base.
     let secondary_scale = powerio_core::electrical::calc_impedance_rebase(
+        1.0,
         un2,
         sn,
         kv(network, ports[1]),
         network.base_mva(),
-    )
-    .unwrap_or(f64::NAN);
+        powerio_core::electrical::RebaseOrder::BaseQuotient,
+    );
     let mut branch = Branch::new(
         ports[0],
         ports[1],

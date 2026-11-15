@@ -749,9 +749,9 @@ pub fn calc_transformer_magnetizing(
         ));
     }
     let v = calc_coil_voltage(transformer, 1) * transformer.windings[1].tap;
-    let ybase = crate::electrical::calc_rated_admittance(
-        transformer.windings[0].s_rating / transformer.phases as f64,
-        v,
+    let ybase = crate::electrical::calc_squared_voltage_admittance(
+        transformer.windings[0].s_rating,
+        transformer.phases as f64 * v * v,
     );
     Ok(Some(TransformerMagnetizing {
         winding: 1,

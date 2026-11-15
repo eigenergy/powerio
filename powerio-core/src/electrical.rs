@@ -16,24 +16,56 @@ pub fn calc_impedance_base(voltage: f64, power: f64) -> Option<f64> {
     calc_branch_impedance_base(voltage, voltage, power)
 }
 
-/// The factor `Z_base(from) / Z_base(to)` that takes a per unit impedance
-/// on the base `(from_voltage, from_power)` to the base `(to_voltage,
-/// to_power)`, each base by [`calc_impedance_base`]; with the bases swapped
-/// it takes a per unit admittance from `from` to `to`. `None` when either
-/// base is unusable. The one per unit rebase: the SINCAL balanced
+/// The order in which [`calc_impedance_rebase`] forms `value · Z_base(from)
+/// / Z_base(to)`. Each reader keeps the order it has always used, so its
+/// results stay bit for bit the same; the quantity is the same in every
+/// order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RebaseOrder {
+    /// `value · (Z_base(from) / Z_base(to))`, each base by
+    /// [`calc_impedance_base`]; `NaN` when either base is unusable. The
+    /// SINCAL balanced transformer's series impedance.
+    BaseQuotient,
+    /// `value · (S_to / S_from) · (V_from / V_to)²`, unchecked. The PSS/E
+    /// `CM=2` exciting current and the integrated transmission and
+    /// distribution transformer lowering.
+    PowerRatio,
+    /// `value / (S_from / S_to) · (V_from / V_to)²`, unchecked. The PSS/E
+    /// `CM=2` no load loss.
+    InversePowerRatio,
+}
+
+/// `value` taken from the per unit base `(from_voltage, from_power)` to the
+/// base `(to_voltage, to_power)` when it is a per unit impedance, the factor
+/// `Z_base(from) / Z_base(to)`; with the bases swapped it takes a per unit
+/// admittance from `from` to `to`. `order` picks the operation order
+/// ([`RebaseOrder`]). The one per unit rebase: the SINCAL balanced
 /// transformer's series impedance, the PSS/E `CM=2` magnetizing admittance
 /// and the integrated transmission and distribution transformer lowering
 /// read it.
 #[must_use]
 pub fn calc_impedance_rebase(
+    value: f64,
     from_voltage: f64,
     from_power: f64,
     to_voltage: f64,
     to_power: f64,
-) -> Option<f64> {
-    Some(
-        calc_impedance_base(from_voltage, from_power)? / calc_impedance_base(to_voltage, to_power)?,
-    )
+    order: RebaseOrder,
+) -> f64 {
+    let voltage_ratio = || (from_voltage / to_voltage).powi(2);
+    match order {
+        RebaseOrder::BaseQuotient => {
+            match (
+                calc_impedance_base(from_voltage, from_power),
+                calc_impedance_base(to_voltage, to_power),
+            ) {
+                (Some(from), Some(to)) => value * (from / to),
+                _ => f64::NAN,
+            }
+        }
+        RebaseOrder::PowerRatio => value * (to_power / from_power) * voltage_ratio(),
+        RebaseOrder::InversePowerRatio => value / (from_power / to_power) * voltage_ratio(),
+    }
 }
 
 /// The impedance base `V₁ V₂ / S` of a branch between two voltage bases at
@@ -62,8 +94,9 @@ pub fn calc_branch_impedance_base(from_voltage: f64, to_voltage: f64, power: f64
 /// `conj(S)`). With an impedance in place of the power it is the power that
 /// impedance draws, the same quotient. Unchecked: the caller states what an
 /// unusable voltage or power means. The one voltage squared over a power:
-/// [`calc_branch_impedance_base`] (over `V₁ V₂`) and the distribution ZIP
-/// coefficient and nominal power conversions read it.
+/// [`calc_branch_impedance_base`] (over `V₁ V₂`), the distribution ZIP
+/// coefficient and nominal power conversions and the OpenDSS rated reactor
+/// read it.
 #[must_use]
 pub fn calc_squared_voltage_impedance<T>(voltage_squared: f64, power: T) -> T
 where
@@ -77,8 +110,8 @@ where
 /// voltage_squared`, for a real or a complex power (`conj(S) / |V|²` takes
 /// `conj(S)`). Unchecked, as [`calc_squared_voltage_impedance`]. The one
 /// power over voltage squared: [`calc_rated_admittance`] is it at
-/// `voltage · voltage`, and the distribution load's nominal admittance
-/// reads it.
+/// `voltage · voltage`, and the distribution load's nominal admittance and
+/// the transformer magnetizing base read it.
 #[must_use]
 pub fn calc_squared_voltage_admittance<T>(power: T, voltage_squared: f64) -> T
 where
@@ -400,6 +433,25 @@ mod tests {
         assert_eq!(calc_admittance_base(12.47, -1.0), None);
         assert_eq!(calc_admittance_base(f64::INFINITY, 1.0), None);
         assert_eq!(calc_admittance_base(1e300, 1e-300), None);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // each order states its exact spelling
+    fn the_rebase_orders_spell_their_operations() {
+        let (value, v1, s1, v2, s2) = (0.37, 13.8, 100.0, 12.47, 37.5);
+        assert_eq!(
+            calc_impedance_rebase(value, v1, s1, v2, s2, RebaseOrder::BaseQuotient),
+            value * ((v1 * v1 / s1) / (v2 * v2 / s2))
+        );
+        assert_eq!(
+            calc_impedance_rebase(value, v1, s1, v2, s2, RebaseOrder::PowerRatio),
+            value * (s2 / s1) * (v1 / v2).powi(2)
+        );
+        assert_eq!(
+            calc_impedance_rebase(value, v1, s1, v2, s2, RebaseOrder::InversePowerRatio),
+            value / (s1 / s2) * (v1 / v2).powi(2)
+        );
+        assert!(calc_impedance_rebase(value, 0.0, s1, v2, s2, RebaseOrder::BaseQuotient).is_nan());
     }
 
     #[test]

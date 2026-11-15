@@ -243,6 +243,28 @@
   over an angle window, `BalancedNetwork::per_unit_base` and `IndexedNetwork::per_unit_base` the
   power base a normalized network divides by, and `DeEnergizedIsland` one island an island
   reference report finds without supply.
+- More of the shared conversions have one implementation in `powerio_core::electrical`.
+  `calc_squared_voltage_impedance` (`V² / S` over a stated squared voltage, real or complex, also
+  the power an impedance draws) and `calc_squared_voltage_admittance` (`S / V²`, real or complex)
+  are the one quotient each: `calc_branch_impedance_base` and `calc_rated_admittance` read them,
+  and so do the distribution ZIP conversions and `calc_load_nominal_admittance`, which formed
+  their own complex quotients, the rated OpenDSS `Reactor`'s reactance (`kV² · 1000 / (kvar /
+  phases)`, its coil voltage by the one OpenDSS bank coil voltage rule) and the transformer
+  magnetizing admittance base (`S / (phases · V · V)`, behind the transformer primitive and the
+  multiconductor OPF descriptor), all bit for bit as before. `calc_impedance_rebase` (with
+  `RebaseOrder`) is the one per unit rebase of a value by `Z_base(from) / Z_base(to)` (its swap
+  for an admittance), in the operation order each reader formed, so all are unchanged:
+  `BaseQuotient` (the two bases by `calc_impedance_base`, `NaN` for an unusable one) for the
+  SINCAL balanced transformer's series impedance, `PowerRatio`
+  (`value · (S_to / S_from) · (V_from / V_to)²`) for the PSS/E `CM=2` exciting current and the
+  integrated transmission and distribution transformer lowering's impedance scale, and
+  `InversePowerRatio` (`value / (S_from / S_to) · (V_from / V_to)²`) for the PSS/E `CM=2` no load
+  loss. `calc_log_voltage_power_term` is the one load law term over a log voltage ratio
+  (`c e^{γ ℓ}` with its derivative), for a model that lifts voltage to its log. Further callers of
+  `calc_rated_admittance` and `calc_rated_power`: the balanced MG-RAVENS shunt reader and writer
+  (unchanged), and the GridLAB-D capacitor reader (`rating / (V · V)` where it formed
+  `rating / V / V`) and writer (`b · (V · V)` where it formed `(b · V) · V`), which can move in
+  the last place.
 
 **Matrices for callers**
 
@@ -282,28 +304,6 @@
   still accepted and writes no row.
 - Three phase pandapower: `powerio_tnd::formats::pandapower::{parse, PandapowerModule, TOKEN,
   unmapped_connections}` and `powerio_tx::format::is_three_phase_pandapower`.
-
-- More of the shared conversions have one implementation in `powerio_core::electrical`.
-  `calc_squared_voltage_impedance` (`V² / S` over a stated squared voltage, real or complex, also
-  the power an impedance draws) and `calc_squared_voltage_admittance` (`S / V²`, real or complex)
-  are the one quotient each: `calc_branch_impedance_base` and `calc_rated_admittance` read them,
-  and so do the distribution ZIP conversions and `calc_load_nominal_admittance`, which formed
-  their own complex quotients, bit for bit as before. `calc_impedance_rebase` (the factor
-  `Z_base(from) / Z_base(to)`, its swap for an admittance) is the one per unit rebase: the SINCAL
-  balanced transformer's series impedance (unchanged), the PSS/E `CM=2` magnetizing conductance
-  and susceptance (from the winding base at the nominal voltage to the system base at the bus
-  voltage; they formed `MAG1 / (1e6 S_sys) (V_bus / V_nom)²` and
-  `MAG2 (S_w / S_sys) (V_bus / V_nom)²`) and the integrated transmission and distribution
-  transformer lowering's impedance scale (it formed `(S_sys / S_w) (V_w / V_base)²`) read it; the
-  last two can move in the last place. `calc_log_voltage_power_term` is the one load law term
-  over a log voltage ratio (`c e^{γ ℓ}` with its derivative), for a model that lifts voltage to
-  its log. Further callers of `calc_rated_admittance` and `calc_rated_power`: the balanced
-  MG-RAVENS shunt reader and writer (unchanged), the GridLAB-D capacitor reader
-  (`rating / (V · V)` where it formed `rating / V / V`) and writer (`b · (V · V)` where it formed
-  `(b · V) · V`), and the transformer magnetizing admittance base
-  (`calc_rated_admittance(S / phases, V)` where it formed `S / (phases · V · V)`), behind the
-  transformer primitive and the multiconductor OPF descriptor; those three can move in the last
-  place.
 
 **Distribution**
 
@@ -549,19 +549,20 @@
   names: `terminal_phase` and the distribution CIM and MG-RAVENS wire conventions read it. The PMD
   MATHEMATICAL reader and writer share one dense inverse. The OpenDSS source's `Isc3`, `Isc1` and
   zero sequence quadratic share one short circuit relation (`kV · 1000 / factor / x`, the engine's
-  order) and its short circuit levels and the Thevenin writer's candidates one `V² / Z`, and the
-  OpenDSS geometry's Deri and full Carson loop term is
+  order), the Thevenin writer's short circuit level candidates read `V² / Z` from
+  `calc_squared_voltage_impedance`, and the OpenDSS geometry's Deri and full Carson loop term is
   `powerio_dist::overhead::calc_conductor_loop_reactance`, the free space term of
   `calc_carson_impedance` (all unchanged). `McOpfLoadLaw::new` constructs a load law.
-  Behaviour changes: the rated OpenDSS `Reactor` (`kvar` and `kv`) takes its coil voltage from the
-  one OpenDSS bank coil voltage rule and its reactance as `calc_impedance_base(kV, kvar / phases)
-  · 1000` where it formed `kV² · 1000 / (kvar / phases)`, which can move it in the last place, and
-  refuses a rating whose base overflows or underflows (`rated reactor impedance base overflows or
-  underflows`) where it read an infinite reactance; the GridLAB-D writer finds a load's, inverter's
-  and transformer winding's WYE neutral by `calc_wye_neutral_position` and a load's phases by
-  `calc_terminal_role` over the network's terminal conventions, where it matched the literal
-  `n`, so a network whose BMOPF conventions do not call the bus terminal `n` a neutral is refused
-  (every bus the writer accepts carries one grounded `n`, so other networks write as before);
+  Behaviour changes: the GridLAB-D writer finds a load's, inverter's and transformer winding's
+  WYE neutral by `calc_wye_neutral_position` and a load's phases by `calc_terminal_role` over the
+  network's terminal conventions, where it matched the literal `n`. It now refuses such an element
+  unless the conventions make the last terminal of its map the only terminal of that map that is
+  not a phase, and a neutral (not an earth) the bus carries. So a network whose BMOPF conventions
+  do not call `n` a neutral, or also call another terminal of the element's map (`1`, `2` or `3`)
+  a neutral or an earth, is refused where 0.12.0 matched `n` and wrote it (with
+  `{"neutral": ["n", "3"]}` a load mapped `[1, 2, 3, n]` has an ambiguous neutral), and such a
+  terminal is left out of a load's phases. A network whose conventions leave `n` the one terminal
+  of each such map that is not a phase writes as before;
   `calc_balanced_phase_angle` returns `+0.0` for phase zero (and every multiple of `phases`),
   where it returned `−0.0`, so a phasor built on it has a `+0.0` imaginary part there.
 - The conversion matrix baseline records the CIM wire convention's neutral above: MG-RAVENS
