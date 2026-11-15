@@ -252,6 +252,23 @@
 - BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
   schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
   `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.
+- OpenDSS tape-shielded cables: `TSData` and the `tscable` and `tscables` properties of
+  `LineGeometry` and `Line` are read, and the geometry line constants calculate the tape shield
+  (resistance from its diameter, thickness and lap, GMR to the middle of the tape) as OpenDSS's
+  `TSLineConstants` does, beside the overhead and concentric-neutral models. A geometry mixing
+  `CNData` and `TSData` cables is refused. A line on a tape-shielded geometry was
+  `READ.DSS.GEOMETRY_UNRESOLVED` before.
+- Distribution CIM and MG-RAVENS segments without a `PerLengthImpedance` that name a
+  `WireSpacingInfo` take the impedance of their wire catalog entries (`OverheadWireInfo`,
+  `WireInfo`, `ConcentricNeutralCableInfo`, `TapeShieldCableInfo`) on their `WirePosition`s,
+  calculated by the same OpenDSS line constants under OpenDSS's default earth (Deri, 100 ohm-m).
+  A neutral phase the segment's terminals do not state is Kron reduced. A position no phase
+  names a wire for leaves the impedance unknown, so the segment stays refused
+  (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or untyped in MG-RAVENS), now with the position named.
+- MG-RAVENS reads a transformer end's `phaseAngleClock` as the vector group shift its winding
+  connections represent (a delta–wye pair is clock 1, as in distribution CIM) instead of
+  reporting it unmapped, and keeps a tank whose clock its windings do not represent untyped with
+  both clocks named. The writer states that clock, where it wrote 0 for every end.
 - Read three-phase pandapower networks, those with `asymmetric_load`,
   `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
   under the `pandapower-json` token (#846). A three-phase network with rows

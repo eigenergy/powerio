@@ -189,15 +189,15 @@ is refused.
 | `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus |
 | `LinearShuntCompensator` | shunt banks; `Yn` is a wye bank whose neutral is grounded, `Y` one on an ungrounded neutral |
 | the `Switch` classes with `SwitchPhase` | switches with their state |
-| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit |
+| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit; each end's `phaseAngleClock` must be the clock its winding connections represent, as in distribution CIM below, or the tank stays untyped with both clocks named, and the writer states that clock |
 | `EnergySource` | voltage sources; a source whose phasors are not one balanced set is written as one single phase `EnergySource` per conductor with the same phasors |
 | `RotatingMachine`, `PowerElectronicsConnection` | generators and inverter based resources |
 
-Line import currently supports impedance stated through
-`PerLengthPhaseImpedance`. Segments whose impedance comes only from wire or
-cable assets (`WireSpacingInfo`, `OverheadWireInfo`,
-`ConcentricNeutralCableInfo`, or `TapeShieldCableInfo`) have no typed line
-projection yet; their source records are retained and the omission is diagnosed.
+A segment with a `PerLengthPhaseImpedance` takes it. A segment without one,
+on a `WireSpacingInfo`, takes the impedance of its wires, calculated as the
+CIM reader does (see [Wire catalog lines](#wire-catalog-lines)). A segment
+whose wires cannot be calculated stays untyped at its source path with the
+reason, and the catalog records stay untyped as well.
 
 Voltage limits follow the upstream converter's line-to-line base, including
 single-phase equipment. PowerIO converts them to phase-to-ground bounds in the
@@ -323,6 +323,28 @@ code. A diagram without a code is a drawing. PowerIO does not reproject: the
 network's `geo` metadata names the CRS, and a geographic layer applied with
 `apply_geo_layer` replaces the coordinates with reprojected ones.
 
+### Wire catalog lines
+
+A segment with no `PerLengthImpedance` that names a `WireSpacingInfo` takes
+the impedance of its conductors: each `ACLineSegmentPhase` names a
+`WirePosition` by its `sequenceNumber` and a wire catalog entry by its
+`PowerSystemResource.AssetDatasheet` (`OverheadWireInfo`, `WireInfo`,
+`ConcentricNeutralCableInfo` or `TapeShieldCableInfo`). The OpenDSS line
+constants that read `geometry` calculate it, under OpenDSS's default earth
+(Deri, 100 ohm-m) since CIM states none, reported once as a
+`VALUE_DEFAULTED` finding. Positions and diameters are meters and
+resistances ohm/m, as CIM states them; `diameterOverScreen` is the tape's
+inside diameter. A position repeated with the same coordinates is one
+position. A neutral (`N`) phase the segment's `Terminal.phases` does not
+state is Kron reduced, as an OpenDSS line on a spacing with more conductors
+than phases reduces its neutrals; one the terminals state stays a conductor.
+
+A position no phase names leaves the impedance unknown (an unstated neutral
+changes every phase entry), and the segment is refused with the position
+named: `READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or an untyped segment in
+MG-RAVENS. The MG-RAVENS `IEEE13_Assets` example is such a document: it
+names no wire for the neutral of ten of its eleven segments.
+
 Without a `BaseFrequency`, distribution CIM reads at 60 Hz in both CIM16 and
 CIM100, with a `READ.CIM_DIST.VALUE_DEFAULTED` finding. The namespace identifies
 the schema, not the grid's operating frequency; state `BaseFrequency` for 50 Hz
@@ -368,7 +390,7 @@ sharing one `TransformerTankInfo`; every other transformer, including those
 from other formats, takes the `PowerTransformerEnd` form.
 
 Regulator controls, distributed energy resources
-(`PowerElectronicsConnection`), machines, wire and cable geometry, operational limits,
+(`PowerElectronicsConnection`), machines, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
@@ -424,8 +446,8 @@ producer dialects outside the documented electrical profile.
   not run yet.
 - **Not mapped.** Regulator and tap changer controls (`RegulatingControl`,
   `TapChangerControl`), distributed energy resources
-  (`PowerElectronicsConnection`) and machines, wire and cable geometry,
-  operational limits, and `LoadResponseCharacteristic` are reported on read
+  (`PowerElectronicsConnection`) and machines, operational limits, and
+  `LoadResponseCharacteristic` are reported on read
   (`READ.CIM_DIST.CLASS_UNMAPPED`, `READ.CIM_DIST.FIELD_UNMAPPED`). A
   document that connects equipment through `TopologicalNode` (bus branch)
   only is refused. On write, generators, inverter based resources, and

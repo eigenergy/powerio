@@ -8,12 +8,15 @@ that check before numerical use.
 
 ## OpenDSS line geometry
 
-PowerIO does not calculate conductor impedances from OpenDSS `geometry`,
-`spacing`, `wires`, `cncables` or `tscables`. The reader retains a line using any
-of these properties as an untyped source object and reports
-`READ.DSS.GEOMETRY_UNRESOLVED` with error severity. It creates neither a typed
-line nor a synthetic linecode or terminal map for that object. This also
-applies when geometry properties and an explicit linecode occur together.
+The dss reader calculates conductor impedances from OpenDSS `geometry`,
+`spacing`, `wires`, `cncables` and `tscables` with the pinned engine's line
+constants: overhead conductors, concentric-neutral cables (`CNData`) and
+tape-shielded cables (`TSData`), under the earth model and resistivity the
+source states. A line whose geometry falls outside that calculation, for
+example one mixing `CNData` and `TSData` cables, is retained as an untyped
+source object and reported as `READ.DSS.GEOMETRY_UNRESOLVED` with error
+severity, naming the reason. The reader creates neither a typed line nor a
+synthetic linecode or terminal map for that object.
 
 The original, unmodified source module can still emit its exact source bytes.
 IR retains the untyped object, but canonical OpenDSS, PMD and BMOPF conversion
@@ -23,15 +26,15 @@ before requesting those conversions. Numerical calculations reject both these
 untyped records and geometry-dependent typed lines from earlier IR documents.
 
 This intentionally rejects calculations and canonical conversions that could
-otherwise use incomplete electrical data. It does not implement Carson's
-equations or infer conductor count from a phase count. Explicit linecode data
-without geometry-dependent properties remains eligible when the remaining
-checks pass.
+otherwise use incomplete electrical data. It does not infer conductor count
+from a phase count. Explicit linecode data without geometry-dependent
+properties remains eligible when the remaining checks pass.
 
 ## Distribution CIM segments without impedance
 
 A CIM `ACLineSegment` whose impedance the reader cannot read, for example one
-described only by wire spacing and wire data, parses with a zero placeholder
+on a `WireSpacingInfo` with a position no `ACLineSegmentPhase` names a wire
+for, parses with a zero placeholder
 line code and an error finding, `READ.CIM_DIST.IMPEDANCE_UNRESOLVED`. The
 audit blocks it as `READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED`, because the
 placeholder would be a short circuit between its buses. Numerical
