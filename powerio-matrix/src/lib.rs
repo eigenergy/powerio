@@ -65,9 +65,9 @@ mod mcopf;
 pub use mcopf::{
     BoundedLoadLawPolicy, MC_OPF_DROOP_SMOOTHING, McAcOpfAssemblyOptions, McAcOpfPreparation,
     McOpfAngleLimit, McOpfBranch, McOpfCoil, McOpfComplexRow, McOpfDevice, McOpfDeviceKind,
-    McOpfDroop, McOpfDroopValue, McOpfLoadLaw, McOpfLoadLawProjection, McOpfShunt, McOpfTerminal,
-    McOpfTransformer, McOpfTransformerCoil, McOpfTransformerPort, McOpfVoltageLimit,
-    build_mc_ac_opf_preparation,
+    McOpfDroop, McOpfDroopHinge, McOpfDroopTerms, McOpfDroopValue, McOpfLoadLaw,
+    McOpfLoadLawProjection, McOpfShunt, McOpfTerminal, McOpfTransformer, McOpfTransformerCoil,
+    McOpfTransformerPort, McOpfVoltageLimit, build_mc_ac_opf_preparation,
 };
 mod dc_operators;
 mod dcopf;

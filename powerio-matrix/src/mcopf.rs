@@ -207,6 +207,27 @@ impl McOpfLoadLaw {
             (value, slope / self.nominal)
         })
     }
+
+    /// The constant admittance of a law whose every term has exponent two
+    /// (pure constant impedance), per unit: `conj(Σ P + j Σ Q) / nominal²`
+    /// ([`powerio_dist::calc_load_nominal_admittance`]), so
+    /// the coil current is `Y U` at every voltage, zero included. `None`
+    /// when any term has another exponent.
+    #[must_use]
+    #[allow(clippy::float_cmp)] // the impedance exponent is an exact spelling
+    pub fn calc_impedance_admittance(&self) -> Option<num_complex::Complex64> {
+        if !self.terms.iter().flatten().all(|t| t[1] == 2.0) {
+            return None;
+        }
+        let [active, reactive] = self
+            .terms
+            .each_ref()
+            .map(|terms| terms.iter().map(|t| t[0]).sum::<f64>());
+        Some(powerio_dist::calc_load_nominal_admittance(
+            num_complex::Complex64::new(active, reactive),
+            self.nominal,
+        ))
+    }
 }
 
 /// The softplus width of a prepared droop curve as a share of its mean knot
@@ -257,7 +278,59 @@ fn smooth_hinge(z: f64) -> [f64; 4] {
     ]
 }
 
+/// One softplus corner of a droop curve: it adds
+/// `coefficient · width · softplus((v − knot) / width)` to the control power
+/// at the monitored voltage `v` ([`McOpfDroopTerms`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct McOpfDroopHinge {
+    /// The signed slope change at the knot, per unit power per unit
+    /// voltage: `+sⱼ` at a segment's lower knot, `−sⱼ` at its upper knot.
+    pub coefficient: f64,
+    /// The knot, per unit voltage.
+    pub knot: f64,
+    /// The softplus width `ε`, per unit voltage.
+    pub width: f64,
+}
+
+/// A droop curve as a sum: `constant + Σ hinges`
+/// ([`McOpfDroop::calc_terms`]). A segment of zero slope adds no hinge.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct McOpfDroopTerms {
+    /// The control power at the lowest knot and below, per unit.
+    pub constant: f64,
+    /// The corners, two per segment of nonzero slope, lower knot first.
+    pub hinges: Vec<McOpfDroopHinge>,
+}
+
 impl McOpfDroop {
+    /// The curve's terms, the one statement of the smoothed piecewise linear
+    /// curve: [`calc_control`](Self::calc_control) sums them and a symbolic
+    /// model builds its expression from them.
+    #[must_use]
+    #[allow(clippy::float_cmp)] // a flat segment has an exactly zero slope
+    pub fn calc_terms(&self) -> McOpfDroopTerms {
+        let mut hinges = Vec::new();
+        for j in 0..self.knots.len().saturating_sub(1) {
+            let slope = (self.values[j + 1] - self.values[j]) / (self.knots[j + 1] - self.knots[j]);
+            if slope == 0.0 {
+                continue;
+            }
+            for (k, sign) in [(j, 1.0), (j + 1, -1.0)] {
+                hinges.push(McOpfDroopHinge {
+                    coefficient: sign * slope,
+                    knot: self.knots[k],
+                    width: self.epsilon,
+                });
+            }
+        }
+        McOpfDroopTerms {
+            constant: self.values[0],
+            hinges,
+        }
+    }
+
     /// The mean monitored voltage magnitude: `|V_p − V_n|` over the monitor
     /// pairs (`V_n = 0` for ground), averaged, from per unit terminal
     /// voltages indexed like the preparation's terminals.
@@ -287,14 +360,13 @@ impl McOpfDroop {
     /// parameter sensitivities read it.
     #[must_use]
     pub fn calc_control(&self, voltage: f64) -> McOpfDroopValue {
-        let mut value = self.values[0];
+        let terms = self.calc_terms();
+        let mut value = terms.constant;
         let mut slope = 0.0;
-        for j in 0..self.knots.len().saturating_sub(1) {
-            let s = (self.values[j + 1] - self.values[j]) / (self.knots[j + 1] - self.knots[j]);
-            let a = smooth_hinge((voltage - self.knots[j]) / self.epsilon);
-            let b = smooth_hinge((voltage - self.knots[j + 1]) / self.epsilon);
-            value += s * self.epsilon * (a[0] - b[0]);
-            slope += s * (a[1] - b[1]);
+        for hinge in &terms.hinges {
+            let [softplus, sigmoid, ..] = smooth_hinge((voltage - hinge.knot) / hinge.width);
+            value += hinge.coefficient * hinge.width * softplus;
+            slope += hinge.coefficient * sigmoid;
         }
         McOpfDroopValue { value, slope }
     }

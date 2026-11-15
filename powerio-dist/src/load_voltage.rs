@@ -118,8 +118,13 @@ impl DistLoadVoltageModel {
                 ..
             } => {
                 let gamma = [exponent(gamma_p, 0)?, exponent(gamma_q, 1)?];
-                envelope_scale(voltage_pu, [*v_low_pu, *v_min_pu, *v_max_pu])?
-                    .unwrap_or_else(|| gamma.map(|exponent| voltage_pu.powf(exponent)))
+                envelope_scale(voltage_pu, [*v_low_pu, *v_min_pu, *v_max_pu])?.unwrap_or_else(
+                    || {
+                        gamma.map(|exponent| {
+                            crate::electrical::calc_voltage_power_term(1.0, exponent, voltage_pu).0
+                        })
+                    },
+                )
             }
             Self::BoundedZip {
                 alpha_z,
