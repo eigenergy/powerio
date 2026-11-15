@@ -3682,7 +3682,7 @@ fn winding_base(w: &DistWinding) -> Option<f64> {
 /// circuit. The schema leaves every series impedance field optional, so the
 /// caller drops the field instead, and an absent field reads as unknown.
 fn base_impedance(v_ref: f64, s: f64) -> Option<f64> {
-    (s > 0.0 && s.is_finite()).then(|| v_ref * v_ref / s)
+    powerio_core::electrical::calc_impedance_base(v_ref, s)
 }
 
 fn n_winding_phase_count(w: &DistWinding) -> usize {

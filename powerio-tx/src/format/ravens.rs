@@ -1044,7 +1044,7 @@ fn write_branch(
     let raw_kv_from = kv_of.get(&branch.from).copied().unwrap_or(1.0);
     let raw_kv_to = kv_of.get(&branch.to).copied().unwrap_or(1.0);
     let kv = eff_kv(raw_kv_from);
-    let z_base = kv * kv / base_mva;
+    let z_base = powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN);
     let y_base = base_mva / (kv * kv);
 
     let set_name = format!("OpLimbranch{n}");

@@ -60,7 +60,8 @@ pub(super) fn line(
     if kv(network, ports[0]).to_bits() != kv(network, ports[1]).to_bits() {
         return Err(row.bad("Un", "line joins unlike voltage bases"));
     }
-    let base_z = kv(network, ports[0]).powi(2) / network.base_mva();
+    let base_z = powerio_core::electrical::calc_impedance_base(kv(network, ports[0]), network.base_mva())
+        .unwrap_or(f64::NAN);
     let length = row.positive("l")?;
     let parallel = row.positive("ParSys")?;
     let scale = finite(length / parallel / base_z, "line impedance base")?;
@@ -193,7 +194,7 @@ pub(super) fn load(
             if !(0.0..=1.0).contains(&pf) {
                 return Err(row.bad("cosphi", "unsupported power factor"));
             }
-            (s * pf, s * (1.0 - pf * pf).sqrt())
+            (s * pf, s * powerio_core::electrical::calc_power_factor_sine(pf))
         }
         11 | 12 => {
             let p = row.number("P")? * row.number("fP")?;
@@ -201,7 +202,7 @@ pub(super) fn load(
             if pf > 1.0 {
                 return Err(row.bad("cosphi", "power factor exceeds one"));
             }
-            (p, p / pf * (1.0 - pf * pf).sqrt())
+            (p, p * powerio_core::electrical::calc_reactive_ratio(pf))
         }
         _ => return Err(row.bad("Flag_Lf", "unsupported balanced load mode")),
     };

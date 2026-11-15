@@ -872,7 +872,11 @@ impl Writer {
                 );
                 continue;
             }
-            let zbase: Vec<f64> = vnom.iter().zip(&snom).map(|(v, s)| v * v / s).collect();
+            let zbase: Vec<f64> = vnom
+                .iter()
+                .zip(&snom)
+                .map(|(v, s)| powerio_core::electrical::calc_impedance_base(*v, *s).unwrap_or(f64::NAN))
+                .collect();
             let pairs = crate::model::pair_keys(nrw);
             let x_sc: Vec<f64> = pairs
                 .iter()
@@ -2482,7 +2486,7 @@ impl LossChains {
     fn winding_resistance(&self, w: usize) -> Cycle {
         let (v, s, ratio) = (self.vnom[w], self.snom[w], self.ratios[w]);
         Rc::new(move |pu: f64, base: f64| {
-            let z_w = v * v / s;
+            let z_w = powerio_core::electrical::calc_impedance_base(v, s).unwrap_or(f64::NAN);
             let r_pct = ((pu * base) * ratio * ratio) / z_w * 100.0;
             (r_pct / 100.0 * z_w / (ratio * ratio)) / base
         })
@@ -2493,7 +2497,7 @@ impl LossChains {
     fn pair_reactance(&self) -> Cycle {
         let (v, s, ratio) = (self.vnom[0], self.snom[0], self.ratios[0]);
         Rc::new(move |pu: f64, base: f64| {
-            let z1 = v * v / s;
+            let z1 = powerio_core::electrical::calc_impedance_base(v, s).unwrap_or(f64::NAN);
             let mut zbr = BTreeMap::new();
             zbr.insert((0usize, 1usize), Complex64::new(0.0, pu * base));
             let zsc = br2sc_impedance(&zbr, 2);

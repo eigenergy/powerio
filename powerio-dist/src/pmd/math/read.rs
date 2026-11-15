@@ -628,7 +628,8 @@ impl<'a> Reader<'a> {
             return 1.0;
         }
         let vbase = self.vbase.get(bus_key).copied().unwrap_or(1.0);
-        vbase * vbase / self.sbase * self.voltage_scale_factor
+        powerio_core::electrical::calc_impedance_base(vbase, self.sbase).unwrap_or(f64::NAN)
+            * self.voltage_scale_factor
     }
 
     /// Amperes of a per unit current at a bus.

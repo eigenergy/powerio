@@ -57,7 +57,7 @@ pub(super) fn prepare(
         let (profile, pf) = control_profile(ctx, inv, config)?;
         // pf > 0: Q on the same side as P (OpenDSS, BMOPF); Q/P = a/pf.
         let power_factor_coefficients =
-            pf.map(|v| [((1.0 - v.abs()) * (1.0 + v.abs())).sqrt(), -v]);
+            pf.map(powerio_core::electrical::calc_power_factor_coefficients);
         let slope = power_factor_coefficients
             .map(|[a, b]| -a / b)
             .filter(|v| v.is_finite());

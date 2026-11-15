@@ -90,7 +90,7 @@ impl Reader<'_> {
                 let pf = power.re / magnitude;
                 power = Complex64::new(
                     limit * pf,
-                    (limit * (1.0 - pf * pf).sqrt()).copysign(power.im),
+                    (limit * powerio_core::electrical::calc_power_factor_sine(pf)).copysign(power.im),
                 );
             }
             let name = allocate_name(&mut self.identities, &format!("{original}__{letter}"));

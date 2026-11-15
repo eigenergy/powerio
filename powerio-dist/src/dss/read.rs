@@ -1525,7 +1525,7 @@ impl Reader<'_> {
                         q_written = true;
                     }
                     if pf != 0.0 {
-                        kvar = kw * (pf.acos().tan()).copysign(pf);
+                        kvar = kw * powerio_core::electrical::calc_reactive_ratio(pf);
                     }
                 }
                 _ => {

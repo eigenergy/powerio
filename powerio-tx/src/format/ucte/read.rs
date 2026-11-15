@@ -438,7 +438,7 @@ pub(crate) fn parse_ucte_source(
                     )));
                 }
                 let kv = id.node1.base_kv();
-                let zbase = kv * kv / BASE_MVA;
+                let zbase = powerio_core::electrical::calc_impedance_base(kv, BASE_MVA).unwrap_or(f64::NAN);
                 let r = record.number(22, 28, "resistance")?;
                 let x = record.number(29, 35, "reactance")?;
                 let b = record.number(36, 44, "susceptance")?;

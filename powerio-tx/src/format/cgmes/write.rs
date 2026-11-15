@@ -6482,7 +6482,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             &mut w.warnings,
         );
         let kv = w.kv(branch.from)?;
-        let z_base = kv * kv / net.base_mva();
+        let z_base = powerio_core::electrical::calc_impedance_base(kv, net.base_mva()).unwrap_or(f64::NAN);
         let y_base = net.base_mva() / (kv * kv);
         let charging = branch.calc_terminal_charging();
         let emits_as_transformer =

@@ -1322,11 +1322,14 @@ pub(crate) fn n_winding_phase_count(conn: DistWindingConn, terminal_map: &[Strin
 }
 
 /// `phases * v_nom^2 / s`, the impedance base for an n-winding transformer
-/// winding, or `None` if any input isn't a positive finite number.
+/// winding on its per phase power `s / phases`
+/// ([`powerio_core::electrical::calc_impedance_base`]), or `None` if any
+/// input isn't a positive finite number.
 pub(crate) fn n_winding_impedance_base(phases: usize, v_nom: f64, s: f64) -> Option<f64> {
-    let phases = phases as f64;
-    (phases > 0.0 && v_nom.is_finite() && v_nom > 0.0 && s.is_finite() && s > 0.0)
-        .then_some(phases * v_nom * v_nom / s)
+    if phases == 0 {
+        return None;
+    }
+    powerio_core::electrical::calc_impedance_base(v_nom, s / phases as f64)
 }
 
 /// The two phase conductors of a line to line regulating winding: exactly

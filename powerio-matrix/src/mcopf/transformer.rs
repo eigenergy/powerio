@@ -199,7 +199,8 @@ pub(super) fn prepare(
 ) -> Result<Vec<McOpfTransformer>> {
     let mut out = Vec::new();
     let sb = bases.power_base_va;
-    let zb = bases.voltage_base_v.powi(2) / sb;
+    let zb = powerio_core::electrical::calc_impedance_base(bases.voltage_base_v, sb)
+        .ok_or_else(|| invalid("assembly", "the voltage and power bases must be positive"))?;
     let ib = sb / bases.voltage_base_v;
     for t in ctx.net.transformers() {
         validate_extras(t)?;

@@ -107,14 +107,14 @@ impl Reader<'_> {
         } else {
             Complex64::new(
                 available,
-                -(available / pf.abs() * (1.0 - pf * pf).sqrt()).copysign(pf),
+                -(available * powerio_core::electrical::calc_reactive_ratio(pf).abs()).copysign(pf),
             )
         };
         let maximum = rating * maps.len() as f64;
         if power.norm() > maximum {
             power = Complex64::new(
                 (maximum * pf).abs(),
-                (maximum * (1.0 - pf * pf).sqrt()).copysign(power.im),
+                (maximum * powerio_core::electrical::calc_power_factor_sine(pf)).copysign(power.im),
             );
         }
         if !online {

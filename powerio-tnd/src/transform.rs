@@ -1279,7 +1279,8 @@ struct VoltageBase {
 }
 
 fn z_base_ohm_of(line_to_line_volts: f64, base_mva: f64) -> f64 {
-    line_to_line_volts * line_to_line_volts / (base_mva * 1_000_000.0)
+    powerio_core::electrical::calc_impedance_base(line_to_line_volts, base_mva * 1_000_000.0)
+        .unwrap_or(f64::NAN)
 }
 
 #[derive(Clone, Copy)]

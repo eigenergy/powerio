@@ -638,7 +638,8 @@ fn line_row(net: &BalancedNetwork, branch: &Branch, from: &Bus) -> Row {
         0.0,
         branch.b / 2.0,
     ));
-    let zbase = from.base_kv.powi(2) / net.base_mva();
+    let zbase = powerio_core::electrical::calc_impedance_base(from.base_kv, net.base_mva())
+        .unwrap_or(f64::NAN);
     let mut input = row(
         "Flag_Typ_ID Typ_ID Flag_Ll CoupData_ID Flag_Macro Macro_ID LineTemp_ID va ElemLoading_ID",
     );
