@@ -120,13 +120,11 @@ impl DistLoadVoltageModel {
                 ..
             } => {
                 let gamma = [exponent(gamma_p, 0)?, exponent(gamma_q, 1)?];
-                envelope_scale(voltage_pu, [*v_low_pu, *v_min_pu, *v_max_pu])?.unwrap_or_else(
-                    || {
-                        gamma.map(|exponent| {
-                            crate::electrical::calc_voltage_power_term(1.0, exponent, voltage_pu).0
-                        })
-                    },
-                )
+                banded_scale(voltage_pu, [*v_low_pu, *v_min_pu, *v_max_pu])?.unwrap_or_else(|| {
+                    gamma.map(|exponent| {
+                        crate::electrical::calc_voltage_power_term(1.0, exponent, voltage_pu).0
+                    })
+                })
             }
             Self::BoundedZip {
                 alpha_z,
@@ -159,8 +157,8 @@ impl DistLoadVoltageModel {
                                 "load voltage thresholds must be finite and nonnegative".into()
                             );
                         }
-                        let band = envelope_band(voltage_pu, [*low, *min, *max]);
-                        if band == EnvelopeBand::Low {
+                        let band = voltage_band(voltage_pu, [*low, *min, *max]);
+                        if band == VoltageBand::Low {
                             // Native low-voltage continuation is the full nominal
                             // impedance, even when ZIP coefficients do not sum to one.
                             return if (voltage_pu * voltage_pu).is_finite() {
@@ -174,11 +172,11 @@ impl DistLoadVoltageModel {
                             };
                         }
                         let (current_scale, power_scale) = match band {
-                            EnvelopeBand::Transition(weight) => (
+                            VoltageBand::Transition(weight) => (
                                 voltage_pu * (low + (1.0 - low) * weight),
                                 transition_power_scale(voltage_pu, *low, *min, weight),
                             ),
-                            EnvelopeBand::High => (
+                            VoltageBand::High => (
                                 voltage_pu * voltage_pu / if *max == 0.0 { 1.0 } else { *max },
                                 high_power_scale(voltage_pu, *max),
                             ),
@@ -282,24 +280,24 @@ impl DistLoadVoltageModel {
     }
 
     /// [`power_scale_where`](Self::power_scale_where) of this law inside a
-    /// voltage envelope `[v_low_pu, v_min_pu, v_max_pu]`, OpenDSS's load
+    /// set of voltage bands `[v_low_pu, v_min_pu, v_max_pu]`, OpenDSS's load
     /// voltage limits: both factors are `u²` (the nominal impedance) at or
     /// below `v_low_pu`, `u * (low + (1/min - low) * (u - low)/(min - low))`
     /// (current magnitude moving linearly to the constant power current at
     /// `v_min_pu`) up to `v_min_pu`, `(u/max)²` above `v_max_pu`, and this
     /// law's own factors between. A bounded exponential law is exactly its
-    /// exponential law inside its own envelope; this applies the same bands
-    /// to any law, as a solver's envelope option does.
+    /// exponential law inside its own bands; this applies the same bands
+    /// to any law, as a solver's voltage band option does.
     ///
     /// # Errors
     /// Thresholds that are not finite and nonnegative, or what
     /// [`power_scale_where`](Self::power_scale_where) refuses in the middle
     /// band.
-    pub fn power_scale_in_envelope(
+    pub fn power_scale_in_voltage_bands(
         &self,
         phase: usize,
         voltage: f64,
-        envelope: [f64; 3],
+        bands: [f64; 3],
         evaluate: [bool; 2],
     ) -> Result<[f64; 2], String> {
         if !voltage.is_finite() || voltage < 0.0 {
@@ -311,7 +309,7 @@ impl DistLoadVoltageModel {
         if !nominal.is_finite() || nominal <= 0.0 {
             return Err("nominal load voltage must be positive and finite".into());
         }
-        match envelope_scale(voltage / nominal, envelope)? {
+        match banded_scale(voltage / nominal, bands)? {
             Some(scale) => {
                 let value = [0, 1].map(|c| if evaluate[c] { scale[c] } else { 0.0 });
                 if value.iter().any(|v| !v.is_finite()) {
@@ -401,27 +399,27 @@ fn coefficient(values: &[f64], channel: usize) -> Result<f64, String> {
         .ok_or_else(|| "missing or nonfinite load coefficient".into())
 }
 
-/// Where a per unit voltage falls in a load voltage envelope
+/// Where a per unit voltage falls in a load's voltage bands
 /// `[low, min, max]`, in the native branch order (so overlapping thresholds
 /// keep it): at or below `low`, up to `min` (with the transition weight
 /// `(u - low)/(min - low)`), above `max`, or in the middle band.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum EnvelopeBand {
+enum VoltageBand {
     Low,
     Transition(f64),
     High,
     Middle,
 }
 
-fn envelope_band(u: f64, [low, min, max]: [f64; 3]) -> EnvelopeBand {
+fn voltage_band(u: f64, [low, min, max]: [f64; 3]) -> VoltageBand {
     if u <= low {
-        EnvelopeBand::Low
+        VoltageBand::Low
     } else if u <= min {
-        EnvelopeBand::Transition((u - low) / (min - low))
+        VoltageBand::Transition((u - low) / (min - low))
     } else if u > max {
-        EnvelopeBand::High
+        VoltageBand::High
     } else {
-        EnvelopeBand::Middle
+        VoltageBand::Middle
     }
 }
 
@@ -436,18 +434,18 @@ fn high_power_scale(u: f64, max: f64) -> f64 {
     u * u / if max == 0.0 { 1.0 } else { max * max }
 }
 
-/// Both factors of a law inside the envelope's outer bands, or `None` in the
+/// Both factors of a law in the outer voltage bands, or `None` in the
 /// middle band, where the law's own factors hold.
-fn envelope_scale(u: f64, bounds: [f64; 3]) -> Result<Option<[f64; 2]>, String> {
+fn banded_scale(u: f64, bounds: [f64; 3]) -> Result<Option<[f64; 2]>, String> {
     if bounds.iter().any(|v| !v.is_finite() || *v < 0.0) {
         return Err("load voltage thresholds must be finite and nonnegative".into());
     }
     let [low, min, max] = bounds;
-    Ok(match envelope_band(u, bounds) {
-        EnvelopeBand::Low => Some([u * u; 2]),
-        EnvelopeBand::Transition(weight) => Some([transition_power_scale(u, low, min, weight); 2]),
-        EnvelopeBand::High => Some([high_power_scale(u, max); 2]),
-        EnvelopeBand::Middle => None,
+    Ok(match voltage_band(u, bounds) {
+        VoltageBand::Low => Some([u * u; 2]),
+        VoltageBand::Transition(weight) => Some([transition_power_scale(u, low, min, weight); 2]),
+        VoltageBand::High => Some([high_power_scale(u, max); 2]),
+        VoltageBand::Middle => None,
     })
 }
 

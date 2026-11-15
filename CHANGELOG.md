@@ -339,10 +339,10 @@
   lines and switches, and
   `calc_flooded_zone_bases` the one zone base flood across transformers, read by the lowering
   and the PMD MATHEMATICAL writer.
-- `DistLoadVoltageModel::power_scale_in_envelope` evaluates any load law inside an OpenDSS style
-  voltage envelope (`u²` at or below `v_low_pu`, the constant power current transition up to
+- `DistLoadVoltageModel::power_scale_in_voltage_bands` evaluates any load law inside an OpenDSS style
+  set of voltage bands (`u²` at or below `v_low_pu`, the constant power current transition up to
   `v_min_pu`, `(u/max)²` above `v_max_pu`); a bounded exponential law is its exponential law in
-  that envelope and the bounded ZIP law reads the same bands, so a bounded exponential factor can
+  those bands and the bounded ZIP law reads the same bands, so a bounded exponential factor can
   move in the last place. The bounded exponential law's middle band evaluates each exponent with
   the one term evaluation (`calc_voltage_power_term`), so a non-integer exponent below one follows
   its tangent below a voltage ratio of `1e-3`. `calc_load_nominal_admittance` is a branch's
