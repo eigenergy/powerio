@@ -96,8 +96,8 @@ pub use dc_operators::{DcOperatorOptions, DcOperators, ReferenceConstrainedSyste
 pub use dcopf::{
     DcBranchParameters, DcGeneratorParameters, DcOpfAssemblyOptions, DcOpfBundleMetadata,
     DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorParameters,
-    SynthesizedLimitWindow, Units, build_dc_opf_preparation, calc_dc_opf_matrices,
-    emit_dcopf_bundle,
+    SynthesizedLimitWindow, Units, build_dc_opf_preparation, calc_bus_hosts, calc_bus_totals,
+    calc_dc_opf_matrices, emit_dcopf_bundle,
 };
 pub use lindist3flow::{
     AffineScalarCoefficients, ConnectionPowerMap, CrossVoltageCoefficients, LinDist3FlowLineData,

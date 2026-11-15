@@ -365,9 +365,9 @@ impl DcOpfPreparation {
             q: costs.q,
             c: costs.c,
             c0: costs.c0,
-            pmax: nodal::sum_by_bus(n, bus_of_gen, &generators.pmax),
-            pmin: nodal::sum_by_bus(n, bus_of_gen, &generators.pmin),
-            has_gen: nodal::buses_with_generators(n, bus_of_gen),
+            pmax: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmax),
+            pmin: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmin),
+            has_gen: nodal::calc_bus_hosts(n, bus_of_gen),
         })
     }
 }

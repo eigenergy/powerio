@@ -730,11 +730,11 @@ impl AcOpfPreparation {
             q: costs.q,
             c: costs.c,
             c0: costs.c0,
-            pmax: nodal::sum_by_bus(n, bus_of_gen, &generators.pmax),
-            pmin: nodal::sum_by_bus(n, bus_of_gen, &generators.pmin),
-            qmax: nodal::sum_by_bus(n, bus_of_gen, &generators.qmax),
-            qmin: nodal::sum_by_bus(n, bus_of_gen, &generators.qmin),
-            has_gen: nodal::buses_with_generators(n, bus_of_gen),
+            pmax: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmax),
+            pmin: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmin),
+            qmax: nodal::calc_bus_totals(n, bus_of_gen, &generators.qmax),
+            qmin: nodal::calc_bus_totals(n, bus_of_gen, &generators.qmin),
+            has_gen: nodal::calc_bus_hosts(n, bus_of_gen),
         })
     }
 
@@ -742,8 +742,9 @@ impl AcOpfPreparation {
     /// each generator's positive setpoint in generator column order (last
     /// wins), with a non-positive case voltage falling back to 1.0.
     ///
-    /// The result is not clamped to `[vm_min, vm_max]`; feasibility repair is
-    /// solver preparation and stays downstream.
+    /// The result is not clamped to `[vm_min, vm_max]`;
+    /// [`calc_banded_vm_setpoints`](Self::calc_banded_vm_setpoints) is the
+    /// clamped form a power flow holding these magnitudes reads.
     #[must_use]
     pub fn calc_vm_setpoints(&self) -> Vec<f64> {
         let mut vm: Vec<f64> = self
@@ -756,6 +757,34 @@ impl AcOpfPreparation {
             let vg = self.generators.vg[generator];
             if vg > 0.0 {
                 vm[self.generators.bus_of_gen[generator]] = vg;
+            }
+        }
+        vm
+    }
+
+    /// [`calc_vm_setpoints`](Self::calc_vm_setpoints) with each bus that a
+    /// generator setpoint regulates held inside its `[vm_min, vm_max]` band.
+    /// A power flow holds a regulated magnitude at its setpoint with no
+    /// magnitude variable to bound it, so an out of band setpoint would pin
+    /// the bus at an infeasible magnitude. A band that is not usable (a non
+    /// finite or inverted bound) applies no clamp, and a bus no generator
+    /// regulates keeps its case voltage.
+    #[must_use]
+    pub fn calc_banded_vm_setpoints(&self) -> Vec<f64> {
+        let mut vm = self.calc_vm_setpoints();
+        let regulating: Vec<usize> = self
+            .generators
+            .bus_of_gen
+            .iter()
+            .zip(&self.generators.vg)
+            .filter(|&(_, &vg)| vg > 0.0)
+            .map(|(&bus, _)| bus)
+            .collect();
+        let regulated = nodal::calc_bus_hosts(self.n_buses, &regulating);
+        for (bus, value) in vm.iter_mut().enumerate() {
+            let (lo, hi) = (self.buses.vm_min[bus], self.buses.vm_max[bus]);
+            if regulated[bus] && lo.is_finite() && hi.is_finite() && lo <= hi {
+                *value = value.clamp(lo, hi);
             }
         }
         vm

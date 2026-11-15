@@ -22,6 +22,7 @@ use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, emit_dcopf_bundle};
 pub use limits::SynthesizedLimitWindow;
+pub use nodal::{calc_bus_hosts, calc_bus_totals};
 pub use prep::{
     DcBranchParameters, DcGeneratorParameters, DcOpfPreparation, NodalGeneratorParameters, Units,
 };
