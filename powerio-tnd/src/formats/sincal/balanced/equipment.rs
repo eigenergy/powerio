@@ -60,9 +60,7 @@ pub(super) fn line(
     if kv(network, ports[0]).to_bits() != kv(network, ports[1]).to_bits() {
         return Err(row.bad("Un", "line joins unlike voltage bases"));
     }
-    let base_z =
-        powerio_core::electrical::calc_impedance_base(kv(network, ports[0]), network.base_mva())
-            .unwrap_or(f64::NAN);
+    let base_z = impedance_base(kv(network, ports[0]), network.base_mva());
     let length = row.positive("l")?;
     let parallel = row.positive("ParSys")?;
     let scale = finite(length / parallel / base_z, "line impedance base")?;
@@ -520,4 +518,10 @@ pub(super) fn capacitor(
     );
     shunt.uid = Some(uid.to_owned());
     Ok(shunt)
+}
+
+/// The one per unit impedance base (`powerio_core::electrical`), `NaN` for an
+/// unusable base so the finiteness check below names it.
+fn impedance_base(kv: f64, base_mva: f64) -> f64 {
+    powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN)
 }

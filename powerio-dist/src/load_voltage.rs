@@ -78,7 +78,7 @@ impl DistLoadVoltageModel {
                     if evaluate[component] {
                         let terms = self
                             .component_terms(phase, component == 1)?
-                            .expect("an unbounded law has power law terms");
+                            .ok_or("load law has no power law terms")?;
                         *out =
                             powerio_core::electrical::calc_voltage_power_terms(&terms, voltage_pu)
                                 .0;
@@ -233,13 +233,10 @@ impl DistLoadVoltageModel {
     /// # Errors
     /// A missing or nonfinite coefficient.
     pub fn calc_power_terms(&self, channel: usize) -> Result<Option<[Vec<[f64; 2]>; 2]>, String> {
-        let Some(active) = self.component_terms(channel, false)? else {
-            return Ok(None);
-        };
-        let reactive = self
-            .component_terms(channel, true)?
-            .expect("both components of an unbounded law have terms");
-        Ok(Some([active, reactive]))
+        Ok(self
+            .component_terms(channel, false)?
+            .zip(self.component_terms(channel, true)?)
+            .map(|(active, reactive)| [active, reactive]))
     }
 
     fn component_terms(

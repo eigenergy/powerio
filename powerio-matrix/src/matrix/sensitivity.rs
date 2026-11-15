@@ -856,7 +856,7 @@ fn ptdf_dense_with_path(
 
     // Nonsingular indefinite fallback: explicit inverse by Gaussian
     // elimination with partial pivoting.
-    let rinv = dense_inverse(dense_lr, nr).ok_or(Error::SingularNetwork)?;
+    let rinv = dense_inverse(&dense_lr, nr).ok_or(Error::SingularNetwork)?;
     for (rc, uses) in rows_used.iter().enumerate() {
         scatter_minv_row(&rinv[rc * nr..rc * nr + nr], uses, &full_of, n, &mut ptdf);
     }
@@ -1237,7 +1237,7 @@ impl GroundedSolver {
                 if let Some(chol) = DenseCholesky::factor(&dense, nr) {
                     return Ok(Self::DenseCholesky(chol));
                 }
-                let inverse = dense_inverse(dense, nr).ok_or(Error::SingularNetwork)?;
+                let inverse = dense_inverse(&dense, nr).ok_or(Error::SingularNetwork)?;
                 Ok(Self::DenseInverse { inverse, n: nr })
             }
             SensitivitySolver::Sparse => {
@@ -1594,7 +1594,7 @@ fn dense_to_csr_with_drop(
 /// The explicit inverse of a dense row major `n × n` matrix, by the one
 /// dense inverse ([`powerio_dist::dense::invert_dense_matrix`]: partial
 /// pivoting, each pivot judged against its own column's scale).
-fn dense_inverse(a: Vec<f64>, n: usize) -> Option<Vec<f64>> {
+fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
     let rows: Vec<Vec<f64>> = a.chunks(n.max(1)).take(n).map(<[f64]>::to_vec).collect();
     powerio_dist::dense::invert_dense_matrix(&rows, 0.0).map(|inverse| inverse.concat())
 }
@@ -1738,7 +1738,7 @@ mod pivot_tests {
         // original magnitude. The old floor scaled from the matrix-wide
         // maximum refused this as singular.
         let wide = [1e12, 0.0, 0.0, 1e-6];
-        let inv = dense_inverse(wide.to_vec(), 2).expect("a diagonal matrix inverts");
+        let inv = dense_inverse(&wide, 2).expect("a diagonal matrix inverts");
         assert!((inv[3] - 1e6).abs() < 1e-4, "{inv:?}");
         assert!(DenseCholesky::factor(&wide, 2).is_some());
     }
@@ -1748,17 +1748,17 @@ mod pivot_tests {
         // Elimination reduces the second pivot from order 1 to machine
         // epsilon: no significant digits survive.
         let close = [1.0, 1.0, 1.0, 1.0 + f64::EPSILON];
-        assert!(dense_inverse(close.to_vec(), 2).is_none());
+        assert!(dense_inverse(&close, 2).is_none());
         assert!(DenseCholesky::factor(&close, 2).is_none());
 
         // The same cancellation scaled down by 1e14 is caught by the same
         // relative floor.
         let small = [1e-14, 1e-14, 1e-14, 1e-14 * (1.0 + f64::EPSILON)];
-        assert!(dense_inverse(small.to_vec(), 2).is_none());
+        assert!(dense_inverse(&small, 2).is_none());
         assert!(DenseCholesky::factor(&small, 2).is_none());
 
         // A genuinely singular matrix is refused outright.
-        assert!(dense_inverse(vec![1.0, 1.0, 1.0, 1.0], 2).is_none());
+        assert!(dense_inverse(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
         assert!(DenseCholesky::factor(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
     }
 
@@ -1767,8 +1767,7 @@ mod pivot_tests {
         // Every entry is tiny but the matrix is perfectly conditioned; an
         // absolute floor refused it outright.
         let small = [1e-14, 0.0, 0.0, 1e-14];
-        let inv =
-            dense_inverse(small.to_vec(), 2).expect("a well conditioned small matrix inverts");
+        let inv = dense_inverse(&small, 2).expect("a well conditioned small matrix inverts");
         assert!((inv[0] - 1e14).abs() < 1.0, "{inv:?}");
         assert!(DenseCholesky::factor(&small, 2).is_some());
     }
@@ -1778,7 +1777,7 @@ mod pivot_tests {
     #[test]
     fn a_nan_pivot_does_not_factor() {
         assert!(DenseCholesky::factor(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
-        assert!(dense_inverse(vec![f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
+        assert!(dense_inverse(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
     }
 }
 
