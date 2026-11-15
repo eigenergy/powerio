@@ -481,8 +481,8 @@ impl McAcPfInstance {
         // single phase branch across two phase terminals, one otherwise.
         let line_to_line =
             |configuration: Configuration, across_phases: bool, label: &str| match configuration {
-                Configuration::Delta => Ok(3f64.sqrt()),
-                Configuration::SinglePhase if across_phases => Ok(3f64.sqrt()),
+                Configuration::Delta => Ok(powerio_core::electrical::SQRT_3),
+                Configuration::SinglePhase if across_phases => Ok(powerio_core::electrical::SQRT_3),
                 Configuration::Wye | Configuration::SinglePhase => Ok(1.0),
                 _ => Err(unresolved(format!(
                     "{label} has an unsupported configuration for nominal voltage inference"
@@ -512,7 +512,7 @@ impl McAcPfInstance {
             for (index, winding) in transformer.windings.iter().enumerate() {
                 let label = format!("transformer `{}` winding {}", transformer.name, index + 1);
                 let line_neutral = if transformer.phases >= 2 {
-                    winding.v_ref / 3f64.sqrt()
+                    powerio_core::electrical::calc_wye_phase_voltage(winding.v_ref)
                 } else {
                     winding.v_ref
                 };

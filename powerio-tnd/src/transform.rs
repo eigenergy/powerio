@@ -75,7 +75,7 @@ impl std::fmt::Display for SequenceTransformConvention {
 }
 
 const DEFAULT_LOWERING_BASE_MVA: f64 = 100.0;
-const SQRT_3: f64 = 1.732_050_807_568_877_2;
+use powerio_core::electrical::SQRT_3;
 const COUPLING_TOLERANCE: f64 = 1.0e-9;
 
 fn default_lowering_base_mva() -> f64 {
@@ -1371,8 +1371,10 @@ fn positive_sequence_voltage(
     };
     let phasor =
         |index: usize| Complex64::from_polar(source.v_magnitude[index], source.v_angle[index]);
-    let [_, positive, _] =
-        powerio_dist::sequence::calc_sequence_components([phasor(a), phasor(b), phasor(c)]);
+    let [_, positive, _] = powerio_dist::sequence::calc_sequence_components(
+        [phasor(a), phasor(b), phasor(c)],
+        powerio_dist::sequence::SequenceRotation::Fortescue,
+    );
     Some(Complex64::from_polar(base, positive.arg()))
 }
 
@@ -1480,7 +1482,14 @@ fn line_rate_mva(
             return Some(mva);
         }
         if let Some(amps) = i_max.and_then(|values| limiting_amps(values, active)) {
-            return Some(SQRT_3 * line_to_line_volts * amps / 1_000_000.0);
+            return Some(
+                powerio_core::electrical::calc_line_apparent_power(
+                    line_to_line_volts,
+                    amps,
+                    SQRT_3,
+                    powerio_core::electrical::ApparentPowerOrder::FactorFirst,
+                ) / 1_000_000.0,
+            );
         }
     }
     None

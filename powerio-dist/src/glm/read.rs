@@ -721,11 +721,20 @@ impl Reader<'_> {
                 let value = self.quantity(key, &format!("constant_{law}_{}", phase_name(phase)));
                 stated |= value.is_some();
                 let value = value.unwrap_or_default();
+                // A current reads its phase's nominal phasor, an impedance
+                // the nominal magnitude.
                 let power = match law {
                     "power" => value,
-                    "current" => nominal_phasor(nominal, phase) * value.conj(),
-                    _ if value == Complex64::default() => Complex64::default(),
-                    _ => nominal * nominal / value.conj(),
+                    "current" => crate::load_voltage::calc_zip_nominal_power(
+                        crate::load_voltage::ZipLaw::Current,
+                        value,
+                        nominal_phasor(nominal, phase),
+                    ),
+                    _ => crate::load_voltage::calc_zip_nominal_power(
+                        crate::load_voltage::ZipLaw::Impedance,
+                        value,
+                        nominal,
+                    ),
                 };
                 if !power.re.is_finite() || !power.im.is_finite() {
                     return Err(self.error(key, "load power normalization overflows"));
@@ -1172,6 +1181,16 @@ fn quantity_spec(
 pub(super) fn phase_name(phase: usize) -> char {
     ['A', 'B', 'C'][phase]
 }
+/// The ZIP law a GridLAB-D `constant_<law>` name states: `power`,
+/// `current`, otherwise `impedance`.
+pub(super) fn zip_law(law: &str) -> crate::load_voltage::ZipLaw {
+    match law {
+        "power" => crate::load_voltage::ZipLaw::Power,
+        "current" => crate::load_voltage::ZipLaw::Current,
+        _ => crate::load_voltage::ZipLaw::Impedance,
+    }
+}
+
 pub(super) fn nominal_phasor(magnitude: f64, phase: usize) -> Complex64 {
     Complex64::from_polar(
         magnitude,

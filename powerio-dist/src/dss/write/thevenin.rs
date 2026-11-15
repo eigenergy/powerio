@@ -39,7 +39,12 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
         .into_iter()
         .filter(|&v| valid(v))
     {
-        let mva3 = kv.powi(2) / positive.im / (1.0 + 1.0 / xr1.powi(2)).sqrt();
+        let mva3 = kv.powi(2)
+            / positive.im
+            / crate::electrical::calc_impedance_ratio_divisor(
+                xr1,
+                crate::electrical::ImpedanceRatioForm::OpenDssReactanceOverResistance,
+            );
         for mva3 in neighbors(mva3).into_iter().filter(|&v| valid(v)) {
             if short_circuit_positive(kv, mva3, xr1).is_ok_and(|z| z == positive) {
                 positive_spec = Some((mva3, xr1));
@@ -54,8 +59,8 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
     {
         let mva1 = 3.0 * kv.powi(2) / (2.0 * positive + zero).norm();
         for mva1 in neighbors(mva1).into_iter().filter(|&v| valid(v)) {
-            let factor = 3.0_f64.sqrt();
-            let isc1 = mva1 * 1000.0 / (factor * kv);
+            let factor = crate::electrical::SQRT_3;
+            let isc1 = crate::electrical::calc_line_current(mva1 * 1000.0, kv, factor);
             if short_circuit_zero(kv, isc1, factor, xr0, positive).ok() == Some(zero) {
                 zero_spec = Some((mva1, xr0));
                 break 'zero;

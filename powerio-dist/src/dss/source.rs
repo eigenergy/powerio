@@ -29,6 +29,19 @@ pub(super) struct ResolvedSource {
 /// (`RecalcElementData`: `(2.0 * X1 + X0) / 3.0`).
 const NATIVE_THIRD: crate::sequence::SequenceThird = crate::sequence::SequenceThird::Divide;
 
+use crate::electrical::{SQRT_3, calc_line_current};
+
+/// A short circuit level in MVA from its current in amperes at `kv`
+/// ([`crate::electrical::calc_line_apparent_power`]), `factor · kV · I / 1000`.
+fn apparent_power(kv: f64, current: f64, factor: f64) -> f64 {
+    crate::electrical::calc_line_apparent_power(
+        kv,
+        current,
+        factor,
+        crate::electrical::ApparentPowerOrder::FactorFirst,
+    ) / 1000.0
+}
+
 #[derive(Clone, Copy)]
 enum ImpedanceSpec {
     Mva,
@@ -46,8 +59,12 @@ fn impedance_base(kv: f64, mva: f64) -> Result<f64> {
 
 // Shared with the canonical writer's exact inverse of the native MVA form.
 pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Result<Complex64> {
-    let x = impedance_base(kv, mva3)? / (1.0 + 1.0 / xr1.powi(2)).sqrt();
-    Ok(Complex64::new(x / xr1, x))
+    let (r, x) = crate::electrical::calc_impedance_from_ratio(
+        impedance_base(kv, mva3)?,
+        xr1,
+        crate::electrical::ImpedanceRatioForm::OpenDssReactanceOverResistance,
+    );
+    Ok(Complex64::new(r, x))
 }
 
 pub(super) fn short_circuit_zero(
@@ -263,21 +280,17 @@ impl State {
     }
 
     fn recalculate(&mut self) -> Result<()> {
-        let factor = if self.phases == 1 {
-            1.0
-        } else {
-            3.0_f64.sqrt()
-        };
+        let factor = if self.phases == 1 { 1.0 } else { SQRT_3 };
         if matches!(self.spec, ImpedanceSpec::Current) {
-            self.mva3 = 3.0_f64.sqrt() * self.kv * self.isc3 / 1000.0;
-            self.mva1 = factor * self.kv * self.isc1 / 1000.0;
+            self.mva3 = apparent_power(self.kv, self.isc3, SQRT_3);
+            self.mva1 = apparent_power(self.kv, self.isc1, factor);
         }
         if matches!(self.spec, ImpedanceSpec::Mva | ImpedanceSpec::Current) {
             self.z[1] = short_circuit_positive(self.kv, self.mva3, self.xr1)?;
             self.z[2] = self.z[1];
             if matches!(self.spec, ImpedanceSpec::Mva) {
-                self.isc3 = self.mva3 * 1000.0 / (3.0_f64.sqrt() * self.kv);
-                self.isc1 = self.mva1 * 1000.0 / (factor * self.kv);
+                self.isc3 = calc_line_current(self.mva3 * 1000.0, self.kv, SQRT_3);
+                self.isc1 = calc_line_current(self.mva1 * 1000.0, self.kv, factor);
             }
             self.z[0] = short_circuit_zero(self.kv, self.isc1, factor, self.xr0, self.z[1])?;
         } else {
@@ -288,15 +301,16 @@ impl State {
             if self.z[1] == Complex64::default() {
                 return Err("native source Z1 cannot be zero".into());
             }
-            self.isc3 = self.kv * 1000.0 / 3.0_f64.sqrt() / self.z[1].norm();
+            self.isc3 =
+                crate::electrical::calc_wye_phase_voltage(self.kv * 1000.0) / self.z[1].norm();
             if self.phases == 1 {
                 self.z[0] = self.z[1];
                 self.z[2] = self.z[1];
             }
             let zs = crate::sequence::calc_sequence_self(self.z[1], self.z[0], NATIVE_THIRD);
             self.isc1 = self.kv * 1000.0 / factor / zs.norm();
-            self.mva3 = 3.0_f64.sqrt() * self.kv * self.isc3 / 1000.0;
-            self.mva1 = factor * self.kv * self.isc1 / 1000.0;
+            self.mva3 = apparent_power(self.kv, self.isc3, SQRT_3);
+            self.mva1 = apparent_power(self.kv, self.isc1, factor);
         }
         if !self.pu_written.iter().any(|&v| v) {
             let base = impedance_base(self.kv, self.base_mva)?;

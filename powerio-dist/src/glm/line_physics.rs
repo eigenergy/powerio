@@ -12,7 +12,11 @@ pub(super) fn carson_earth(frequency: f64) -> CarsonEarth {
     CarsonEarth::new(
         0.001_588_36 * frequency,
         0.002_022_37 * frequency,
-        (100.0 / frequency).ln() / 2.0 + 7.6786,
+        crate::overhead::calc_earth_return_log_depth(
+            100.0,
+            frequency,
+            crate::overhead::EarthDepthForm::GridLabD,
+        ),
     )
 }
 

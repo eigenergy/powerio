@@ -73,12 +73,11 @@ impl DssWriter {
         } else {
             "wye"
         };
-        let kv = v_nom[0] / 1000.0
-            * if conn == "wye" && phases > 1 {
-                3.0_f64.sqrt()
-            } else {
-                1.0
-            };
+        let kv = if conn == "wye" && phases > 1 {
+            crate::electrical::calc_wye_line_voltage(v_nom[0] / 1000.0)
+        } else {
+            v_nom[0] / 1000.0
+        };
         let kw = load.p_nom.iter().sum::<f64>() / 1000.0;
         let kvar = load.q_nom.iter().sum::<f64>() / 1000.0;
         let rating = (2.0 * kw.hypot(kvar)).max(1.0);

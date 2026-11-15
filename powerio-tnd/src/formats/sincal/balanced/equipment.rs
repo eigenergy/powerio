@@ -23,8 +23,21 @@ fn quadrature(magnitude: f64, real: f64, context: &str) -> Result<f64> {
     if real > magnitude {
         return Err(error(format!("{context}: real part exceeds magnitude")));
     }
-    // Avoid cancellation/overflow from subtracting separately squared values.
-    finite(((magnitude - real) * (magnitude + real)).sqrt(), context)
+    finite(
+        powerio_core::electrical::calc_quadrature(magnitude, real),
+        context,
+    )
+}
+
+/// The three phase rating in MVA of a current in amperes at `kv`
+/// ([`powerio_core::electrical::calc_line_apparent_power`]).
+fn rating_mva(kv: f64, amps: f64) -> f64 {
+    powerio_core::electrical::calc_line_apparent_power(
+        kv,
+        amps,
+        powerio_core::electrical::SQRT_3,
+        powerio_core::electrical::ApparentPowerOrder::FactorFirst,
+    ) / 1000.0
 }
 
 pub(super) fn line(
@@ -124,7 +137,7 @@ pub(super) fn line(
     )?;
     branch.current_ratings = Some(BranchCurrentRatings::new(amps, 0.0, 0.0));
     let rate = finite(
-        3.0_f64.sqrt() * kv(network, ports[0]) * amps / 1000.0,
+        rating_mva(kv(network, ports[0]), amps),
         "line thermal rating",
     )?;
     // A stated limit must not round to zero, which would read as unlimited.

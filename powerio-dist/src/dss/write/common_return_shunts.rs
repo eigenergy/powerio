@@ -76,7 +76,7 @@ impl DssWriter {
             },
         );
         let voltage = if phases == 2 || phases == 3 {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };

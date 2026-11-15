@@ -847,7 +847,7 @@ impl Reader<'_> {
             extras.insert("model".into(), model.into());
         }
         let v_phase = if phases >= 2 && configuration == Configuration::Wye {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };
@@ -1403,7 +1403,7 @@ impl Reader<'_> {
         let v_ref = if conn_delta {
             kv * 1e3
         } else if phases == 2 || phases == 3 {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };
@@ -1928,7 +1928,7 @@ impl Reader<'_> {
             })
             .unwrap_or(dd::pvsystem::KV);
         Some(match ibr.topology {
-            IbrTopology::FourLeg => kv * 1e3 / 3f64.sqrt(),
+            IbrTopology::FourLeg => crate::electrical::calc_wye_phase_voltage(kv * 1e3),
             IbrTopology::SinglePhase | IbrTopology::ThreeLeg => kv * 1e3,
         })
     }

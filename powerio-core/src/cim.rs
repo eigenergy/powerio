@@ -28,10 +28,15 @@ pub fn phase_terminal(letter: &str) -> Option<&'static str> {
         "A" | "s1" => Some("1"),
         "B" | "s2" => Some("2"),
         "C" => Some("3"),
-        "N" => Some("4"),
+        "N" => Some(NEUTRAL_TERMINAL),
         _ => None,
     }
 }
+
+/// The wire coordinate terminal name of the CIM neutral `N`: OpenDSS node
+/// `4`, which the distribution CIM and MG-RAVENS readers give every neutral
+/// they read ([`phase_terminal`]).
+pub const NEUTRAL_TERMINAL: &str = "4";
 
 /// The CIM `SinglePhaseKind` letter of a terminal name: the node numbers 1
 /// to 4, and the letter names `a`, `b`, `c`, `n` in either case that BMOPF

@@ -91,9 +91,9 @@ pub use cim::{
     source_looks_like_cim_dist,
 };
 pub use connection::{
-    ConnectionChannel, calc_capacitor_susceptance, calc_connection_channels,
-    calc_element_connection, calc_wye_neutral_position, lindist3flow_carries_connection,
-    orient_delta_ring,
+    ConnectionChannel, calc_capacitor_susceptance, calc_coil_susceptance_matrix,
+    calc_connection_channels, calc_element_connection, calc_mapped_neutral_position,
+    calc_wye_neutral_position, lindist3flow_carries_connection, orient_delta_ring,
 };
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
@@ -135,4 +135,6 @@ pub use readiness::{
 pub use terminal_index::{MulticonductorTerminalIndex, TerminalIndexError};
 
 mod load_voltage;
-pub use load_voltage::calc_load_nominal_admittance;
+pub use load_voltage::{
+    ZipLaw, ZipVoltage, calc_load_nominal_admittance, calc_zip_coefficient, calc_zip_nominal_power,
+};

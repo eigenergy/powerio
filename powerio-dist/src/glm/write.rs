@@ -747,12 +747,13 @@ impl Writer<'_> {
             self.coordinates(crate::DistLocationTarget::Load, &load.name);
             for (i, &phase) in phase_order.iter().enumerate() {
                 let power = Complex64::new(load.p_nom[i], load.q_nom[i]);
-                let value = match law {
-                    "power" => power,
-                    "current" => nominal_phasor(1.0, phase) * power.conj() / v_nom[i],
-                    _ if power == Complex64::default() => Complex64::default(),
-                    _ => v_nom[i] * v_nom[i] / power.conj(),
-                };
+                let value = crate::load_voltage::calc_zip_coefficient(
+                    super::read::zip_law(law),
+                    power,
+                    nominal_phasor(1.0, phase),
+                    // A constant power law states no nominal voltage.
+                    v_nom.get(i).copied().unwrap_or(f64::NAN),
+                );
                 if power != Complex64::default() && value == Complex64::default() {
                     return Err(unsupported(
                         "load coefficient conversion underflows to zero",

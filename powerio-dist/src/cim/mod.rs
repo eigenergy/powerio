@@ -46,6 +46,31 @@ mod write;
 mod xml;
 
 use std::f64::consts::PI;
+use std::sync::LazyLock;
+
+/// The terminal conventions of the CIM wire coordinate: the terminals that
+/// [`powerio_core::cim::terminal_phase`] writes as the neutral `N` (`4`,
+/// `n`, `N`) are the neutral, every other terminal but ground `0` a phase.
+static WIRE_CONVENTIONS: LazyLock<serde_json::Value> =
+    LazyLock::new(|| serde_json::json!({"neutral": ["4", "n", "N"]}));
+
+/// The terminal conventions ([`crate::calc_terminal_role`]) a network read
+/// from distribution CIM or MG-RAVENS states, and the CIM and MG-RAVENS
+/// writers classify by: `4` (or a letter `n`/`N`) is the neutral on every
+/// bus, whatever its other terminals. The readers name every neutral `4`
+/// ([`powerio_core::cim::NEUTRAL_TERMINAL`]), so a single phase bus `[1, 4]`
+/// has its neutral classified as one everywhere.
+pub(crate) fn wire_conventions() -> &'static serde_json::Value {
+    &WIRE_CONVENTIONS
+}
+
+/// Whether a terminal is the CIM neutral `N` under the CIM wire convention:
+/// [`crate::calc_terminal_role`] over [`wire_conventions`] (which names the
+/// neutral by label, so no bus is needed).
+pub(crate) fn is_wire_neutral(terminal: &str) -> bool {
+    crate::calc_terminal_role::<&str>(&[], terminal, Some(wire_conventions()))
+        == crate::TerminalRole::Neutral
+}
 
 pub(crate) use read::parse_cim_collecting;
 pub(crate) use write::emit_cim_dist_text;
@@ -184,7 +209,7 @@ pub(crate) fn tank_phase_clock(
     }
     let neutral_first = |w: Option<&crate::DistWinding>| {
         w.and_then(|w| w.terminal_map.first())
-            .is_some_and(|t| t == "4")
+            .is_some_and(|t| crate::cim::is_wire_neutral(t))
     };
     if neutral_first(transformer.windings.first())
         == neutral_first(transformer.windings.get(winding))
@@ -324,7 +349,7 @@ pub(crate) fn no_load_test_pct(
     let loss = 100.0 * 1000.0 * loss_kw / s_1;
     let iexc = exciting * base_power / s_1;
     let imag = if loss > 0.0 && loss <= iexc {
-        (iexc * iexc - loss * loss).sqrt()
+        crate::electrical::calc_quadrature(iexc, loss)
     } else {
         iexc
     };

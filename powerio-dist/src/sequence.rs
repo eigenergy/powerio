@@ -102,18 +102,26 @@ pub const OPENDSS_ALPHA: Complex64 = Complex64::new(-0.5, 0.866_025);
 /// Entry `(i, j)`, `i ≠ j`, of the three phase circulant matrix of an
 /// element with unequal sequence impedances `[z₀, z₁, z₂]` as OpenDSS
 /// `VSource` forms it: `(z₀ + z₁ α^((j−i) mod 3) + z₂ α^((i−j) mod 3)) / 3`
-/// with [`OPENDSS_ALPHA`]. The diagonal is `(z₂ + z₁ + z₀) / 3`.
-/// [`calc_circulant_sequence_from_phase`] is its inverse.
+/// with [`OPENDSS_ALPHA`], summed in `VSource.RecalcElementData`'s order,
+/// the `α²` term, then the `α` term, then `z₀` (`Calpha2 * Z2 + Calpha1 *
+/// Z1 + Z0` above the diagonal, `Calpha2 * Z1 + Calpha1 * Z2 + Z0` below
+/// it, DSS C-API 0.14.5), with `α² = α · α`. The diagonal is
+/// `(z₂ + z₁ + z₀) / 3`. [`calc_circulant_sequence_from_phase`] is its
+/// inverse.
 #[must_use]
 pub fn calc_circulant_phase_entry(sequence: [Complex64; 3], i: usize, j: usize) -> Complex64 {
     let [zero, positive, negative] = sequence;
     if i == j {
         return (negative + positive + zero) / 3.0;
     }
-    (zero
-        + positive * OPENDSS_ALPHA.powu(((j + 3 - i) % 3) as u32)
-        + negative * OPENDSS_ALPHA.powu(((i + 3 - j) % 3) as u32))
-        / 3.0
+    let alpha_squared = OPENDSS_ALPHA * OPENDSS_ALPHA;
+    // Above the diagonal (j = i + 1 mod 3) z₁ takes α and z₂ takes α².
+    let (by_alpha_squared, by_alpha) = if (j + 3 - i) % 3 == 1 {
+        (negative, positive)
+    } else {
+        (positive, negative)
+    };
+    (alpha_squared * by_alpha_squared + OPENDSS_ALPHA * by_alpha + zero) / 3.0
 }
 
 /// The sequence impedances `[z₀, z₁, z₂]` of a three phase circulant matrix
@@ -144,19 +152,86 @@ where
     (own - mutual, own + mutual * 2.0)
 }
 
-/// Fortescue's operator `a = e^{j 2π/3}` and `a²`.
-fn rotation() -> (Complex64, Complex64) {
-    let a = Complex64::from_polar(1.0, 2.0 * std::f64::consts::PI / 3.0);
-    (a, a * a)
+/// The rotation operator `a` a symmetrical component transform is built
+/// on. The variants are the same transform to within their rounding of
+/// `sin 120°`; the reference tools use several, so a reader reproducing one
+/// names the operator it uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SequenceRotation {
+    /// Fortescue's `a = e^{j 2π/3}` from its polar form, `a² = a · a`, and
+    /// the inverse `A⁻¹ = conj(A)ᵀ / 3`: every reader and model that follows
+    /// no engine's rounding.
+    Fortescue,
+    /// `a = −½ + j √3/2` written in rectangular form, `a² = conj(a)`, and
+    /// the inverse `conj(A)ᵀ / 3`: the SINCAL multiconductor transformer
+    /// port expansion.
+    Rectangular,
+    /// OpenDSS `mathutil.pas`'s `SetAMatrix` as upstream OpenDSS builds it
+    /// (and DSS C-API under its `BadPrecision` compatibility flag):
+    /// `a = −½ + j 0.866025403`, truncated, `a² = conj(a)`, and `A⁻¹` the
+    /// exact inverse of that `A` (`Ap2s.Invert`), whose sequence rows are
+    /// `[⅓, w, conj(w)]` and `[⅓, conj(w), w]` with
+    /// `w = −1/6 + j / (4 · 0.866025403)`; `conj(A)ᵀ / 3` is not its inverse.
+    /// The IndMach012a user model's sequence admittance reads it.
+    OpenDssMathutil,
+}
+
+/// `sin 120°` as `mathutil.pas`'s `SetAMatrix` spells it.
+const MATHUTIL_SINE: f64 = 0.866_025_403;
+
+/// The transform `A` (columns: the phase phasors of a unit zero, positive
+/// and negative sequence quantity) and its inverse under `rotation`.
+fn transform(rotation: SequenceRotation) -> ([[Complex64; 3]; 3], [[Complex64; 3]; 3]) {
+    let one = Complex64::new(1.0, 0.0);
+    let (a, a2) = match rotation {
+        SequenceRotation::Fortescue => {
+            let a = Complex64::from_polar(1.0, 2.0 * std::f64::consts::PI / 3.0);
+            (a, a * a)
+        }
+        SequenceRotation::Rectangular => {
+            let a = Complex64::new(-0.5, crate::electrical::SQRT_3 / 2.0);
+            (a, a.conj())
+        }
+        SequenceRotation::OpenDssMathutil => {
+            let a = Complex64::new(-0.5, MATHUTIL_SINE);
+            (a, a.conj())
+        }
+    };
+    let forward = [[one, one, one], [one, a2, a], [one, a, a2]];
+    let third = one / 3.0;
+    let inverse = if rotation == SequenceRotation::OpenDssMathutil {
+        let w = Complex64::new(-1.0 / 6.0, 1.0 / (4.0 * MATHUTIL_SINE));
+        [
+            [third, third, third],
+            [third, w, w.conj()],
+            [third, w.conj(), w],
+        ]
+    } else {
+        [
+            [third, third, third],
+            [third, a / 3.0, a2 / 3.0],
+            [third, a2 / 3.0, a / 3.0],
+        ]
+    };
+    (forward, inverse)
 }
 
 /// The zero, positive and negative sequence components of three phase
 /// phasors `[a, b, c]`: `V₀ = (Va + Vb + Vc)/3`, `V₁ = (Va + a Vb + a² Vc)/3`,
-/// `V₂ = (Va + a² Vb + a Vc)/3`.
+/// `V₂ = (Va + a² Vb + a Vc)/3`, under `rotation` (for
+/// [`SequenceRotation::OpenDssMathutil`], the rows of its exact inverse).
 #[must_use]
-pub fn calc_sequence_components(phase: [Complex64; 3]) -> [Complex64; 3] {
-    let (a, a2) = rotation();
+pub fn calc_sequence_components(
+    phase: [Complex64; 3],
+    rotation: SequenceRotation,
+) -> [Complex64; 3] {
+    let (forward, inverse) = transform(rotation);
     let [va, vb, vc] = phase;
+    if rotation == SequenceRotation::OpenDssMathutil {
+        return inverse.map(|row| row[0] * va + row[1] * vb + row[2] * vc);
+    }
+    let (a, a2) = (forward[2][1], forward[1][1]);
     [
         (va + vb + vc) / 3.0,
         (va + a * vb + a2 * vc) / 3.0,
@@ -166,18 +241,55 @@ pub fn calc_sequence_components(phase: [Complex64; 3]) -> [Complex64; 3] {
 
 /// The three phase phasors `[a, b, c]` of zero, positive and negative
 /// sequence components `[V₀, V₁, V₂]`: `Va = V₀ + V₁ + V₂`,
-/// `Vb = V₀ + a² V₁ + a V₂`, `Vc = V₀ + a V₁ + a² V₂`, the inverse of
-/// [`calc_sequence_components`]. The GridLAB-D sequence voltage substation
-/// reads it.
+/// `Vb = V₀ + a² V₁ + a V₂`, `Vc = V₀ + a V₁ + a² V₂` under `rotation`, the
+/// inverse of [`calc_sequence_components`]. The GridLAB-D sequence voltage
+/// substation reads it.
 #[must_use]
-pub fn calc_phase_components(sequence: [Complex64; 3]) -> [Complex64; 3] {
-    let (a, a2) = rotation();
+pub fn calc_phase_components(
+    sequence: [Complex64; 3],
+    rotation: SequenceRotation,
+) -> [Complex64; 3] {
+    let (forward, _) = transform(rotation);
+    let (a, a2) = (forward[2][1], forward[1][1]);
     let [zero, positive, negative] = sequence;
     [
         zero + positive + negative,
         zero + a2 * positive + a * negative,
         zero + a * positive + a2 * negative,
     ]
+}
+
+/// The three phase matrix `A diag(d₀, d₁, d₂) A⁻¹` of an element whose
+/// sequence networks are uncoupled, with sequence values
+/// `diagonal = [d₀, d₁, d₂]` (impedances or admittances), under `rotation`.
+/// For an operator whose inverse is `conj(A)ᵀ / 3` entry `(i, j)` is
+/// `(d₀ + d₁ f + d₂ conj(f)) / 3` with `f = p_i conj(p_j)` and
+/// `p = [1, a², a]`; for [`SequenceRotation::OpenDssMathutil`] it is
+/// `Σₛ A_is dₛ A⁻¹_sj` over its exact inverse. The one sequence diagonal to
+/// phase expansion: the SINCAL multiconductor transformer ports
+/// ([`SequenceRotation::Rectangular`]) and the OpenDSS IndMach012a motor
+/// ([`SequenceRotation::OpenDssMathutil`]) read it.
+#[must_use]
+pub fn calc_phase_matrix_from_sequence(
+    diagonal: [Complex64; 3],
+    rotation: SequenceRotation,
+) -> [[Complex64; 3]; 3] {
+    let (forward, inverse) = transform(rotation);
+    let mut matrix = [[Complex64::default(); 3]; 3];
+    for (i, row) in matrix.iter_mut().enumerate() {
+        for (j, entry) in row.iter_mut().enumerate() {
+            *entry = if rotation == SequenceRotation::OpenDssMathutil {
+                forward[i][1] * diagonal[1] * inverse[1][j]
+                    + forward[i][2] * diagonal[2] * inverse[2][j]
+                    + forward[i][0] * diagonal[0] * inverse[0][j]
+            } else {
+                let p = [forward[0][1], forward[1][1], forward[2][1]];
+                let factor = p[i] * p[j].conj();
+                (diagonal[0] + diagonal[1] * factor + diagonal[2] * factor.conj()) / 3.0
+            };
+        }
+    }
+    matrix
 }
 
 /// The sequence matrix `A⁻¹ Z A` of a three phase matrix (rows and columns
@@ -189,11 +301,9 @@ pub fn calc_phase_components(sequence: [Complex64; 3]) -> [Complex64; 3] {
 /// When `matrix` is smaller than three by three.
 #[must_use]
 pub fn calc_sequence_matrix(matrix: &[Vec<Complex64>]) -> [[Complex64; 3]; 3] {
-    let (a, a2) = rotation();
-    let one = Complex64::new(1.0, 0.0);
     // Columns of A: the phase phasors of a unit zero, positive and negative
     // sequence quantity; A⁻¹ = conj(A)ᵀ / 3.
-    let basis = [[one, one, one], [one, a2, a], [one, a, a2]];
+    let (basis, _) = transform(SequenceRotation::Fortescue);
     let mut seq = [[Complex64::new(0.0, 0.0); 3]; 3];
     for (p, row) in seq.iter_mut().enumerate() {
         for (q, out) in row.iter_mut().enumerate() {
@@ -240,9 +350,11 @@ impl VoltageSource {
         };
         let base = match *phases {
             [a, b, c] => {
-                let [_, positive, _] =
-                    calc_sequence_components([phasor(a)?, phasor(b)?, phasor(c)?]);
-                3f64.sqrt() * positive.norm()
+                let [_, positive, _] = calc_sequence_components(
+                    [phasor(a)?, phasor(b)?, phasor(c)?],
+                    SequenceRotation::Fortescue,
+                );
+                crate::electrical::calc_wye_line_voltage(positive.norm())
             }
             [a, b] => (phasor(a)? - phasor(b)?).norm(),
             [a] => phasor(a)?.norm(),
@@ -296,11 +408,40 @@ mod tests {
             Complex64::new(0.1, 0.4),
             Complex64::new(0.12, 0.5),
         ];
-        for (back, value) in calc_sequence_components(calc_phase_components(sequence))
-            .iter()
-            .zip(sequence)
-        {
-            assert!((back - value).norm() < 1e-12);
+        for rotation in [
+            SequenceRotation::Fortescue,
+            SequenceRotation::Rectangular,
+            SequenceRotation::OpenDssMathutil,
+        ] {
+            let phase = calc_phase_components(sequence, rotation);
+            for (back, value) in calc_sequence_components(phase, rotation)
+                .iter()
+                .zip(sequence)
+            {
+                assert!((back - value).norm() < 1e-12, "{rotation:?}");
+            }
+            // A diag A⁻¹ applied to the phasors is A diag of their sequence.
+            let matrix = calc_phase_matrix_from_sequence(sequence, rotation);
+            let unit = [
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.2, -0.3),
+                Complex64::new(-0.4, 0.1),
+            ];
+            let image = calc_phase_components(
+                {
+                    let components = calc_sequence_components(unit, rotation);
+                    [
+                        components[0] * sequence[0],
+                        components[1] * sequence[1],
+                        components[2] * sequence[2],
+                    ]
+                },
+                rotation,
+            );
+            for (i, row) in matrix.iter().enumerate() {
+                let value: Complex64 = row.iter().zip(unit).map(|(m, v)| m * v).sum();
+                assert!((value - image[i]).norm() < 1e-12, "{rotation:?}");
+            }
         }
         let row = [0, 1, 2].map(|j| calc_circulant_phase_entry(sequence, 0, j));
         for (back, value) in calc_circulant_sequence_from_phase(row).iter().zip(sequence) {

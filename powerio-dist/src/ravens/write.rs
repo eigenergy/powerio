@@ -237,17 +237,15 @@ fn xf64(extras: &Extras, key: &str) -> Option<f64> {
 /// Whether the bus grounds its neutral conductor.
 fn neutral_grounded(net: &MulticonductorNetwork, bus: &str) -> bool {
     net.bus(bus)
-        .is_some_and(|b| b.grounded.iter().any(|t| terminal_phase(t) == Some("N")))
+        .is_some_and(|b| b.grounded.iter().any(|t| crate::cim::is_wire_neutral(t)))
 }
 
-/// Whether a terminal name is a phase conductor: anything the CIM wire
-/// convention ([`powerio_core::cim::terminal_phase`]) does not write as the
-/// neutral `N` (`4`, `n`, `N`), which the readers read back as terminal `4`
-/// on any bus. This is not [`crate::model::calc_terminal_role`], which calls
-/// a `4` neutral only in an exact `1` to `4` set: a CIM read single phase
-/// bus `[1, 4]` would count its neutral as a phase.
+/// Whether a terminal name is a phase conductor: anything that is not the
+/// neutral under the CIM wire convention ([`crate::cim::is_wire_neutral`],
+/// the one terminal classification over the convention the MG-RAVENS
+/// reader states), so a single phase bus `[1, 4]` keeps its neutral.
 fn is_hot(terminal: &str) -> bool {
-    terminal_phase(terminal) != Some("N")
+    !crate::cim::is_wire_neutral(terminal)
 }
 
 /// PhaseCode states a set; ordering belongs to phase records, not this enum.
@@ -332,7 +330,7 @@ struct Writer {
 // Omitting duplicate bounds is lossless, including libm-scale differences
 // between phase magnitudes; no approximate comparison or global tolerance.
 fn source_fixes_phase_bounds(net: &MulticonductorNetwork, bus: &crate::DistBus) -> bool {
-    let phases = bus.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+    let phases = bus.phase_indices(net.terminal_conventions());
     let fixed = |index: usize| {
         net.sources().iter().find_map(|source| {
             if !source.bus.eq_ignore_ascii_case(&bus.id)
@@ -1038,12 +1036,18 @@ impl Writer {
             obj.insert("EnergyConsumer.grounded".into(), Value::Bool(grounded));
             obj.insert("Equipment.inService".into(), Value::Bool(true));
             if let Some(&v) = load.voltage_model.v_nom().first() {
-                let base = if delta { v } else { v * 3f64.sqrt() };
+                let base = if delta {
+                    v
+                } else {
+                    crate::electrical::calc_wye_line_voltage(v)
+                };
                 let base = stable_fixed(base, |b| {
                     if delta {
                         b
                     } else {
-                        (b / 3f64.sqrt()) * 3f64.sqrt()
+                        crate::electrical::calc_wye_line_voltage(
+                            crate::electrical::calc_wye_phase_voltage(b),
+                        )
                     }
                 });
                 let name = format!("BaseV_{}", fdisp(base / 1e3));
@@ -1451,7 +1455,7 @@ impl Writer {
                 // wye bank sits line-to-neutral, everything else line-to-line.
                 self.base_of(&shunt.bus).map(|base| {
                     if !delta && n == 1 {
-                        base / 3f64.sqrt()
+                        crate::electrical::calc_wye_phase_voltage(base)
                     } else {
                         base
                     }
@@ -1702,7 +1706,7 @@ impl Writer {
                 let rated_amps = if hot == 1 {
                     rated_s / u
                 } else {
-                    rated_s / (3f64.sqrt() * u)
+                    crate::electrical::calc_line_current(rated_s, u, crate::electrical::SQRT_3)
                 };
                 let pu = stable_fixed(amps / rated_amps, |v| (v * rated_amps) / rated_amps);
                 let pu = self.num(pu, &what);
@@ -2072,7 +2076,7 @@ impl Writer {
                 // to be byte stable.
                 let mut ordered = w.terminal_map.clone();
                 if grounded && !ordered.iter().any(|t| !is_hot(t)) {
-                    ordered.push("4".to_owned());
+                    ordered.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
                 }
                 end.insert(
                     "TransformerTankEnd.orderedPhases".into(),
@@ -2270,7 +2274,13 @@ impl Writer {
         let normal = self.base_of(bus);
         // The upstream converter uses line-to-line voltage limits even on
         // a single-phase bus. Keep canonical multiply/divide cycles stable.
-        let scale = |v: f64| stable_fixed(v * 3f64.sqrt(), |x| x / 3f64.sqrt() * 3f64.sqrt());
+        let scale = |v: f64| {
+            stable_fixed(crate::electrical::calc_wye_line_voltage(v), |x| {
+                crate::electrical::calc_wye_line_voltage(crate::electrical::calc_wye_phase_voltage(
+                    x,
+                ))
+            })
+        };
         Some(self.voltage_limit_set(b.v_min.map(scale), b.v_max.map(scale), normal))
     }
 
@@ -2649,7 +2659,7 @@ fn bus_bases(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
         for w in &xf.windings {
             let hot = w.terminal_map.iter().filter(|t| is_hot(t)).count();
             let volts = if hot <= 1 {
-                w.v_ref * 3f64.sqrt()
+                crate::electrical::calc_wye_line_voltage(w.v_ref)
             } else {
                 w.v_ref
             };

@@ -883,7 +883,12 @@ fn apply_current_limit(
     match current_limit {
         Some(limit) if limit > 0 => {
             let amps = limit as f64;
-            branch.rate_a = SQRT_3 * kv * amps / 1000.0;
+            branch.rate_a = powerio_core::electrical::calc_line_apparent_power(
+                kv,
+                amps,
+                SQRT_3,
+                powerio_core::electrical::ApparentPowerOrder::FactorFirst,
+            ) / 1000.0;
         }
         Some(limit) => reader.warn(
             &codes::READ_UCTE_VALUE_SUBSTITUTED,

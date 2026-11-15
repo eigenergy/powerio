@@ -171,11 +171,13 @@ fn zero_admittance(
                     "rated shunt zero-sequence admittance underflows",
                 ));
             }
-            let denominator = rx.hypot(1.0);
-            Complex64::new(
-                -sign * magnitude * (rx / denominator),
-                sign * magnitude / denominator,
-            )
+            // The sign is ±1, so scaling the split by it is exact.
+            let (g, b) = powerio_core::electrical::calc_impedance_from_ratio(
+                magnitude,
+                rx,
+                powerio_core::electrical::ImpedanceRatioForm::ResistanceOverReactance,
+            );
+            Complex64::new(-sign * g, sign * b)
         }
         2 if at_nominal => reciprocal(number(row, "R0")?, number(row, "X0")?)?,
         _ => {

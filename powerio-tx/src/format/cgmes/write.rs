@@ -6014,7 +6014,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         if linear {
             eq.text(
                 "LinearShuntCompensator.bPerSection",
-                sections[0].1 / (kv * kv),
+                powerio_core::electrical::calc_rated_admittance(sections[0].1, kv),
             );
             if !field_was_omitted(
                 detailed,
@@ -6024,7 +6024,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ) {
                 eq.text(
                     "LinearShuntCompensator.gPerSection",
-                    sections[0].0 / (kv * kv),
+                    powerio_core::electrical::calc_rated_admittance(sections[0].0, kv),
                 );
             }
         }
@@ -6055,14 +6055,20 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     &id,
                 );
                 eq.text("NonlinearShuntCompensatorPoint.sectionNumber", section + 1);
-                eq.text("NonlinearShuntCompensatorPoint.b", b / (kv * kv));
+                eq.text(
+                    "NonlinearShuntCompensatorPoint.b",
+                    powerio_core::electrical::calc_rated_admittance(b, kv),
+                );
                 if !field_was_omitted(
                     detailed,
                     "shunt",
                     local_id,
                     OmittedFieldName::ShuntConductancePerSection,
                 ) {
-                    eq.text("NonlinearShuntCompensatorPoint.g", g / (kv * kv));
+                    eq.text(
+                        "NonlinearShuntCompensatorPoint.g",
+                        powerio_core::electrical::calc_rated_admittance(g, kv),
+                    );
                 }
                 eq.close("NonlinearShuntCompensatorPoint");
             }
@@ -6853,7 +6859,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     "OperationalLimit.OperationalLimitType",
                     &det_mrid("limittype", kind),
                 );
-                let amps = mva * 1000.0 / (3f64.sqrt() * kv);
+                let amps = powerio_core::electrical::calc_line_current(
+                    mva * 1000.0,
+                    kv,
+                    powerio_core::electrical::SQRT_3,
+                );
                 if v3 {
                     limit_body.text("CurrentLimit.normalValue", amps);
                 } else {
@@ -7135,7 +7145,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                         "OperationalLimit.OperationalLimitType",
                         &det_mrid("limittype", kind),
                     );
-                    let amps = mva * 1000.0 / (3f64.sqrt() * bus_kv);
+                    let amps = powerio_core::electrical::calc_line_current(
+                        mva * 1000.0,
+                        bus_kv,
+                        powerio_core::electrical::SQRT_3,
+                    );
                     if v3 {
                         limit_body.text("CurrentLimit.normalValue", amps);
                     } else {

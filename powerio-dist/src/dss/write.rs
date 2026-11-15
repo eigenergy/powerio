@@ -270,7 +270,7 @@ fn estimate_bus_kv(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
                 }) {
                     v
                 } else {
-                    v / 3f64.sqrt()
+                    crate::electrical::calc_wye_phase_voltage(v)
                 }
             };
             let known: Option<(usize, f64)> = t
@@ -958,7 +958,7 @@ impl DssWriter {
         let mut bases: Vec<f64> = self
             .kv_estimate
             .values()
-            .map(|v| v * 3f64.sqrt() / 1e3)
+            .map(|v| crate::electrical::calc_wye_line_voltage(*v) / 1e3)
             .collect();
         bases.sort_by(f64::total_cmp);
         bases.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
@@ -1683,13 +1683,8 @@ impl DssWriter {
             return Some(w.v_ref / 1e3);
         }
         let bus = w.bus.to_ascii_lowercase();
-        let scale =
-            if winding_is_line_to_neutral(t.phases, w, |b| self.grounded.get(b).map(Vec::as_slice))
-            {
-                1.0
-            } else {
-                3f64.sqrt()
-            };
+        let line_to_neutral =
+            winding_is_line_to_neutral(t.phases, w, |b| self.grounded.get(b).map(Vec::as_slice));
         let Some(v_pn) = self.kv_estimate.get(&bus).copied() else {
             self.warn(
                 &C::EMIT_DSS_VALUE_DEFAULTED,
@@ -1703,7 +1698,11 @@ impl DssWriter {
             );
             return None;
         };
-        let kv = v_pn * scale / 1e3;
+        let kv = if line_to_neutral {
+            v_pn
+        } else {
+            crate::electrical::calc_wye_line_voltage(v_pn)
+        } / 1e3;
         self.warn(
             &C::EMIT_DSS_FIELD_DROPPED,
             format!(
@@ -1981,7 +1980,7 @@ impl DssWriter {
             // OpenDSS convention: line to line for 2 and 3 phase, line to
             // neutral for single phase.
             let v = if ctx.phases >= 2 || ctx.configuration == Configuration::Delta {
-                vln * 3f64.sqrt()
+                crate::electrical::calc_wye_line_voltage(vln)
             } else {
                 vln
             };
@@ -2017,7 +2016,7 @@ impl DssWriter {
             ));
         }
         let v = if phases >= 2 && configuration == Configuration::Wye {
-            v_phase * 3f64.sqrt()
+            crate::electrical::calc_wye_line_voltage(v_phase)
         } else {
             v_phase
         };
@@ -2554,7 +2553,7 @@ impl DssWriter {
         let configuration = ibr_configuration(ibr);
         let kv = self.ibr_kv(ibr, phases, configuration, "pvsystem");
         let base_v = if phases >= 2 && configuration != Configuration::Delta {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };
@@ -3076,7 +3075,7 @@ fn shunt_kvar(
     let v_ref = if conn_delta || !matches!(phases, 2 | 3) {
         kv * 1e3
     } else {
-        kv * 1e3 / 3f64.sqrt()
+        crate::electrical::calc_wye_phase_voltage(kv * 1e3)
     };
     if let Some(saved) = extras_f64(&sh.extras, "kvar")
         && super::read::kvar_shunt_matrix(
@@ -3099,7 +3098,7 @@ fn shunt_kvar(
         b_branch * (kv * 1e3) * (kv * 1e3) * edges.len() as f64 / 1e3
     } else {
         let v_phase = if matches!(phases, 2 | 3) {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };
@@ -4398,7 +4397,7 @@ mod tests {
         });
         let out = emit_dss_text(&net);
         let kv = 2400.0 * 3f64.sqrt() / 1e3;
-        let v_phase = kv * 1e3 / 3f64.sqrt();
+        let v_phase = crate::electrical::calc_wye_phase_voltage(kv * 1e3);
         let expected = b_phase * v_phase * v_phase * 2.0 / 1e3;
         let line = out
             .text
@@ -4442,7 +4441,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no reactor emitted in:\n{}", out.text));
         assert!(!out.text.contains("Capacitor.rx"), "{}", out.text);
         let kv = 2400.0 * 3f64.sqrt() / 1e3;
-        let v_phase = kv * 1e3 / 3f64.sqrt();
+        let v_phase = crate::electrical::calc_wye_phase_voltage(kv * 1e3);
         let expected = b_phase.abs() * v_phase * v_phase * 3.0 / 1e3;
         assert!(line.contains(&format!("kvar={}", num(expected))), "{line}");
     }

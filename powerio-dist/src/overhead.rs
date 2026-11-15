@@ -31,14 +31,32 @@ impl CarsonEarth {
     }
 }
 
+/// How [`calc_earth_return_log_depth`] spells the equivalent earth return
+/// depth. The forms are the same depth in different length units and
+/// roundings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EarthDepthForm {
+    /// OpenDSS, metres: `ln(658.5 √(ρ / f))` (`Line.pas` and the line
+    /// geometry's Carson earth).
+    OpenDss,
+    /// GridLAB-D, feet: `ln(ρ / f) / 2 + 7.6786`, its rounding of
+    /// `ln(2160 √(ρ / f))` (`overhead_line_conductor`'s Carson terms).
+    GridLabD,
+}
+
 /// `ln D_e` of the equivalent earth return depth `D_e = 658.5 √(ρ / f)`
-/// metres, for an earth resistivity `rho` in ohm metres and a frequency in
-/// hertz. The one earth return depth: the OpenDSS geometry's
-/// [`CarsonEarth::log_depth`] and the OpenDSS line's earth return reactance
-/// coefficient `Kxg = Xg / ln D_e` read it.
+/// metres (`2160 √(ρ / f)` feet), for an earth resistivity `rho` in ohm
+/// metres and a frequency in hertz, spelled as `form` states. The one earth
+/// return depth: the OpenDSS geometry's [`CarsonEarth::log_depth`], the
+/// OpenDSS line's earth return reactance coefficient `Kxg = Xg / ln D_e`
+/// and the GridLAB-D Carson earth read it.
 #[must_use]
-pub fn calc_earth_return_log_depth(rho: f64, frequency: f64) -> f64 {
-    (658.5 * (rho / frequency).sqrt()).ln()
+pub fn calc_earth_return_log_depth(rho: f64, frequency: f64, form: EarthDepthForm) -> f64 {
+    match form {
+        EarthDepthForm::OpenDss => (658.5 * (rho / frequency).sqrt()).ln(),
+        EarthDepthForm::GridLabD => (rho / frequency).ln() / 2.0 + 7.6786,
+    }
 }
 
 /// The simplified Carson impedance of a conductor pair with earth return,

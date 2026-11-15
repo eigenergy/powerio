@@ -31,6 +31,12 @@ use crate::model::{
     MulticonductorNetworkTables, UntypedObject, VoltageSource,
 };
 
+/// The neutral terminal of a PowerModelsDistribution MATHEMATICAL bus:
+/// conductor `4`, the `kr_neutral` its Kron reduction removes. The reader
+/// names the neutral it restores so, and states it as the network's
+/// neutral ([`crate::calc_terminal_role`] reads that statement).
+const KRON_NEUTRAL: &str = "4";
+
 const FMT: &str = "PMD MATHEMATICAL";
 
 /// A generator's `pmin`, `pmax`, `qmin`, and `qmax`, each when stated.
@@ -649,16 +655,16 @@ impl<'a> Reader<'a> {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if let Some(b) = self.net.buses_mut().iter_mut().find(|b| b.id == bus) {
-            if !b.terminals.iter().any(|t| t == "4") {
-                b.terminals.push("4".to_owned());
+            if !b.terminals.iter().any(|t| t == KRON_NEUTRAL) {
+                b.terminals.push(KRON_NEUTRAL.to_owned());
             }
-            if kron && !b.grounded.iter().any(|t| t == "4") {
-                b.grounded.push("4".to_owned());
+            if kron && !b.grounded.iter().any(|t| t == KRON_NEUTRAL) {
+                b.grounded.push(KRON_NEUTRAL.to_owned());
             }
         }
         self.net.extras_mut().insert(
             "bmopf_terminal_conventions".into(),
-            json!({"neutral": ["4"]}),
+            json!({"neutral": [KRON_NEUTRAL]}),
         );
     }
 
@@ -775,11 +781,11 @@ impl<'a> Reader<'a> {
             bus.connections("terminals")
                 .iter()
                 .zip(bus.bools("grounded"))
-                .any(|(terminal, grounded)| terminal == "4" && grounded)
+                .any(|(terminal, grounded)| terminal == KRON_NEUTRAL && grounded)
         }) {
             self.net.extras_mut().insert(
                 "bmopf_terminal_conventions".into(),
-                json!({"neutral": ["4"]}),
+                json!({"neutral": [KRON_NEUTRAL]}),
             );
         }
     }
@@ -1108,7 +1114,7 @@ impl<'a> Reader<'a> {
                 // Choose the to bus base and recover the from voltage on it.
                 to_kv
             } else if conn == DistWindingConn::Delta {
-                ratio_kv / 3f64.sqrt()
+                crate::electrical::calc_wye_phase_voltage(ratio_kv)
             } else {
                 ratio_kv
             };
@@ -1117,7 +1123,7 @@ impl<'a> Reader<'a> {
             let bus = self.bus_id(bus_key, &what);
             if conn == DistWindingConn::Wye
                 && self.doc.get("is_kron_reduced").and_then(Value::as_bool) == Some(true)
-                && !map.iter().any(|t| t == "4")
+                && !map.iter().any(|t| t == KRON_NEUTRAL)
             {
                 // Native PMD removes the first (grounded) terminal of the
                 // reversed center-tap half, retaining its -1 polarity. Put
@@ -1129,9 +1135,9 @@ impl<'a> Reader<'a> {
                     && map.len() == 1
                     && unit.int("polarity") == Some(-1)
                 {
-                    map.insert(0, "4".to_owned());
+                    map.insert(0, KRON_NEUTRAL.to_owned());
                 } else {
-                    map.push("4".to_owned());
+                    map.push(KRON_NEUTRAL.to_owned());
                 }
                 self.restore_neutral(&bus);
             }
@@ -1505,7 +1511,7 @@ impl<'a> Reader<'a> {
         // the neutral the reduction eliminated, restored at the bus.
         let pd_len = first.floats("pd").len().max(1);
         if first.str("configuration") != Some("DELTA") && connections.len() == pd_len {
-            connections.push("4".to_owned());
+            connections.push(KRON_NEUTRAL.to_owned());
             self.restore_neutral(&bus);
         }
         let n = connections.len().max(1);
@@ -1671,7 +1677,7 @@ impl<'a> Reader<'a> {
         let bus_key = g.index("gen_bus").unwrap_or_default();
         let bus = self.bus_id(&bus_key, &what);
         let map = g.connections("connections");
-        let hot = map.iter().filter(|t| *t != "4").count().max(1);
+        let hot = map.iter().filter(|t| *t != KRON_NEUTRAL).count().max(1);
         let (p_min, p_max, q_min, q_max) = self.gen_bounds(&g);
         let s_max = p_max.clone().unwrap_or_else(|| vec![0.0; hot]);
         let mut ibr = DistIbr::new(

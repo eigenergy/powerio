@@ -369,7 +369,7 @@ pub fn calc_transformer_winding_admittance(
 #[must_use]
 pub fn calc_coil_voltage_ratio(conn: DistWindingConn, phases: usize) -> f64 {
     if conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
-        3f64.sqrt()
+        crate::electrical::SQRT_3
     } else {
         1.0
     }

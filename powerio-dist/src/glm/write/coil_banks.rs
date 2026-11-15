@@ -96,7 +96,8 @@ impl<'a> CoilBanks<'a> {
             };
             let members = [a, b, c];
             let primary = a.windings[0].v_ref * a.windings[0].tap;
-            let secondary = a.windings[1].v_ref * a.windings[1].tap * 3.0_f64.sqrt();
+            let secondary =
+                crate::electrical::calc_wye_line_voltage(a.windings[1].v_ref * a.windings[1].tap);
             let rating = a.windings[0].s_rating * 3.0;
             let resistance = a.windings[0].r_pct + a.windings[1].r_pct;
             let reactance = a.xsc_pct[0];
@@ -111,7 +112,9 @@ impl<'a> CoilBanks<'a> {
                 || members.iter().enumerate().any(|(phase, t)| {
                     t.windings[0].terminal_map[1] != other[phase]
                         || t.windings[0].v_ref * t.windings[0].tap != primary
-                        || t.windings[1].v_ref * t.windings[1].tap * 3.0_f64.sqrt() != secondary
+                        || crate::electrical::calc_wye_line_voltage(
+                            t.windings[1].v_ref * t.windings[1].tap,
+                        ) != secondary
                         || t.windings[0].s_rating * 3.0 != rating
                         || t.windings[0].r_pct + t.windings[1].r_pct != resistance
                         || t.xsc_pct[0] != reactance

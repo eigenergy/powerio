@@ -215,28 +215,19 @@ impl Motor {
         };
         let positive = admittance(self.slip);
         let negative = admittance(2.0 - self.slip);
-        // mathutil.pas uses this truncated rotation and actually inverts A.
-        // Conjugate(A)/3 is not its inverse; the difference is observable for
-        // low-slip currents. Preserve the pinned library's current law.
-        let rotation = 0.866_025_403;
-        let a = Complex64::new(-0.5, rotation);
-        let one = Complex64::new(1.0, 0.0);
-        let third = one / 3.0;
-        let inverse = Complex64::new(-1.0 / 6.0, 1.0 / (4.0 * rotation));
-        let forward = [[one, one], [a.conj(), a], [a, a.conj()]];
-        let reverse = [
-            [third, inverse, inverse.conj()],
-            [third, inverse.conj(), inverse],
-        ];
-        let mut matrix = [[Complex64::default(); 3]; 3];
-        for (i, row) in matrix.iter_mut().enumerate() {
-            for (j, entry) in row.iter_mut().enumerate() {
-                *entry = forward[i][0] * positive * reverse[0][j]
-                    + forward[i][1] * negative * reverse[1][j];
-                if !entry.re.is_finite() || !entry.im.is_finite() {
-                    return Err("singular motor equivalent".into());
-                }
-            }
+        // The pinned library's mathutil.pas truncates the rotation and
+        // inverts A exactly; conj(A)/3 is not that inverse, and the
+        // difference is observable for low-slip currents.
+        let matrix = crate::sequence::calc_phase_matrix_from_sequence(
+            [Complex64::default(), positive, negative],
+            crate::sequence::SequenceRotation::OpenDssMathutil,
+        );
+        if matrix
+            .iter()
+            .flatten()
+            .any(|entry| !entry.re.is_finite() || !entry.im.is_finite())
+        {
+            return Err("singular motor equivalent".into());
         }
         Ok(matrix)
     }

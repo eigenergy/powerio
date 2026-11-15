@@ -123,7 +123,8 @@ impl IntegratedNetwork {
             .find(|b| b.id == link.transmission_bus)
             .ok_or_else(|| invalid("interface transmission bus is missing"))?;
         let a = voltage_pu
-            * (bus.base_kv * 1000.0 / 3.0_f64.sqrt() * link.voltage_ratio)
+            * (powerio_core::electrical::calc_wye_phase_voltage(bus.base_kv * 1000.0)
+                * link.voltage_ratio)
             * Complex64::from_polar(1.0, link.angle_shift_radians);
         let phases = [
             a,
@@ -189,7 +190,8 @@ impl IntegratedNetwork {
                     "interface requires an active bus with positive voltage base",
                 ));
             }
-            let nominal = bus.base_kv * 1000.0 / 3.0_f64.sqrt() * link.voltage_ratio;
+            let nominal = powerio_core::electrical::calc_wye_phase_voltage(bus.base_kv * 1000.0)
+                * link.voltage_ratio;
             let net = self
                 .feeders
                 .get(&link.feeder)

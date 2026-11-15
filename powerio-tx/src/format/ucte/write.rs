@@ -356,7 +356,8 @@ fn current_limit_amps(branch: &Branch, kv: f64) -> Option<i64> {
         .map(|ratings| ratings.c_rating_a)
         .filter(|amps| *amps > 0.0)
         .or_else(|| {
-            crate::thermal_limit::as_option(branch.rate_a).map(|mva| mva * 1000.0 / (SQRT_3 * kv))
+            crate::thermal_limit::as_option(branch.rate_a)
+                .map(|mva| powerio_core::electrical::calc_line_current(mva * 1000.0, kv, SQRT_3))
         })?;
     Some(amps.round() as i64)
 }
@@ -971,10 +972,13 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
             .current_rating
             .filter(|amps| *amps > 0.0)
             .or_else(|| {
-                switch
-                    .thermal_rating
-                    .filter(|mva| *mva > 0.0)
-                    .map(|mva| mva * 1000.0 / (SQRT_3 * kv_of[&switch.to]))
+                switch.thermal_rating.filter(|mva| *mva > 0.0).map(|mva| {
+                    powerio_core::electrical::calc_line_current(
+                        mva * 1000.0,
+                        kv_of[&switch.to],
+                        SQRT_3,
+                    )
+                })
             });
         if let Some(amps) = amps {
             put_integer(

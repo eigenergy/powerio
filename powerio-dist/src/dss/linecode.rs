@@ -41,14 +41,19 @@ pub(crate) struct LineMatrices {
 /// `Kxg := Xg / ln(658.5 * sqrt(rho / BaseFrequency))` (`Line.pas`, at
 /// creation, on `FetchLineCode` and on an `xg` or `rho` edit).
 pub(crate) fn calc_earth_return_kxg(xg: f64, rho: f64, base_frequency: f64) -> f64 {
-    xg / crate::overhead::calc_earth_return_log_depth(rho, base_frequency)
+    xg / crate::overhead::calc_earth_return_log_depth(
+        rho,
+        base_frequency,
+        crate::overhead::EarthDepthForm::OpenDss,
+    )
 }
 
 /// The length a frequency corrected matrix is scaled to.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LineScale {
-    /// The whole line: `(x − Xgmod) · length · f/f₀`, as `Line.CalcYPrim`
-    /// orders it.
+    /// The whole line: `(x − Xgmod) · length · f/f₀` and `b · length · f/f₀`,
+    /// each product taken left to right as `Line.CalcYPrim` orders it
+    /// (`YValues.im * LengthMultiplier * FreqMultiplier`).
     Length(f64),
     /// Per meter of a code shared by several lines:
     /// `(x − Xgmod) · f/f₀ / meters`.
@@ -88,7 +93,7 @@ impl EarthReturn {
                     LineScale::Length(length) => {
                         *r = (*r + self.rg * (ratio - 1.0)) * length;
                         *x = (*x - xgmod) * length * ratio;
-                        *b *= length * ratio;
+                        *b = *b * length * ratio;
                     }
                     LineScale::PerMeter(meters) => {
                         *r = (*r + self.rg * (ratio - 1.0)) / meters;

@@ -668,7 +668,11 @@ fn line_row(net: &BalancedNetwork, branch: &Branch, from: &Bus) -> Row {
         (
             "Ith",
             if branch.rate_a.is_finite() {
-                branch.rate_a / (3.0_f64.sqrt() * from.base_kv)
+                powerio_core::electrical::calc_line_current(
+                    branch.rate_a,
+                    from.base_kv,
+                    powerio_core::electrical::SQRT_3,
+                )
             } else {
                 0.0
             },

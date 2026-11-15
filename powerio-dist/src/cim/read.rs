@@ -461,16 +461,9 @@ impl Store {
 // Phase mapping
 // ---------------------------------------------------------------------------
 
-/// A `SinglePhaseKind` value to its wire coordinate terminal name.
-fn phase_terminal(phase: &str) -> Option<&'static str> {
-    match phase {
-        "A" | "s1" => Some("1"),
-        "B" | "s2" => Some("2"),
-        "C" => Some("3"),
-        "N" => Some("4"),
-        _ => None,
-    }
-}
+// A `SinglePhaseKind` value to its wire coordinate terminal name: the one
+// mapping, `powerio_core::cim::phase_terminal`.
+use powerio_core::cim::phase_terminal;
 
 /// Expand a `PhaseCode` value (`A`, `ABC`, `ABCN`, `AB`, `s1`, `s12`,
 /// `s1N`, `s12N`) into terminal names in canonical order. `None` for a value
@@ -488,7 +481,7 @@ fn expand_phase_code(code: &str) -> Option<Vec<String>> {
             'A' => push("1"),
             'B' => push("2"),
             'C' => push("3"),
-            'N' => push("4"),
+            'N' => push(powerio_core::cim::NEUTRAL_TERMINAL),
             's' => match chars.next() {
                 Some('1') => {
                     push("1");
@@ -510,9 +503,9 @@ fn expand_phase_code(code: &str) -> Option<Vec<String>> {
 /// grounded neutral (terminal 4). Delta maps have no neutral.
 fn with_neutral(mut map: Vec<String>, config: Configuration) -> Vec<String> {
     if matches!(config, Configuration::Wye | Configuration::SinglePhase)
-        && !map.iter().any(|t| t == "4")
+        && !map.iter().any(|t| crate::cim::is_wire_neutral(t))
     {
-        map.push("4".to_owned());
+        map.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
     }
     map
 }
@@ -1450,7 +1443,7 @@ impl<'a> Mapper<'a> {
             Ok(impedance) => {
                 self.catalog_lines += 1;
                 if !terminal_neutral {
-                    map.retain(|t| t != "4");
+                    map.retain(|t| !crate::cim::is_wire_neutral(t));
                 }
                 for note in &impedance.notes {
                     self.note(
@@ -1574,7 +1567,7 @@ impl<'a> Mapper<'a> {
                 label: self.label(child),
                 sequence: store.f(child, "ACLineSegmentPhase.sequenceNumber"),
                 catalog,
-                reduced: terminal == "4" && !terminal_neutral,
+                reduced: crate::cim::is_wire_neutral(terminal) && !terminal_neutral,
             });
         }
         (records, conductors, terminal_neutral)
@@ -1971,7 +1964,7 @@ impl<'a> Mapper<'a> {
                 let phases: Vec<String> = self
                     .fallback_map("EnergyConsumer", &id)
                     .into_iter()
-                    .filter(|t| t != "4")
+                    .filter(|t| !crate::cim::is_wire_neutral(t))
                     .collect();
                 let unstated = vec![None; phases.len()];
                 let p_nom = self.phase_powers(&id, "p", &unstated, false);
@@ -1990,7 +1983,7 @@ impl<'a> Mapper<'a> {
                     "EnergyConsumerPhase.phase",
                     None,
                 ) {
-                    if terminal == "4" {
+                    if crate::cim::is_wire_neutral(&terminal) {
                         self.drop_record(
                             "EnergyConsumerPhase",
                             &child,
@@ -2210,7 +2203,7 @@ impl<'a> Mapper<'a> {
                 let map: Vec<String> = self
                     .fallback_map("LinearShuntCompensator", &id)
                     .into_iter()
-                    .filter(|t| t != "4")
+                    .filter(|t| !crate::cim::is_wire_neutral(t))
                     .collect();
                 let g = self
                     .store
@@ -2909,7 +2902,7 @@ impl<'a> Mapper<'a> {
         let phases = match windings[0]
             .terminal_map
             .iter()
-            .filter(|t| *t != "4")
+            .filter(|t| !crate::cim::is_wire_neutral(t))
             .count()
         {
             3 => 3,
@@ -2979,7 +2972,7 @@ impl<'a> Mapper<'a> {
         let three_phase = windings[0]
             .terminal_map
             .iter()
-            .filter(|t| *t != "4")
+            .filter(|t| !crate::cim::is_wire_neutral(t))
             .count()
             == 3;
         let leadlag = crate::cim::clocks_leadlag(windings, clocks, three_phase).map_err(|m| {
@@ -3427,7 +3420,10 @@ impl<'a> Mapper<'a> {
                 .map(str::to_owned)
                 && let Some(map) = self.terminal_phases(&term)
             {
-                let n = map.iter().filter(|t| *t != "4").count();
+                let n = map
+                    .iter()
+                    .filter(|t| !crate::cim::is_wire_neutral(t))
+                    .count();
                 if n > 0 {
                     return n;
                 }
@@ -3481,9 +3477,10 @@ impl<'a> Mapper<'a> {
             let stated = self.terminal_phases(&term).filter(|m| !m.is_empty());
             let map = match (conn, stated) {
                 // A delta winding has no neutral terminal.
-                (DistWindingConn::Delta, Some(map)) => {
-                    map.into_iter().filter(|t| t != "4").collect::<Vec<_>>()
-                }
+                (DistWindingConn::Delta, Some(map)) => map
+                    .into_iter()
+                    .filter(|t| !crate::cim::is_wire_neutral(t))
+                    .collect::<Vec<_>>(),
                 (_, Some(map)) => map,
                 (_, None) => default_map.clone(),
             };
@@ -3691,7 +3688,10 @@ impl<'a> Mapper<'a> {
                 .map(|(t, _)| t)
                 .collect()
             };
-            let phases: Vec<String> = phases.into_iter().filter(|t| t != "4").collect();
+            let phases: Vec<String> = phases
+                .into_iter()
+                .filter(|t| !crate::cim::is_wire_neutral(t))
+                .collect();
             if phases.is_empty() {
                 self.drop_record("EnergySource", &id, "no readable phase");
                 continue;
@@ -3726,18 +3726,19 @@ impl<'a> Mapper<'a> {
                 .f(&id, "EnergySource.voltageAngle")
                 .unwrap_or(0.0);
             let map = with_neutral(phases, Configuration::Wye);
+            let hot = |t: &String| !crate::cim::is_wire_neutral(t);
             let v_magnitude = map
                 .iter()
-                .map(|t| if t == "4" { 0.0 } else { v_ln })
+                .map(|t| if hot(t) { v_ln } else { 0.0 })
                 .collect();
             let v_angle = map
                 .iter()
                 .enumerate()
                 .map(|(i, t)| {
-                    if t == "4" {
-                        0.0
-                    } else {
+                    if hot(t) {
                         wrap_angle(base_angle - (i as f64) * 2.0 * PI / n as f64)
+                    } else {
+                        0.0
                     }
                 })
                 .collect();
@@ -4159,8 +4160,8 @@ fn derive_buses(
                 .get(&bus_id.to_ascii_lowercase())
                 .map(|set| set.iter().cloned().collect())
                 .unwrap_or_default();
-            let grounded = if terminals.iter().any(|t| t == "4") {
-                vec!["4".to_owned()]
+            let grounded = if terminals.iter().any(|t| crate::cim::is_wire_neutral(t)) {
+                vec![powerio_core::cim::NEUTRAL_TERMINAL.to_owned()]
             } else {
                 Vec::new()
             };

@@ -194,8 +194,10 @@ pub enum TerminalRole {
 /// The one terminal classification: [`DistBus::phase_indices`],
 /// [`DistBus::neutral_indices`], the WYE neutral of a connection
 /// ([`crate::calc_wye_neutral_position`]), the BMOPF reader, validator and
-/// writer, the PMD MATHEMATICAL writer and the multiconductor to balanced
-/// lowering read it.
+/// writer, the PMD MATHEMATICAL writer, the multiconductor to balanced
+/// lowering, and the CIM and MG-RAVENS readers and writers (over the CIM
+/// wire convention, which those readers state for their networks:
+/// [`MulticonductorNetwork::terminal_conventions`]) read it.
 #[must_use]
 pub fn calc_terminal_role<S: AsRef<str>>(
     terminals: &[S],
@@ -1131,12 +1133,23 @@ dist_table_accessors! {
 }
 
 impl MulticonductorNetwork {
-    /// The network's BMOPF terminal conventions (the
-    /// `bmopf_terminal_conventions` extra), which [`calc_terminal_role`]
-    /// reads; `None` when the source stated none.
+    /// The network's terminal conventions, which [`calc_terminal_role`]
+    /// reads: the BMOPF `terminal_conventions` its source stated (the
+    /// `bmopf_terminal_conventions` extra), else, for a network read from
+    /// distribution CIM or MG-RAVENS, the CIM wire convention those readers
+    /// state (`4`, `n` or `N` is the neutral on every bus, so a single phase
+    /// bus `[1, 4]` has a neutral); `None` otherwise.
     #[must_use]
     pub fn terminal_conventions(&self) -> Option<&serde_json::Value> {
-        self.tables.extras.get("bmopf_terminal_conventions")
+        self.tables
+            .extras
+            .get("bmopf_terminal_conventions")
+            .or_else(|| match self.tables.source_format {
+                Some(DistSourceFormat::CimDist | DistSourceFormat::RavensJson) => {
+                    Some(crate::cim::wire_conventions())
+                }
+                _ => None,
+            })
     }
 
     /// Hz.

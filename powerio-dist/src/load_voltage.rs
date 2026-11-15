@@ -451,6 +451,92 @@ fn envelope_scale(u: f64, bounds: [f64; 3]) -> Result<Option<[f64; 2]>, String> 
     })
 }
 
+/// A GridLAB-D ZIP load term: the law its coefficient states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ZipLaw {
+    /// `constant_power`: the coefficient is the complex power.
+    Power,
+    /// `constant_current`: the coefficient is a current phasor.
+    Current,
+    /// `constant_impedance`: the coefficient is an impedance.
+    Impedance,
+}
+
+/// The nominal voltage a ZIP conversion reads: a real magnitude (`f64`,
+/// a zero angle reference) or a phasor (`Complex64`).
+pub trait ZipVoltage: Copy {
+    /// The voltage times `value`.
+    fn scale(self, value: num_complex::Complex64) -> num_complex::Complex64;
+    /// `|V|²`: the square of a magnitude, or a phasor's `norm_sqr`.
+    fn magnitude_squared(self) -> f64;
+}
+
+impl ZipVoltage for f64 {
+    fn scale(self, value: num_complex::Complex64) -> num_complex::Complex64 {
+        self * value
+    }
+    fn magnitude_squared(self) -> f64 {
+        self * self
+    }
+}
+
+impl ZipVoltage for num_complex::Complex64 {
+    fn scale(self, value: num_complex::Complex64) -> num_complex::Complex64 {
+        self * value
+    }
+    fn magnitude_squared(self) -> f64 {
+        self.norm_sqr()
+    }
+}
+
+/// The complex power a ZIP coefficient draws at its nominal voltage
+/// `voltage`: the constant power itself, `S = V conj(I)` for a constant
+/// current, and `S = |V|² / conj(Z)` for a constant impedance (zero for a
+/// zero impedance, which GridLAB-D reads as no term). The one ZIP
+/// coefficient to power conversion: the GridLAB-D load, explicit connection
+/// and triplex readers read it.
+#[must_use]
+pub fn calc_zip_nominal_power<V: ZipVoltage>(
+    law: ZipLaw,
+    coefficient: num_complex::Complex64,
+    voltage: V,
+) -> num_complex::Complex64 {
+    match law {
+        ZipLaw::Power => coefficient,
+        ZipLaw::Current => voltage.scale(coefficient.conj()),
+        ZipLaw::Impedance if coefficient == num_complex::Complex64::default() => {
+            num_complex::Complex64::default()
+        }
+        ZipLaw::Impedance => voltage.magnitude_squared() / coefficient.conj(),
+    }
+}
+
+/// The ZIP coefficient that draws `power` at a nominal voltage of magnitude
+/// `magnitude` and unit phasor `direction` (`1.0` for a zero angle
+/// reference): the power itself, the current `conj(S) e^{jθ} / |V|` (that
+/// is `conj(S / V)`), or the impedance `|V|² / conj(S)` (zero for zero
+/// power), the reciprocal of [`calc_load_nominal_admittance`]'s
+/// `conj(S) / |V|²` formed without a reciprocal. The inverse of
+/// [`calc_zip_nominal_power`]: the GridLAB-D load, explicit connection and
+/// triplex writers read it.
+#[must_use]
+pub fn calc_zip_coefficient<V: ZipVoltage>(
+    law: ZipLaw,
+    power: num_complex::Complex64,
+    direction: V,
+    magnitude: f64,
+) -> num_complex::Complex64 {
+    match law {
+        ZipLaw::Power => power,
+        ZipLaw::Current => direction.scale(power.conj()) / magnitude,
+        ZipLaw::Impedance if power == num_complex::Complex64::default() => {
+            num_complex::Complex64::default()
+        }
+        ZipLaw::Impedance => magnitude * magnitude / power.conj(),
+    }
+}
+
 /// The nominal admittance of a load branch drawing `power` at `v_nom`:
 /// `conj(S) / V²`, siemens, the constant impedance law's admittance and the
 /// current `Y U` every law reduces to at or below its low voltage

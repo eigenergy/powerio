@@ -80,12 +80,13 @@ impl Writer<'_> {
             }
             let power = Complex64::new(load.p_nom[i], load.q_nom[i]);
             let base = reference(1.0, from, to);
-            let value = match law {
-                "power" => power,
-                "current" => base / base.norm() * power.conj() / nominal[i],
-                _ if power == Complex64::default() => Complex64::default(),
-                _ => nominal[i] * nominal[i] / power.conj(),
-            };
+            let value = crate::load_voltage::calc_zip_coefficient(
+                crate::glm::read::zip_law(law),
+                power,
+                base / base.norm(),
+                // A constant power law states no nominal voltage.
+                nominal.get(i).copied().unwrap_or(f64::NAN),
+            );
             if power != Complex64::default() && value == Complex64::default() {
                 return Err(unsupported(
                     "phase-pair load coefficient underflows to zero",

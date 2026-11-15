@@ -296,7 +296,13 @@ impl Writer<'_> {
             }
             for (i, channel) in channels.into_iter().enumerate() {
                 let power = Complex::new(load.p_nom[i], load.q_nom[i]);
-                let value = power.conj() / v_nom[i];
+                // Triplex current takes a zero angle reference.
+                let value = crate::load_voltage::calc_zip_coefficient(
+                    crate::load_voltage::ZipLaw::Current,
+                    power,
+                    1.0,
+                    v_nom[i],
+                );
                 if !value.re.is_finite()
                     || !value.im.is_finite()
                     || (power != Complex::default() && value == Complex::default())
@@ -443,11 +449,17 @@ impl Writer<'_> {
         self.coordinates(target, &load.name);
         for (i, channel) in channels.iter().enumerate() {
             let power = Complex::new(load.p_nom[i], load.q_nom[i]);
-            let value = match law {
-                "power" => power,
-                _ if power == Complex::default() => Complex::default(),
-                _ => v[i] * v[i] / power.conj(),
-            };
+            let value = crate::load_voltage::calc_zip_coefficient(
+                if law == "power" {
+                    crate::load_voltage::ZipLaw::Power
+                } else {
+                    crate::load_voltage::ZipLaw::Impedance
+                },
+                power,
+                1.0,
+                // A constant power law states no nominal voltage.
+                v.get(i).copied().unwrap_or(f64::NAN),
+            );
             if power != Complex::default() && value == Complex::default() {
                 return Err(unsupported("triplex load coefficient underflows"));
             }

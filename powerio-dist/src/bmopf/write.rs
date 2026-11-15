@@ -2617,7 +2617,6 @@ impl Writer {
     fn decompose_wye_wye(&mut self, t: &DistTransformer) -> Vec<(String, Value)> {
         let mut out = Vec::new();
         let (from, to) = (&t.windings[0], &t.windings[1]);
-        let sqrt3 = 3f64.sqrt();
         for k in 0..t.phases {
             let per = |w: &DistWinding| {
                 let neutral = w.terminal_map.last().cloned().unwrap_or_default();
@@ -2625,7 +2624,7 @@ impl Writer {
                     bus: w.bus.clone(),
                     terminal_map: vec![w.terminal_map[k].clone(), neutral],
                     conn: DistWindingConn::Wye,
-                    v_ref: w.v_ref / sqrt3,
+                    v_ref: crate::electrical::calc_wye_phase_voltage(w.v_ref),
                     s_rating: w.s_rating / 3.0,
                     r_pct: w.r_pct,
                     tap: w.tap,
@@ -3731,7 +3730,9 @@ fn proposal_provenance(meta: &mut Map<String, Value>) {
 
 /// Labels keep first-seen order and case-sensitive identity. Each label
 /// takes the role the one terminal classification
-/// ([`crate::model::DistBus::terminal_role`]) gives it: neutral when it is a
+/// ([`crate::model::DistBus::terminal_role`], over the network's terminal
+/// conventions: the CIM wire convention for a network read from CIM or
+/// MG-RAVENS) gives it: neutral when it is a
 /// neutral on any bus, else earth when it is earth on any bus, else phase.
 /// The `earth` list is written only when some label is earth.
 fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
@@ -3742,7 +3743,7 @@ fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
             .flat_map(|bus| {
                 bus.terminals
                     .iter()
-                    .filter(move |name| bus.terminal_role(name, None) == role)
+                    .filter(move |name| bus.terminal_role(name, net.terminal_conventions()) == role)
             })
             .collect()
     };

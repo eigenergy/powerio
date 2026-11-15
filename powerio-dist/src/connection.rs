@@ -110,8 +110,9 @@ pub fn lindist3flow_carries_connection(
 /// The position of a WYE connection's explicit neutral in an element's
 /// terminal map: the one mapped terminal whose role on the bus
 /// ([`crate::calc_terminal_role`] over the network's terminal conventions)
-/// is not a phase, ground terminal `0` included. `None` when every mapped
-/// terminal is a phase.
+/// is not a phase, ground terminal `0` included
+/// ([`calc_mapped_neutral_position`]). `None` when every mapped terminal is
+/// a phase.
 ///
 /// # Errors
 /// A bus the network does not declare, or more than one mapped terminal
@@ -124,20 +125,42 @@ pub fn calc_wye_neutral_position(
     let declared = network
         .bus(bus)
         .ok_or_else(|| format!("bus `{bus}` is not declared"))?;
-    let conventions = network.terminal_conventions();
+    calc_mapped_neutral_position(
+        &declared.terminals,
+        terminal_map,
+        network.terminal_conventions(),
+    )
+    .map_err(|reason| format!("bus `{bus}` {reason}"))
+}
+
+/// The position in `terminal_map` of the one mapped terminal that is not a
+/// phase of a bus with terminals `bus_terminals`: a terminal the bus does
+/// not carry, or one whose [`crate::calc_terminal_role`] under
+/// `conventions` is neutral or earth. `None` when every mapped terminal is a
+/// phase. The one WYE neutral rule: [`calc_wye_neutral_position`] reads it
+/// over a network, the BMOPF capacitor lowering over a document's bus.
+///
+/// # Errors
+/// More than one mapped terminal that is not a phase.
+pub fn calc_mapped_neutral_position<S: AsRef<str>>(
+    bus_terminals: &[S],
+    terminal_map: &[String],
+    conventions: Option<&serde_json::Value>,
+) -> Result<Option<usize>, String> {
     let mut nonphase = terminal_map
         .iter()
         .enumerate()
         .filter(|(_, terminal)| {
-            !declared.terminals.contains(terminal)
-                || declared.terminal_role(terminal, conventions) != crate::TerminalRole::Phase
+            !bus_terminals
+                .iter()
+                .any(|t| t.as_ref() == terminal.as_str())
+                || crate::calc_terminal_role(bus_terminals, terminal, conventions)
+                    != crate::TerminalRole::Phase
         })
         .map(|(position, _)| position);
     let neutral = nonphase.next();
     if nonphase.next().is_some() {
-        return Err(format!(
-            "bus `{bus}` maps more than one non-phase terminal: the WYE neutral is ambiguous"
-        ));
+        return Err("maps more than one non-phase terminal: the WYE neutral is ambiguous".into());
     }
     Ok(neutral)
 }
@@ -246,13 +269,40 @@ pub fn calc_capacitor_susceptance(
     )
     .map_err(|reason| format!("capacitor `{}`: {reason}", capacitor.name))?;
     let coil_voltage = if capacitor.configuration == Configuration::Wye && terminals > 1 {
-        capacitor.v_nom / 3f64.sqrt()
+        crate::electrical::calc_wye_phase_voltage(capacitor.v_nom)
     } else {
         capacitor.v_nom
     };
-    let y = capacitor.q_rated / (coils.len() as f64) / (coil_voltage * coil_voltage);
-    let mut matrix = vec![vec![0.0; terminals]; terminals];
-    for coil in coils {
+    let y = crate::electrical::calc_rated_admittance(
+        capacitor.q_rated / (coils.len() as f64),
+        coil_voltage,
+    );
+    Ok(Some(calc_coil_susceptance_matrix(
+        terminals,
+        &coils,
+        &vec![y; coils.len()],
+    )))
+}
+
+/// The susceptance matrix over `terminal_count` terminals of coils
+/// `coils` with susceptances `susceptance` (one per coil, in coil order):
+/// each coil adds its susceptance to its terminal's diagonal and, when it
+/// returns through another terminal rather than ground, to that terminal's
+/// diagonal and subtracts it between the two. The one capacitor coil
+/// stamp: [`calc_capacitor_susceptance`], the BMOPF per coil capacitor
+/// lowering and the OpenDSS common return capacitor bank read it.
+///
+/// # Panics
+/// A coil terminal outside `terminal_count`, or fewer susceptances than
+/// coils.
+#[must_use]
+pub fn calc_coil_susceptance_matrix(
+    terminal_count: usize,
+    coils: &[ConnectionChannel],
+    susceptance: &[f64],
+) -> crate::model::ConductorMatrix {
+    let mut matrix = vec![vec![0.0; terminal_count]; terminal_count];
+    for (coil, &y) in coils.iter().zip(susceptance) {
         matrix[coil.from][coil.from] += y;
         if let Some(to) = coil.to {
             matrix[to][to] += y;
@@ -260,7 +310,7 @@ pub fn calc_capacitor_susceptance(
             matrix[to][coil.from] -= y;
         }
     }
-    Ok(Some(matrix))
+    matrix
 }
 
 #[cfg(test)]

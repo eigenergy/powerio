@@ -446,7 +446,12 @@ impl Reader {
                     continue;
                 }
             };
-            let v = finite(&row, "ext_grid", "vm_pu", vm_pu * vn_kv * 1e3 / 3f64.sqrt())?;
+            let v = finite(
+                &row,
+                "ext_grid",
+                "vm_pu",
+                powerio_core::electrical::calc_wye_phase_voltage(vm_pu * vn_kv * 1e3),
+            )?;
             let va = row.f_or("va_degree", 0.0);
             let mut source = VoltageSource::new(
                 name.clone(),
@@ -505,7 +510,7 @@ impl Reader {
                 Some("wye") => (
                     Configuration::Wye,
                     terminals(&WYE),
-                    vn_kv * 1e3 / 3f64.sqrt(),
+                    powerio_core::electrical::calc_wye_phase_voltage(vn_kv * 1e3),
                 ),
                 Some("delta") => (Configuration::Delta, terminals(&PHASES), vn_kv * 1e3),
                 _ => {

@@ -145,7 +145,10 @@ impl Reader<'_> {
             .filter(|v| *v > 0.0)
             .ok_or_else(|| self.error(key, "generator parent requires positive nominal_voltage"))?;
         let rated_v = self.real(key, "Rated_V").unwrap_or(0.0);
-        if rated_v > 0.0 && !(0.99..=1.01).contains(&(rated_v / 3.0_f64.sqrt() / nominal)) {
+        if rated_v > 0.0
+            && !(0.99..=1.01)
+                .contains(&(crate::electrical::calc_wye_phase_voltage(rated_v) / nominal))
+        {
             return Err(self.error(key, "native diesel_dg Rated_V must match its parent's line-line nominal voltage within 1%"));
         }
         Ok(root)

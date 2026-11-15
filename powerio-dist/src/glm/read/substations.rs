@@ -71,8 +71,11 @@ impl Reader<'_> {
             ));
         }
         let rotation = Complex64::from_polar(1.0, angle);
-        let values =
-            crate::sequence::calc_phase_components([seq[0], seq[1], seq[2]]).map(|v| v * rotation);
+        let values = crate::sequence::calc_phase_components(
+            [seq[0], seq[1], seq[2]],
+            crate::sequence::SequenceRotation::Fortescue,
+        )
+        .map(|v| v * rotation);
         if values
             .iter()
             .any(|v| !v.re.is_finite() || !v.im.is_finite())

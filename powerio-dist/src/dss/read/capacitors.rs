@@ -91,12 +91,12 @@ impl Reader<'_> {
             return Err("bank needs one positive finite AC kvar/kV rating".into());
         }
         let voltage = if phases == 2 || phases == 3 {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };
-        let b =
-            kvar[0] * 1e3 / phases as f64 / voltage.powi(2) * (self.net.base_frequency() / base);
+        let b = crate::electrical::calc_rated_admittance(kvar[0] * 1e3 / phases as f64, voltage)
+            * (self.net.base_frequency() / base);
         if !b.is_finite() || b <= 0.0 {
             return Err("bank susceptance must be positive and finite".into());
         }
@@ -111,13 +111,14 @@ impl Reader<'_> {
             1,
         ));
         let n = phases + 1;
-        let mut matrix = vec![vec![0.0; n]; n];
-        for i in 0..phases {
-            matrix[i][i] = b;
-            matrix[i][phases] = -b;
-            matrix[phases][i] = -b;
-            matrix[phases][phases] += b;
-        }
+        // Each phase coil returns through the common terminal, mapped last.
+        let coils = crate::connection::calc_connection_channels(
+            crate::Configuration::Wye,
+            n,
+            phases,
+            Some(phases),
+        )?;
+        let matrix = crate::connection::calc_coil_susceptance_matrix(n, &coils, &vec![b; phases]);
         let mut extras = super::extras_from_leftovers(props);
         extras.insert("conn".into(), "wye".into());
         extras.insert("phases".into(), phases.into());

@@ -2674,7 +2674,7 @@ fn regulator_voltage(
         .flat_map(|source| source.v_magnitude.iter().copied())
         .find(|v| v.is_finite() && *v > 0.0)?;
     Some(if line_to_line {
-        magnitude * 3.0_f64.sqrt()
+        crate::electrical::calc_wye_line_voltage(magnitude)
     } else {
         magnitude
     })

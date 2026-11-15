@@ -405,7 +405,7 @@ fn letters_to_terminals(letters: &[String]) -> Vec<String> {
 fn hot_terminals(letters: &[String]) -> Vec<String> {
     letters_to_terminals(letters)
         .into_iter()
-        .filter(|t| t != "4")
+        .filter(|t| !crate::cim::is_wire_neutral(t))
         .collect()
 }
 
@@ -764,12 +764,17 @@ impl Mapper<'_> {
         let pending = std::mem::take(&mut self.ungrounded_single_phase);
         let single_phase: BTreeSet<usize> = pending.iter().map(|(index, _)| *index).collect();
         for (index, node) in pending {
-            if self.grounded_terminals(&node).iter().any(|t| t == "4") {
+            if self
+                .grounded_terminals(&node)
+                .iter()
+                .any(|t| crate::cim::is_wire_neutral(t))
+            {
                 continue;
             }
             let net = &self.net;
             let reaches = |bus: &str, map: &[String]| {
-                bus.eq_ignore_ascii_case(&node) && map.iter().any(|t| t == "4")
+                bus.eq_ignore_ascii_case(&node)
+                    && map.iter().any(|t| crate::cim::is_wire_neutral(t))
             };
             let others = net
                 .lines()
@@ -1369,7 +1374,7 @@ impl Mapper<'_> {
             } else if !delta {
                 // A wye load returns on the neutral terminal; `grounded`
                 // says whether that neutral is grounded at the node.
-                map.push("4".to_owned());
+                map.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
                 if grounded {
                     self.ground_node(&at.node);
                 } else if phases == 1 {
@@ -1379,7 +1384,13 @@ impl Mapper<'_> {
             }
 
             let base = self.base_voltage(obj);
-            let v_phase = base.map(|b| if delta { b } else { b / 3f64.sqrt() });
+            let v_phase = base.map(|b| {
+                if delta {
+                    b
+                } else {
+                    crate::electrical::calc_wye_phase_voltage(b)
+                }
+            });
             let v_nom = if let Some(v) = v_phase {
                 vec![v; phases]
             } else {
@@ -1399,7 +1410,7 @@ impl Mapper<'_> {
                 // dss `kv` semantics: line-to-neutral for one phase, line-to-line
                 // otherwise. Derived from the BaseVoltage, so recorded as such.
                 let kv = if phases == 1 && !delta {
-                    b / 3f64.sqrt() / 1e3
+                    crate::electrical::calc_wye_phase_voltage(b) / 1e3
                 } else {
                     b / 1e3
                 };
@@ -1627,7 +1638,7 @@ impl Mapper<'_> {
             } else {
                 Configuration::Wye
             };
-            map.push("4".to_owned());
+            map.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
 
             let mut extras = extras_with_mrid(obj);
             if let Some(rated_u) = fnum(obj, "RotatingMachine.ratedU") {
@@ -1726,7 +1737,7 @@ impl Mapper<'_> {
             let rated_s = f_or(obj, "PowerElectronicsConnection.ratedS", 0.0);
             let rated_u = fnum(obj, "PowerElectronicsConnection.ratedU");
             let mut map = hot;
-            map.push("4".to_owned());
+            map.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
             let topology = match phases {
                 1 => IbrTopology::SinglePhase,
                 _ => IbrTopology::ThreeLeg,
@@ -1789,7 +1800,7 @@ impl Mapper<'_> {
                 let rated_amps = if phases == 1 {
                     rated_s / u
                 } else {
-                    rated_s / (3f64.sqrt() * u)
+                    crate::electrical::calc_line_current(rated_s, u, crate::electrical::SQRT_3)
                 };
                 ibr.i_max = Some(vec![pu * rated_amps; phases]);
             }
@@ -1862,7 +1873,7 @@ impl Mapper<'_> {
             let mut v_magnitude = v_magnitude;
             let mut v_angle = v_angle;
             if at.phases.iter().any(|l| l == "N") {
-                map.push("4".to_owned());
+                map.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
                 v_magnitude.push(0.0);
                 v_angle.push(0.0);
             }
@@ -2171,10 +2182,16 @@ impl Mapper<'_> {
                     self.defaulted("transformer", &name, "phases");
                 }
                 let grounded = fbool_map(end, "TransformerEnd.grounded").unwrap_or(false);
-                if conn == DistWindingConn::Wye && grounded && !map.contains(&"4".to_owned()) {
-                    map.push("4".to_owned());
+                if conn == DistWindingConn::Wye
+                    && grounded
+                    && !map.iter().any(|t| crate::cim::is_wire_neutral(t))
+                {
+                    map.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
                 }
-                let hot = map.iter().filter(|t| *t != "4").count();
+                let hot = map
+                    .iter()
+                    .filter(|t| !crate::cim::is_wire_neutral(t))
+                    .count();
                 // A delta end on two conductors is one phase to phase
                 // winding (an open delta tank's `AB`), not two phases.
                 let end_phases = if conn == DistWindingConn::Delta && hot == 2 {
@@ -2204,7 +2221,10 @@ impl Mapper<'_> {
                             winding.r_neutral = Some(rg);
                             winding.x_neutral = Some(xg);
                         }
-                        if rg == 0.0 && xg == 0.0 && map.contains(&"4".to_owned()) {
+                        if rg == 0.0
+                            && xg == 0.0
+                            && map.iter().any(|t| crate::cim::is_wire_neutral(t))
+                        {
                             self.ground_node(&node);
                         }
                     } else {
@@ -2485,8 +2505,8 @@ impl Mapper<'_> {
                 // opendss2xml states these limits on sqrt(3) * Bus.kVBase,
                 // including single-phase equipment. Typed scalar bounds are
                 // phase-to-ground volts, like PMD's vm_lb/vm_ub.
-                bus.v_min = limits.v_low.map(|v| v / 3f64.sqrt());
-                bus.v_max = limits.v_high.map(|v| v / 3f64.sqrt());
+                bus.v_min = limits.v_low.map(crate::electrical::calc_wye_phase_voltage);
+                bus.v_max = limits.v_high.map(crate::electrical::calc_wye_phase_voltage);
             }
             bus.location = locations.remove(&obj.name);
             bus.extras = extras_with_mrid(obj);
@@ -2523,7 +2543,7 @@ impl Mapper<'_> {
     fn grounded_terminals(&self, node: &str) -> Vec<String> {
         if self.node_grounds.is_empty() {
             return if self.node_grounded.contains(node) {
-                vec!["4".to_owned()]
+                vec![powerio_core::cim::NEUTRAL_TERMINAL.to_owned()]
             } else {
                 Vec::new()
             };
@@ -2548,7 +2568,7 @@ impl Mapper<'_> {
             };
             let mut grounded = letters_to_terminals(&at.phases);
             if grounded.is_empty() {
-                grounded.push("4".to_owned());
+                grounded.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
                 self.defaulted("ground", &obj.name, "phases");
             }
             self.use_terminals(&at.node, &grounded);

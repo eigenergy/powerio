@@ -181,7 +181,7 @@ fn check_commands_and_frequency(raw: &RawDss) -> Result<(), String> {
 // kvar bank and its current rating using that edit's phase count.
 fn default_rating(object: &RawObject, vars: &super::VarMap) -> Result<f64, String> {
     let mut phases = 3.0;
-    let mut amps = (100.0 / phases) / (12.47 / 3.0_f64.sqrt());
+    let mut amps = (100.0 / phases) / crate::electrical::calc_wye_phase_voltage(12.47);
     let mut start = 0;
     for end in object.edit_bounds() {
         for property in &object.props[start..end] {
@@ -200,7 +200,7 @@ fn default_rating(object: &RawObject, vars: &super::VarMap) -> Result<f64, Strin
             }
         }
         let kv = if (2.0..=3.0).contains(&phases) {
-            12.47 / 3.0_f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(12.47)
         } else {
             12.47
         };
@@ -276,7 +276,11 @@ impl Reader<'_> {
         {
             return Err("invalid rated reactor parameters or AC frequency".into());
         }
-        let phase_kv = kv / if phases >= 2.0 { 3.0_f64.sqrt() } else { 1.0 };
+        let phase_kv = if phases >= 2.0 {
+            crate::electrical::calc_wye_phase_voltage(kv)
+        } else {
+            kv
+        };
         let reactance = phase_kv * phase_kv * 1000.0 / (kvar / phases);
         let inductance = reactance / std::f64::consts::TAU / base;
         let impedance =

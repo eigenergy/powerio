@@ -225,11 +225,12 @@ fn measured(row: &Row<'_>, magnitude: &str, rx: &str) -> Result<Complex64> {
 }
 
 fn from_magnitude_rx(magnitude: f64, rx: f64) -> Result<Complex64> {
-    let denominator = rx.hypot(1.0);
-    checked(Complex64::new(
-        magnitude * (rx / denominator),
-        magnitude / denominator,
-    ))
+    let (r, x) = powerio_core::electrical::calc_impedance_from_ratio(
+        magnitude,
+        rx,
+        powerio_core::electrical::ImpedanceRatioForm::ResistanceOverReactance,
+    );
+    checked(Complex64::new(r, x))
 }
 
 fn quadrature(magnitude: f64, real: f64, conflict: &str) -> Result<f64> {
@@ -243,12 +244,8 @@ fn quadrature(magnitude: f64, real: f64, conflict: &str) -> Result<f64> {
         }
         return Err(format_error(format!("transformer {conflict}")));
     }
-    if magnitude == 0.0 {
-        return Ok(0.0);
-    }
-    let ratio = real / magnitude;
     finite(
-        magnitude * ((1.0 - ratio) * (1.0 + ratio)).sqrt(),
+        powerio_core::electrical::calc_quadrature(magnitude, real),
         "reactive component",
     )
 }

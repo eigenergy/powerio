@@ -30,16 +30,167 @@ pub fn calc_admittance_base(voltage: f64, power: f64) -> Option<f64> {
     if !positive(voltage) || !positive(power) {
         return None;
     }
-    Some(power / (voltage * voltage)).filter(|base| positive(*base))
+    Some(calc_rated_admittance(power, voltage)).filter(|base| positive(*base))
+}
+
+/// The admittance that draws `power` at `voltage`, `power / V²`, formed as
+/// `power / (voltage · voltage)` in consistent units: a susceptance from a
+/// rated reactive power (a capacitor bank or a shunt section in Mvar at
+/// kilovolts), a conductance from an active power. The one power over
+/// voltage squared: [`calc_admittance_base`], the capacitor stamp, the
+/// BMOPF capacitor lowering, the OpenDSS common return bank and the CGMES
+/// and PSS/E shunt and SVC conversions read it.
+#[must_use]
+pub fn calc_rated_admittance(power: f64, voltage: f64) -> f64 {
+    power / (voltage * voltage)
+}
+
+/// The power an admittance draws at `voltage`, `admittance · V²`, formed as
+/// `admittance · (voltage · voltage)`: the inverse of
+/// [`calc_rated_admittance`].
+#[must_use]
+pub fn calc_rated_power(admittance: f64, voltage: f64) -> f64 {
+    admittance * (voltage * voltage)
+}
+
+/// `√3`, the line to line over line to neutral voltage ratio of a balanced
+/// three phase system.
+pub const SQRT_3: f64 = 1.732_050_807_568_877_2;
+
+/// The line to neutral voltage of a balanced three phase system from its
+/// line to line voltage, `V_LL / √3`. The one line to neutral conversion
+/// (OpenDSS, MG-RAVENS, pandapower, the transmission and distribution
+/// coupling).
+#[must_use]
+pub fn calc_wye_phase_voltage(line_voltage: f64) -> f64 {
+    line_voltage / SQRT_3
+}
+
+/// The line to line voltage of a balanced three phase system from its line
+/// to neutral voltage, `√3 V_LN`: the inverse of [`calc_wye_phase_voltage`].
+#[must_use]
+pub fn calc_wye_line_voltage(phase_voltage: f64) -> f64 {
+    phase_voltage * SQRT_3
+}
+
+/// The order [`calc_line_apparent_power`] multiplies in. The orders are the
+/// same product and can differ in the last place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ApparentPowerOrder {
+    /// `factor · V · I`: every reader and writer that follows no other
+    /// tool's rounding.
+    FactorFirst,
+    /// `I · factor · V`: PowSybl's `AbstractConverter.convertToMva`
+    /// (`I / 1000 · √3 · Vnom`, the current passed in kiloamperes).
+    CurrentFirst,
+}
+
+/// The apparent power of a balanced current `current` at the voltage
+/// `voltage`: `factor · V · I`, with `factor` [`SQRT_3`] for a three phase
+/// rating at its line to line voltage and `1` for a single phase one, in
+/// consistent units (kilovolts and kiloamperes give megavolt amperes), the
+/// product taken in `order`. The one rating conversion from current: the
+/// CGMES, UCTE, PowSybl PSS/E and SINCAL readers, the multiconductor to
+/// balanced lowering and the OpenDSS source read it.
+#[must_use]
+pub fn calc_line_apparent_power(
+    voltage: f64,
+    current: f64,
+    factor: f64,
+    order: ApparentPowerOrder,
+) -> f64 {
+    match order {
+        ApparentPowerOrder::FactorFirst => factor * voltage * current,
+        ApparentPowerOrder::CurrentFirst => current * factor * voltage,
+    }
+}
+
+/// The balanced current of an apparent power `power` at `voltage`,
+/// `S / (factor · V)`: the inverse of [`calc_line_apparent_power`]. The
+/// CGMES, UCTE and SINCAL writers and the OpenDSS source and Thevenin
+/// writer read it.
+#[must_use]
+pub fn calc_line_current(power: f64, voltage: f64, factor: f64) -> f64 {
+    power / (factor * voltage)
+}
+
+/// The quadrature leg `√(m² − r²)` of a magnitude `m` and its in phase
+/// part `r`, formed as `√((m − |r|)(m + |r|))`, free of the cancellation of
+/// `m² − r²` near `|r| = m`, and as `m √((1 − q)(1 + q))` with
+/// `q = |r| / m` where that product overflows: the reactance of a short
+/// circuit test from its impedance and
+/// resistance, the magnetizing current of a no load test from its exciting
+/// current and loss, the reactive power of an apparent power and its active
+/// part, and with `m = 1` the sine of a power factor
+/// ([`calc_power_factor_sine`]). Zero when both are zero; `NaN` when
+/// `|r| > m` or either is `NaN`. The caller states what an excess means for
+/// its quantity.
+#[must_use]
+pub fn calc_quadrature(magnitude: f64, real: f64) -> f64 {
+    let real = real.abs();
+    let product = (magnitude - real) * (magnitude + real);
+    if product.is_finite() {
+        return product.sqrt();
+    }
+    let ratio = real / magnitude;
+    magnitude * ((1.0 - ratio) * (1.0 + ratio)).sqrt()
+}
+
+/// Which ratio [`calc_impedance_from_ratio`] reads and how it forms the
+/// split. The forms can differ in the last place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImpedanceRatioForm {
+    /// An `R / X` ratio: `X = |Z| / hypot(R/X, 1)`, `R = |Z| (R/X) / hypot(R/X, 1)`
+    /// (the SINCAL transformer, source and rated shunt readers).
+    ResistanceOverReactance,
+    /// An `X / R` ratio as OpenDSS `VSource` splits a short circuit
+    /// impedance: `X = |Z| / √(1 + 1 / (X/R)²)`, `R = X / (X/R)`.
+    OpenDssReactanceOverResistance,
+}
+
+/// The divisor `|Z| / X` of an impedance with the given ratio, formed as
+/// `form` states: `hypot(R/X, 1)` or `√(1 + 1 / (X/R)²)`.
+#[must_use]
+pub fn calc_impedance_ratio_divisor(ratio: f64, form: ImpedanceRatioForm) -> f64 {
+    match form {
+        ImpedanceRatioForm::ResistanceOverReactance => ratio.hypot(1.0),
+        ImpedanceRatioForm::OpenDssReactanceOverResistance => (1.0 + 1.0 / (ratio * ratio)).sqrt(),
+    }
+}
+
+/// The resistance and reactance `(R, X)` of an impedance of magnitude
+/// `magnitude` with the given `R / X` or `X / R` ratio, split as `form`
+/// states over [`calc_impedance_ratio_divisor`]. The one impedance from a
+/// magnitude and a ratio: the SINCAL multiconductor transformer, source and
+/// rated shunt readers and the OpenDSS source's short circuit impedance
+/// read it.
+#[must_use]
+pub fn calc_impedance_from_ratio(
+    magnitude: f64,
+    ratio: f64,
+    form: ImpedanceRatioForm,
+) -> (f64, f64) {
+    let divisor = calc_impedance_ratio_divisor(ratio, form);
+    match form {
+        ImpedanceRatioForm::ResistanceOverReactance => {
+            (magnitude * (ratio / divisor), magnitude / divisor)
+        }
+        ImpedanceRatioForm::OpenDssReactanceOverResistance => {
+            let reactance = magnitude / divisor;
+            (reactance / ratio, reactance)
+        }
+    }
 }
 
 /// The sine of a power factor's angle, `sin(acos |pf|) = √((1 − |pf|)(1 + |pf|))`,
-/// formed without the cancellation of `1 − pf²` near unity. Reactive power
+/// formed without the cancellation of `1 − pf²` near unity: the
+/// [`calc_quadrature`] of a unit magnitude. Reactive power
 /// is `S` times this for an apparent power `S`. `NaN` when `|pf| > 1`.
 #[must_use]
 pub fn calc_power_factor_sine(pf: f64) -> f64 {
-    let magnitude = pf.abs();
-    ((1.0 - magnitude) * (1.0 + magnitude)).sqrt()
+    calc_quadrature(1.0, pf)
 }
 
 /// How [`calc_reactive_ratio`] forms `tan(acos |pf|)`. The forms are the
@@ -166,6 +317,52 @@ mod tests {
         assert_eq!(calc_admittance_base(12.47, -1.0), None);
         assert_eq!(calc_admittance_base(f64::INFINITY, 1.0), None);
         assert_eq!(calc_admittance_base(1e300, 1e-300), None);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // each conversion states its exact spelling
+    fn the_rating_conversions_spell_their_products() {
+        assert_eq!(SQRT_3, 3f64.sqrt());
+        assert_eq!(calc_rated_admittance(1.2, 12.47), 1.2 / (12.47 * 12.47));
+        assert_eq!(calc_rated_power(0.5, 12.47), 0.5 * (12.47 * 12.47));
+        assert_eq!(calc_wye_phase_voltage(12_470.0), 12_470.0 / 3f64.sqrt());
+        assert_eq!(calc_wye_line_voltage(7_200.0), 7_200.0 * 3f64.sqrt());
+        let (kv, amps) = (110.0, 650.0);
+        assert_eq!(
+            calc_line_apparent_power(kv, amps, SQRT_3, ApparentPowerOrder::FactorFirst),
+            3f64.sqrt() * kv * amps
+        );
+        assert_eq!(
+            calc_line_apparent_power(kv, amps / 1000.0, SQRT_3, ApparentPowerOrder::CurrentFirst),
+            amps / 1000.0 * 3f64.sqrt() * kv
+        );
+        assert_eq!(
+            calc_line_current(120.0, kv, SQRT_3),
+            120.0 / (3f64.sqrt() * kv)
+        );
+    }
+
+    #[test]
+    fn the_quadrature_leg_and_the_ratio_split_close_their_triangles() {
+        assert!((calc_quadrature(5.0, 3.0) - 4.0).abs() < 1e-15);
+        assert!((calc_quadrature(5.0, -3.0) - 4.0).abs() < 1e-15);
+        assert_eq!(calc_quadrature(0.0, 0.0), 0.0);
+        assert_eq!(calc_quadrature(2.0, 2.0), 0.0);
+        assert!(calc_quadrature(1.0, 1.5).is_nan());
+        assert!(calc_quadrature(0.0, 1.0).is_nan());
+        assert!((calc_quadrature(1e300, 6e299) - 8e299).abs() < 1e285);
+        for form in [
+            ImpedanceRatioForm::ResistanceOverReactance,
+            ImpedanceRatioForm::OpenDssReactanceOverResistance,
+        ] {
+            let (r, x) = calc_impedance_from_ratio(5.0, 0.75, form);
+            assert!((r.hypot(x) - 5.0).abs() < 1e-14);
+            let ratio = match form {
+                ImpedanceRatioForm::ResistanceOverReactance => r / x,
+                _ => x / r,
+            };
+            assert!((ratio - 0.75).abs() < 1e-14);
+        }
     }
 
     #[test]

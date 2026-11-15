@@ -64,14 +64,12 @@ fn phase_letter(terminal: &str) -> Option<&'static str> {
     powerio_core::cim::terminal_phase(terminal)
 }
 
-/// Whether a terminal is written as the neutral conductor `N`: the CIM
-/// wire convention's letter ([`powerio_core::cim::terminal_phase`]), which
-/// the CIM readers read back as terminal `4` on any bus. This is not
-/// [`crate::model::calc_terminal_role`], which calls a `4` neutral only in an
-/// exact `1` to `4` set: a CIM read single phase bus `[1, 4]` would classify
-/// its neutral as a phase and a round trip would double the source voltage.
+/// Whether a terminal is written as the neutral conductor `N`: its role
+/// under the CIM wire convention ([`crate::cim::is_wire_neutral`], the one
+/// terminal classification over the convention the CIM readers state), so
+/// a CIM read single phase bus `[1, 4]` keeps its neutral.
 fn is_neutral(terminal: &str) -> bool {
-    phase_letter(terminal) == Some("N")
+    crate::cim::is_wire_neutral(terminal)
 }
 
 /// The canonical position of a phase in a `PhaseCode`: A, B, C, then N.

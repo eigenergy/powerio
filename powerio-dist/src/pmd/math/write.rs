@@ -971,7 +971,7 @@ impl Writer {
                 let winding = &xf.windings[w];
                 let index = self.transformers.len() + 1;
                 let tm_nom = if winding.conn == DistWindingConn::Delta {
-                    kv(vnom[w], &self.settings) * 3f64.sqrt()
+                    crate::electrical::calc_wye_line_voltage(kv(vnom[w], &self.settings))
                 } else {
                     kv(vnom[w], &self.settings)
                 };
@@ -2111,7 +2111,11 @@ impl Writer {
                     load.fields.get("configuration").and_then(Value::as_str) == Some("DELTA");
                 load.set(
                     "vnom_kv",
-                    num(if delta { base * 3f64.sqrt() } else { base }),
+                    num(if delta {
+                        crate::electrical::calc_wye_line_voltage(base)
+                    } else {
+                        base
+                    }),
                 );
             }
             load.scale("vnom_kv", |kv| kv / base, voltage(base));
@@ -2220,10 +2224,18 @@ impl Writer {
             if let Some(unit) = self.units.iter().find(|u| u.index == k) {
                 let recovered = |v: f64| {
                     let kv = v / vsf;
-                    let kv_ll = if delta { kv * 3f64.sqrt() } else { kv };
+                    let kv_ll = if delta {
+                        crate::electrical::calc_wye_line_voltage(kv)
+                    } else {
+                        kv
+                    };
                     let pu = kv_ll * ((1.0 / f_vbase) / (1.0 / t_vbase));
                     let kv_ll2 = pu * f_vbase / t_vbase;
-                    let kv2 = if delta { kv_ll2 / 3f64.sqrt() } else { kv_ll2 };
+                    let kv2 = if delta {
+                        crate::electrical::calc_wye_phase_voltage(kv_ll2)
+                    } else {
+                        kv_ll2
+                    };
                     kv2 * vsf
                 };
                 let v = stabilize(unit.v_ref, &recovered);
@@ -2239,10 +2251,18 @@ impl Writer {
                 move |kv_ll| kv_ll * ((1.0 / f_vbase) / (1.0 / t_vbase)),
                 move |pu| {
                     let kv_ll = pu * f_vbase / t_vbase;
-                    let kv = if delta { kv_ll / 3f64.sqrt() } else { kv_ll };
+                    let kv = if delta {
+                        crate::electrical::calc_wye_phase_voltage(kv_ll)
+                    } else {
+                        kv_ll
+                    };
                     let v_ref = kv * vsf;
                     let kv2 = v_ref / vsf;
-                    let kv_ll2 = if delta { kv2 * 3f64.sqrt() } else { kv2 };
+                    let kv_ll2 = if delta {
+                        crate::electrical::calc_wye_line_voltage(kv2)
+                    } else {
+                        kv2
+                    };
                     kv_ll2 * ((1.0 / f_vbase) / (1.0 / t_vbase))
                 },
             );
@@ -2397,7 +2417,7 @@ impl Writer {
             };
             let tm_nom = if xf.fields.get("configuration").and_then(Value::as_str) == Some("DELTA")
             {
-                tm_nom / 3f64.sqrt()
+                crate::electrical::calc_wye_phase_voltage(tm_nom)
             } else {
                 tm_nom
             };
@@ -2444,7 +2464,14 @@ impl Writer {
                     .and_then(Value::as_str)
                     .unwrap_or("?")
                     .to_owned();
-                Some((if delta { kv / 3f64.sqrt() } else { kv }, load_name))
+                Some((
+                    if delta {
+                        crate::electrical::calc_wye_phase_voltage(kv)
+                    } else {
+                        kv
+                    },
+                    load_name,
+                ))
             });
             let (base, stands_in) = from_load.map_or_else(
                 || (1.0, "1 kV".to_owned()),
