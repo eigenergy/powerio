@@ -313,6 +313,10 @@
   refuse it, as they refuse a CIM segment without impedance, instead of writing the feeder
   without it. In 0.12.0, which calculated no wire catalog segment, converting the MG-RAVENS
   `IEEE13_Assets` example to OpenDSS succeeded with ten of its eleven segments missing. The MG-RAVENS round trip keeps the equipment.
+- Fix: `powerio convert` reports the reader's findings before the error when the conversion is
+  refused, in text and in the `--diagnostics-format json` array; it printed only the error, so
+  converting the CIM `IEEE13_Assets` example to OpenDSS showed `BUILD.DIST.ELECTRICAL_INCOMPLETE`
+  without the `READ.CIM_DIST.IMPEDANCE_UNRESOLVED` finding naming each segment's missing wire.
 - MG-RAVENS reports a single phase wye load stating `grounded` false whose neutral no
   equipment but such loads reaches (`READ.RAVENS_DIST.VALUE_CONFLICT`): its neutral floats, so
   it does not draw its stated power. The load is kept as stated; the CIM reader grounds such a
