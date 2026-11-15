@@ -13,6 +13,7 @@
 //! profile set, and the routing reads a header-less document with per phase
 //! classes as distribution CIM.
 
+use crate::sequence::{SequenceThird, calc_phase_from_sequence};
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 
@@ -1822,20 +1823,8 @@ fn stated_sequence(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
             })
             .collect()
     };
-    (matrix("rs")?
-        == crate::sequence::calc_phase_from_sequence(
-            n,
-            r1,
-            r0,
-            crate::sequence::SequenceThird::Divide,
-        )
-        && matrix("xs")?
-            == crate::sequence::calc_phase_from_sequence(
-                n,
-                x1,
-                x0,
-                crate::sequence::SequenceThird::Divide,
-            ))
+    (matrix("rs")? == calc_phase_from_sequence(n, r1, r0, SequenceThird::Divide)
+        && matrix("xs")? == calc_phase_from_sequence(n, x1, x0, SequenceThird::Divide))
     .then_some((r1, x1, r0, x0))
 }
 

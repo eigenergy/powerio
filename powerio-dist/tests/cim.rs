@@ -1702,7 +1702,7 @@ fn a_misspelt_tank_end_is_named_where_it_is_dropped() {
             "",
         );
     let text = text.replacen(
-        r##"<cim:TransformerTank rdf:ID="_ct">"##,
+        r#"<cim:TransformerTank rdf:ID="_ct">"#,
         r##"<cim:TransformerTank rdf:ID="_ct"><cim:TransformerTank.TransformerTankInfo rdf:resource="#_info"/>"##,
         1,
     );
@@ -1718,7 +1718,7 @@ fn a_misspelt_tank_end_is_named_where_it_is_dropped() {
         dropped
             .iter()
             .find(|f| f.contains(&format!("ct_e{n}")))
-            .map(|f| f.to_string())
+            .map(|f| (*f).clone())
             .unwrap_or_default()
     };
     assert!(

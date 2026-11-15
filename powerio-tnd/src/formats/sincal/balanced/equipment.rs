@@ -1,5 +1,6 @@
 //! Positive-sequence physical units to the balanced network's MW/kV/pu basis.
 use super::{error, rows::NativeRow, settings::StaticProfiles};
+use powerio_core::electrical::{ReactiveRatioForm, calc_reactive_ratio};
 use powerio_tx::Result;
 use powerio_tx::network::{
     BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BusId, BusType, Generator, Load,
@@ -204,13 +205,7 @@ pub(super) fn load(
             if pf > 1.0 {
                 return Err(row.bad("cosphi", "power factor exceeds one"));
             }
-            (
-                p,
-                p * powerio_core::electrical::calc_reactive_ratio(
-                    pf,
-                    powerio_core::electrical::ReactiveRatioForm::Sine,
-                ),
-            )
+            (p, p * calc_reactive_ratio(pf, ReactiveRatioForm::Sine))
         }
         _ => return Err(row.bad("Flag_Lf", "unsupported balanced load mode")),
     };

@@ -12,6 +12,7 @@
 //! are counted per class and property, and every default, substitution,
 //! dropped record, and unresolved reference has its own finding.
 
+use crate::sequence::{SequenceThird, calc_phase_from_sequence};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::f64::consts::PI;
@@ -1389,33 +1390,13 @@ impl<'a> Mapper<'a> {
         let per = |v: f64| v / length;
         let mut code = DistLineCode::new(
             name.clone(),
-            crate::sequence::calc_phase_from_sequence(
-                n,
-                per(r1),
-                per(r0),
-                crate::sequence::SequenceThird::Divide,
-            ),
-            crate::sequence::calc_phase_from_sequence(
-                n,
-                per(x1),
-                per(x0),
-                crate::sequence::SequenceThird::Divide,
-            ),
+            calc_phase_from_sequence(n, per(r1), per(r0), SequenceThird::Divide),
+            calc_phase_from_sequence(n, per(x1), per(x0), SequenceThird::Divide),
         );
         set_shunt_halves(
             &mut code,
-            &crate::sequence::calc_phase_from_sequence(
-                n,
-                per(g1),
-                per(g0),
-                crate::sequence::SequenceThird::Divide,
-            ),
-            &crate::sequence::calc_phase_from_sequence(
-                n,
-                per(b1),
-                per(b0),
-                crate::sequence::SequenceThird::Divide,
-            ),
+            &calc_phase_from_sequence(n, per(g1), per(g0), SequenceThird::Divide),
+            &calc_phase_from_sequence(n, per(b1), per(b0), SequenceThird::Divide),
         );
         line_codes.push(code);
         (name, resolved)
@@ -1780,30 +1761,10 @@ impl<'a> Mapper<'a> {
                 }
                 let (r0, x0) = (r0.unwrap_or(r1), x0.unwrap_or(x1));
                 Some((
-                    crate::sequence::calc_phase_from_sequence(
-                        n,
-                        r1,
-                        r0,
-                        crate::sequence::SequenceThird::Divide,
-                    ),
-                    crate::sequence::calc_phase_from_sequence(
-                        n,
-                        x1,
-                        x0,
-                        crate::sequence::SequenceThird::Divide,
-                    ),
-                    crate::sequence::calc_phase_from_sequence(
-                        n,
-                        g1,
-                        g0,
-                        crate::sequence::SequenceThird::Divide,
-                    ),
-                    crate::sequence::calc_phase_from_sequence(
-                        n,
-                        b1,
-                        b0,
-                        crate::sequence::SequenceThird::Divide,
-                    ),
+                    calc_phase_from_sequence(n, r1, r0, SequenceThird::Divide),
+                    calc_phase_from_sequence(n, x1, x0, SequenceThird::Divide),
+                    calc_phase_from_sequence(n, g1, g0, SequenceThird::Divide),
+                    calc_phase_from_sequence(n, b1, b0, SequenceThird::Divide),
                 ))
             }
             other => {
@@ -2667,11 +2628,11 @@ impl<'a> Mapper<'a> {
                     .props_all(&end, MISSPELT_TANK_END_TANK)
                     .is_empty()
                 {
-                    why.push_str(&format!(
-                        " (it states `{MISSPELT_TANK_END_TANK}`, a misspelling of \
+                    why = format!(
+                        "{why} (it states `{MISSPELT_TANK_END_TANK}`, a misspelling of \
                          `TransformerTankEnd.TransformerTank` that no CIM or MG-RAVENS profile \
                          defines, which is not read)"
-                    ));
+                    );
                 }
                 if self.store.refv(&end, "TransformerEnd.Terminal").is_none() {
                     why.push_str(" and states no TransformerEnd.Terminal");
@@ -3789,18 +3750,9 @@ impl<'a> Mapper<'a> {
                 // The PMD reader's convention: full matrices over every
                 // terminal, which the dss and PMD writers both read.
                 let (r1, x1) = (r1.unwrap_or(0.0), x1.unwrap_or(0.0));
-                let rs = crate::sequence::calc_phase_from_sequence(
-                    map.len(),
-                    r1,
-                    r0.unwrap_or(r1),
-                    crate::sequence::SequenceThird::Divide,
-                );
-                let xs = crate::sequence::calc_phase_from_sequence(
-                    map.len(),
-                    x1,
-                    x0.unwrap_or(x1),
-                    crate::sequence::SequenceThird::Divide,
-                );
+                let expand =
+                    |z1, z0| calc_phase_from_sequence(map.len(), z1, z0, SequenceThird::Divide);
+                let (rs, xs) = (expand(r1, r0.unwrap_or(r1)), expand(x1, x0.unwrap_or(x1)));
                 source.extras.insert("rs".into(), matrix_value(&rs));
                 source.extras.insert("xs".into(), matrix_value(&xs));
                 // The stated values too: rebuilding them from the matrices

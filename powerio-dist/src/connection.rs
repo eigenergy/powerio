@@ -191,34 +191,6 @@ pub fn orient_delta_ring(channels: &mut [ConnectionChannel], direction: i8) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pairs(channels: &[ConnectionChannel]) -> Vec<(usize, Option<usize>)> {
-        channels.iter().map(|c| (c.from, c.to)).collect()
-    }
-
-    #[test]
-    fn every_connection_shape_has_one_channel_per_power() {
-        let wye = calc_connection_channels(Configuration::Wye, 3, 3, None).unwrap();
-        assert_eq!(pairs(&wye), [(0, None), (1, None), (2, None)]);
-        let neutral = calc_connection_channels(Configuration::Wye, 4, 3, None).unwrap();
-        assert_eq!(pairs(&neutral), [(0, Some(3)), (1, Some(3)), (2, Some(3))]);
-        let first = calc_connection_channels(Configuration::Wye, 4, 3, Some(0)).unwrap();
-        assert_eq!(pairs(&first), [(1, Some(0)), (2, Some(0)), (3, Some(0))]);
-        let single = calc_connection_channels(Configuration::SinglePhase, 2, 1, None).unwrap();
-        assert_eq!(pairs(&single), [(0, Some(1))]);
-        let ring = calc_connection_channels(Configuration::Delta, 3, 3, None).unwrap();
-        assert_eq!(pairs(&ring), [(0, Some(1)), (1, Some(2)), (2, Some(0))]);
-        let stated = calc_connection_channels(Configuration::Delta, 4, 2, None).unwrap();
-        assert_eq!(pairs(&stated), [(0, Some(1)), (2, Some(3))]);
-        assert!(calc_connection_channels(Configuration::Wye, 5, 3, None).is_err());
-        assert!(calc_connection_channels(Configuration::Wye, 4, 3, Some(4)).is_err());
-        assert!(calc_connection_channels(Configuration::Delta, 5, 2, None).is_err());
-    }
-}
-
 /// A capacitor bank's susceptance matrix, siemens, over its terminal map.
 ///
 /// Each coil of the bank's connection ([`calc_element_connection`]: a WYE
@@ -289,4 +261,32 @@ pub fn calc_capacitor_susceptance(
         }
     }
     Ok(Some(matrix))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pairs(channels: &[ConnectionChannel]) -> Vec<(usize, Option<usize>)> {
+        channels.iter().map(|c| (c.from, c.to)).collect()
+    }
+
+    #[test]
+    fn every_connection_shape_has_one_channel_per_power() {
+        let wye = calc_connection_channels(Configuration::Wye, 3, 3, None).unwrap();
+        assert_eq!(pairs(&wye), [(0, None), (1, None), (2, None)]);
+        let neutral = calc_connection_channels(Configuration::Wye, 4, 3, None).unwrap();
+        assert_eq!(pairs(&neutral), [(0, Some(3)), (1, Some(3)), (2, Some(3))]);
+        let first = calc_connection_channels(Configuration::Wye, 4, 3, Some(0)).unwrap();
+        assert_eq!(pairs(&first), [(1, Some(0)), (2, Some(0)), (3, Some(0))]);
+        let single = calc_connection_channels(Configuration::SinglePhase, 2, 1, None).unwrap();
+        assert_eq!(pairs(&single), [(0, Some(1))]);
+        let ring = calc_connection_channels(Configuration::Delta, 3, 3, None).unwrap();
+        assert_eq!(pairs(&ring), [(0, Some(1)), (1, Some(2)), (2, Some(0))]);
+        let stated = calc_connection_channels(Configuration::Delta, 4, 2, None).unwrap();
+        assert_eq!(pairs(&stated), [(0, Some(1)), (2, Some(3))]);
+        assert!(calc_connection_channels(Configuration::Wye, 5, 3, None).is_err());
+        assert!(calc_connection_channels(Configuration::Wye, 4, 3, Some(4)).is_err());
+        assert!(calc_connection_channels(Configuration::Delta, 5, 2, None).is_err());
+    }
 }
