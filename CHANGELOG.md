@@ -101,6 +101,52 @@
   partitions, island labels, the preparations' reference coverage check and the multiconductor node
   merge share one component labeling.
 
+**Shared formulas**
+
+- `powerio_core::electrical` (re-exported as `powerio::electrical`, `powerio_tx::electrical` and
+  `powerio_dist::electrical`) holds the scalar formulas both network families share:
+  `calc_impedance_base` (`V² / S`, `None` for an unusable base), `calc_power_factor_sine`,
+  `calc_reactive_ratio` and `calc_power_factor_coefficients` with
+  `calc_reactive_ratio_derivative` and `calc_power_factor_coefficients_derivative`, and the
+  voltage power law term `calc_voltage_power_term` (and `calc_voltage_power_terms`) with its
+  ratio floor `LOAD_VOLTAGE_RATIO_FLOOR`. The per unit bases of the BMOPF, PMD, CGMES, UCTE,
+  balanced MG-RAVENS, SINCAL and multiconductor OPF code, every `Q = P tan(acos pf)` of the
+  OpenDSS, GridLAB-D, SINCAL and multiconductor OPF code, and every load law evaluation call it.
+- `powerio_tx::load_voltage`: `LoadVoltageTerm` (`new`, `calc_power`, `is_below_floor`),
+  `Load::calc_voltage_terms` and `Load::calc_power_at` (`LoadPowerAtVoltage`),
+  `calc_load_nominal_voltage` and `LoadVoltageError` evaluate a balanced load's voltage model with
+  its derivative. `powerio_tx::pi_model::PiModel` (`new`, `calc_block`, `calc_folded`) is a
+  branch's pi model, `DcBranchColumn` with `BranchSusceptanceFormula::calc_dc_column` and
+  `calc_phase_shift_radians` a branch's DC column, `Branch::calc_current_bound` its current bound
+  over an angle window, `BalancedNetwork::per_unit_base` and `IndexedNetwork::per_unit_base` the
+  power base a normalized network divides by, and `DeEnergizedIsland` one island an island
+  reference report finds without supply.
+
+**Matrices for callers**
+
+- `GroundedLaplacianFactor::from_edges` grounds the given buses (and every bus no edge touches)
+  and factors the reduced weighted Laplacian of an edge list once, with the PTDF builder's sparse
+  factorization; `solve` gives the DC angles, `calc_edge_flows` the edge flows and `solver_path`
+  the factorization used. `calc_edge_laplacian_product` is the matrix free `L x`.
+- `McOpfLoadLaw::calc_power` gives a load law's per unit power and voltage slope, and
+  `McOpfDroop::calc_control` (`McOpfDroopValue`), `calc_parameter_derivative` and
+  `calc_monitored_voltage` the one volt-var and volt-watt curve evaluation with its parameter
+  sensitivities. `McOpfTransformer::calc_physical_tap_derivative` and
+  `calc_tap_multiplier_derivative` are the tap convention's derivatives.
+- `calc_bus_totals` and `calc_bus_hosts` sum an element column onto buses and mark the buses
+  that host one; `calc_prepared_bus_specifications` converts an instance's bus specifications to
+  preparation units; `calc_reference_constrained_system` is the DC operators' grounded system
+  with each reference at its stated angle; `AcOpfPreparation::calc_banded_vm_setpoints` gives the
+  voltage setpoints inside their bands; `AcBranchData::calc_branch_flow_partials`, `len` and
+  `is_empty` and `AcBranchFlows` the AC branch flows and their partials;
+  `DcOpfPreparation::calc_angle_difference`, `calc_branch_flow_weight_derivative` and
+  `calc_device_withdrawal` the DC angle difference, flow weight derivative and device
+  withdrawal; `SynthesizedLimitWindow::is_stated` whether a window is the default;
+  `Grounding::new`, `len` and `is_empty` build and size a grounding; and `PassivePrimitive` (with
+  `PassiveFamily::noun`) is one element of `NetworkPrimitives`.
+- Three phase pandapower: `powerio_tnd::formats::pandapower::{parse, PandapowerModule, TOKEN,
+  unmapped_connections}` and `powerio_tx::format::is_three_phase_pandapower`.
+
 **Distribution**
 
 - `powerio_dist::transformer` is the one home of transformer winding physics:
@@ -134,15 +180,70 @@
   `v_min_pu`, `(u/max)²` above `v_max_pu`); a bounded exponential law is its exponential law in
   that envelope and the bounded ZIP law reads the same bands, so a bounded exponential factor can
   move in the last place. `calc_load_nominal_admittance` is a branch's `conj(S) / V²`.
-- `powerio_tx::union_find` (the workspace's one union-find and component labeling) is public, and
+- `powerio_core::union_find` (the workspace's one union-find and component labeling:
+  `UnionFind` with `new`, `find`, `union`, `union_keep_smaller` and `into_labeling`, and
+  `calc_component_labels`) is public, re-exported as `powerio_tx::union_find`, and
   `powerio_tx::geo::calc_haversine_km` with `EARTH_RADIUS_KM` is the one great circle distance.
-- `powerio_dist::dense::invert_dense_matrix` is the one small dense inverse (real or complex) and
+  `UnionFind::union` keeps its first argument's representative.
+- `powerio_dist::dense::invert_dense_matrix` is the one small dense inverse (real `f64` or complex
+  `Complex64`, the `DenseScalar` trait) and
   `powerio_dist::kron::calc_kron_reduced_impedance` the one Kron reduction, behind the line and
   switch series admittances, the open line Schur complement, both geometry readers, the PMD
   leakage round trip, neutral Kron reduction and the multiconductor to balanced lowering.
-  `powerio_dist::overhead::calc_carson_impedance` and `calc_potential_coefficient` are the one
-  simplified Carson equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
+  `powerio_dist::overhead::calc_carson_impedance` (over a `CarsonEarth`, the earth return terms
+  of a frequency and resistivity) and `calc_potential_coefficient` are the one simplified Carson
+  equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
   Geometry, Kron and lowered impedances can move in the last place.
+- `powerio_dist::dense::invert_dense_matrix` also refuses a pivot at most `n ε` times its
+  column's largest original magnitude, and an infinite pivot, the rule the dense PTDF fallback
+  used; that fallback and the OpenDSS source and Line primitive check now call it. A dense
+  inverse that cancels a column to rounding noise is refused as singular, and the OpenDSS
+  primitive check accepts an invertible primitive whose diagonal pivots the native engine meets
+  at an exact zero (a zero self impedance with nonzero mutuals).
+- `calc_terminal_role` (`TerminalRole`: phase, neutral, earth) is the one terminal
+  classification: BMOPF terminal conventions when stated, else `n`/`N` and the fourth of exactly
+  `1` to `4` neutral, and ground `0` earth. `DistBus::phase_indices`, the new
+  `DistBus::terminal_role` and `neutral_indices`, `calc_wye_neutral_position`, the BMOPF
+  validator's neutral check and centre tap common terminal, and the multiconductor to balanced
+  lowering read it, and `MulticonductorNetwork::terminal_conventions` returns the stated
+  conventions. Behaviour changes: `phase_indices` no longer counts a terminal `0` as a phase; the
+  lowering reads the network's terminal conventions and the four wire `4`; a BMOPF centre tap
+  whose secondary maps a `4` its bus neither grounds nor calls neutral takes its last terminal as
+  common.
+- `powerio_dist::transformer::calc_coil_voltage_ratio`, `calc_winding_phase_count` and
+  `calc_winding_impedance_base` (a winding's coil voltage squared over its per phase power) are
+  the one coil voltage, base phase count and winding impedance base: the BMOPF n-winding reader
+  and writer, the PMD MATHEMATICAL reader and the multiconductor OPF descriptor read them. A
+  BMOPF n-winding unit reads every WYE winding's rated voltage over the unit's phase count, as
+  `calc_coil_voltage` divides it (a single phase WYE winding of a polyphase unit read a coil
+  voltage `√3` below its `v_nom`), and the OPF counts a WYE winding's base phases from its
+  terminal map. The OPF tells a regulator by `is_transformer_regulator`.
+- `DistLoadVoltageModel::calc_power_terms` states every unbounded load law (constant power,
+  current and impedance, exponential, ZIP) as power law terms and `nominal_voltage` reads a
+  channel's nominal; `power_scale` and `power_scale_where` evaluate those terms with the one term
+  evaluation, and the multiconductor OPF load law is the same terms in per unit. Behaviour
+  changes: the multiconductor OPF refuses a load law with a missing ZIP fraction or exponent, or
+  a single entry for several coils, which it defaulted (`alpha_p = 1` when every alpha was
+  absent, a missing exponent `0`) or broadcast, as the BMOPF schema requires every coefficient
+  per sub-load; a non-integer exponent below one follows its tangent below a voltage ratio of
+  `1e-3` (`LOAD_VOLTAGE_RATIO_FLOOR`).
+- `powerio_dist::sequence` is the one symmetrical component transform pair:
+  `calc_phase_from_sequence` (with `calc_sequence_self` and `calc_sequence_mutual`),
+  `calc_sequence_from_phase`, `calc_sequence_matrix` and `calc_sequence_components`, read by
+  the OpenDSS line code, line, source and Thevenin code, the pandapower reader, the SINCAL
+  multiconductor writer and the multiconductor to balanced lowering.
+  `VoltageSource::calc_line_to_line_voltage` is the one source line to line base (`√3 |V₁|` for
+  three phases, the phasor difference for a split phase pair, the magnitude for one). A line
+  code's sequence expansion now divides by three rather than multiplying by one third, which
+  can move an entry in the last place.
+- The GridLAB-D writer's bus nominal voltages are the voltage zones seeded by each source's
+  phase magnitude and carried across transformers by `calc_flooded_zone_bases`.
+- `calc_connection_channels` (`ConnectionChannel`) is the one channel rule of a typed connection,
+  and `MulticonductorTerminalIndex` (`TerminalIndexError`, with `build`, `resolve`,
+  `bus_terminals`, `len` and `is_empty`) the one flat terminal index.
+  `MulticonductorNetwork::identifier_key` is the key a network's source identifies an element
+  by (ASCII lowercase for OpenDSS). `powerio_prob::McAcPfInstance::calc_inferred_load_nominal_voltages` reports the load
+  nominal voltages the instance infers.
 - Fix: the BMOPF writer states a DELTA winding's `delta_roll` from the one
   delta orientation (`calc_delta_direction`). An n-winding unit that stated
   no roll was written with `-1` and read back with that roll, against the
