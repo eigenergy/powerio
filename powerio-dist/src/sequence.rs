@@ -364,29 +364,31 @@ pub fn calc_balanced_phase_angle(phase: usize, phases: usize) -> f64 {
 pub enum LineVoltageForm {
     /// The balanced equivalent of every phasor: `√3 |V₁|` for three phases
     /// ([`calc_sequence_components`], Fortescue), the phasor difference
-    /// `|Va − Vb|` for two (a split phase pair). The multiconductor to
+    /// `|Va − Vb|` for two (a split phase pair), the phasor's magnitude for
+    /// one (a single phase source's own voltage). The multiconductor to
     /// balanced lowering reads it.
     PositiveSequence,
     /// The first phase's magnitude times the chord of the `n` phase polygon
-    /// ([`calc_polygon_chord`]): the form an MG-RAVENS or CIM
-    /// `EnergySource`, which states one magnitude for a balanced set, takes
-    /// its `nominalVoltage` in. The MG-RAVENS writer reads it.
+    /// ([`calc_polygon_chord`]), and for one phase the line to line
+    /// equivalent `√3 |V|` of its magnitude, which is line to neutral
+    /// ([`crate::electrical::calc_wye_line_voltage`]): the form an MG-RAVENS
+    /// or CIM `EnergySource`, which states one magnitude for a balanced set,
+    /// takes its `nominalVoltage` in. The MG-RAVENS writer reads it.
     FirstPhase,
 }
 
 impl VoltageSource {
     /// The source's line to line voltage base over its phase positions
     /// `phases` (indices into its voltage vectors), volts, in `form`
-    /// ([`LineVoltageForm`]). One phase is the line to line equivalent
-    /// `√3 |V|` of its magnitude, which is line to neutral
-    /// ([`crate::electrical::calc_wye_line_voltage`]), in either form.
+    /// ([`LineVoltageForm`]).
     ///
     /// Under [`LineVoltageForm::PositiveSequence`]: `√3 |V₁|` for three
-    /// phases, `|Va − Vb|` for two; `None` for any other count, a stated
+    /// phases, `|Va − Vb|` for two, `|V|` for one; `None` for any other
+    /// count, a stated
     /// magnitude or angle that is missing or not finite, or a base that is
     /// not positive. Under [`LineVoltageForm::FirstPhase`]: the first
     /// position's stated magnitude times `calc_polygon_chord(n)` for `n` of
-    /// two or more, formed as stated (a zero, negative or nonfinite
+    /// two or more and times `√3` for one, formed as stated (a zero, negative or nonfinite
     /// magnitude gives that base, for the caller's own check); `None` only
     /// when no position is given or its magnitude is missing.
     ///
@@ -423,10 +425,7 @@ impl VoltageSource {
                 crate::electrical::calc_wye_line_voltage(positive.norm())
             }
             [a, b] => (phasor(a)? - phasor(b)?).norm(),
-            [a] => {
-                phasor(a)?;
-                crate::electrical::calc_wye_line_voltage(self.v_magnitude[a].abs())
-            }
+            [a] => phasor(a)?.norm(),
             _ => return None,
         };
         (base.is_finite() && base > 0.0).then_some(base)
@@ -559,15 +558,14 @@ mod tests {
             source.calc_line_to_line_voltage(&[0, 1, 2, 3], LineVoltageForm::PositiveSequence),
             None
         );
-        for form in [
-            LineVoltageForm::PositiveSequence,
-            LineVoltageForm::FirstPhase,
-        ] {
-            assert_eq!(
-                source.calc_line_to_line_voltage(&[0], form),
-                Some(crate::electrical::calc_wye_line_voltage(120.0))
-            );
-        }
+        assert_eq!(
+            source.calc_line_to_line_voltage(&[0], LineVoltageForm::PositiveSequence),
+            Some(120.0)
+        );
+        assert_eq!(
+            source.calc_line_to_line_voltage(&[0], LineVoltageForm::FirstPhase),
+            Some(crate::electrical::calc_wye_line_voltage(120.0))
+        );
         // The first phase form reads one magnitude: a split phase pair's is
         // twice it, whatever the second phasor states.
         source.v_magnitude = vec![120.0, 100.0];

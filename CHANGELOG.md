@@ -491,8 +491,9 @@
   phases, the phasor difference for a split phase pair), which the multiconductor to balanced
   lowering reads, or `FirstPhase` (the first phase's magnitude times the polygon chord, the form
   an `EnergySource` stating one magnitude takes), which the MG-RAVENS writer reads for a source's
-  `nominalVoltage` and its bus's `BaseVoltage` seed where it kept its own chord helper; one phase
-  is `√3 |V|` in either form, its magnitude being line to neutral. `calc_polygon_chord`
+  `nominalVoltage` and its bus's `BaseVoltage` seed where it kept its own chord helper. One phase
+  is its magnitude `|V|` under `PositiveSequence`, as before, and `√3 |V|` under `FirstPhase`, an
+  `EnergySource` magnitude being line to neutral. `calc_polygon_chord`
   (`2 sin(π / n)`) is the one line to line over line to neutral ratio of `n` evenly spaced
   phasors, behind the OpenDSS source's per phase magnitude, the Thevenin writer, and the CIM and
   MG-RAVENS source readers and writers (unchanged values). The MG-RAVENS writer states a source's
