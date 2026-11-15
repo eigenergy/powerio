@@ -1495,8 +1495,14 @@ mod tests {
     fn terminal_roles_follow_the_conventions_or_the_spellings() {
         let four = ["1", "2", "3", "4"];
         assert_eq!(calc_terminal_role(&four, "4", None), TerminalRole::Neutral);
-        assert_eq!(calc_terminal_role(&["1", "4"], "4", None), TerminalRole::Phase);
-        assert_eq!(calc_terminal_role(&["a", "N"], "N", None), TerminalRole::Neutral);
+        assert_eq!(
+            calc_terminal_role(&["1", "4"], "4", None),
+            TerminalRole::Phase
+        );
+        assert_eq!(
+            calc_terminal_role(&["a", "N"], "N", None),
+            TerminalRole::Neutral
+        );
         assert_eq!(calc_terminal_role(&["1"], "0", None), TerminalRole::Earth);
         let conventions = serde_json::json!({"neutral": ["x"], "earth": ["g"]});
         let names = ["1", "x", "g", "n"];

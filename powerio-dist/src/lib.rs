@@ -72,6 +72,7 @@ pub mod pmd;
 mod portable_path;
 pub mod ravens;
 pub mod readiness;
+pub mod sequence;
 pub mod terminal_index;
 #[cfg(test)]
 pub(crate) mod testkit;

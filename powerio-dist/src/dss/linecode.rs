@@ -241,11 +241,7 @@ impl State {
 }
 
 fn sequence_matrix(n: usize, positive: f64, zero: f64) -> Vec<Vec<f64>> {
-    let mut matrix = vec![vec![(zero - positive) * (1.0 / 3.0); n]; n];
-    for (i, row) in matrix.iter_mut().enumerate() {
-        row[i] = (2.0 * positive + zero) * (1.0 / 3.0);
-    }
-    matrix
+    crate::sequence::calc_phase_from_sequence(n, positive, zero)
 }
 
 // DSS C-API 87d85c2 ParserDel.ParseAsSymMatrix starts with zeros, then

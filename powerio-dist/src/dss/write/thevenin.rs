@@ -87,15 +87,16 @@ fn neighbors(value: f64) -> [f64; 17] {
     reason = "native matrix reconstruction must be exact"
 )]
 fn sequence(diagonal: f64, mutual: f64, reactance: bool) -> Option<(f64, f64)> {
-    for zero in neighbors(diagonal + 2.0 * mutual) {
-        for positive in neighbors(diagonal - mutual) {
+    let (positive_guess, zero_guess) = crate::sequence::calc_sequence_from_phase(diagonal, mutual);
+    for zero in neighbors(zero_guess) {
+        for positive in neighbors(positive_guess) {
             if zero.is_finite()
                 && positive.is_finite()
-                && (2.0 * positive + zero) / 3.0 == diagonal
+                && crate::sequence::calc_sequence_self(positive, zero) == diagonal
                 && (if reactance {
                     diagonal - positive
                 } else {
-                    (zero - positive) / 3.0
+                    crate::sequence::calc_sequence_mutual(positive, zero)
                 }) == mutual
             {
                 return Some((zero, positive));

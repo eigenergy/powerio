@@ -149,11 +149,7 @@ impl State {
             self.sequence.values[5] = self.sequence.values[4];
         }
         let sequence = |positive: f64, zero: f64| {
-            let mut rows = vec![vec![(zero - positive) / 3.0; self.n]; self.n];
-            for (i, row) in rows.iter_mut().enumerate() {
-                row[i] = (2.0 * positive + zero) / 3.0;
-            }
-            rows
+            crate::sequence::calc_phase_from_sequence(self.n, positive, zero)
         };
         self.matrices = LineMatrices {
             r: sequence(self.sequence.values[0], self.sequence.values[2]),

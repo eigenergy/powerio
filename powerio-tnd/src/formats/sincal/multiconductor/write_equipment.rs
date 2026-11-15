@@ -145,8 +145,7 @@ fn sequence(matrix: &ConductorMatrix, context: &str) -> Result<(f64, f64)> {
             near(*value, if i == j { d } else { m }, context)?;
         }
     }
-    let positive = d - m;
-    let zero = d + 2.0 * m;
+    let (positive, zero) = powerio_dist::sequence::calc_sequence_from_phase(d, m);
     if !positive.is_finite() || !zero.is_finite() || positive < 0.0 || zero < 0.0 {
         return Err(error(format!(
             "{context}: no supported nonnegative sequence representation"

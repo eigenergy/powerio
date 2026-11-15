@@ -939,7 +939,7 @@ format!(
         label: &str,
         matrix: &[Vec<Complex64>],
     ) -> Complex64 {
-        let seq = sequence_matrix(matrix);
+        let seq = powerio_dist::sequence::calc_sequence_matrix(matrix);
         let coupling = sequence_coupling_norm(&seq);
         if coupling > COUPLING_TOLERANCE {
             self.records.approximations.push(format!(
@@ -1135,7 +1135,7 @@ format!(
                 let matrix = complex_matrix(&shunt.g, &shunt.b, 1.0);
                 let reduced = kron_or_select(&matrix, &active, &neutral)
                     .map_err(|message| self.shunt_matrix_error(idx, &shunt.name, &message))?;
-                let seq = sequence_matrix(&reduced);
+                let seq = powerio_dist::sequence::calc_sequence_matrix(&reduced);
                 seq[1][1]
             } else {
                 self.records.approximations.push(format!(
@@ -1352,30 +1352,24 @@ fn same_active_phase_order(
     from == to
 }
 
+/// A source's balanced line voltage phasor over three phase positions:
+/// `√3 V₁` ([`powerio_dist::sequence::calc_sequence_components`]), whose
+/// magnitude is the one source line to line base
+/// ([`powerio_dist::VoltageSource::calc_line_to_line_voltage`]) and whose
+/// angle is the positive sequence angle.
 fn positive_sequence_voltage(
     source: &powerio_dist::VoltageSource,
     positions: &[usize],
 ) -> Option<Complex64> {
-    if positions.len() != 3 {
+    let base = source.calc_line_to_line_voltage(positions)?;
+    let &[a, b, c] = positions else {
         return None;
-    }
-    let mut phase = [Complex64::new(0.0, 0.0); 3];
-    for (out, &idx) in phase.iter_mut().zip(positions.iter()) {
-        let magnitude = *source.v_magnitude.get(idx)?;
-        let angle = *source.v_angle.get(idx)?;
-        if !magnitude.is_finite() || !angle.is_finite() {
-            return None;
-        }
-        *out = Complex64::from_polar(magnitude, angle);
-    }
-    let basis = sequence_basis();
-    let mut seq = [Complex64::new(0.0, 0.0); 3];
-    for (sequence_idx, out) in seq.iter_mut().enumerate() {
-        for phase_idx in 0..3 {
-            *out += basis[phase_idx][sequence_idx].conj() * phase[phase_idx];
-        }
-    }
-    Some(seq[1])
+    };
+    let phasor =
+        |index: usize| Complex64::from_polar(source.v_magnitude[index], source.v_angle[index]);
+    let [_, positive, _] =
+        powerio_dist::sequence::calc_sequence_components([phasor(a), phasor(b), phasor(c)]);
+    Some(Complex64::from_polar(base, positive.arg()))
 }
 
 fn complex_matrix(
@@ -1446,37 +1440,6 @@ fn submatrix(matrix: &[Vec<Complex64>], rows: &[usize], cols: &[usize]) -> Vec<V
     rows.iter()
         .map(|&row| cols.iter().map(|&col| matrix[row][col]).collect())
         .collect()
-}
-
-#[allow(clippy::many_single_char_names)]
-fn sequence_basis() -> [[Complex64; 3]; 3] {
-    let scale = 1.0 / SQRT_3;
-    let a = Complex64::from_polar(1.0, 2.0 * PI / 3.0);
-    let a2 = a * a;
-    [
-        [
-            Complex64::new(scale, 0.0),
-            Complex64::new(scale, 0.0),
-            Complex64::new(scale, 0.0),
-        ],
-        [Complex64::new(scale, 0.0), a2 * scale, a * scale],
-        [Complex64::new(scale, 0.0), a * scale, a2 * scale],
-    ]
-}
-
-fn sequence_matrix(matrix: &[Vec<Complex64>]) -> [[Complex64; 3]; 3] {
-    let basis = sequence_basis();
-    let mut seq = [[Complex64::new(0.0, 0.0); 3]; 3];
-    for p in 0..3 {
-        for q in 0..3 {
-            for i in 0..3 {
-                for j in 0..3 {
-                    seq[p][q] += basis[i][p].conj() * matrix[i][j] * basis[j][q];
-                }
-            }
-        }
-    }
-    seq
 }
 
 fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
