@@ -100,10 +100,12 @@ impl DistLoadVoltageModel {
                 {
                     return Err("constant-power bounds and current limit must be positive, finite and ordered".into());
                 }
+                // Outside the band the load is a constant impedance at the
+                // band edge: the one power law term with exponent two.
                 let scale = if voltage_pu <= *v_min_pu {
-                    (voltage_pu / v_min_pu).powi(2)
+                    crate::electrical::calc_voltage_power_term(1.0, 2.0, voltage_pu / v_min_pu).0
                 } else if voltage_pu > *v_max_pu {
-                    (voltage_pu / v_max_pu).powi(2)
+                    crate::electrical::calc_voltage_power_term(1.0, 2.0, voltage_pu / v_max_pu).0
                 } else {
                     1.0
                 };
