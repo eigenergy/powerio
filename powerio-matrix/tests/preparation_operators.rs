@@ -551,3 +551,95 @@ fn synthesized_limits_can_span_the_selected_angle_bounds() {
         }
     }
 }
+
+/// `p_shift` is the preparation's own phase shift withdrawal, and it stays so
+/// when a caller edits a weight and recomputes it; the DC operators' bus
+/// phase shift injection is the same scatter.
+#[test]
+fn phase_shift_withdrawal_is_the_incidence_times_the_offset() {
+    let mut network = case("case9.m");
+    network.branches_mut()[1].shift = 7.5;
+    network.branches_mut()[4].shift = -3.0;
+    let instance = DcOpfInstance::from_network(network.clone()).unwrap();
+    let mut preparation =
+        build_dc_opf_preparation(&instance, &DcOpfAssemblyOptions::default()).unwrap();
+    assert_eq!(
+        preparation.calc_phase_shift_withdrawal(),
+        preparation.p_shift
+    );
+    assert!(preparation.p_shift.iter().any(|&value| value != 0.0));
+
+    let incidence = preparation.calc_bus_branch_incidence();
+    preparation.branches.susceptance_magnitude[1] *= 1.25;
+    let offset = preparation.calc_branch_flow_offset();
+    let withdrawal = preparation.calc_phase_shift_withdrawal();
+    for (bus, row) in incidence.outer_iterator().enumerate() {
+        let expected: f64 = row.iter().map(|(branch, &a)| a * offset[branch]).sum();
+        assert!(
+            (withdrawal[bus] - expected).abs() <= 1e-12 * expected.abs().max(1.0),
+            "bus {bus}: {} vs {expected}",
+            withdrawal[bus]
+        );
+    }
+
+    let operators = DcOperators::build(&DcPfInstance::from_network(network).unwrap()).unwrap();
+    let injection = operators.calc_bus_phase_shift_injection();
+    let unedited = build_dc_opf_preparation(&instance, &DcOpfAssemblyOptions::default()).unwrap();
+    for (dense, id) in unedited.bus_ids.iter().enumerate() {
+        let row = operators
+            .bus_ids()
+            .iter()
+            .position(|other| other == id)
+            .unwrap();
+        let (value, expected) = (injection[row], unedited.p_shift[dense]);
+        assert!(
+            (value - expected).abs() <= 1e-12 * expected.abs().max(1.0),
+            "bus {id}: {value} vs {expected}"
+        );
+    }
+}
+
+/// The series admittance derivative of a pi model block is exact: the block
+/// is linear in the series admittance.
+#[test]
+fn pi_model_series_derivative_matches_a_difference() {
+    let mut network = case("case30.m");
+    network.branches_mut()[3].tap = 0.97;
+    network.branches_mut()[3].shift = 4.0;
+    let mut preparation = build_ac_opf_preparation(
+        &AcOpfInstance::from_network(network).unwrap(),
+        &AcOpfAssemblyOptions::default(),
+    )
+    .unwrap();
+    for branch in [0, 3, 7] {
+        let [d_g, d_b] = preparation
+            .branches
+            .calc_branch_admittance_series_derivative(branch);
+        let base = preparation.branches.calc_branch_admittance(branch);
+        for (derivative, conductance) in [(d_g, true), (d_b, false)] {
+            let step = 0.5;
+            let column = if conductance {
+                &mut preparation.branches.g
+            } else {
+                &mut preparation.branches.b
+            };
+            column[branch] += step;
+            let moved = preparation.branches.calc_branch_admittance(branch);
+            let column = if conductance {
+                &mut preparation.branches.g
+            } else {
+                &mut preparation.branches.b
+            };
+            column[branch] -= step;
+            for entry in 0..4 {
+                let difference = (moved[entry] - base[entry]) / step;
+                assert!(
+                    (difference - derivative[entry]).norm()
+                        <= 1e-12 * derivative[entry].norm().max(1.0),
+                    "branch {branch} entry {entry}: {difference} vs {}",
+                    derivative[entry]
+                );
+            }
+        }
+    }
+}

@@ -490,21 +490,17 @@ impl DcOperators {
     /// `p_shift = Aᵀ * (b .* shift)` in bus order.
     #[must_use]
     pub fn calc_bus_phase_shift_injection(&self) -> Vec<f64> {
-        let mut injection = vec![0.0; self.bus_ids.len()];
-        for (column, value) in self
-            .calc_branch_phase_shift_injection()
-            .into_iter()
-            .enumerate()
-        {
-            if value == 0.0 {
-                continue;
-            }
-            // Column `column` of A is `e_from - e_to`.
-            let (from, to) = self.endpoints(column);
-            injection[from] += value;
-            injection[to] -= value;
-        }
-        injection
+        // The positive factor weight is the negated public susceptance; the
+        // scatter is the crate's one phase shift withdrawal over it.
+        crate::matrix::calc_dc_phase_shift_withdrawal(
+            self.bus_ids.len(),
+            self.endpoints
+                .iter()
+                .copied()
+                .zip(self.branch_susceptance.iter())
+                .zip(self.shift_radians.iter().copied())
+                .map(|((endpoints, &susceptance), shift)| (endpoints, -susceptance, shift)),
+        )
     }
 
     /// Calculate DC active power flow in branch order from bus voltage angles
@@ -616,10 +612,6 @@ impl DcOperators {
             rhs,
             retained_rows,
         })
-    }
-
-    fn endpoints(&self, column: usize) -> (usize, usize) {
-        self.endpoints[column]
     }
 
     /// Endpoint rows per column, recovered from the incidence structure.

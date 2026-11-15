@@ -25,7 +25,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostics::Diagnostic;
 use num_complex::Complex64;
-use powerio_dist::{Configuration, MulticonductorNetwork};
+use powerio_dist::{
+    Configuration, DistCapacitor, DistLine, DistLineCode, DistShunt, MulticonductorNetwork,
+};
 use sprs::CsMat;
 
 use crate::diagnostics::codes;
@@ -313,6 +315,196 @@ impl Stamper {
             self.susceptance.add(i, j, value.im);
         }
     }
+
+    /// Accumulate an element's primitive admittance over the node references
+    /// of its terminals, in the primitive's terminal order.
+    fn add_primitive(&mut self, terminals: &[NodeRef], primitive: &[Vec<Complex64>]) {
+        for (row, &from) in terminals.iter().enumerate() {
+            for (column, &to) in terminals.iter().enumerate() {
+                self.add(from, to, primitive[row][column]);
+            }
+        }
+    }
+}
+
+/// The primitive admittance of a line, siemens, over its terminals in the
+/// order `terminal_map_from` then `terminal_map_to`: the inverse of the
+/// linecode's series impedance over the length couples the two ends, and
+/// each end carries its shunt half,
+///
+/// ```text
+/// [ Y + Y_from     -Y      ]      Y = (Z_series · length)⁻¹
+/// [    -Y       Y + Y_to   ]      Y_from = (G_from + j B_from) · length
+/// ```
+///
+/// The one line stamp: [`calc_multiconductor_admittance_matrix`] scatters
+/// it into the nodal system.
+///
+/// # Errors
+/// A line whose terminal maps disagree with the linecode's conductor count,
+/// a linecode matrix of another shape, a length that is not finite and
+/// positive, or a singular series impedance.
+pub fn calc_line_primitive_admittance(
+    line: &DistLine,
+    code: &DistLineCode,
+) -> Result<Vec<Vec<Complex64>>> {
+    let conductors = code.n_conductors;
+    if line.terminal_map_from.len() != conductors || line.terminal_map_to.len() != conductors {
+        return Err(Error::Mtx(format!(
+            "line `{}` maps {}/{} terminals over a {conductors} conductor linecode",
+            line.name,
+            line.terminal_map_from.len(),
+            line.terminal_map_to.len()
+        )));
+    }
+    if !line.length.is_finite() || line.length <= 0.0 {
+        return Err(Error::Mtx(format!(
+            "line `{}` states no usable length",
+            line.name
+        )));
+    }
+    let square = |matrix: &[Vec<f64>]| {
+        matrix.len() == conductors && matrix.iter().all(|row| row.len() == conductors)
+    };
+    if ![
+        &code.r_series,
+        &code.x_series,
+        &code.g_from,
+        &code.b_from,
+        &code.g_to,
+        &code.b_to,
+    ]
+    .into_iter()
+    .all(|matrix| square(matrix))
+    {
+        return Err(Error::Mtx(format!(
+            "linecode `{}` states a matrix that is not {conductors} by {conductors}",
+            code.name
+        )));
+    }
+    let z: Vec<Vec<Complex64>> = (0..conductors)
+        .map(|row| {
+            (0..conductors)
+                .map(|column| {
+                    Complex64::new(code.r_series[row][column], code.x_series[row][column])
+                        * line.length
+                })
+                .collect()
+        })
+        .collect();
+    let Some(y_series) = invert(&z) else {
+        return Err(Error::Mtx(format!(
+            "line `{}` has a singular series impedance matrix",
+            line.name
+        )));
+    };
+    let mut primitive = vec![vec![Complex64::new(0.0, 0.0); 2 * conductors]; 2 * conductors];
+    for row in 0..conductors {
+        for column in 0..conductors {
+            let y = y_series[row][column];
+            let shunt_from =
+                Complex64::new(code.g_from[row][column], code.b_from[row][column]) * line.length;
+            let shunt_to =
+                Complex64::new(code.g_to[row][column], code.b_to[row][column]) * line.length;
+            primitive[row][column] = y + shunt_from;
+            primitive[conductors + row][conductors + column] = y + shunt_to;
+            primitive[row][conductors + column] = -y;
+            primitive[conductors + row][column] = -y;
+        }
+    }
+    Ok(primitive)
+}
+
+/// The primitive admittance of a shunt element, siemens, over its
+/// `terminal_map`: its stated `G + j B`.
+#[must_use]
+pub fn calc_shunt_primitive_admittance(shunt: &DistShunt) -> Vec<Vec<Complex64>> {
+    shunt
+        .g
+        .iter()
+        .zip(&shunt.b)
+        .map(|(g_row, b_row)| {
+            g_row
+                .iter()
+                .zip(b_row)
+                .map(|(&g, &b)| Complex64::new(g, b))
+                .collect()
+        })
+        .collect()
+}
+
+/// The primitive admittance of a capacitor bank, siemens, over its
+/// `terminal_map`, from its nameplate reactive power at nameplate voltage:
+///
+/// - single phase: one coil of `q / v²` across its two terminals;
+/// - wye: one coil per phase terminal to the last terminal (the neutral),
+///   `q / phases / v_ln²` with the line to line nameplate `v_ln = v / √3`;
+/// - delta: a two terminal open delta bank is one coil, an `N` terminal bank
+///   `N` coils around the ring, each `q / coils / v²`.
+///
+/// `None` for a configuration the builders do not stamp. The one capacitor
+/// stamp: [`calc_multiconductor_admittance_matrix`] scatters it into the
+/// nodal system.
+///
+/// # Errors
+/// A single phase bank without exactly two terminals, a wye bank with no
+/// phase terminal, or a delta bank with fewer than two terminals.
+pub fn calc_capacitor_primitive_admittance(
+    capacitor: &DistCapacitor,
+) -> Result<Option<Vec<Vec<Complex64>>>> {
+    let terminals = capacitor.terminal_map.len();
+    let mut primitive = vec![vec![Complex64::new(0.0, 0.0); terminals]; terminals];
+    let mut couple = |a: usize, c: usize, b: f64| {
+        let y = Complex64::new(0.0, b);
+        primitive[a][a] += y;
+        primitive[c][c] += y;
+        primitive[a][c] -= y;
+        primitive[c][a] -= y;
+    };
+    match capacitor.configuration {
+        Configuration::SinglePhase => {
+            if terminals != 2 {
+                return Err(Error::Mtx(format!(
+                    "single phase capacitor `{}` maps {terminals} terminals",
+                    capacitor.name
+                )));
+            }
+            couple(
+                0,
+                1,
+                capacitor.q_rated / (capacitor.v_nom * capacitor.v_nom),
+            );
+        }
+        Configuration::Wye => {
+            let phases = terminals.saturating_sub(1);
+            if phases == 0 {
+                return Err(Error::Mtx(format!(
+                    "wye capacitor `{}` maps no phase terminal",
+                    capacitor.name
+                )));
+            }
+            let v_ln = capacitor.v_nom / 3f64.sqrt();
+            let b = capacitor.q_rated / (phases as f64) / (v_ln * v_ln);
+            for phase in 0..phases {
+                couple(phase, phases, b);
+            }
+        }
+        Configuration::Delta => {
+            if terminals < 2 {
+                return Err(Error::Mtx(format!(
+                    "delta capacitor `{}` maps {terminals} terminals",
+                    capacitor.name
+                )));
+            }
+            let loops = if terminals == 2 { 1 } else { terminals };
+            let b = capacitor.q_rated / (loops as f64) / (capacitor.v_nom * capacitor.v_nom);
+            for pair in 0..loops {
+                couple(pair, (pair + 1) % terminals, b);
+            }
+        }
+        _ => return Ok(None),
+    }
+    Ok(Some(primitive))
 }
 
 /// Build the passive nodal admittance and the ideal equipment constraints.
@@ -377,47 +569,16 @@ pub fn calc_multiconductor_admittance_matrix(
             ));
             continue;
         }
-        let z: Vec<Vec<Complex64>> = (0..conductors)
-            .map(|row| {
-                (0..conductors)
-                    .map(|column| {
-                        Complex64::new(code.r_series[row][column], code.x_series[row][column])
-                            * line.length
-                    })
-                    .collect()
-            })
-            .collect();
-        let Some(y_series) = invert(&z) else {
-            return Err(Error::Mtx(format!(
-                "line `{}` has a singular series impedance matrix",
-                line.name
-            )));
-        };
-        let from: Vec<NodeRef> = line
-            .terminal_map_from
-            .iter()
-            .map(|terminal| resolve(&line.bus_from, terminal, &format!("line `{}`", line.name)))
-            .collect::<Result<_>>()?;
-        let to: Vec<NodeRef> = line
-            .terminal_map_to
-            .iter()
-            .map(|terminal| resolve(&line.bus_to, terminal, &format!("line `{}`", line.name)))
-            .collect::<Result<_>>()?;
-        for row in 0..conductors {
-            for column in 0..conductors {
-                let y = y_series[row][column];
-                stamper.add(from[row], from[column], y);
-                stamper.add(to[row], to[column], y);
-                stamper.add(from[row], to[column], -y);
-                stamper.add(to[row], from[column], -y);
-                let shunt_from = Complex64::new(code.g_from[row][column], code.b_from[row][column])
-                    * line.length;
-                let shunt_to =
-                    Complex64::new(code.g_to[row][column], code.b_to[row][column]) * line.length;
-                stamper.add(from[row], from[column], shunt_from);
-                stamper.add(to[row], to[column], shunt_to);
-            }
-        }
+        let primitive = calc_line_primitive_admittance(line, code)?;
+        let terminals: Vec<NodeRef> =
+            line.terminal_map_from
+                .iter()
+                .map(|terminal| resolve(&line.bus_from, terminal, &format!("line `{}`", line.name)))
+                .chain(line.terminal_map_to.iter().map(|terminal| {
+                    resolve(&line.bus_to, terminal, &format!("line `{}`", line.name))
+                }))
+                .collect::<Result<_>>()?;
+        stamper.add_primitive(&terminals, &primitive);
     }
 
     // Shunt elements: their stated admittance matrix across their terminals.
@@ -427,12 +588,7 @@ pub fn calc_multiconductor_admittance_matrix(
             .iter()
             .map(|terminal| resolve(&shunt.bus, terminal, &format!("shunt `{}`", shunt.name)))
             .collect::<Result<_>>()?;
-        for row in 0..terminals.len() {
-            for column in 0..terminals.len() {
-                let value = Complex64::new(shunt.g[row][column], shunt.b[row][column]);
-                stamper.add(terminals[row], terminals[column], value);
-            }
-        }
+        stamper.add_primitive(&terminals, &calc_shunt_primitive_admittance(shunt));
     }
 
     // Capacitor banks: nameplate reactive power at nameplate voltage.
@@ -448,75 +604,15 @@ pub fn calc_multiconductor_admittance_matrix(
                 )
             })
             .collect::<Result<_>>()?;
-        match capacitor.configuration {
-            Configuration::SinglePhase => {
-                if terminals.len() != 2 {
-                    return Err(Error::Mtx(format!(
-                        "single phase capacitor `{}` maps {} terminals",
-                        capacitor.name,
-                        terminals.len()
-                    )));
-                }
-                let b = capacitor.q_rated / (capacitor.v_nom * capacitor.v_nom);
-                let y = Complex64::new(0.0, b);
-                stamper.add(terminals[0], terminals[0], y);
-                stamper.add(terminals[1], terminals[1], y);
-                stamper.add(terminals[0], terminals[1], -y);
-                stamper.add(terminals[1], terminals[0], -y);
-            }
-            Configuration::Wye => {
-                // Phase terminals to the last terminal (neutral); nameplate
-                // voltage is line to line.
-                let phases = terminals.len().saturating_sub(1);
-                if phases == 0 {
-                    return Err(Error::Mtx(format!(
-                        "wye capacitor `{}` maps no phase terminal",
-                        capacitor.name
-                    )));
-                }
-                let v_ln = capacitor.v_nom / 3f64.sqrt();
-                let b = capacitor.q_rated / (phases as f64) / (v_ln * v_ln);
-                let neutral = terminals[phases];
-                for &phase in &terminals[..phases] {
-                    let y = Complex64::new(0.0, b);
-                    stamper.add(phase, phase, y);
-                    stamper.add(neutral, neutral, y);
-                    stamper.add(phase, neutral, -y);
-                    stamper.add(neutral, phase, -y);
-                }
-            }
-            Configuration::Delta => {
-                let phases = terminals.len();
-                if phases < 2 {
-                    return Err(Error::Mtx(format!(
-                        "delta capacitor `{}` maps {} terminals",
-                        capacitor.name, phases
-                    )));
-                }
-                // A two-terminal open-delta bank has one physical coil;
-                // a full N-terminal delta bank has N coils. Divide the
-                // bank's total rated vars by the number of stamped coils.
-                let loops = if phases == 2 { 1 } else { phases };
-                let b = capacitor.q_rated / (loops as f64) / (capacitor.v_nom * capacitor.v_nom);
-                for pair in 0..loops {
-                    let a = terminals[pair];
-                    let c = terminals[(pair + 1) % phases];
-                    let y = Complex64::new(0.0, b);
-                    stamper.add(a, a, y);
-                    stamper.add(c, c, y);
-                    stamper.add(a, c, -y);
-                    stamper.add(c, a, -y);
-                }
-            }
-            _ => {
-                diagnostics.push(Diagnostic::of(
-                    &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
-                    format!(
-                        "capacitor `{}` states a configuration this builder does not stamp",
-                        capacitor.name
-                    ),
-                ));
-            }
+        match calc_capacitor_primitive_admittance(capacitor)? {
+            Some(primitive) => stamper.add_primitive(&terminals, &primitive),
+            None => diagnostics.push(Diagnostic::of(
+                &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
+                format!(
+                    "capacitor `{}` states a configuration this builder does not stamp",
+                    capacitor.name
+                ),
+            )),
         }
     }
 

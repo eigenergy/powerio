@@ -225,6 +225,29 @@ pub(crate) fn calc_dc_branch_flow(
         .collect()
 }
 
+/// The nodal phase shift withdrawal `A (-w .* shift)` over `n` buses, one
+/// per `((from, to), w, shift)` column with `w` the positive factor weight:
+/// each column's flow offset ([`calc_dc_flow_offset`]) leaves at its from bus
+/// and arrives at its to bus. A self-loop's offset cancels at its own bus.
+/// The one phase shift scatter in the crate: the DC preparation's `p_shift`,
+/// `DcOpfPreparation::calc_phase_shift_withdrawal` and
+/// `DcOperators::calc_bus_phase_shift_injection` all read it.
+pub(crate) fn calc_dc_phase_shift_withdrawal(
+    n: usize,
+    columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
+) -> Vec<f64> {
+    let mut withdrawal = vec![0.0; n];
+    for ((from, to), weight, shift) in columns {
+        let offset = calc_dc_flow_offset(weight, shift);
+        if offset == 0.0 || from == to {
+            continue;
+        }
+        withdrawal[from] += offset;
+        withdrawal[to] -= offset;
+    }
+    withdrawal
+}
+
 /// Sparse diagonal matrix from `values` (square, `len × len`).
 pub fn calc_diagonal(values: &[f64]) -> CsMat<f64> {
     let n = values.len();

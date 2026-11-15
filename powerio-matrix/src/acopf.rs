@@ -422,6 +422,34 @@ impl AcBranchData {
         )
     }
 
+    /// The derivatives of [`Self::calc_branch_admittance`] for `branch`
+    /// with respect to its series conductance `g` and series susceptance
+    /// `b`, as `[d/dg, d/db]`, each a `[Yff, Yft, Ytf, Ytt]` block. The pi
+    /// model block is linear in the series admittance and does not depend on
+    /// it through the charging, so each derivative is the block of a unit
+    /// series admittance (`1` for `g`, `j` for `b`) with no charging, at the
+    /// branch's tap and shift: the same one block formula, evaluated there.
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column.
+    #[must_use]
+    pub fn calc_branch_admittance_series_derivative(&self, branch: usize) -> [[Complex64; 4]; 2] {
+        let zero = Complex64::new(0.0, 0.0);
+        let block = |y_series| {
+            crate::matrix::calc_pi_admittance(
+                y_series,
+                zero,
+                zero,
+                self.tap[branch],
+                self.shift[branch],
+            )
+        };
+        [
+            block(Complex64::new(1.0, 0.0)),
+            block(Complex64::new(0.0, 1.0)),
+        ]
+    }
+
     /// The terminal flows of every active branch at the bus voltages
     /// `vm` (per unit) and `va` (radians), both in dense bus order:
     ///

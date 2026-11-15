@@ -548,3 +548,112 @@ fn bmopf_unequal_capacitors_stamp_the_actual_coil_ratings() {
         }
     }
 }
+
+/// The line, shunt and capacitor primitives are what the nodal builder
+/// scatters: a two bus feeder with one of each assembles to exactly their
+/// sum over the node indexing.
+#[test]
+fn the_nodal_system_is_the_scatter_of_the_element_primitives() {
+    use num_complex::Complex64;
+    use powerio_matrix::{
+        calc_capacitor_primitive_admittance, calc_line_primitive_admittance,
+        calc_shunt_primitive_admittance,
+    };
+    let mut net = MulticonductorNetwork::default();
+    net.buses_mut()
+        .push(DistBus::new("a", strings(&["1", "2", "4"])));
+    net.buses_mut()
+        .push(DistBus::new("b", strings(&["1", "2", "4"])));
+    let mut code = DistLineCode::new(
+        "lc",
+        vec![vec![0.3, 0.1], vec![0.1, 0.3]],
+        vec![vec![0.8, 0.4], vec![0.4, 0.8]],
+    );
+    code.b_from = vec![vec![1e-4, -2e-5], vec![-2e-5, 1e-4]];
+    code.b_to = code.b_from.clone();
+    net.line_codes_mut().push(code);
+    let line = DistLine::new(
+        "l1",
+        "a",
+        "b",
+        strings(&["1", "2"]),
+        strings(&["1", "2"]),
+        "lc",
+        2.5,
+    );
+    net.lines_mut().push(line.clone());
+    let shunt = DistShunt::new(
+        "sh",
+        "b",
+        strings(&["1", "4"]),
+        vec![vec![0.01, -0.01], vec![-0.01, 0.01]],
+        vec![vec![0.02, -0.02], vec![-0.02, 0.02]],
+    );
+    net.shunts_mut().push(shunt.clone());
+    let capacitor = DistCapacitor::new(
+        "c",
+        "a",
+        strings(&["1", "2", "4"]),
+        Configuration::Wye,
+        3.0e4,
+        400.0,
+    );
+    net.capacitors_mut().push(capacitor.clone());
+
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
+    let index = system.index();
+    let node = |bus: &str, terminal: &str| match index.resolve(bus, terminal) {
+        Some(NodeRef::Node(dense)) => dense,
+        other => panic!("{bus}.{terminal}: {other:?}"),
+    };
+    let n = index.len();
+    let mut expected = vec![vec![Complex64::new(0.0, 0.0); n]; n];
+    let mut scatter = |terminals: &[usize], primitive: &[Vec<Complex64>]| {
+        for (row, &i) in terminals.iter().enumerate() {
+            for (column, &j) in terminals.iter().enumerate() {
+                expected[i][j] += primitive[row][column];
+            }
+        }
+    };
+    let code = &net.line_codes()[0];
+    let line_primitive = calc_line_primitive_admittance(&line, code).unwrap();
+    assert_eq!(line_primitive.len(), 4);
+    scatter(
+        &[
+            node("a", "1"),
+            node("a", "2"),
+            node("b", "1"),
+            node("b", "2"),
+        ],
+        &line_primitive,
+    );
+    scatter(
+        &[node("b", "1"), node("b", "4")],
+        &calc_shunt_primitive_admittance(&shunt),
+    );
+    let capacitor_primitive = calc_capacitor_primitive_admittance(&capacitor)
+        .unwrap()
+        .expect("wye bank");
+    // Two phase coils to the neutral, each q / 2 / (v / sqrt 3)^2.
+    let coil = 3.0e4 / 2.0 / (400.0 / 3f64.sqrt()).powi(2);
+    assert!((capacitor_primitive[2][2].im - 2.0 * coil).abs() < 1e-12);
+    scatter(
+        &[node("a", "1"), node("a", "2"), node("a", "4")],
+        &capacitor_primitive,
+    );
+    let g = dense(system.conductance());
+    let b = dense(system.susceptance());
+    for i in 0..n {
+        for j in 0..n {
+            let scale = expected[i][j].norm().max(1.0);
+            assert!(
+                (g[i][j] - expected[i][j].re).abs() <= 1e-12 * scale,
+                "G[{i}][{j}]"
+            );
+            assert!(
+                (b[i][j] - expected[i][j].im).abs() <= 1e-12 * scale,
+                "B[{i}][{j}]"
+            );
+        }
+    }
+}

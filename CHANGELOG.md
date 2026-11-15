@@ -30,6 +30,18 @@
   its Jacobian; the free `calc_bus_power_injection` is the same calculation. The Jacobian fill no
   longer searches or evaluates trigonometry per entry: on a 78,484 bus case a build takes 6 ms
   instead of 73 ms and a refresh 1.4 ms instead of 7 ms.
+- `DcOpfPreparation::calc_phase_shift_withdrawal` recomputes `p_shift` (`A` times the branch flow
+  offsets) from the preparation's branch columns, so a caller that edits a weight or a shift keeps
+  the nodal phase shift in step. The preparation's `p_shift` and
+  `DcOperators::calc_bus_phase_shift_injection` are that one scatter.
+- `AcBranchData::calc_branch_admittance_series_derivative` gives the derivatives of a branch's pi
+  model block with respect to its series conductance and susceptance: the same block formula at a
+  unit series admittance with no charging.
+- `calc_line_primitive_admittance`, `calc_shunt_primitive_admittance` and
+  `calc_capacitor_primitive_admittance` give a multiconductor line's, shunt's and capacitor bank's
+  primitive admittance over its terminals; `calc_multiconductor_admittance_matrix` scatters exactly
+  these. A line's series and shunt halves now enter the nodal sum together, which can move an
+  entry in the last place.
 - `AcOpfAssemblyOptions::with_synthesized_limit_window` and the same on `DcOpfAssemblyOptions`
   take a `SynthesizedLimitWindow`: `Stated` (the default, as before) or `SelectedBounds`, which
   synthesizes an unrated branch's limit over the selected angle difference bounds, PowerModels'

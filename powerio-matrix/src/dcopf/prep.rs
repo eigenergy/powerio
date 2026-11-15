@@ -320,6 +320,29 @@ impl DcOpfPreparation {
             .collect()
     }
 
+    /// The nodal phase shift withdrawal `A branch_flow_offset` of this
+    /// preparation's branch columns, in dense bus order and the
+    /// preparation's power unit: each branch's
+    /// [`calc_branch_flow_offset`](Self::calc_branch_flow_offset) leaves at
+    /// its from bus and arrives at its to bus. This is the calculation behind
+    /// [`Self::p_shift`]; a caller that edits the branch weights or shifts
+    /// recomputes `p_shift` with it.
+    #[must_use]
+    pub fn calc_phase_shift_withdrawal(&self) -> Vec<f64> {
+        let branches = &self.branches;
+        crate::matrix::calc_dc_phase_shift_withdrawal(
+            self.n_buses,
+            branches
+                .from_bus
+                .iter()
+                .copied()
+                .zip(branches.to_bus.iter().copied())
+                .zip(branches.susceptance_magnitude.iter().copied())
+                .zip(branches.shift.iter().copied())
+                .map(|((endpoints, weight), shift)| (endpoints, weight, shift)),
+        )
+    }
+
     /// Project generator cost and bounds to bus space.
     ///
     /// The bounds at a bus are the sum of the generator bounds, which is the
@@ -438,7 +461,6 @@ pub(crate) fn preparation_from_view(
     let mut angle_max = Vec::new();
     let mut branch_rows = Vec::new();
     let mut skipped_zero_impedance = Vec::new();
-    let mut p_shift = vec![0.0; n_buses];
     // Dense bus order is the position order of `network().buses`.
     let buses = &case.network().buses();
 
@@ -499,13 +521,6 @@ pub(crate) fn preparation_from_view(
         } else {
             0.0
         };
-        if shift_rad != 0.0 {
-            // The flow offset enters at the from bus and leaves at the to
-            // bus, as a withdrawal.
-            let offset = crate::matrix::calc_dc_flow_offset(branch_b, shift_rad);
-            p_shift[from] += offset;
-            p_shift[to] -= offset;
-        }
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
         let (amin, amax) =
@@ -535,6 +550,18 @@ pub(crate) fn preparation_from_view(
 
     let n_active_generators = q.len();
     let n_active_branches = b.len();
+    // The flow offset of every branch leaves at its from bus and arrives at
+    // its to bus, as a withdrawal.
+    let p_shift = crate::matrix::calc_dc_phase_shift_withdrawal(
+        n_buses,
+        from_bus
+            .iter()
+            .copied()
+            .zip(to_bus.iter().copied())
+            .zip(b.iter().copied())
+            .zip(shift.iter().copied())
+            .map(|((endpoints, weight), shift)| (endpoints, weight, shift)),
+    );
     let thermal_limit_active = f_max.iter().map(|limit| limit.is_finite()).collect();
     let bus_analysis_rows = active_buses.analysis_rows;
     let p_d = bus_analysis_rows
