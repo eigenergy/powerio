@@ -382,8 +382,11 @@ impl Writer<'_> {
                 &line.terminal_map_to,
             )?;
         }
-        let zones =
-            crate::voltage_zones::calc_voltage_zone_labels(self.net).map_err(unsupported)?;
+        let zones = crate::voltage_zones::calc_voltage_zone_labels(
+            self.net,
+            crate::voltage_zones::ZoneSwitches::Closed,
+        )
+        .map_err(unsupported)?;
         let row_of: BTreeMap<String, usize> = self
             .net
             .buses()

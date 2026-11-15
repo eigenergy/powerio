@@ -532,8 +532,11 @@ impl<'a> LoweringState<'a> {
             .collect();
         // Preflight refused a network whose lines or switches name unknown
         // buses; should one slip through, each bus is its own zone.
-        let zones = powerio_dist::voltage_zones::calc_voltage_zone_labels(self.net)
-            .unwrap_or_else(|_| (0..self.net.buses().len()).collect());
+        let zones = powerio_dist::voltage_zones::calc_voltage_zone_labels(
+            self.net,
+            powerio_dist::voltage_zones::ZoneSwitches::Closed,
+        )
+        .unwrap_or_else(|_| (0..self.net.buses().len()).collect());
 
         let mut zone_base: BTreeMap<usize, f64> = BTreeMap::new();
         for source in self.net.sources() {

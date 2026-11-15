@@ -458,8 +458,11 @@ impl McAcPfInstance {
                 .ok_or_else(|| unresolved(format!("{label} references unknown bus `{bus}`")))
         };
         // Voltage zones: the buses lines and closed switches join.
-        let zone =
-            powerio_dist::voltage_zones::calc_voltage_zone_labels(network).map_err(unresolved)?;
+        let zone = powerio_dist::voltage_zones::calc_voltage_zone_labels(
+            network,
+            powerio_dist::voltage_zones::ZoneSwitches::Closed,
+        )
+        .map_err(unresolved)?;
 
         let conventions = network.terminal_conventions();
         let phase_to_phase = |position: usize, terminals: &[String]| {

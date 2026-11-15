@@ -216,9 +216,12 @@
   is the one mapped terminal the bus conventions do not call a phase.
   `lindist3flow_carries_connection` is the one LinDist3Flow connection rule.
 - `powerio_dist::voltage_zones::calc_voltage_zone_labels` is the one network voltage zone
-  partition (lines and closed switches), read by the multiconductor to balanced lowering and the
-  load nominal voltage inference, and `calc_flooded_zone_bases` the one zone base flood across
-  transformers, read by the lowering and the PMD MATHEMATICAL writer.
+  partition (lines and the switches its `ZoneSwitches` admits: `Closed` or `All`), read over
+  closed switches by the multiconductor to balanced lowering, the GridLAB-D writer and the load
+  nominal voltage inference and over every switch by the MG-RAVENS writer's bus base voltages
+  (which kept their own fixed point flood; the bases are unchanged), and
+  `calc_flooded_zone_bases` the one zone base flood across transformers, read by the lowering
+  and the PMD MATHEMATICAL writer.
 - `DistLoadVoltageModel::power_scale_in_envelope` evaluates any load law inside an OpenDSS style
   voltage envelope (`u²` at or below `v_low_pu`, the constant power current transition up to
   `v_min_pu`, `(u/max)²` above `v_max_pu`); a bounded exponential law is its exponential law in
@@ -324,7 +327,13 @@
   mutual `Y0 / 3 − Y1 / 3`, which can move them in the last place. The rated shunt's reactive
   factor is `calc_power_factor_sine`.
   `VoltageSource::calc_line_to_line_voltage` is the one source line to line base (`√3 |V₁|` for
-  three phases, the phasor difference for a split phase pair, the magnitude for one).
+  three phases, the phasor difference for a split phase pair, the magnitude for one), and
+  `calc_polygon_chord` (`2 sin(π / n)`) the one line to line over line to neutral ratio of `n`
+  evenly spaced phasors, behind the OpenDSS source's per phase magnitude, the Thevenin writer,
+  and the CIM and MG-RAVENS source `nominalVoltage` readers and writers (unchanged values). The
+  CIM and MG-RAVENS readers and writers expand a source's or line's sequence values through
+  `calc_phase_from_sequence` and form a winding's base with `calc_impedance_base` (unchanged
+  values; a base whose square overflows is now refused as unusable).
 - The GridLAB-D writer's bus nominal voltages are the voltage zones seeded by each source's
   phase magnitude and carried across transformers by `calc_flooded_zone_bases`.
 - `calc_connection_channels` (`ConnectionChannel`) is the one channel rule of a typed connection,

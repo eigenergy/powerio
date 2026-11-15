@@ -370,13 +370,13 @@ impl State {
             }
         }
         let nominal_phase_kv = if self.phases > 1 {
-            self.kv / (2.0 * (std::f64::consts::PI / self.phases as f64).sin())
+            self.kv / crate::sequence::calc_polygon_chord(self.phases)
         } else {
             self.kv
         };
         let mut magnitude = self.kv * self.pu * 1000.0;
         if self.phases > 1 {
-            magnitude /= 2.0 * (std::f64::consts::PI / self.phases as f64).sin();
+            magnitude /= crate::sequence::calc_polygon_chord(self.phases);
         }
         if (frequency - self.frequency).abs() > 1e-3 {
             magnitude = 0.0;

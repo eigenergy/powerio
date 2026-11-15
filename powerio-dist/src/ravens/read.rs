@@ -1840,7 +1840,7 @@ impl Mapper<'_> {
             let v_ln = if phases == 1 {
                 magnitude
             } else {
-                magnitude / (2.0 * (std::f64::consts::PI / n).sin())
+                magnitude / crate::sequence::calc_polygon_chord(phases)
             };
             let v_magnitude = vec![v_ln; phases];
             let v_angle: Vec<f64> = (0..phases)
@@ -1918,19 +1918,12 @@ impl Mapper<'_> {
                     .collect();
                 let branch_name = unique(format!("_pio_ravens_{name}_impedance"), &occupied);
                 let matrix = |positive: f64, zero: f64| -> ConductorMatrix {
-                    (0..phases)
-                        .map(|i| {
-                            (0..phases)
-                                .map(|j| {
-                                    if i == j {
-                                        (zero + 2.0 * positive) / 3.0
-                                    } else {
-                                        (zero - positive) / 3.0
-                                    }
-                                })
-                                .collect()
-                        })
-                        .collect()
+                    crate::sequence::calc_phase_from_sequence(
+                        phases,
+                        positive,
+                        zero,
+                        crate::sequence::SequenceThird::Divide,
+                    )
                 };
                 self.net.line_codes_mut().push(DistLineCode::new(
                     &branch_name,

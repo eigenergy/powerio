@@ -25,8 +25,8 @@ use crate::model::{
 
 use super::read::SWITCH_CLASSES;
 use super::{
-    LEAKAGE_READING, exact_preimage, no_load_test_values, sequence_to_phase,
-    short_circuit_test_pct, tank_phase_clock, wrap_angle, z_base,
+    LEAKAGE_READING, exact_preimage, no_load_test_values, short_circuit_test_pct, tank_phase_clock,
+    wrap_angle,
 };
 use crate::ravens::MRID_KEY as RAVENS_MRID_KEY;
 
@@ -1074,7 +1074,7 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, clocks: &[f64], buses: &[
         doc.number(&what, "PowerTransformerEnd.r", winding_r_ohm(winding));
         // Two windings carry the pair reactance on end 1; more windings
         // state each pair as a TransformerMeshImpedance.
-        let x = match z_base(winding.v_ref, s_base) {
+        let x = match crate::electrical::calc_impedance_base(winding.v_ref, s_base) {
             Some(base) if index == 0 && xf.windings.len() == 2 => {
                 let xsc = xf.xsc_pct.first().copied().unwrap_or(0.0);
                 exact_preimage(xsc, xsc / 100.0 * base, |x| (x / base + 0.0) * 100.0)
@@ -1103,7 +1103,7 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, clocks: &[f64], buses: &[
                 doc.reference("TransformerMeshImpedance.FromTransformerEnd", &end_ids[i].0);
                 doc.reference("TransformerMeshImpedance.ToTransformerEnd", &end_ids[j].0);
                 doc.number(&what, "TransformerMeshImpedance.r", 0.0);
-                let x = match z_base(end_ids[i].1, s_base) {
+                let x = match crate::electrical::calc_impedance_base(end_ids[i].1, s_base) {
                     Some(base) => exact_preimage(xsc, xsc / 100.0 * base, |x| x / base * 100.0),
                     None => 0.0,
                 };
@@ -1122,7 +1122,7 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, clocks: &[f64], buses: &[
             &format!("{}_Yc", xf.name),
         );
         doc.reference("TransformerCoreAdmittance.TransformerEnd", &end_ids[0].0);
-        let (g, b) = match z_base(end_ids[0].1, s_base) {
+        let (g, b) = match crate::electrical::calc_impedance_base(end_ids[0].1, s_base) {
             Some(base) => (
                 exact_preimage(loss, loss / 100.0 / base, |g| 100.0 * g * base),
                 exact_preimage(imag, imag / 100.0 / base, |b| 100.0 * b * base),
@@ -1181,7 +1181,7 @@ fn short_circuit_count(doc: &mut Doc, xf: &DistTransformer) {
 /// A winding's resistance in ohm on its own base, chosen so the reader's
 /// percentage comes back exactly.
 fn winding_r_ohm(winding: &DistWinding) -> f64 {
-    match z_base(winding.v_ref, winding.s_rating) {
+    match crate::electrical::calc_impedance_base(winding.v_ref, winding.s_rating) {
         Some(base) => exact_preimage(winding.r_pct, winding.r_pct / 100.0 * base, |r| {
             r / base * 100.0
         }),
@@ -1588,7 +1588,7 @@ impl TankCatalogs {
 /// voltage `rated_u`, on a test base of `s_1`) whose reading with `loss`
 /// recovers the pair reactance `x` exactly.
 fn test_leakage(x: f64, loss: f64, rated_u: f64, s_1: f64) -> f64 {
-    let Some(base) = z_base(rated_u, s_1) else {
+    let Some(base) = crate::electrical::calc_impedance_base(rated_u, s_1) else {
         return 0.0;
     };
     let read = |leakage: f64| {
@@ -1730,7 +1730,7 @@ fn write_source(doc: &mut Doc, source: &VoltageSource, node: &str) {
     let v_ln = phases.first().map_or(0.0, |(i, _)| magnitude(*i));
     let base_angle = phases.first().map_or(0.0, |(i, _)| angle(*i));
     let v_ll = if n >= 2 {
-        let factor = 2.0 * (std::f64::consts::PI / n as f64).sin();
+        let factor = crate::sequence::calc_polygon_chord(n);
         exact_preimage(v_ln, v_ln * factor, |v| v / factor)
     } else {
         v_ln
@@ -1822,8 +1822,21 @@ fn stated_sequence(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
             })
             .collect()
     };
-    (matrix("rs")? == sequence_to_phase(r0, r1, n) && matrix("xs")? == sequence_to_phase(x0, x1, n))
-        .then_some((r1, x1, r0, x0))
+    (matrix("rs")?
+        == crate::sequence::calc_phase_from_sequence(
+            n,
+            r1,
+            r0,
+            crate::sequence::SequenceThird::Divide,
+        )
+        && matrix("xs")?
+            == crate::sequence::calc_phase_from_sequence(
+                n,
+                x1,
+                x0,
+                crate::sequence::SequenceThird::Divide,
+            ))
+    .then_some((r1, x1, r0, x0))
 }
 
 /// The branch conductance and susceptance of a balanced three phase delta

@@ -144,7 +144,7 @@ fn voltage(source: &VoltageSource) -> Option<(f64, f64, &'static str)> {
     if magnitude <= 0.0 || source.v_magnitude.len() != 3 || source.v_angle.len() != 3 {
         return None;
     }
-    let factor = 2.0 * (std::f64::consts::PI / 3.0).sin();
+    let factor = crate::sequence::calc_polygon_chord(3);
     let kv = neighbors(magnitude * factor / 1000.0)
         .into_iter()
         .find(|kv| (kv * 1000.0 / factor).to_bits() == magnitude.to_bits())?;

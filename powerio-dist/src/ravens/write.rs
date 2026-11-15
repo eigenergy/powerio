@@ -1827,11 +1827,10 @@ impl Writer {
                 .map(|(k, _)| k)
                 .collect();
             let has_neutral = source.terminal_map.iter().any(|t| !is_hot(t));
-            let n = hot.len().max(1) as f64;
             let chord = if hot.len() <= 1 {
                 1.0
             } else {
-                2.0 * (std::f64::consts::PI / n).sin()
+                crate::sequence::calc_polygon_chord(hot.len())
             };
             let v_ln = hot
                 .first()
@@ -2592,11 +2591,7 @@ fn versions() -> Value {
 /// n-gon (`sqrt(3)` at three), and `sqrt(3)` again for a single conductor,
 /// whose magnitude is line to neutral.
 fn line_to_line_chord(hot: usize) -> f64 {
-    if hot <= 1 {
-        3f64.sqrt()
-    } else {
-        2.0 * (std::f64::consts::PI / hot as f64).sin()
-    }
+    crate::sequence::calc_polygon_chord(if hot <= 1 { 3 } else { hot })
 }
 
 fn seed_better(x: (usize, f64), y: (usize, f64)) -> bool {
@@ -2604,12 +2599,12 @@ fn seed_better(x: (usize, f64), y: (usize, f64)) -> bool {
 }
 
 /// Nominal line-to-line volts per bus (lowercased id): seeded by sources and
-/// transformer windings, flooded across lines and switches. Loads do not
-/// seed — a load's own base may legitimately differ from the bus base.
+/// transformer windings, shared across each voltage zone of lines and
+/// switches. Loads do not seed — a load's own base may legitimately differ
+/// from the bus base.
 ///
-/// Selection is order-independent: each bus keeps the most authoritative seed
-/// ([`seed_better`]) rather than the first one written, and the flood takes
-/// the per-component maximum. Element order (a dss parse keeps file order, a
+/// Selection is order-independent: each zone keeps its most authoritative
+/// seed ([`seed_better`]) rather than the first one written. Element order (a dss parse keeps file order, a
 /// RAVENS parse sorts by name) therefore cannot change the result, so
 /// write → read → write is byte stable.
 fn bus_bases(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
@@ -2661,44 +2656,38 @@ fn bus_bases(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
             seed(&w.bus, hot.max(1), volts);
         }
     }
-    // Flood across zero-impedance-class edges (lines and switches share a
-    // base). Take the per-edge maximum both ways and iterate to a fixed
-    // point; max propagation converges to the per-component maximum
-    // regardless of edge order.
-    loop {
-        let mut changed = false;
-        let edges = net
-            .lines()
-            .iter()
-            .map(|l| (&l.bus_from, &l.bus_to))
-            .chain(net.switches().iter().map(|s| (&s.bus_from, &s.bus_to)));
-        for (a, b) in edges {
-            let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
-            let best = match (seeds.get(&a).copied(), seeds.get(&b).copied()) {
-                (Some(x), Some(y)) => {
-                    if seed_better(x, y) {
-                        x
-                    } else {
-                        y
-                    }
-                }
-                (Some(x), None) => x,
-                (None, Some(y)) => y,
-                (None, None) => continue,
-            };
-            for end in [a, b] {
-                if seeds.get(&end) != Some(&best) {
-                    seeds.insert(end, best);
-                    changed = true;
+    // Lines and every switch share a base: the one zone partition
+    // (`calc_voltage_zone_labels`), each zone taking its most authoritative
+    // seed, which no element order changes. A line or switch naming an
+    // undeclared bus leaves every bus on its own seed.
+    let Ok(labels) = crate::voltage_zones::calc_voltage_zone_labels(
+        net,
+        crate::voltage_zones::ZoneSwitches::All,
+    ) else {
+        return seeds
+            .into_iter()
+            .map(|(bus, (_, volts))| (bus, volts))
+            .collect();
+    };
+    let mut best: BTreeMap<usize, (usize, f64)> = BTreeMap::new();
+    for (bus, &zone) in net.buses().iter().zip(&labels) {
+        if let Some(&candidate) = seeds.get(&bus.id.to_ascii_lowercase()) {
+            match best.get(&zone) {
+                Some(&current) if !seed_better(candidate, current) => {}
+                _ => {
+                    best.insert(zone, candidate);
                 }
             }
         }
-        if !changed {
-            break;
-        }
     }
-    seeds
+    let mut bases: BTreeMap<String, f64> = seeds
         .into_iter()
         .map(|(bus, (_, volts))| (bus, volts))
-        .collect()
+        .collect();
+    for (bus, zone) in net.buses().iter().zip(&labels) {
+        if let Some(&(_, volts)) = best.get(zone) {
+            bases.insert(bus.id.to_ascii_lowercase(), volts);
+        }
+    }
+    bases
 }

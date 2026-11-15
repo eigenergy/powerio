@@ -19,8 +19,7 @@ use std::rc::Rc;
 
 use super::xml::{CimDocument, CimObject, PropValue, parse_cimxml};
 use super::{
-    LEAKAGE_READING, no_load_test_pct, sequence_to_phase, short_circuit_test_pct, tank_phase_clock,
-    wrap_angle, z_base,
+    LEAKAGE_READING, no_load_test_pct, short_circuit_test_pct, tank_phase_clock, wrap_angle,
 };
 use crate::diagnostics::{Diagnostic, DiagnosticInfo, codes as C};
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
@@ -1386,13 +1385,33 @@ impl<'a> Mapper<'a> {
         let per = |v: f64| v / length;
         let mut code = DistLineCode::new(
             name.clone(),
-            sequence_to_phase(per(r0), per(r1), n),
-            sequence_to_phase(per(x0), per(x1), n),
+            crate::sequence::calc_phase_from_sequence(
+                n,
+                per(r1),
+                per(r0),
+                crate::sequence::SequenceThird::Divide,
+            ),
+            crate::sequence::calc_phase_from_sequence(
+                n,
+                per(x1),
+                per(x0),
+                crate::sequence::SequenceThird::Divide,
+            ),
         );
         set_shunt_halves(
             &mut code,
-            &sequence_to_phase(per(g0), per(g1), n),
-            &sequence_to_phase(per(b0), per(b1), n),
+            &crate::sequence::calc_phase_from_sequence(
+                n,
+                per(g1),
+                per(g0),
+                crate::sequence::SequenceThird::Divide,
+            ),
+            &crate::sequence::calc_phase_from_sequence(
+                n,
+                per(b1),
+                per(b0),
+                crate::sequence::SequenceThird::Divide,
+            ),
         );
         line_codes.push(code);
         (name, resolved)
@@ -1757,10 +1776,30 @@ impl<'a> Mapper<'a> {
                 }
                 let (r0, x0) = (r0.unwrap_or(r1), x0.unwrap_or(x1));
                 Some((
-                    sequence_to_phase(r0, r1, n),
-                    sequence_to_phase(x0, x1, n),
-                    sequence_to_phase(g0, g1, n),
-                    sequence_to_phase(b0, b1, n),
+                    crate::sequence::calc_phase_from_sequence(
+                        n,
+                        r1,
+                        r0,
+                        crate::sequence::SequenceThird::Divide,
+                    ),
+                    crate::sequence::calc_phase_from_sequence(
+                        n,
+                        x1,
+                        x0,
+                        crate::sequence::SequenceThird::Divide,
+                    ),
+                    crate::sequence::calc_phase_from_sequence(
+                        n,
+                        g1,
+                        g0,
+                        crate::sequence::SequenceThird::Divide,
+                    ),
+                    crate::sequence::calc_phase_from_sequence(
+                        n,
+                        b1,
+                        b0,
+                        crate::sequence::SequenceThird::Divide,
+                    ),
                 ))
             }
             other => {
@@ -2663,7 +2702,7 @@ impl<'a> Mapper<'a> {
                     .store
                     .f(core, "TransformerCoreAdmittance.b")
                     .unwrap_or(0.0);
-                let Some(base) = z_base(winding.v_ref, s_1) else {
+                let Some(base) = crate::electrical::calc_impedance_base(winding.v_ref, s_1) else {
                     let label = self.label(core);
                     self.note(
                         &C::READ_CIM_DIST_VALUE_DEFAULTED,
@@ -3052,7 +3091,10 @@ impl<'a> Mapper<'a> {
                 .store
                 .f(id, "TransformerEndInfo.r")
                 .filter(|r| *r != 0.0)
-                .and_then(|r| z_base(v_ref, s_rating).map(|base| r / base * 100.0));
+                .and_then(|r| {
+                    crate::electrical::calc_impedance_base(v_ref, s_rating)
+                        .map(|base| r / base * 100.0)
+                });
             ends.push(CatalogEnd {
                 id: id.clone(),
                 number,
@@ -3473,7 +3515,7 @@ impl<'a> Mapper<'a> {
             let (v_ref, s_rating) = (v_ref.unwrap_or(0.0), s_rating.unwrap_or(0.0));
             let mut winding = DistWinding::new(bus, map, conn, v_ref, s_rating);
             if let Some(r) = self.store.f(end, "PowerTransformerEnd.r")
-                && let Some(base) = z_base(v_ref, s_rating)
+                && let Some(base) = crate::electrical::calc_impedance_base(v_ref, s_rating)
             {
                 winding.r_pct = r / base * 100.0;
             }
@@ -3544,7 +3586,9 @@ impl<'a> Mapper<'a> {
         meshes_of: &HashMap<String, Vec<String>>,
     ) -> Vec<f64> {
         let s_base = windings.first().map_or(0.0, |w| w.s_rating);
-        let per_unit = |x: f64, v_ref: f64| z_base(v_ref, s_base).map(|base| x / base);
+        let per_unit = |x: f64, v_ref: f64| {
+            crate::electrical::calc_impedance_base(v_ref, s_base).map(|base| x / base)
+        };
         let mut star = Vec::with_capacity(ends.len());
         for (end, winding) in ends.iter().zip(windings) {
             let x = self.store.f(end, "PowerTransformerEnd.x").unwrap_or(0.0);
@@ -3663,7 +3707,7 @@ impl<'a> Mapper<'a> {
             // A line to line magnitude to the per terminal line to neutral
             // magnitude of n phases spaced 2π/n apart (the dss convention).
             let v_ln = if n >= 2 {
-                v_ll / (2.0 * (PI / n as f64).sin())
+                v_ll / crate::sequence::calc_polygon_chord(n)
             } else {
                 v_ll
             };
@@ -3696,8 +3740,18 @@ impl<'a> Mapper<'a> {
                 // The PMD reader's convention: full matrices over every
                 // terminal, which the dss and PMD writers both read.
                 let (r1, x1) = (r1.unwrap_or(0.0), x1.unwrap_or(0.0));
-                let rs = sequence_to_phase(r0.unwrap_or(r1), r1, map.len());
-                let xs = sequence_to_phase(x0.unwrap_or(x1), x1, map.len());
+                let rs = crate::sequence::calc_phase_from_sequence(
+                    map.len(),
+                    r1,
+                    r0.unwrap_or(r1),
+                    crate::sequence::SequenceThird::Divide,
+                );
+                let xs = crate::sequence::calc_phase_from_sequence(
+                    map.len(),
+                    x1,
+                    x0.unwrap_or(x1),
+                    crate::sequence::SequenceThird::Divide,
+                );
                 source.extras.insert("rs".into(), matrix_value(&rs));
                 source.extras.insert("xs".into(), matrix_value(&xs));
                 // The stated values too: rebuilding them from the matrices

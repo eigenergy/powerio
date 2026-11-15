@@ -5,16 +5,31 @@ use std::collections::BTreeMap;
 
 use crate::MulticonductorNetwork;
 
+/// Which switches join a voltage zone ([`calc_voltage_zone_labels`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ZoneSwitches {
+    /// Closed switches only: the zones of the energized network.
+    Closed,
+    /// Every switch, open or closed: an open tie still joins two sections
+    /// of one nominal voltage.
+    All,
+}
+
 /// The voltage zone of each network bus, in bus table order: buses joined by
-/// a line or a closed switch share a label (a representative bus index),
-/// with bus identities compared ASCII case insensitively. Transformers
-/// separate zones. The one network zone partition: the multiconductor to
-/// balanced lowering bases its zones on it and the load nominal voltage
-/// inference anchors its zones on it.
+/// a line or a switch `switches` admits share a label (a representative bus
+/// index), with bus identities compared ASCII case insensitively.
+/// Transformers separate zones. The one network zone partition: the
+/// multiconductor to balanced lowering, the GridLAB-D writer and the load
+/// nominal voltage inference read it over closed switches, the MG-RAVENS
+/// writer's base voltages over every switch.
 ///
 /// # Errors
-/// A line or closed switch naming a bus the network does not declare.
-pub fn calc_voltage_zone_labels(network: &MulticonductorNetwork) -> Result<Vec<usize>, String> {
+/// A line or admitted switch naming a bus the network does not declare.
+pub fn calc_voltage_zone_labels(
+    network: &MulticonductorNetwork,
+    switches: ZoneSwitches,
+) -> Result<Vec<usize>, String> {
     let position: BTreeMap<String, usize> = network
         .buses()
         .iter()
@@ -32,7 +47,11 @@ pub fn calc_voltage_zone_labels(network: &MulticonductorNetwork) -> Result<Vec<u
         let label = format!("line `{}`", line.name);
         edges.push((find(&line.bus_from, &label)?, find(&line.bus_to, &label)?));
     }
-    for switch in network.switches().iter().filter(|switch| !switch.open) {
+    for switch in network
+        .switches()
+        .iter()
+        .filter(|switch| switches == ZoneSwitches::All || !switch.open)
+    {
         let label = format!("switch `{}`", switch.name);
         edges.push((
             find(&switch.bus_from, &label)?,

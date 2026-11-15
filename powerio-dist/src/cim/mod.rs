@@ -47,8 +47,6 @@ mod xml;
 
 use std::f64::consts::PI;
 
-use crate::model::ConductorMatrix;
-
 pub(crate) use read::parse_cim_collecting;
 pub(crate) use write::emit_cim_dist_text;
 
@@ -138,23 +136,6 @@ pub fn source_looks_like_cim_dist(source: &powerio_core::Source) -> bool {
 
 // The reader and the writer share these so the writer computes exactly what
 // the reader does: write, read, write stays byte stable.
-
-/// Impedance base `V²/S` (ohm), or None when degenerate.
-fn z_base(v_ref: f64, s_rating: f64) -> Option<f64> {
-    (v_ref > 0.0 && s_rating > 0.0).then_some(v_ref * v_ref / s_rating)
-}
-
-/// Expand zero and positive sequence scalars into an `n×n` phase matrix:
-/// self `(z0 + 2·z1)/3` on the diagonal, mutual `(z0 − z1)/3` off it.
-fn sequence_to_phase(z0: f64, z1: f64, n: usize) -> ConductorMatrix {
-    let self_z = (z0 + 2.0 * z1) / 3.0;
-    let mutual = (z0 - z1) / 3.0;
-    let mut m = vec![vec![mutual; n]; n];
-    for (i, row) in m.iter_mut().enumerate() {
-        row[i] = self_z;
-    }
-    m
-}
 
 /// An angle in radians wrapped to `(-π, π]`.
 fn wrap_angle(angle: f64) -> f64 {
@@ -301,7 +282,7 @@ fn short_circuit_test_pct(
     s_1: f64,
     reading: LeakageReading,
 ) -> Option<ShortCircuitPct> {
-    let base = z_base(rated_u, base_power)?;
+    let base = crate::electrical::calc_impedance_base(rated_u, base_power)?;
     if s_1 <= 0.0 {
         return None;
     }
@@ -398,7 +379,7 @@ mod tests {
     use std::f64::consts::PI;
 
     use super::{
-        LeakageReading, is_case_document, looks_like_cim_dist, no_load_test_pct, sequence_to_phase,
+        LeakageReading, is_case_document, looks_like_cim_dist, no_load_test_pct,
         short_circuit_test_pct, wrap_angle,
     };
 
@@ -496,7 +477,12 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn sequence_expands_to_a_symmetric_phase_matrix() {
-        let m = sequence_to_phase(6.0, 3.0, 3);
+        let m = crate::sequence::calc_phase_from_sequence(
+            3,
+            3.0,
+            6.0,
+            crate::sequence::SequenceThird::Divide,
+        );
         // self = (6 + 6)/3 = 4, mutual = (6 - 3)/3 = 1.
         assert_eq!(m[0][0], 4.0);
         assert_eq!(m[0][1], 1.0);

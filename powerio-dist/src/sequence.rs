@@ -192,6 +192,17 @@ pub fn calc_sequence_matrix(matrix: &[Vec<Complex64>]) -> [[Complex64; 3]; 3] {
     seq
 }
 
+/// The line to line over line to neutral ratio of `phases` phasors of one
+/// magnitude spaced `2π / phases` apart, `2 sin(π / phases)` (`√3` for
+/// three, `2` for two): OpenDSS `VSource`'s per phase magnitude
+/// (`kVBase · PerUnit · 1000 / 2 / Sin(180 / Fnphases · π / 180)`) and the
+/// CIM and MG-RAVENS `nominalVoltage` read and written over it. The one
+/// polygon chord.
+#[must_use]
+pub fn calc_polygon_chord(phases: usize) -> f64 {
+    2.0 * (std::f64::consts::PI / phases as f64).sin()
+}
+
 impl VoltageSource {
     /// The source's line to line voltage base over its phase positions
     /// `phases` (indices into its voltage vectors), volts: `√3 |V₁|`, the
