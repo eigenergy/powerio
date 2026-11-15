@@ -42,7 +42,9 @@ pub(crate) struct Data {
     pub epsr: f64,
     pub inslayer: f64,
     pub diains: f64,
-    pub diacable: f64,
+    /// The diameter over the neutral strands (CNData) or over the jacket
+    /// (TSData, which the tape model does not read); `None` when unstated.
+    pub diacable: Option<f64>,
 }
 
 /// Copper resistivity, ohm-m, and 1/pi, as TSLineConstants writes them.
@@ -60,7 +62,7 @@ impl Data {
             epsr: 2.3,
             inslayer: -1.0,
             diains: -1.0,
-            diacable: -1.0,
+            diacable: None,
         }
     }
 
@@ -126,7 +128,7 @@ impl Data {
             (_, "epsr") => self.epsr = value,
             (_, "inslayer") => self.inslayer = value,
             (_, "diains") => self.diains = value,
-            (_, "diacable") => self.diacable = value,
+            (_, "diacable") => self.diacable = Some(value),
             _ => return Err(format!("unqualified {class} property {key}")),
         }
         if (value <= 0.0 && key != "tapelap") || (key == "epsr" && value < 1.0) {
@@ -139,7 +141,7 @@ impl Data {
         let length = meters(radius_units);
         self.inslayer *= length;
         self.diains *= length;
-        self.diacable *= length;
+        self.diacable = self.diacable.map(|d| d * length);
         match &mut self.screen {
             Screen::ConcentricNeutral {
                 diastrand,
@@ -180,8 +182,9 @@ impl Data {
                     && [diastrand, gmrstrand, rstrand]
                         .iter()
                         .all(|v| v.is_finite() && *v > 0.0)
-                    && self.diacable.is_finite()
-                    && self.diacable > diastrand
+                    && self
+                        .diacable
+                        .is_some_and(|d| d.is_finite() && d > diastrand)
             }
             Screen::TapeShield {
                 diashield,
@@ -221,6 +224,15 @@ impl Data {
         }
     }
 
+    /// The concentric neutral's ring radius. `validate` requires the
+    /// diameter over the neutral; were it missing, the NaN would reach the
+    /// calculation's nonfinite refusal, never a number.
+    fn neutral_ring_radius(&self, diastrand: f64) -> f64 {
+        self.diacable.map_or(f64::NAN, |diacable| {
+            calc_concentric_neutral_radius(diacable, diastrand)
+        })
+    }
+
     /// The screen's own GMR.
     fn screen_gmr(&self) -> f64 {
         match self.screen {
@@ -232,7 +244,7 @@ impl Data {
             } => calc_concentric_neutral_gmr(
                 gmrstrand,
                 k as f64,
-                calc_concentric_neutral_radius(self.diacable, diastrand),
+                self.neutral_ring_radius(diastrand),
             ),
             Screen::TapeShield {
                 diashield,
@@ -247,7 +259,7 @@ impl Data {
     fn screen_distance(&self, distance: Option<f64>) -> f64 {
         match self.screen {
             Screen::ConcentricNeutral { k, diastrand, .. } => {
-                let radius = calc_concentric_neutral_radius(self.diacable, diastrand);
+                let radius = self.neutral_ring_radius(diastrand);
                 distance.map_or(radius, |d| {
                     calc_concentric_neutral_distance(d, k as f64, radius)
                 })

@@ -23,7 +23,7 @@ fn geometry() -> Geometry {
                         epsr: 2.3 + j * 0.1,
                         inslayer: 0.004,
                         diains: 0.026,
-                        diacable: 0.031,
+                        diacable: Some(0.031),
                     }),
                 }
             })
@@ -116,7 +116,7 @@ fn tape_shield_geometry() -> Geometry {
                     epsr: 2.3,
                     inslayer: 0.220 * IN,
                     diains: 0.82 * IN,
-                    diacable: 1.06 * IN,
+                    diacable: Some(1.06 * IN),
                 }),
                 x: 0.0,
                 height: -4.0 * 0.3048,

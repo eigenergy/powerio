@@ -1437,7 +1437,10 @@ impl<'a> Mapper<'a> {
         } else {
             segment_impedance(&spacing_label, &records, &conductors, frequency)
         };
-        let name = self.unique_line_code_name(&format!("{line_name}_lc"));
+        let taken = self.taken.entry("linecode").or_default();
+        let name = super::wire_info::line_code_name(line_name, |candidate| {
+            !taken.insert(candidate.to_ascii_lowercase())
+        });
         let n = phases.len().max(1);
         match computed {
             Ok(impedance) => {
@@ -1445,18 +1448,15 @@ impl<'a> Mapper<'a> {
                 if !terminal_neutral {
                     map.retain(|t| t != "4");
                 }
-                for note in impedance.notes {
+                for note in &impedance.notes {
                     self.note(
                         &C::READ_CIM_DIST_VALUE_DEFAULTED,
                         "ACLineSegment",
                         line,
-                        note,
+                        note.clone(),
                     );
                 }
-                let m = impedance.b.len();
-                let mut code = DistLineCode::new(name.clone(), impedance.r, impedance.x);
-                set_shunt_halves(&mut code, &vec![vec![0.0; m]; m], &impedance.b);
-                line_codes.push(code);
+                line_codes.push(impedance.line_code(name.clone()));
                 if !length_stated {
                     self.note(
                         &C::READ_CIM_DIST_IMPEDANCE_UNRESOLVED,

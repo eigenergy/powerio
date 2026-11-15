@@ -1117,27 +1117,18 @@ impl Mapper<'_> {
             &conductors,
             self.net.base_frequency(),
         )?;
-        for note in impedance.notes {
+        for note in &impedance.notes {
             self.warn(
                 &C::READ_RAVENS_DIST_VALUE_DEFAULTED,
                 format!("ACLineSegment {}: {note}", obj.name),
             );
         }
-        let mut name = format!("{}_lc", obj.name);
-        let mut n = 1;
-        while self.net.linecode(&name).is_some() {
-            n += 1;
-            name = format!("{}_lc_{n}", obj.name);
-        }
-        let half = |m: &ConductorMatrix| -> ConductorMatrix {
-            m.iter()
-                .map(|row| row.iter().map(|v| v / 2.0).collect())
-                .collect()
-        };
-        let mut code = DistLineCode::new(name.clone(), impedance.r, impedance.x);
-        code.b_from = half(&impedance.b);
-        code.b_to = half(&impedance.b);
-        self.net.line_codes_mut().push(code);
+        let name = crate::cim::wire_info::line_code_name(&obj.name, |candidate| {
+            self.net.linecode(candidate).is_some()
+        });
+        self.net
+            .line_codes_mut()
+            .push(impedance.line_code(name.clone()));
         Ok(name)
     }
 

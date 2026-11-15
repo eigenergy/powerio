@@ -60,6 +60,35 @@ pub(crate) struct Impedance {
     pub notes: Vec<String>,
 }
 
+impl Impedance {
+    /// The segment's line code: the series matrices, and the shunt
+    /// susceptance split evenly between the two ends (no conductance).
+    pub(crate) fn line_code(&self, name: impl Into<String>) -> crate::DistLineCode {
+        let half = |m: &ConductorMatrix| -> ConductorMatrix {
+            m.iter()
+                .map(|row| row.iter().map(|v| v / 2.0).collect())
+                .collect()
+        };
+        let mut code = crate::DistLineCode::new(name, self.r.clone(), self.x.clone());
+        code.b_from = half(&self.b);
+        code.b_to = half(&self.b);
+        code
+    }
+}
+
+/// The name of a wire catalog segment's line code: `{segment}_lc`, then
+/// `{segment}_lc_2`, `_3`, … while `taken` says the candidate is in use.
+pub(crate) fn line_code_name(segment: &str, mut taken: impl FnMut(&str) -> bool) -> String {
+    let base = format!("{segment}_lc");
+    let mut candidate = base.clone();
+    let mut n = 1;
+    while taken(&candidate) {
+        n += 1;
+        candidate = format!("{base}_{n}");
+    }
+    candidate
+}
+
 /// A position number: a whole number from 1.
 fn sequence(value: Option<f64>) -> Option<u32> {
     let v = value?;
@@ -170,10 +199,12 @@ fn wire(catalog: &Catalog<'_>, x: f64, y: f64, notes: &mut Vec<String>) -> Resul
                 epsr: positive("CableInfo.relativePermittivity")?,
                 inslayer: positive("WireInfo.insulationThickness")?,
                 diains: positive("CableInfo.diameterOverInsulation")?,
+                // The concentric neutral's ring needs it; the tape model
+                // does not read the jacket.
                 diacable: if class == "ConcentricNeutralCableInfo" {
-                    positive("ConcentricNeutralCableInfo.diameterOverNeutral")?
+                    Some(positive("ConcentricNeutralCableInfo.diameterOverNeutral")?)
                 } else {
-                    value("CableInfo.diameterOverJacket").unwrap_or(f64::NAN)
+                    value("CableInfo.diameterOverJacket")
                 },
             })
         }
