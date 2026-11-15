@@ -61,6 +61,7 @@ pub mod hvdc;
 pub mod indexed;
 pub mod islands;
 pub mod lcc;
+pub mod load_voltage;
 pub mod merge;
 pub mod network;
 mod normalize;
@@ -155,6 +156,10 @@ pub use islands::{
     DeEnergizedIsland, Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport,
 };
 pub use lcc::{LccConverterState, LccOperatingPoint};
+pub use load_voltage::{
+    LOAD_VOLTAGE_RATIO_FLOOR, LoadPowerAtVoltage, LoadVoltageError, LoadVoltageTerm,
+    calc_load_nominal_voltage,
+};
 pub use merge::{
     BusGroup, BusMerge, BusMergeRule, MergeSurvivor, MergedCharging, MergedFlows,
     PSSE_DEFAULT_ZERO_IMPEDANCE_THRESHOLD, RemovalReason, RemovedBranch, RemovedFlow,

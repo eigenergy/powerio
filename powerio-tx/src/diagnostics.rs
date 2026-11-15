@@ -528,6 +528,8 @@ pub mod codes {
             "a generator carries no cost data under a policy that requires one", category = Data;
         VALIDATE_THERMAL_LIMIT_INVALID = "VALIDATE.THERMAL_LIMIT.INVALID", Error,
             "a finite thermal limit must be finite and nonnegative", category = Data;
+        VALIDATE_LOAD_VOLTAGE_INVALID = "VALIDATE.LOAD_VOLTAGE.INVALID", Error,
+            "a load's voltage model cannot be evaluated", category = Data;
         VALIDATE_GEN_COST_NOT_A_NUMBER = "VALIDATE.GEN_COST.NOT_A_NUMBER", Error,
             "a default generator cost field is not finite", category = Data;
         VALIDATE_GEN_COST_PATCH_INVALID = "VALIDATE.GEN_COST.PATCH_INVALID", Error,

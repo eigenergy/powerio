@@ -8,7 +8,6 @@ use num_complex::Complex64;
 
 use powerio_tx::{
     BalancedNetwork, BusId, BusType, HvdcConverterKind, HvdcTreatment, IndexedNetwork,
-    LoadVoltageModel,
 };
 
 use crate::diagnostics::{Diagnostic, codes};
@@ -422,62 +421,6 @@ fn branch_terminal_powers(
     Ok(powers)
 }
 
-/// The power a load draws at voltage magnitude `vm` (per unit), in the
-/// load's own unit.
-fn load_power_at(load: &powerio_tx::Load, vm: f64, base_kv: f64) -> Complex64 {
-    match &load.voltage_model {
-        Some(LoadVoltageModel::Zip {
-            p_constant_power,
-            q_constant_power,
-            p_constant_current,
-            q_constant_current,
-            p_constant_impedance,
-            q_constant_impedance,
-            ..
-        }) => Complex64::new(
-            p_constant_power + p_constant_current * vm + p_constant_impedance * vm * vm,
-            q_constant_power + q_constant_current * vm + q_constant_impedance * vm * vm,
-        ),
-        Some(LoadVoltageModel::Exponential {
-            p,
-            q,
-            v_nom,
-            gamma_p,
-            gamma_q,
-        }) => {
-            // A nominal voltage is stated in kV; without one the ratio is
-            // the per unit magnitude itself.
-            let ratio = match v_nom {
-                Some(v_nom) if *v_nom > 0.0 && base_kv > 0.0 => vm * base_kv / v_nom,
-                _ => vm,
-            };
-            Complex64::new(p * ratio.powf(*gamma_p), q * ratio.powf(*gamma_q))
-        }
-        _ => Complex64::new(load.p, load.q),
-    }
-}
-
-fn is_voltage_dependent(load: &powerio_tx::Load) -> bool {
-    match &load.voltage_model {
-        Some(LoadVoltageModel::Zip {
-            p_constant_current,
-            q_constant_current,
-            p_constant_impedance,
-            q_constant_impedance,
-            ..
-        }) => [
-            p_constant_current,
-            q_constant_current,
-            p_constant_impedance,
-            q_constant_impedance,
-        ]
-        .iter()
-        .any(|part| **part != 0.0),
-        Some(LoadVoltageModel::Exponential { .. }) => true,
-        _ => false,
-    }
-}
-
 /// Calculate the AC bus balance at the voltages `net` stores, with every
 /// device at its stated output.
 ///
@@ -596,9 +539,22 @@ pub fn calc_stated_state_mismatch(
     }
     for load in view.network().loads().iter().filter(|l| l.in_service) {
         if let Some(idx) = view.bus_index(load.bus) {
-            let vm = voltages[idx].norm();
-            stated[idx] -= load_power_at(load, vm, buses[idx].base_kv) / base;
-            if is_voltage_dependent(load) {
+            // The load's power at the stored magnitude through powerio-tx's one
+            // voltage model evaluation.
+            let base_kv = buses[idx].base_kv;
+            let invalid = |reason| powerio_tx::Error::InvalidLoadVoltageModel {
+                bus: load.bus,
+                reason,
+            };
+            let power = load
+                .calc_power_at(buses[idx].vm, base_kv)
+                .map_err(invalid)?;
+            stated[idx] -= Complex64::new(power.p, power.q) / base;
+            if load
+                .calc_voltage_terms(base_kv)
+                .map_err(invalid)?
+                .is_some_and(|terms| !terms.is_empty())
+            {
                 flags[idx] |= StatedBusFlags::VOLTAGE_DEPENDENT_LOAD;
             }
         }
