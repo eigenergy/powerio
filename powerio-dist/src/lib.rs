@@ -54,6 +54,7 @@
 pub mod bmopf;
 pub mod cim;
 mod collect;
+mod connection;
 pub mod convert;
 mod current_form;
 pub mod diagnostics;
@@ -79,6 +80,7 @@ pub use cim::{
     CIM_DIST_HEAD_BYTES, looks_like_cim_dist, looks_like_cim_dist_header,
     source_looks_like_cim_dist,
 };
+pub use connection::{ConnectionChannel, calc_connection_channels};
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
     parse_dist_target_format,

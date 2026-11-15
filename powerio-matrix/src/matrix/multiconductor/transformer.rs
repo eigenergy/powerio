@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use num_complex::Complex64;
 use powerio_dist::{DistTransformer, DistWinding, DistWindingConn, MulticonductorNetwork};
 
 use super::{MulticonductorNodeIndex, NodeRef};
@@ -150,4 +151,139 @@ pub(super) fn ideal_wye_constraints(
         }
     }
     Ok(result)
+}
+
+fn invalid_leakage(transformer: &DistTransformer, reason: &str) -> Error {
+    Error::Mtx(format!(
+        "transformer `{}` states no usable leakage data: {reason}",
+        transformer.name
+    ))
+}
+
+/// The pairwise leakage impedances of a multiwinding transformer, per unit on
+/// the first winding's rating: for windings `a` and `b`,
+///
+/// ```text
+/// z[a][b] = (r_a · S_1 / S_a + r_b · S_1 / S_b) / 100 + j · xsc_ab / 100
+/// ```
+///
+/// with each winding's `r_pct` referred to the first winding's rating and
+/// `xsc_pct` in pair order `(1,2), (1,3), …, (2,3), …`. The diagonal is zero.
+/// The one leakage derivation from OpenDSS style nameplate data: the
+/// multiconductor OPF transformer descriptor scales it to its ohmic base, and
+/// [`calc_transformer_winding_admittance`] inverts it.
+///
+/// # Errors
+/// Fewer than two windings, a winding rating that is not finite and
+/// positive, a resistance that is not finite, or an `xsc_pct` whose length is
+/// not one value per winding pair.
+pub fn calc_transformer_leakage_impedances(
+    transformer: &DistTransformer,
+) -> Result<Vec<Vec<Complex64>>> {
+    let windings = &transformer.windings;
+    let count = windings.len();
+    if count < 2 {
+        return Err(invalid_leakage(transformer, "fewer than two windings"));
+    }
+    if windings
+        .iter()
+        .any(|w| !w.s_rating.is_finite() || w.s_rating <= 0.0 || !w.r_pct.is_finite())
+    {
+        return Err(invalid_leakage(
+            transformer,
+            "a winding rating is not finite and positive or a resistance is not finite",
+        ));
+    }
+    if transformer.xsc_pct.len() != count * (count - 1) / 2 {
+        return Err(invalid_leakage(
+            transformer,
+            "xsc_pct does not state one reactance per winding pair",
+        ));
+    }
+    let reference_rating = windings[0].s_rating;
+    let resistance: Vec<f64> = windings
+        .iter()
+        .map(|w| w.r_pct / 100.0 * reference_rating / w.s_rating)
+        .collect();
+    let mut impedance = vec![vec![Complex64::new(0.0, 0.0); count]; count];
+    let mut pair = 0;
+    for a in 0..count {
+        for b in a + 1..count {
+            let z = Complex64::new(
+                resistance[a] + resistance[b],
+                transformer.xsc_pct[pair] / 100.0,
+            );
+            impedance[a][b] = z;
+            impedance[b][a] = z;
+            pair += 1;
+        }
+    }
+    Ok(impedance)
+}
+
+/// The winding domain admittance `Y_1Volt` of a multiwinding transformer,
+/// siemens at a one volt winding base (OpenDSS `CalcY_Terminal`): the
+/// pairwise leakage impedances of [`calc_transformer_leakage_impedances`]
+/// scaled by `phases / S_1`, reduced against the last winding,
+///
+/// ```text
+/// ZB[i][j] = z[i][n]                          (i = j)
+///          = (z[i][n] + z[j][n] - z[i][j]) / 2  (i ≠ j)
+/// ```
+///
+/// inverted, and lifted back through the winding difference incidence
+/// `A` (row `i` is `u_i - u_n`): `Y_1Volt = Aᵀ ZB⁻¹ A`. A two winding unit
+/// reduces to `y · [[1, -1], [-1, 1]]`. `None` when the reduced matrix is
+/// exactly singular or not finite: one volt base impedances of high rating
+/// units sit far below any fixed pivot threshold, so only exact singularity
+/// is refused.
+///
+/// # Errors
+/// The leakage data [`calc_transformer_leakage_impedances`] refuses, or a
+/// phase count of zero.
+pub fn calc_transformer_winding_admittance(
+    transformer: &DistTransformer,
+) -> Result<Option<Vec<Vec<Complex64>>>> {
+    let leakage = calc_transformer_leakage_impedances(transformer)?;
+    if transformer.phases == 0 {
+        return Err(invalid_leakage(transformer, "zero phases"));
+    }
+    let count = leakage.len();
+    let reference = count - 1;
+    let base = transformer.phases as f64 / transformer.windings[0].s_rating;
+    let z = |a: usize, b: usize| leakage[a][b] * base;
+    let reduced: Vec<Vec<Complex64>> = (0..reference)
+        .map(|i| {
+            (0..reference)
+                .map(|j| {
+                    if i == j {
+                        z(i, reference)
+                    } else {
+                        (z(i, reference) + z(j, reference) - z(i, j)) / 2.0
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let finite = |value: &Complex64| value.re.is_finite() && value.im.is_finite();
+    if reduced.iter().flatten().any(|value| !finite(value)) {
+        return Ok(None);
+    }
+    let Some(inverse) = super::invert_above(&reduced, 0.0) else {
+        return Ok(None);
+    };
+    if inverse.iter().flatten().any(|value| !finite(value)) {
+        return Ok(None);
+    }
+    let mut admittance = vec![vec![Complex64::new(0.0, 0.0); count]; count];
+    for i in 0..reference {
+        for j in 0..reference {
+            let value = inverse[i][j];
+            admittance[i][j] += value;
+            admittance[i][reference] -= value;
+            admittance[reference][j] -= value;
+            admittance[reference][reference] += value;
+        }
+    }
+    Ok(Some(admittance))
 }

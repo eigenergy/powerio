@@ -190,11 +190,7 @@ impl<'n> IndexedNetwork<'n> {
     /// form.
     #[inline]
     pub fn per_unit_base(&self) -> f64 {
-        if self.net.is_normalized() {
-            1.0
-        } else {
-            self.net.base_mva()
-        }
+        self.net.per_unit_base()
     }
 
     /// A branch/bus angle field (`shift`, `va`) in radians. The raw model stores

@@ -21,6 +21,8 @@
 
 mod transformer;
 
+pub use transformer::{calc_transformer_leakage_impedances, calc_transformer_winding_admittance};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostics::Diagnostic;
@@ -159,6 +161,22 @@ impl MulticonductorNodeIndex {
         })
     }
 
+    /// The flat terminal index underneath: every declared terminal, grounded
+    /// or not, at its stable position.
+    #[must_use]
+    pub const fn terminals(&self) -> &powerio_dist::MulticonductorTerminalIndex {
+        &self.terminals
+    }
+
+    /// Where the terminal at a flat position lands: a dense unknown or
+    /// ground. `None` for a position past the terminal index.
+    #[must_use]
+    pub fn resolve_position(&self, position: usize) -> Option<NodeRef> {
+        self.dense_of_terminal
+            .get(position)
+            .map(|dense| dense.map_or(NodeRef::Ground, NodeRef::Node))
+    }
+
     /// The voltage unknowns, in dense row order.
     #[must_use]
     pub fn nodes(&self) -> &[DistNode] {
@@ -251,7 +269,24 @@ const SINGULAR_PIVOT_OHMS: f64 = 1e-14;
 /// pivoting, for conductor count sized matrices. `None` when a pivot is
 /// [`SINGULAR_PIVOT_OHMS`] or smaller (or NaN).
 fn invert(matrix: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
+    invert_above(matrix, SINGULAR_PIVOT_OHMS)
+}
+
+/// [`invert`] with the pivot magnitude at or below which the matrix is
+/// singular stated by the caller; zero refuses only exact singularity.
+fn invert_above(matrix: &[Vec<Complex64>], singular_pivot: f64) -> Option<Vec<Vec<Complex64>>> {
     let n = matrix.len();
+    // A scalar's inverse is its scaled reciprocal (`Complex::finv`), which
+    // neither overflows nor underflows for an extreme impedance.
+    if let [row] = matrix
+        && let [z] = row.as_slice()
+    {
+        let magnitude = z.norm();
+        if magnitude.is_nan() || magnitude <= singular_pivot {
+            return None;
+        }
+        return Some(vec![vec![z.finv()]]);
+    }
     let mut work: Vec<Vec<Complex64>> = matrix.to_vec();
     let mut inverse: Vec<Vec<Complex64>> = (0..n)
         .map(|row| {
@@ -276,7 +311,7 @@ fn invert(matrix: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
                 best = row;
             }
         }
-        if work[best][pivot].norm().is_nan() || work[best][pivot].norm() <= SINGULAR_PIVOT_OHMS {
+        if work[best][pivot].norm().is_nan() || work[best][pivot].norm() <= singular_pivot {
             return None;
         }
         work.swap(pivot, best);
@@ -547,6 +582,176 @@ pub fn calc_capacitor_primitive_admittance(
     Ok(Some(primitive))
 }
 
+/// The passive element family behind a [`PassivePrimitive`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PassiveFamily {
+    Line,
+    Shunt,
+    Capacitor,
+}
+
+impl PassiveFamily {
+    /// The family's lowercase name, as messages and element listings print it.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Line => "line",
+            Self::Shunt => "shunt",
+            Self::Capacitor => "capacitor",
+        }
+    }
+}
+
+/// One passive element's primitive admittance, siemens, with the bus
+/// terminal behind each primitive row.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct PassivePrimitive<'a> {
+    pub family: PassiveFamily,
+    pub name: &'a str,
+    /// `(bus, terminal)` of each primitive row, in primitive order.
+    pub terminals: Vec<(&'a str, &'a str)>,
+    pub primitive: Vec<Vec<Complex64>>,
+}
+
+/// Every passive element of the network with its primitive admittance:
+/// lines (series inverse and both shunt halves,
+/// [`calc_line_primitive_admittance`]), then shunts
+/// ([`calc_shunt_primitive_admittance`]), then capacitor banks
+/// ([`calc_capacitor_primitive_admittance`]), each family in table order.
+/// The one passive element list: [`calc_multiconductor_admittance_matrix`]
+/// scatters it over its node references, and a caller indexing terminals its
+/// own way scatters it over its positions with
+/// [`scatter_primitive_admittance`].
+///
+/// A line's linecode is found under the network's identifier convention
+/// ([`MulticonductorNetwork::identifier_key`]), the convention readiness
+/// checks. An element the builders do not stamp (a line without a usable
+/// length, a capacitor configuration with no primitive) is left out and
+/// reported in the returned diagnostics, never stamped approximately.
+///
+/// # Errors
+/// A line naming an undeclared linecode or mapping terminals that disagree
+/// with its linecode, a singular series impedance, a shunt whose matrices
+/// are not square over its terminal map or not finite, a capacitor whose
+/// nameplate is not finite and positive, or a capacitor terminal map its
+/// configuration cannot carry.
+#[allow(clippy::too_many_lines)] // one block per passive family, in stamp order
+pub fn calc_passive_primitives(
+    network: &MulticonductorNetwork,
+) -> Result<(Vec<PassivePrimitive<'_>>, Vec<Diagnostic>)> {
+    let mut linecodes: BTreeMap<String, &DistLineCode> = BTreeMap::new();
+    for code in network.line_codes() {
+        linecodes
+            .entry(network.identifier_key(&code.name))
+            .or_insert(code);
+    }
+    let mut primitives = Vec::with_capacity(
+        network.lines().len() + network.shunts().len() + network.capacitors().len(),
+    );
+    let mut diagnostics = Vec::new();
+
+    for line in network.lines() {
+        let Some(code) = linecodes.get(&network.identifier_key(&line.linecode)) else {
+            return Err(Error::Mtx(format!(
+                "line `{}` names linecode `{}` the network does not declare",
+                line.name, line.linecode
+            )));
+        };
+        let conductors = code.n_conductors;
+        if line.terminal_map_from.len() != conductors || line.terminal_map_to.len() != conductors {
+            return Err(Error::Mtx(format!(
+                "line `{}` maps {}/{} terminals over a {conductors} conductor linecode",
+                line.name,
+                line.terminal_map_from.len(),
+                line.terminal_map_to.len()
+            )));
+        }
+        if !line.length.is_finite() || line.length <= 0.0 {
+            diagnostics.push(Diagnostic::of(
+                &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
+                format!(
+                    "line `{}` states no usable length; its stamp is omitted",
+                    line.name
+                ),
+            ));
+            continue;
+        }
+        primitives.push(PassivePrimitive {
+            family: PassiveFamily::Line,
+            name: &line.name,
+            terminals: line
+                .terminal_map_from
+                .iter()
+                .map(|terminal| (line.bus_from.as_str(), terminal.as_str()))
+                .chain(
+                    line.terminal_map_to
+                        .iter()
+                        .map(|terminal| (line.bus_to.as_str(), terminal.as_str())),
+                )
+                .collect(),
+            primitive: calc_line_primitive_admittance(line, code)?,
+        });
+    }
+
+    for shunt in network.shunts() {
+        let size = shunt.terminal_map.len();
+        let square = |matrix: &[Vec<f64>]| {
+            matrix.len() == size
+                && matrix
+                    .iter()
+                    .all(|row| row.len() == size && row.iter().all(|value| value.is_finite()))
+        };
+        if !square(&shunt.g) || !square(&shunt.b) {
+            return Err(Error::Mtx(format!(
+                "shunt `{}` states a matrix that is not finite and {size} by {size}",
+                shunt.name
+            )));
+        }
+        primitives.push(PassivePrimitive {
+            family: PassiveFamily::Shunt,
+            name: &shunt.name,
+            terminals: shunt
+                .terminal_map
+                .iter()
+                .map(|terminal| (shunt.bus.as_str(), terminal.as_str()))
+                .collect(),
+            primitive: calc_shunt_primitive_admittance(shunt),
+        });
+    }
+
+    for capacitor in network.capacitors() {
+        if !capacitor.q_rated.is_finite() || !capacitor.v_nom.is_finite() || capacitor.v_nom <= 0.0
+        {
+            return Err(Error::Mtx(format!(
+                "capacitor `{}` states no finite nameplate reactive power at a positive voltage",
+                capacitor.name
+            )));
+        }
+        match calc_capacitor_primitive_admittance(capacitor)? {
+            Some(primitive) => primitives.push(PassivePrimitive {
+                family: PassiveFamily::Capacitor,
+                name: &capacitor.name,
+                terminals: capacitor
+                    .terminal_map
+                    .iter()
+                    .map(|terminal| (capacitor.bus.as_str(), terminal.as_str()))
+                    .collect(),
+                primitive,
+            }),
+            None => diagnostics.push(Diagnostic::of(
+                &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
+                format!(
+                    "capacitor `{}` states a configuration this builder does not stamp",
+                    capacitor.name
+                ),
+            )),
+        }
+    }
+    Ok((primitives, diagnostics))
+}
+
 /// Build the passive nodal admittance and the ideal equipment constraints.
 ///
 /// # Errors
@@ -574,86 +779,18 @@ pub fn calc_multiconductor_admittance_matrix(
         })
     };
 
-    let linecode_of = |name: &str| {
-        network
-            .line_codes()
+    // Lines, shunts and capacitor banks: the network's one passive primitive
+    // list, scattered over the node references of its terminals.
+    let (primitives, mut passive_findings) = calc_passive_primitives(network)?;
+    diagnostics.append(&mut passive_findings);
+    for element in &primitives {
+        let label = format!("{} `{}`", element.family.noun(), element.name);
+        let terminals: Vec<NodeRef> = element
+            .terminals
             .iter()
-            .find(|linecode| linecode.name == name)
-    };
-
-    // Lines: series inverse of the linecode impedance over the length, and
-    // both shunt halves.
-    for line in network.lines() {
-        let Some(code) = linecode_of(&line.linecode) else {
-            return Err(Error::Mtx(format!(
-                "line `{}` names linecode `{}` the network does not declare",
-                line.name, line.linecode
-            )));
-        };
-        let conductors = code.n_conductors;
-        if line.terminal_map_from.len() != conductors || line.terminal_map_to.len() != conductors {
-            return Err(Error::Mtx(format!(
-                "line `{}` maps {}/{} terminals over a {conductors} conductor linecode",
-                line.name,
-                line.terminal_map_from.len(),
-                line.terminal_map_to.len()
-            )));
-        }
-        if !line.length.is_finite() || line.length <= 0.0 {
-            diagnostics.push(Diagnostic::of(
-                &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
-                format!(
-                    "line `{}` states no usable length; its stamp is omitted",
-                    line.name
-                ),
-            ));
-            continue;
-        }
-        let primitive = calc_line_primitive_admittance(line, code)?;
-        let terminals: Vec<NodeRef> =
-            line.terminal_map_from
-                .iter()
-                .map(|terminal| resolve(&line.bus_from, terminal, &format!("line `{}`", line.name)))
-                .chain(line.terminal_map_to.iter().map(|terminal| {
-                    resolve(&line.bus_to, terminal, &format!("line `{}`", line.name))
-                }))
-                .collect::<Result<_>>()?;
-        stamper.add_primitive(&terminals, &primitive)?;
-    }
-
-    // Shunt elements: their stated admittance matrix across their terminals.
-    for shunt in network.shunts() {
-        let terminals: Vec<NodeRef> = shunt
-            .terminal_map
-            .iter()
-            .map(|terminal| resolve(&shunt.bus, terminal, &format!("shunt `{}`", shunt.name)))
+            .map(|&(bus, terminal)| resolve(bus, terminal, &label))
             .collect::<Result<_>>()?;
-        stamper.add_primitive(&terminals, &calc_shunt_primitive_admittance(shunt))?;
-    }
-
-    // Capacitor banks: nameplate reactive power at nameplate voltage.
-    for capacitor in network.capacitors() {
-        let terminals: Vec<NodeRef> = capacitor
-            .terminal_map
-            .iter()
-            .map(|terminal| {
-                resolve(
-                    &capacitor.bus,
-                    terminal,
-                    &format!("capacitor `{}`", capacitor.name),
-                )
-            })
-            .collect::<Result<_>>()?;
-        match calc_capacitor_primitive_admittance(capacitor)? {
-            Some(primitive) => stamper.add_primitive(&terminals, &primitive)?,
-            None => diagnostics.push(Diagnostic::of(
-                &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
-                format!(
-                    "capacitor `{}` states a configuration this builder does not stamp",
-                    capacitor.name
-                ),
-            )),
-        }
+        stamper.add_primitive(&terminals, &element.primitive)?;
     }
 
     // Ideal equipment: constraint rows over the node voltages, collected as

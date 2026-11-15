@@ -176,13 +176,7 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
         );
     }
 
-    let identity = |value: &str| {
-        if *net.source_format() == Some(crate::model::DistSourceFormat::Dss) {
-            value.to_ascii_lowercase()
-        } else {
-            value.to_owned()
-        }
-    };
+    let identity = |value: &str| net.identifier_key(value);
     audit_untyped(net, &mut report);
     audit_load_voltage(net, &mut report);
 

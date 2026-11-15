@@ -28,16 +28,31 @@ impl DistLoadVoltageModel {
     ///
     /// Returns an error for missing coefficients, invalid parameters or
     /// nonfinite evaluation instead of manufacturing a nominal load law.
+    pub fn power_scale(&self, phase: usize, voltage: f64) -> Result<[f64; 2], String> {
+        self.power_scale_where(phase, voltage, [true; 2])
+    }
+
+    /// [`power_scale`](Self::power_scale) for only the components `evaluate`
+    /// selects, `[active power, reactive power]`. An inactive component is
+    /// returned as zero without evaluating its law, so an exponent stated for
+    /// a component the load does not draw (a reactive exponent of a purely
+    /// active load, say) cannot make the result nonfinite. A caller that
+    /// multiplies each factor by its nominal power passes `[p != 0, q != 0]`.
     #[expect(
         clippy::too_many_lines,
         reason = "keep all branches of the bounded voltage law together for comparison with its documented equations"
     )]
-    pub fn power_scale(&self, phase: usize, voltage: f64) -> Result<[f64; 2], String> {
+    pub fn power_scale_where(
+        &self,
+        phase: usize,
+        voltage: f64,
+        evaluate: [bool; 2],
+    ) -> Result<[f64; 2], String> {
         if !voltage.is_finite() || voltage < 0.0 {
             return Err("load voltage magnitude must be finite and nonnegative".into());
         }
         if matches!(self, Self::ConstantPower { .. }) {
-            return Ok([1.0; 2]);
+            return Ok(evaluate.map(|on| if on { 1.0 } else { 0.0 }));
         }
         let nominal = *self
             .v_nom()
@@ -53,13 +68,21 @@ impl DistLoadVoltageModel {
                 .filter(|v| v.is_finite())
                 .ok_or_else(|| "missing or nonfinite load coefficient".into())
         };
+        // An inactive component's exponent is never read; zero stands in, so
+        // its factor stays finite until it is cleared below.
+        let exponent = |v: &[f64], component: usize| -> Result<f64, String> {
+            if evaluate[component] { at(v) } else { Ok(0.0) }
+        };
         let value = match self {
             Self::ConstantPower { .. } => unreachable!(),
             Self::ConstantCurrent { .. } => [voltage_pu; 2],
             Self::ConstantImpedance { .. } => [voltage_pu * voltage_pu; 2],
             Self::Exponential {
                 gamma_p, gamma_q, ..
-            } => [voltage_pu.powf(at(gamma_p)?), voltage_pu.powf(at(gamma_q)?)],
+            } => [
+                voltage_pu.powf(exponent(gamma_p, 0)?),
+                voltage_pu.powf(exponent(gamma_q, 1)?),
+            ],
             Self::BoundedConstantPower {
                 v_min_pu,
                 v_max_pu,
@@ -92,7 +115,7 @@ impl DistLoadVoltageModel {
                 ..
             } => bounded_exponential_scale(
                 voltage_pu,
-                [at(gamma_p)?, at(gamma_q)?],
+                [exponent(gamma_p, 0)?, exponent(gamma_q, 1)?],
                 [*v_low_pu, *v_min_pu, *v_max_pu],
             )?,
             Self::Zip {
@@ -136,7 +159,11 @@ impl DistLoadVoltageModel {
                             // Native low-voltage continuation is the full nominal
                             // impedance, even when ZIP coefficients do not sum to one.
                             return if (voltage_pu * voltage_pu).is_finite() {
-                                Ok([voltage_pu * voltage_pu; 2])
+                                Ok(evaluate.map(
+                                    |on| {
+                                        if on { voltage_pu * voltage_pu } else { 0.0 }
+                                    },
+                                ))
                             } else {
                                 Err("load power evaluation became nonfinite".into())
                             };
@@ -175,6 +202,12 @@ impl DistLoadVoltageModel {
                 .map(|v| v * dropout)
             }
         };
+        let mut value = value;
+        for (factor, &on) in value.iter_mut().zip(&evaluate) {
+            if !on {
+                *factor = 0.0;
+            }
+        }
         if value.iter().any(|v| !v.is_finite()) {
             Err("load power evaluation became nonfinite".into())
         } else {

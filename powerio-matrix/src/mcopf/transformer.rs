@@ -623,8 +623,28 @@ fn leakage_descriptor(
     if ref_base <= 0.0 {
         return Err(invalid(&t.name, "nonpositive transformer power base"));
     }
+    // An OpenDSS style unit's pairwise leakage is the one derivation in
+    // `calc_transformer_leakage_impedances`, per unit on the first winding's
+    // rating, scaled here to the first winding's ohmic base over the bus
+    // base. A regulator states its series impedance in its own extras, and
+    // an n-winding BMOPF unit states each resistance on its winding's phase
+    // base and the reactance on its power base, so those keep their own
+    // referral below.
+    if !nw && !regulator {
+        let leakage = crate::matrix::multiconductor::calc_transformer_leakage_impedances(t)
+            .map_err(|error| invalid(&t.name, error))?;
+        let scale = ref_base * t.windings[0].tap.powi(2) / zb;
+        for (a, row) in zpair.iter_mut().enumerate() {
+            for (b, value) in row.iter_mut().enumerate() {
+                *value = [leakage[a][b].re * scale, leakage[a][b].im * scale];
+            }
+        }
+    }
     for a in 0..m {
         for b in a + 1..m {
+            if !nw && !regulator {
+                continue;
+            }
             let x = if regulator {
                 extra_number(t, "x_series_from", 0.0)?
                     + extra_number(t, "x_series_to", 0.0)? / ratios[1].powi(2)

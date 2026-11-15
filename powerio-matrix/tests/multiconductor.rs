@@ -12,7 +12,10 @@ use powerio_dist::{
     Configuration, DistBus, DistCapacitor, DistLine, DistLineCode, DistShunt, DistSwitch,
     DistTransformer, DistWinding, DistWindingConn, MulticonductorNetwork, VoltageSource,
 };
-use powerio_matrix::{NodeRef, calc_multiconductor_admittance_matrix};
+use powerio_matrix::{
+    NodeRef, PassiveFamily, calc_multiconductor_admittance_matrix, calc_passive_primitives,
+    calc_transformer_leakage_impedances, calc_transformer_winding_admittance,
+};
 
 fn dense(matrix: &powerio_matrix::SparseMatrix) -> Vec<Vec<f64>> {
     let mut out = vec![vec![0.0; matrix.cols()]; matrix.rows()];
@@ -679,4 +682,82 @@ fn a_near_zero_series_impedance_is_singular() {
     assert!(powerio_matrix::calc_line_primitive_admittance(&line, &code).is_ok());
     line.length = 1e-16;
     assert!(powerio_matrix::calc_line_primitive_admittance(&line, &code).is_err());
+}
+
+#[test]
+fn a_two_winding_leakage_inverts_to_one_series_admittance() {
+    use num_complex::Complex64;
+
+    let mut first = DistWinding::new("p", strings(&["1"]), DistWindingConn::Wye, 7200.0, 25000.0);
+    first.r_pct = 1.0;
+    let mut second = DistWinding::new("s", strings(&["1"]), DistWindingConn::Wye, 240.0, 50000.0);
+    second.r_pct = 2.0;
+    let transformer = DistTransformer::new("t", vec![first, second], vec![8.0], 1);
+    let leakage = calc_transformer_leakage_impedances(&transformer).unwrap();
+    // The second winding's resistance is referred to the first's rating.
+    let expected = Complex64::new(0.01 + 0.02 * 25000.0 / 50000.0, 0.08);
+    assert!((leakage[0][1] - expected).norm() < 1e-15);
+    assert_eq!(leakage[0][1], leakage[1][0]);
+    let admittance = calc_transformer_winding_admittance(&transformer)
+        .unwrap()
+        .unwrap();
+    let y = (expected / 25000.0).finv();
+    for (row, signs) in admittance.iter().zip([[1.0, -1.0], [-1.0, 1.0]]) {
+        for (&value, sign) in row.iter().zip(signs) {
+            assert!((value - y * sign).norm() < 1e-9 * y.norm());
+        }
+    }
+    let short = DistTransformer::new(
+        "short",
+        transformer
+            .windings
+            .iter()
+            .cloned()
+            .map(|mut w| {
+                w.r_pct = 0.0;
+                w
+            })
+            .collect(),
+        vec![0.0],
+        1,
+    );
+    assert!(
+        calc_transformer_winding_admittance(&short)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn the_passive_element_list_states_each_family_in_table_order() {
+    let mut net = MulticonductorNetwork::default();
+    net.buses_mut()
+        .push(DistBus::new("a", strings(&["1", "2"])));
+    net.buses_mut()
+        .push(DistBus::new("b", strings(&["1", "2"])));
+    net.line_codes_mut()
+        .push(DistLineCode::new("lc", vec![vec![1.0]], vec![vec![2.0]]));
+    net.lines_mut().push(DistLine::new(
+        "l",
+        "a",
+        "b",
+        strings(&["1"]),
+        strings(&["1"]),
+        "lc",
+        1.0,
+    ));
+    net.capacitors_mut().push(DistCapacitor::new(
+        "c",
+        "b",
+        strings(&["1", "2"]),
+        Configuration::SinglePhase,
+        1000.0,
+        240.0,
+    ));
+    let (primitives, findings) = calc_passive_primitives(&net).unwrap();
+    assert_eq!(findings.len(), 0, "{findings:?}");
+    let families: Vec<_> = primitives.iter().map(|p| p.family).collect();
+    assert_eq!(families, [PassiveFamily::Line, PassiveFamily::Capacitor]);
+    assert_eq!(primitives[0].terminals, [("a", "1"), ("b", "1")]);
+    assert_eq!(primitives[1].terminals, [("b", "1"), ("b", "2")]);
 }

@@ -553,33 +553,76 @@ impl DcOperators {
                 "the instance states no reference bus to ground the system",
             ));
         }
-        let n = self.bus_ids.len();
-        let grounding = crate::matrix::Grounding::new(&self.reference_rows);
-        let retained_rows = grounding.full_of_reduced(n);
         // The internal positive factor weights are the negated public
         // susceptances; the grounded matrix is the crate's one weighted
         // Laplacian with the reference rows and columns removed.
         let weights: Vec<f64> = self.branch_susceptance.iter().map(|b| -b).collect();
         let laplacian = crate::matrix::calc_weighted_laplacian(&self.incidence, &weights);
-        // A branch to an eliminated reference bus still carries an
-        // off-diagonal Laplacian entry; since its column is gone, its
-        // contribution moves to the retained row's right hand side, carrying
-        // the reference bus's stated angle in: `-(L va_ref)` at each retained
-        // row, with `va_ref` zero away from the references.
-        let mut reference_angles = vec![0.0; n];
-        for &row in &self.reference_rows {
-            reference_angles[row] = self.reference_va_radians[row];
-        }
-        let reference_load = crate::matrix::calc_csr_product(&laplacian, &reference_angles);
         let shift_injection = self.calc_bus_phase_shift_injection();
-        let rhs = retained_rows
+        let injection: Vec<f64> = self
+            .net_injection
             .iter()
-            .map(|&row| self.net_injection[row] - shift_injection[row] - reference_load[row])
+            .zip(&shift_injection)
+            .map(|(p, shift)| p - shift)
             .collect();
-        Ok(ReferenceConstrainedSystem {
-            matrix: crate::matrix::ground_with(&laplacian, &grounding),
-            rhs,
-            retained_rows,
-        })
+        let reference_va: Vec<f64> = self
+            .reference_rows
+            .iter()
+            .map(|&row| self.reference_va_radians[row])
+            .collect();
+        Ok(calc_reference_constrained_system(
+            &laplacian,
+            &self.reference_rows,
+            &reference_va,
+            &injection,
+        ))
+    }
+}
+
+/// The reference constrained linear system of a DC power flow over a bus
+/// Laplacian `L` with positive branch weights: `L` with the reference rows and
+/// columns removed, and at each retained row the right hand side
+/// `injection - (L va_ref)`, where `va_ref` holds each reference row's angle,
+/// radians, and zero elsewhere. `injection` is the full length nodal power
+/// the angles must carry (net injection less every fixed withdrawal), per
+/// unit; `reference_va` is aligned with `reference_rows`. Solving
+/// `matrix · va = rhs` gives the retained angles with each reference fixed at
+/// its stated angle. [`DcOperators::calc_reference_constrained_system`] is this
+/// over the instance's operators.
+///
+/// # Panics
+/// `injection` shorter than the Laplacian's row count, or a reference row
+/// outside it.
+#[must_use]
+pub fn calc_reference_constrained_system(
+    laplacian: &SparseMatrix,
+    reference_rows: &[usize],
+    reference_va: &[f64],
+    injection: &[f64],
+) -> ReferenceConstrainedSystem {
+    let n = laplacian.rows();
+    let grounding = crate::matrix::Grounding::new(reference_rows);
+    let retained_rows = grounding.full_of_reduced(n);
+    // A branch to an eliminated reference bus still carries an off-diagonal
+    // Laplacian entry; since its column is gone, its contribution moves to the
+    // retained row's right hand side, carrying the reference bus's stated
+    // angle in. With every reference at zero there is nothing to carry.
+    let mut reference_angles = vec![0.0; n];
+    for (&row, &va) in reference_rows.iter().zip(reference_va) {
+        reference_angles[row] = va;
+    }
+    let reference_load = if reference_angles.iter().any(|&va| va != 0.0) {
+        crate::matrix::calc_csr_product(laplacian, &reference_angles)
+    } else {
+        vec![0.0; n]
+    };
+    let rhs = retained_rows
+        .iter()
+        .map(|&row| injection[row] - reference_load[row])
+        .collect();
+    ReferenceConstrainedSystem {
+        matrix: crate::matrix::ground_with(laplacian, &grounding),
+        rhs,
+        retained_rows,
     }
 }

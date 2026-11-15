@@ -90,9 +90,11 @@ pub use acopf::{
     AcBranchData, AcBranchFlows, AcBusData, AcGeneratorData, AcOpfAssemblyOptions,
     AcOpfPreparation, AcPfAssemblyOptions, AcPfBusData, AcPfGeneratorData, AcPfPreparation,
     AcStorageData, NodalAcGeneratorData, PreparedAcBusSpecification, build_ac_opf_preparation,
-    build_ac_pf_preparation,
+    build_ac_pf_preparation, calc_prepared_bus_specifications,
 };
-pub use dc_operators::{DcOperatorOptions, DcOperators, ReferenceConstrainedSystem};
+pub use dc_operators::{
+    DcOperatorOptions, DcOperators, ReferenceConstrainedSystem, calc_reference_constrained_system,
+};
 pub use dcopf::{
     DcBranchParameters, DcGeneratorParameters, DcOpfAssemblyOptions, DcOpfBundleMetadata,
     DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorParameters,
@@ -134,9 +136,10 @@ pub use opf::{AnalysisBranchSource, PiecewiseLinearCost, PreparedObjective};
 
 pub use matrix::multiconductor::{
     AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
-    calc_capacitor_primitive_admittance, calc_line_primitive_admittance,
-    calc_multiconductor_admittance_matrix, calc_shunt_primitive_admittance,
-    scatter_primitive_admittance,
+    PassiveFamily, PassivePrimitive, calc_capacitor_primitive_admittance,
+    calc_line_primitive_admittance, calc_multiconductor_admittance_matrix, calc_passive_primitives,
+    calc_shunt_primitive_admittance, calc_transformer_leakage_impedances,
+    calc_transformer_winding_admittance, scatter_primitive_admittance,
 };
 pub use matrix::{
     BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, Grounding, IslandPtdf, MatrixStats,

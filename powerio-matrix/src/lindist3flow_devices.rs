@@ -167,30 +167,40 @@ pub fn lindist3flow_connection_incidence(
     terminal_count: usize,
     channel_count: usize,
 ) -> Result<Vec<Vec<f64>>> {
-    match configuration {
+    // The LinDist3Flow slice carries the grounded wye, the two terminal
+    // single phase or delta channel, and the three phase delta ring.
+    let carried = match configuration {
         Configuration::SinglePhase | Configuration::Delta
             if terminal_count == 2 && channel_count == 1 =>
         {
-            Ok(vec![vec![1.0, -1.0]])
+            true
         }
-        Configuration::Wye | Configuration::SinglePhase if terminal_count == channel_count => {
-            Ok((0..terminal_count)
-                .map(|row| {
-                    (0..terminal_count)
-                        .map(|column| f64::from(row == column))
-                        .collect()
-                })
-                .collect())
-        }
-        Configuration::Delta if terminal_count == 3 && channel_count == 3 => Ok(vec![
-            vec![1.0, -1.0, 0.0],
-            vec![0.0, 1.0, -1.0],
-            vec![-1.0, 0.0, 1.0],
-        ]),
-        _ => Err(invalid(format!(
+        Configuration::Wye | Configuration::SinglePhase => terminal_count == channel_count,
+        Configuration::Delta => terminal_count == 3 && channel_count == 3,
+        _ => false,
+    };
+    let unsupported = || {
+        invalid(format!(
             "{configuration:?} connection with {terminal_count} terminals and {channel_count} channels is unsupported"
-        ))),
+        ))
+    };
+    if !carried {
+        return Err(unsupported());
     }
+    let channels =
+        powerio_dist::calc_connection_channels(configuration, terminal_count, channel_count, None)
+            .map_err(|_| unsupported())?;
+    Ok(channels
+        .iter()
+        .map(|channel| {
+            let mut row = vec![0.0; terminal_count];
+            row[channel.from] = 1.0;
+            if let Some(to) = channel.to {
+                row[to] = -1.0;
+            }
+            row
+        })
+        .collect())
 }
 
 fn resolve_nodes(

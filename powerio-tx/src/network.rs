@@ -4277,6 +4277,20 @@ impl BalancedNetwork {
         self.source_format() == SourceFormat::Normalized
     }
 
+    /// The divisor that turns this network's power quantities into per unit:
+    /// `base_mva` for a raw network, `1.0` for a normalized one, whose powers
+    /// are already per unit. [`IndexedNetwork::per_unit_base`](crate::IndexedNetwork::per_unit_base)
+    /// reads this.
+    #[must_use]
+    #[inline]
+    pub fn per_unit_base(&self) -> f64 {
+        if self.is_normalized() {
+            1.0
+        } else {
+            self.base_mva()
+        }
+    }
+
     /// Error unless `base_mva` is a positive, finite number. It is every
     /// per-unit divisor, so a malformed base would otherwise silently poison
     /// downstream values with `NaN`/`Inf` or flipped signs. The per-unit

@@ -107,21 +107,31 @@ impl Writer<'_> {
 }
 
 fn connections(load: &DistLoad) -> Result<Vec<(&String, &String)>, Error> {
-    let result = match (load.configuration, load.terminal_map.as_slice()) {
-        (Configuration::SinglePhase | Configuration::Delta, [a, b]) => vec![(a, b)],
-        (Configuration::Delta, [a, b, c]) => vec![(a, b), (b, c), (c, a)],
-        (Configuration::Wye, map) if map.len() >= 2 && map.last().is_some_and(|n| n == "n") => map
-            [..map.len() - 1]
-            .iter()
-            .map(|p| (p, &map[map.len() - 1]))
-            .collect(),
-        _ => {
-            return Err(unsupported(format!(
-                "load {} needs an additional connection model",
-                load.name
-            )));
+    // GridLAB-D states a wye neutral as `n`, the last terminal.
+    let map = load.terminal_map.as_slice();
+    let neutral_last = map.len() >= 2 && map.last().is_some_and(|n| n == "n");
+    let channels = match load.configuration {
+        Configuration::Wye if !neutral_last => None,
+        Configuration::Wye => {
+            crate::calc_connection_channels(load.configuration, map.len(), map.len() - 1, None).ok()
+        }
+        configuration => {
+            crate::calc_connection_channels(configuration, map.len(), load.p_nom.len(), None).ok()
         }
     };
+    let result = channels
+        .and_then(|channels| {
+            channels
+                .iter()
+                .map(|channel| channel.to.map(|to| (&map[channel.from], &map[to])))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| {
+            unsupported(format!(
+                "load {} needs an additional connection model",
+                load.name
+            ))
+        })?;
     if load.configuration == Configuration::Wye
         && result
             .iter()

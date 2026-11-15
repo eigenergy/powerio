@@ -907,19 +907,15 @@ pub fn build_ac_pf_preparation(
     )?;
     apply_source_mappings(&mut common, source);
 
-    let (power_scale, _) = options.units.power_scales(view.per_unit_base());
+    let by_source_row = calc_prepared_bus_specifications(instance, options.units)?;
     let specifications = common
         .bus_source_rows
         .iter()
         .map(|source_row| match source_row {
-            Some(row) => prepare_bus_specification(
-                instance.specifications()[*row],
-                power_scale,
-                source.is_normalized(),
-            ),
-            None => Ok(PreparedAcBusSpecification::Pq { p: 0.0, q: 0.0 }),
+            Some(row) => by_source_row[*row],
+            None => PreparedAcBusSpecification::Pq { p: 0.0, q: 0.0 },
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
 
     let mut initial_vm = common.buses.initial_vm.clone();
     let mut initial_va = common
@@ -974,6 +970,29 @@ pub fn build_ac_pf_preparation(
         },
         branches: common.branches,
     })
+}
+
+/// The instance's bus specifications in preparation units, one per source
+/// bus row: power scaled by `units` over the network's per unit base (one for
+/// a normalized network), reference angles in radians. This is the conversion
+/// [`build_ac_pf_preparation`] applies; a caller that keeps its own bus index
+/// reads the same values here without building the preparation.
+///
+/// # Errors
+/// A specification case this build does not know.
+pub fn calc_prepared_bus_specifications(
+    instance: &AcPfInstance,
+    units: Units,
+) -> Result<Vec<PreparedAcBusSpecification>> {
+    let source = instance.network();
+    let (power_scale, _) = units.power_scales(source.per_unit_base());
+    instance
+        .specifications()
+        .iter()
+        .map(|&specification| {
+            prepare_bus_specification(specification, power_scale, source.is_normalized())
+        })
+        .collect()
 }
 
 fn prepare_bus_specification(

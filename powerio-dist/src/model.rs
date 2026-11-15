@@ -1072,6 +1072,19 @@ impl MulticonductorNetwork {
     pub fn base_frequency_mut(&mut self) -> &mut f64 {
         &mut self.tables_mut().base_frequency
     }
+
+    /// The key under which this network's source identifies an element by
+    /// name: ASCII lowercase for an OpenDSS source, whose names are case
+    /// insensitive, the name itself otherwise. Readiness and every name
+    /// lookup over the tables (a line's linecode, say) compare these keys.
+    #[must_use]
+    pub fn identifier_key(&self, name: &str) -> String {
+        if self.tables.source_format == Some(crate::model::DistSourceFormat::Dss) {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_owned()
+        }
+    }
 }
 
 impl Default for MulticonductorNetwork {
