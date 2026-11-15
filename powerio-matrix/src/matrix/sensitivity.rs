@@ -895,6 +895,124 @@ const BACKWARD_ERROR_TRUST: f64 = 1e-10;
 /// a small backward error, lands near or above 1.
 const FORWARD_ERROR_TRUST: f64 = 1e-4;
 
+/// The grounded weighted Laplacian `L = A diag(w) Aᵀ` of an edge list,
+/// factored once for repeated DC solves: the grounds' rows and columns are
+/// removed ([`Grounding`]), and so is every bus no edge touches, and the
+/// reduced matrix is factored by the one sparse factorization of the PTDF
+/// builder (Cholesky, then `LDLᵀ`, then LU, each accepted only when it
+/// solves a probe right hand side accurately). Grounded and untouched buses
+/// keep angle zero. With `w` the branch susceptances and one ground per
+/// connected component, [`solve`](Self::solve) is a lossless DC power flow
+/// and [`calc_edge_flows`](Self::calc_edge_flows) its branch flows.
+pub struct GroundedLaplacianFactor {
+    n: usize,
+    edges: Vec<(usize, usize, f64)>,
+    grounding: Grounding,
+    factor: SparseFactor,
+}
+
+impl GroundedLaplacianFactor {
+    /// Factor the grounded Laplacian of `edges` (`(a, b, w)`, buses below `n`)
+    /// with `grounds` fixed at zero angle.
+    ///
+    /// # Errors
+    /// [`Error::ShapeMismatch`] for an edge or ground outside `0..n`, and
+    /// [`Error::SingularNetwork`] for a nonfinite weight or a reduced matrix
+    /// no factorization solves (a component without a ground).
+    pub fn from_edges(n: usize, edges: &[(usize, usize, f64)], grounds: &[usize]) -> Result<Self> {
+        let outside = |i: usize| Error::ShapeMismatch {
+            what: "grounded Laplacian bus index",
+            expected: n,
+            got: i,
+        };
+        let mut touched = vec![false; n];
+        for &(a, b, w) in edges {
+            for i in [a, b] {
+                if i >= n {
+                    return Err(outside(i));
+                }
+            }
+            if !w.is_finite() {
+                return Err(Error::SingularNetwork);
+            }
+            if a != b {
+                touched[a] = true;
+                touched[b] = true;
+            }
+        }
+        if let Some(&g) = grounds.iter().find(|&&g| g >= n) {
+            return Err(outside(g));
+        }
+        let mut refs = grounds.to_vec();
+        refs.extend((0..n).filter(|&i| !touched[i]));
+        let grounding = Grounding::new(&refs);
+        let a =
+            crate::matrix::assemble_bus_branch_incidence(n, edges.iter().map(|&(a, b, _)| (a, b)));
+        let w: Vec<f64> = edges.iter().map(|&(_, _, w)| w).collect();
+        let reduced = ground_with(&calc_weighted_laplacian(&a, &w), &grounding);
+        let factor = SparseFactor::factor(&reduced)?;
+        Ok(Self {
+            n,
+            edges: edges.to_vec(),
+            grounding,
+            factor,
+        })
+    }
+
+    /// The angles that balance `injection` (one per bus), grounded and
+    /// untouched buses at zero.
+    ///
+    /// # Panics
+    /// When `injection` is shorter than the bus count.
+    #[must_use]
+    pub fn solve(&self, injection: &[f64]) -> Vec<f64> {
+        let full = self.grounding.full_of_reduced(self.n);
+        let mut rhs = faer::Mat::<f64>::zeros(full.len(), 1);
+        for (r, &i) in full.iter().enumerate() {
+            rhs[(r, 0)] = injection[i];
+        }
+        self.factor.solve_block(rhs.as_mut());
+        let mut theta = vec![0.0; self.n];
+        for (r, &i) in full.iter().enumerate() {
+            theta[i] = rhs[(r, 0)];
+        }
+        theta
+    }
+
+    /// The flow `w (θ_a − θ_b)` of each edge at angles `theta`, the one DC
+    /// flow from angles.
+    #[must_use]
+    pub fn calc_edge_flows(&self, theta: &[f64]) -> Vec<f64> {
+        crate::matrix::calc_dc_branch_flow(
+            theta,
+            self.edges.iter().map(|&(a, b, w)| ((a, b), w, 0.0)),
+        )
+    }
+
+    /// The factorization that solved the reduced matrix.
+    #[must_use]
+    pub fn solver_path(&self) -> SensitivitySolverPath {
+        self.factor.path()
+    }
+}
+
+/// The weighted Laplacian product `L x` of an edge list, `L = A diag(w) Aᵀ`:
+/// each edge `(a, b, w)` adds `w (x_a − x_b)` to bus `a` and subtracts it
+/// from bus `b`. The matrix free operator an iterative DC solve applies.
+///
+/// # Panics
+/// When an edge names a bus outside `x`.
+#[must_use]
+pub fn calc_edge_laplacian_product(edges: &[(usize, usize, f64)], x: &[f64]) -> Vec<f64> {
+    let mut y = vec![0.0; x.len()];
+    for &(a, b, w) in edges {
+        let d = w * (x[a] - x[b]);
+        y[a] += d;
+        y[b] -= d;
+    }
+    y
+}
+
 /// One way to factor the grounded matrix, `None` when it breaks down.
 type FactorAttempt = fn(&faer::sparse::SparseColMat<usize, f64>) -> Option<SparseFactor>;
 
@@ -1821,5 +1939,29 @@ mod closed_switch_tests {
         assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
         assert_eq!(ptdf_entries, 0);
         assert_eq!(lodf_entries, 0);
+    }
+}
+
+#[cfg(test)]
+mod grounded_laplacian_tests {
+    use super::{GroundedLaplacianFactor, calc_edge_laplacian_product};
+
+    #[test]
+    fn a_grounded_edge_laplacian_solves_a_dc_flow() {
+        // 0 -(2)- 1 -(4)- 2, bus 3 untouched; ground bus 0.
+        let edges = [(0, 1, 2.0), (1, 2, 4.0)];
+        let factor = GroundedLaplacianFactor::from_edges(4, &edges, &[0]).unwrap();
+        let injection = [-3.0, 1.0, 2.0, 0.0];
+        let theta = factor.solve(&injection);
+        assert_eq!(theta[0], 0.0);
+        assert_eq!(theta[3], 0.0);
+        let flows = factor.calc_edge_flows(&theta);
+        assert!((flows[0] + 3.0).abs() < 1e-12 && (flows[1] + 2.0).abs() < 1e-12);
+        let product = calc_edge_laplacian_product(&edges, &theta);
+        for i in 1..3 {
+            assert!((product[i] - injection[i]).abs() < 1e-12);
+        }
+        assert!(GroundedLaplacianFactor::from_edges(3, &[(1, 2, 1.0)], &[0]).is_err());
+        assert!(GroundedLaplacianFactor::from_edges(2, &[(0, 2, 1.0)], &[0]).is_err());
     }
 }
