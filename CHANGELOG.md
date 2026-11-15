@@ -391,6 +391,13 @@
   example's `fdrxfmr` test states a 0.03 kW loss where its source's `%noloadloss=0.6` is 3 kW,
   though its exciting current (1.253) carries the 0.6, so it reads as the test states:
   `%noloadloss` 0.006 and `%imag` 1.253, not the source's 0.6 and 1.1.
+- The distribution CIM reader names why it drops a transformer tank or end: an end that states
+  the misspelt `TranformerTankEnd.TransformerTank` (which no CIM or MG-RAVENS profile defines,
+  so it is still not read) or no `TransformerEnd.Terminal`, and a tank that states its catalog
+  as `TransformerTank.TransformerTankInfo` rather than through an `Asset`, as the MG-RAVENS
+  `IEEE13_Assets.xml` example does for every tank. A `RatioTapChanger.stepVoltageIncrement` of
+  100 percent or more (that example states 106.875) is reported and the nominal tap used, where
+  it was read as a percent step.
 - MG-RAVENS equipment the reader keeps untyped while the document states it in service (a
   segment whose wires cannot be calculated, a switch or segment with fewer than two terminals, a
   tank without a datasheet, ends or a clock either convention represents, a delta load with

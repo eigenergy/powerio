@@ -17,6 +17,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::f64::consts::PI;
 use std::rc::Rc;
 
+/// A misspelt `TransformerTankEnd.TransformerTank` some MG-RAVENS examples
+/// state; it is named in the diagnostic, not read.
+const MISSPELT_TANK_END_TANK: &str = "TranformerTankEnd.TransformerTank";
+
 use super::xml::{CimDocument, CimObject, PropValue, parse_cimxml};
 use super::{
     LEAKAGE_READING, no_load_test_pct, short_circuit_test_pct, tank_phase_clock, wrap_angle,
@@ -2657,7 +2661,22 @@ impl<'a> Mapper<'a> {
         let attached: HashSet<&String> = index.ends_of.values().flatten().collect();
         for end in self.store.ids_of("TransformerTankEnd") {
             if !attached.contains(&end) && !self.dropped.contains(&end) {
-                self.drop_record("TransformerTankEnd", &end, "it names no TransformerTank");
+                let mut why = String::from("it names no TransformerTank");
+                if !self
+                    .store
+                    .props_all(&end, MISSPELT_TANK_END_TANK)
+                    .is_empty()
+                {
+                    why.push_str(&format!(
+                        " (it states `{MISSPELT_TANK_END_TANK}`, a misspelling of \
+                         `TransformerTankEnd.TransformerTank` that no CIM or MG-RAVENS profile \
+                         defines, which is not read)"
+                    ));
+                }
+                if self.store.refv(&end, "TransformerEnd.Terminal").is_none() {
+                    why.push_str(" and states no TransformerEnd.Terminal");
+                }
+                self.drop_record("TransformerTankEnd", &end, &why);
             }
         }
         for core in self.store.ids_of("TransformerCoreAdmittance") {
@@ -2778,7 +2797,20 @@ impl<'a> Mapper<'a> {
     #[allow(clippy::too_many_lines, clippy::float_cmp)] // clock numbers are discrete
     fn tank(&mut self, pt: &str, tank: &str, index: &TankIndex) -> Result<Option<DistTransformer>> {
         let Some(links) = index.info_of.get(tank) else {
-            self.drop_tank(tank, index, "it has no TransformerTankInfo");
+            let why = if self
+                .store
+                .refv(tank, "TransformerTank.TransformerTankInfo")
+                .is_some()
+            {
+                "it has no TransformerTankInfo: it states \
+                 `TransformerTank.TransformerTankInfo`, which the CIM100 distribution profile \
+                 does not define and which is not read; a tank's catalog is the AssetInfo of \
+                 an Asset whose `Asset.PowerSystemResources` lists it"
+            } else {
+                "it has no TransformerTankInfo (no Asset whose `Asset.PowerSystemResources` \
+                 lists it states one in `Asset.AssetInfo`)"
+            };
+            self.drop_tank(tank, index, why);
             return Ok(None);
         };
         let (asset, info) = links[0].clone();
@@ -3558,6 +3590,23 @@ impl<'a> Mapper<'a> {
             .store
             .f(&changer, "RatioTapChanger.stepVoltageIncrement");
         let label = self.label(&changer);
+        if let Some(increment) = increment
+            && !(increment.is_finite() && increment.abs() < 100.0)
+        {
+            // CIM states the step in percent of the end's rated voltage; a
+            // step of a whole rated voltage or more is no tap step (a value
+            // in volts, say), and no tap is guessed from it.
+            self.note(
+                &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                "RatioTapChanger",
+                &changer,
+                format!(
+                    "RatioTapChanger {label}: stepVoltageIncrement {increment} is not a percent \
+                     of rated voltage below 100; the nominal tap is used"
+                ),
+            );
+            return None;
+        }
         if let (Some(position), Some(neutral), Some(increment)) = (position, neutral, increment) {
             Some(1.0 + (position - neutral) * increment / 100.0)
         } else {

@@ -1180,6 +1180,24 @@ fn transformer_reactance_and_taps_come_from_their_own_records() {
     assert!(close(tb.xsc_pct[0], 15.550_418 / z_base * 100.0));
     assert!(close(ta.windings[0].tap, 1.025));
     assert!(close(tb.windings[0].tap, 1.0));
+
+    // A step of a whole rated voltage or more is not a percent step (the
+    // MG-RAVENS IEEE 13 example states 106.875): no tap is guessed from it.
+    let volts = text.replacen(
+        "<cim:RatioTapChanger.stepVoltageIncrement>0.625<",
+        "<cim:RatioTapChanger.stepVoltageIncrement>106.875<",
+        1,
+    );
+    let net = parse_str(&volts, "cim-dist").unwrap();
+    let ta = net.transformers().iter().find(|t| t.name == "ta").unwrap();
+    assert!(close(ta.windings[0].tap, 1.0));
+    assert!(
+        findings(&net.warnings, "READ.CIM_DIST.VALUE_DEFAULTED")
+            .iter()
+            .any(|f| f.contains("stepVoltageIncrement 106.875")),
+        "{:#?}",
+        net.warnings
+    );
 }
 
 #[test]
@@ -1662,6 +1680,58 @@ fn a_tank_without_catalog_data_is_dropped() {
             .all(|f| !f.contains("TransformerTankEnd")),
         "{:#?}",
         net.warnings
+    );
+}
+
+/// The MG-RAVENS IEEE 13 example misspells the end's tank association,
+/// states no end terminal, and links the tank's catalog directly: each is
+/// named where the record is dropped, and nothing is guessed.
+#[test]
+fn a_misspelt_tank_end_is_named_where_it_is_dropped() {
+    let text = center_tap(CT5_R, [0.09, 0.0, 0.0])
+        .replace(
+            r##"<cim:Asset.PowerSystemResources rdf:resource="#_ct"/>"##,
+            "",
+        )
+        .replace(
+            "<cim:TransformerTankEnd.TransformerTank ",
+            "<cim:TranformerTankEnd.TransformerTank ",
+        )
+        .replace(
+            r##"<cim:TransformerEnd.Terminal rdf:resource="#_ct_t1"/>"##,
+            "",
+        );
+    let text = text.replacen(
+        r##"<cim:TransformerTank rdf:ID="_ct">"##,
+        r##"<cim:TransformerTank rdf:ID="_ct"><cim:TransformerTank.TransformerTankInfo rdf:resource="#_info"/>"##,
+        1,
+    );
+    let net = parse_str(&feeder(&text), "cim-dist").unwrap();
+    assert_eq!(net.transformers().as_slice(), []);
+    let dropped = findings(&net.warnings, "READ.CIM_DIST.RECORD_DROPPED");
+    assert!(
+        dropped.iter().any(|f| f.contains("TransformerTank ct")
+            && f.contains("`TransformerTank.TransformerTankInfo`")),
+        "{dropped:#?}"
+    );
+    let end = |n: u8| {
+        dropped
+            .iter()
+            .find(|f| f.contains(&format!("ct_e{n}")))
+            .map(|f| f.to_string())
+            .unwrap_or_default()
+    };
+    assert!(
+        end(1).contains("`TranformerTankEnd.TransformerTank`"),
+        "{dropped:#?}"
+    );
+    assert!(
+        end(1).contains("no TransformerEnd.Terminal"),
+        "{dropped:#?}"
+    );
+    assert!(
+        !end(2).contains("no TransformerEnd.Terminal"),
+        "{dropped:#?}"
     );
 }
 
