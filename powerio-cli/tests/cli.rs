@@ -1783,3 +1783,77 @@ fn summary_lists_the_islands() {
     assert_eq!(islands["islands"][2]["hvdc_ties"], 1);
     assert_eq!(islands["islands"][1]["hvdc_ties"], 0);
 }
+
+/// A refused conversion reports the reader's findings ahead of the error,
+/// in text and in the JSON array, so a segment the reader could not type
+/// shows its precise reason (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`) beside
+/// the writer's `BUILD.DIST.ELECTRICAL_INCOMPLETE`.
+#[test]
+fn convert_failure_reports_the_reader_findings_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let case = tmp.path().join("no_impedance.xml");
+    let terminal = |id: &str, equipment: &str, node: &str, seq: u8| {
+        format!(
+            r##"<cim:Terminal rdf:ID="{id}"><cim:Terminal.ConductingEquipment rdf:resource="#{equipment}"/><cim:Terminal.ConnectivityNode rdf:resource="#{node}"/><cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/><cim:ACDCTerminal.sequenceNumber>{seq}</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
+"##
+        )
+    };
+    let text = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">
+<cim:BaseFrequency rdf:ID="_f"><cim:BaseFrequency.frequency>60</cim:BaseFrequency.frequency></cim:BaseFrequency>
+<cim:ConnectivityNode rdf:ID="_n1"><cim:IdentifiedObject.name>n1</cim:IdentifiedObject.name></cim:ConnectivityNode>
+<cim:ConnectivityNode rdf:ID="_n2"><cim:IdentifiedObject.name>n2</cim:IdentifiedObject.name></cim:ConnectivityNode>
+<cim:EnergySource rdf:ID="_src"><cim:IdentifiedObject.name>src</cim:IdentifiedObject.name><cim:EnergySource.voltageMagnitude>12470</cim:EnergySource.voltageMagnitude></cim:EnergySource>
+{}<cim:ACLineSegment rdf:ID="_l1"><cim:IdentifiedObject.name>l1</cim:IdentifiedObject.name><cim:Conductor.length>100</cim:Conductor.length></cim:ACLineSegment>
+{}{}</rdf:RDF>
+"#,
+        terminal("_src_t1", "_src", "_n1", 1),
+        terminal("_l1_t1", "_l1", "_n1", 1),
+        terminal("_l1_t2", "_l1", "_n2", 2),
+    );
+    std::fs::write(&case, text).unwrap();
+    let case = case.to_str().unwrap();
+    let out_path = tmp.path().join("out.dss");
+    let out_path = out_path.to_str().unwrap();
+
+    let text_mode = run(&[
+        "convert", case, "--from", "cim-dist", "--to", "dss", "-o", out_path,
+    ]);
+    assert_failure(&text_mode);
+    let stderr = String::from_utf8_lossy(&text_mode.stderr);
+    let read = stderr
+        .find("READ.CIM_DIST.IMPEDANCE_UNRESOLVED: ACLineSegment l1")
+        .unwrap_or_else(|| panic!("{stderr}"));
+    let error = stderr
+        .find("BUILD.DIST.ELECTRICAL_INCOMPLETE")
+        .unwrap_or_else(|| panic!("{stderr}"));
+    assert!(read < error, "{stderr}");
+
+    let json_mode = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        case,
+        "--from",
+        "cim-dist",
+        "--to",
+        "dss",
+        "-o",
+        out_path,
+    ]);
+    assert_failure(&json_mode);
+    let codes: Vec<String> = json_diagnostics(&json_mode)
+        .iter()
+        .map(|d| d["code"].as_str().unwrap().to_owned())
+        .collect();
+    let read = codes
+        .iter()
+        .position(|c| c == "READ.CIM_DIST.IMPEDANCE_UNRESOLVED")
+        .unwrap_or_else(|| panic!("{codes:?}"));
+    let error = codes
+        .iter()
+        .position(|c| c == "BUILD.DIST.ELECTRICAL_INCOMPLETE")
+        .unwrap_or_else(|| panic!("{codes:?}"));
+    assert!(read < error, "{codes:?}");
+}

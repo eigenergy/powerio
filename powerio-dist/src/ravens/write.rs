@@ -54,6 +54,7 @@ pub(crate) fn emit_ravens_json_text(
     net: &MulticonductorNetwork,
 ) -> Result<TextEmission, powerio_core::Error> {
     validate_transformer_bases(net)?;
+    crate::cim::require_phase_clocks(net)?;
     let returns = super::neutral::prepare(net)?;
     let prepared = super::source::prepare(returns.as_ref())?;
     let net = prepared.as_ref();
@@ -2010,11 +2011,29 @@ impl Writer {
                 );
                 continue;
             }
+            // The clocks state the vector group shift the physics stamps,
+            // `leadlag` included. `require_phase_clocks` has refused a unit
+            // whose shift is unknown; a direct caller still never gets a
+            // wrong clock.
+            let three_phase = xf.phases == 3;
+            let clocks = match (0..xf.windings.len())
+                .map(|k| crate::cim::tank_phase_clock(xf, k, three_phase))
+                .collect::<Result<Vec<f64>, _>>()
+            {
+                Ok(clocks) => clocks,
+                Err(error) => {
+                    self.warn(
+                        &C::EMIT_RAVENS_DIST_RECORD_DROPPED,
+                        format!("{what}: no phase-angle clock: {error}; skipped"),
+                    );
+                    continue;
+                }
+            };
             let info_name = format!("{}_info", xf.name);
             let mut obj = identified("PowerTransformer", &xf.name, extras_mrid(&xf.extras));
             obj.insert(
                 "PowerTransformer.vectorGroup".into(),
-                Value::String(vector_group(xf)),
+                Value::String(vector_group(xf, &clocks)),
             );
 
             let mut tank = identified("TransformerTank", &xf.name, None);
@@ -2092,7 +2111,10 @@ impl Writer {
                         }
                     )),
                 );
-                info.insert("TransformerEndInfo.phaseAngleClock".into(), Value::from(0));
+                info.insert(
+                    "TransformerEndInfo.phaseAngleClock".into(),
+                    Value::from(clocks[k]),
+                );
                 let rated_u = self.num(w.v_ref, &what);
                 let rated_s = self.num(w.s_rating, &what);
                 info.insert("TransformerEndInfo.ratedU".into(), rated_u);
@@ -2194,14 +2216,16 @@ impl Writer {
                 let mut test = identified("NoLoadTest", &format!("{info_name}_1_noload"), None);
                 let energised = self.num(w1.v_ref, &what);
                 test.insert("NoLoadTest.energisedEndVoltage".into(), energised);
-                if let Some(pct) = imag {
-                    let pct = self.num(pct, &what);
-                    test.insert("NoLoadTest.excitingCurrent".into(), pct);
-                }
-                if let Some(pct) = noloadloss {
-                    let loss = stable_fixed(pct / 100.0 * w1.s_rating, |v| {
-                        (v / w1.s_rating * 100.0) / 100.0 * w1.s_rating
-                    });
+                // The loss in kW and the whole exciting current, the test
+                // distribution CIM writes ([`crate::cim::no_load_test_values`]).
+                let (loss, exciting) = crate::cim::no_load_test_values(
+                    noloadloss.unwrap_or(0.0),
+                    imag.unwrap_or(0.0),
+                    w1.s_rating,
+                );
+                let exciting = self.num(exciting, &what);
+                test.insert("NoLoadTest.excitingCurrent".into(), exciting);
+                if noloadloss.is_some() {
                     let loss = self.num(loss, &what);
                     test.insert("NoLoadTest.loss".into(), loss);
                 }
@@ -2229,7 +2253,8 @@ impl Writer {
             );
             assets.insert(info_name, Value::Object(wrapper));
 
-            self.warn_extras(&what, &xf.extras, &["%noloadloss", "%imag"]);
+            // `leadlag` rides in the clocks.
+            self.warn_extras(&what, &xf.extras, &["%noloadloss", "%imag", "leadlag"]);
             table.insert(xf.name.clone(), Value::Object(obj));
         }
         (table, assets)
@@ -2498,7 +2523,9 @@ fn wrap_angle(a: f64) -> f64 {
 
 /// A conventional vector-group label (`Dyn0`, `Yy0`); decorative — the
 /// reader types connections from the catalog records.
-fn vector_group(xf: &DistTransformer) -> String {
+/// The IEC vector group: each winding's connection letter (capital for the
+/// first), `n` for a grounded wye neutral, and each later winding's clock.
+fn vector_group(xf: &DistTransformer, clocks: &[f64]) -> String {
     let mut out = String::new();
     for (k, w) in xf.windings.iter().enumerate() {
         let grounded = w.conn == DistWindingConn::Wye && !w.r_neutral.is_some_and(|r| r < 0.0);
@@ -2512,8 +2539,10 @@ fn vector_group(xf: &DistTransformer) -> String {
         if grounded && w.conn == DistWindingConn::Wye {
             out.push_str(if k == 0 { "N" } else { "n" });
         }
+        if k > 0 {
+            out.push_str(&clocks.get(k).copied().unwrap_or(0.0).to_string());
+        }
     }
-    out.push('0');
     out
 }
 

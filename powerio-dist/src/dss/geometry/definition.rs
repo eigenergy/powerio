@@ -115,9 +115,9 @@ impl Definition {
             .wires
             .get(&offset)
             .ok_or("missing WireData binding")?;
-        let single = matches!(key, "wire" | "cncable");
+        let single = matches!(key, "wire" | "cncable" | "tscable");
         if key == "wire" && self.cn_choices.get(self.active) == Some(&true) {
-            return Err("replacing a CN cable with a bare phase wire is unqualified".into());
+            return Err("replacing a CN or TS cable with a bare phase wire is unqualified".into());
         }
         let start = if single {
             self.active
@@ -128,7 +128,7 @@ impl Definition {
         };
         let count = if single {
             1
-        } else if key == "cncables" {
+        } else if matches!(key, "cncables" | "tscables") {
             self.phases
         } else {
             self.conductors.len().saturating_sub(start)
@@ -146,11 +146,11 @@ impl Definition {
         }
         if key == "wires" {
             self.active = start + count - 1;
-        } else if key.starts_with("cn") {
+        } else if key.starts_with("cn") || key.starts_with("ts") {
             let choice = self
                 .cn_choices
                 .get_mut(self.active)
-                .ok_or("invalid CN selector")?;
+                .ok_or("invalid cable selector")?;
             if !*choice {
                 self.cable_allocations += 1;
                 *choice = true;
@@ -215,7 +215,7 @@ impl Definition {
                     }
                 }
             }
-            "wire" | "wires" | "cncable" | "cncables" => {
+            "wire" | "wires" | "cncable" | "cncables" | "tscable" | "tscables" => {
                 self.bind_property(raw, object, offset, key, budget)?;
             }
             "spacing" => {
@@ -274,7 +274,9 @@ impl Definition {
             })
             .collect::<Result<Vec<_>, String>>()?;
         if self.cn_choices.iter().any(|v| *v) && !wires.iter().any(|w| w.cable.is_some()) {
-            return Err("replacing all CN cables with bare phase wires is unqualified".into());
+            return Err(
+                "replacing all CN or TS cables with bare phase wires is unqualified".into(),
+            );
         }
         Ok(Geometry {
             wires,
@@ -342,7 +344,7 @@ pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<Definition, Strin
                     .get(&copy.source)
                     .ok_or("unresolved LineGeometry copy")?;
                 if source.cn_choices.iter().any(|v| *v) {
-                    return Err("pinned native engine cannot copy a CN LineGeometry".into());
+                    return Err("pinned native engine cannot copy a CN or TS LineGeometry".into());
                 }
                 state.copy(source);
                 offset = copy.end;

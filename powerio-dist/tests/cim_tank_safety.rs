@@ -111,9 +111,44 @@ fn with_dy_clock(clock: &str) -> String {
 }
 
 #[test]
-fn clock_one_is_represented_and_clock_eleven_is_explicitly_refused() {
-    parse_str(&with_dy_clock("1"), "cim-dist").unwrap();
-    for clock in ["11", "0", "-1", "12", "1.5", "NaN", "bad"] {
+fn clocks_one_and_eleven_are_the_two_conventions_and_others_are_refused() {
+    let dy = |net: &powerio_dist::MulticonductorNetwork| {
+        net.transformers()
+            .iter()
+            .find(|t| t.name == "dy_tank")
+            .unwrap()
+            .clone()
+    };
+    // Clock 1: the high voltage winding leads, OpenDSS's default.
+    let ansi = dy(&parse_str(&with_dy_clock("1"), "cim-dist").unwrap());
+    assert!(!ansi.extras.contains_key("leadlag"));
+    assert_eq!(
+        powerio_dist::transformer::calc_transformer_phase_shift(&ansi).unwrap(),
+        30.0
+    );
+    // Clock 11 (Dyn11): the low voltage winding leads, read as `leadlag`
+    // euro so the physics stamps the -30 degree shift, and written back
+    // as clock 11.
+    let net = parse_str(&with_dy_clock("11"), "cim-dist").unwrap();
+    let euro = dy(&net);
+    assert_eq!(euro.extras["leadlag"], serde_json::json!("euro"));
+    assert_eq!(
+        powerio_dist::transformer::calc_transformer_phase_shift(&euro).unwrap(),
+        -30.0
+    );
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("leadlag")),
+        "{:?}",
+        out.warnings
+    );
+    let back = dy(&parse_str(&out.text, "cim-dist").unwrap());
+    assert_eq!(back.extras["leadlag"], serde_json::json!("euro"));
+    assert_eq!(
+        back.extras["cim_phase_angle_clock"],
+        serde_json::json!([0.0, 11.0])
+    );
+    for clock in ["0", "-1", "12", "1.5", "NaN", "bad"] {
         let error = parse_str(&with_dy_clock(clock), "cim-dist")
             .unwrap_err()
             .to_string();
@@ -271,21 +306,84 @@ fn dyn_end_form(clock: Option<&str>) -> String {
 }
 
 #[test]
-fn end_form_refuses_the_clocks_the_tank_form_refuses() {
-    // A Dyn layout represents clock 1 on the secondary.
+fn end_form_reads_and_refuses_the_clocks_the_tank_form_does() {
+    // A Dyn layout represents clock 1 on the secondary, or clock 11 under
+    // the European convention.
     parse_str(&dyn_end_form(None), "cim-dist").unwrap();
     parse_str(&dyn_end_form(Some("1")), "cim-dist").unwrap();
-    for clock in ["11", "0", "-1", "12", "1.5", "NaN", "bad"] {
+    let euro = parse_str(&dyn_end_form(Some("11")), "cim-dist").unwrap();
+    assert_eq!(
+        euro.transformers()[0].extras["leadlag"],
+        serde_json::json!("euro")
+    );
+    // The end form states the clocks only when they need the European
+    // convention, and they read back as written.
+    let out = emit_value(&euro, DistTargetFormat::CimDist);
+    assert!(out.text.contains("phaseAngleClock>11<"), "{}", out.text);
+    let back = parse_str(&out.text, "cim-dist").unwrap();
+    assert_eq!(
+        back.transformers()[0].extras["leadlag"],
+        serde_json::json!("euro")
+    );
+    let ansi = emit_value(
+        &parse_str(&dyn_end_form(Some("1")), "cim-dist").unwrap(),
+        DistTargetFormat::CimDist,
+    );
+    assert!(!ansi.text.contains("phaseAngleClock"));
+    for clock in ["0", "-1", "12", "1.5", "NaN", "bad"] {
         let error = parse_str(&dyn_end_form(Some(clock)), "cim-dist")
             .unwrap_err()
             .to_string();
         assert!(error.contains("phase-angle clock"), "{clock}: {error}");
     }
-    let error = parse_str(&dyn_end_form(Some("11")), "cim-dist")
+    let error = parse_str(&dyn_end_form(Some("0")), "cim-dist")
         .unwrap_err()
         .to_string();
     assert!(
-        error.contains("not represented by its winding layout (clock"),
+        error.contains(
+            "not represented by its winding layout (clock 1, or its European counterpart)"
+        ),
+        "{error}"
+    );
+}
+
+/// A Y-D-D unit whose deltas roll opposite ways: its clocks are 0, 1 and
+/// 11, which neither `leadlag` convention represents together. The end form
+/// states them (never omits them, which would read back with winding 3
+/// shifted 60 degrees), so the reader refuses winding 3 precisely.
+#[test]
+fn end_form_states_clocks_neither_convention_represents_and_the_reader_refuses() {
+    let ydd = r#"{
+      "bus": {
+        "a": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+        "b": {"terminal_names": ["1", "2", "3"]},
+        "c": {"terminal_names": ["1", "2", "3"]}
+      },
+      "voltage_source": {
+        "source": {"v_magnitude": [7200.0, 7200.0, 7200.0, 0.0], "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0], "bus": "a", "terminal_map": ["1", "2", "3", "n"]}
+      },
+      "transformer": {"n_winding": {"t3": {
+        "s_rating": 10000.0,
+        "windings": [
+          {"bus": "a", "terminal_map": ["1", "2", "3", "n"], "v_nom": 12470.0, "configuration": "WYE", "r_winding": 0.01},
+          {"bus": "b", "terminal_map": ["1", "2", "3"], "v_nom": 4160.0, "configuration": "DELTA", "r_winding": 0.02, "delta_roll": 1},
+          {"bus": "c", "terminal_map": ["1", "2", "3"], "v_nom": 480.0, "configuration": "DELTA", "r_winding": 0.03, "delta_roll": -1}
+        ],
+        "x_sc": {"1_2": 0.04, "1_3": 0.05, "2_3": 0.06}
+      }}}
+    }"#;
+    let net = parse_str(ydd, "bmopf-json").unwrap();
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    let clocks: Vec<&str> = out
+        .text
+        .split("<cim:PowerTransformerEnd.phaseAngleClock>")
+        .skip(1)
+        .map(|s| s.split('<').next().unwrap())
+        .collect();
+    assert_eq!(clocks, ["0", "1", "11"], "{}", out.text);
+    let error = parse_str(&out.text, "cim-dist").unwrap_err().to_string();
+    assert!(
+        error.contains("winding 3 phase-angle clock 11 is not represented by its winding layout"),
         "{error}"
     );
 }

@@ -163,14 +163,7 @@ impl Reader<'_> {
         conductors: &[ObjectKey],
     ) -> Result<Vec<Vec<Complex64>>, Error> {
         let f = self.net.base_frequency();
-        // GridLAB-D's simplified Carson coefficients, ohms per mile with
-        // distances in feet, at its fixed 100 ohm-metre earth resistivity:
-        // ln D_e = 7.6786 + ln(ρ / f) / 2.
-        let earth = crate::overhead::CarsonEarth::new(
-            0.001_588_36 * f,
-            0.002_022_37 * f,
-            (100.0 / f).ln() / 2.0 + 7.6786,
-        );
+        let earth = crate::glm::line_physics::carson_earth(f);
         let mut z = vec![vec![Complex64::default(); labels.len()]; labels.len()];
         for (i, &wire) in conductors.iter().enumerate() {
             let gmr = self.positive_geometry(wire, "geometric_mean_radius")?;

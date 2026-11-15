@@ -48,7 +48,10 @@ impl<'a> Context<'a> {
             matrices: None,
         });
         entry.point = point;
-        if matches!(key, Some("nconds" | "like" | "cncable" | "cncables")) {
+        if matches!(
+            key,
+            Some("nconds" | "like" | "cncable" | "cncables" | "tscable" | "tscables")
+        ) {
             let definition = definition::resolve(self.raw, point)?;
             if definition.cable_allocations != entry.cable_allocations {
                 entry.cable_allocations = definition.cable_allocations;

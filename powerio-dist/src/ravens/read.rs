@@ -61,6 +61,7 @@ pub(crate) fn parse_ravens_collecting(
         node_grounded: BTreeSet::new(),
         node_grounds: BTreeMap::new(),
         consumed: BTreeSet::new(),
+        ungrounded_single_phase: Vec::new(),
     };
     mapper.warn(
         &C::READ_RAVENS_DIST_VALUE_DEFAULTED,
@@ -592,6 +593,8 @@ struct Mapper<'a> {
     node_grounds: BTreeMap<String, Vec<String>>,
     /// Concrete kinds a typed mapping claimed (nested helpers included).
     consumed: BTreeSet<&'static str>,
+    /// Single phase wye loads stating `grounded` false: (load index, node).
+    ungrounded_single_phase: Vec<(usize, String)>,
 }
 
 impl Mapper<'_> {
@@ -618,7 +621,7 @@ impl Mapper<'_> {
             self.preserve_dependencies(obj);
             true
         } else if unsupported_phase(&Value::Object(obj.props.clone())) {
-            self.keep_untyped(
+            self.keep_unresolved(
                 obj,
                 "unspecified X/Y phase identity has no wire-coordinate mapping",
             );
@@ -743,9 +746,78 @@ impl Mapper<'_> {
         self.map_sources();
         self.map_transformers()?;
         self.map_grounds();
+        self.report_isolated_load_neutrals();
         self.finish_buses();
         self.preserve_unclaimed();
         Ok(())
+    }
+
+    /// A single phase wye load stating `grounded` false whose neutral no
+    /// equipment but such loads reaches hangs from a floating node: alone it
+    /// draws no current, and with its neighbours it forms a star the source
+    /// never states, so the stated power is not what it draws. The reader
+    /// keeps the document's statement, as a PowerIO round trip needs, and
+    /// says so for every such load. (The CIM reader instead grounds every
+    /// ungrounded wye load, with its own warning.) A neutral other equipment
+    /// carries, a four wire feeder, is not reported.
+    fn report_isolated_load_neutrals(&mut self) {
+        let pending = std::mem::take(&mut self.ungrounded_single_phase);
+        let single_phase: BTreeSet<usize> = pending.iter().map(|(index, _)| *index).collect();
+        for (index, node) in pending {
+            if self.grounded_terminals(&node).iter().any(|t| t == "4") {
+                continue;
+            }
+            let net = &self.net;
+            let reaches = |bus: &str, map: &[String]| {
+                bus.eq_ignore_ascii_case(&node) && map.iter().any(|t| t == "4")
+            };
+            let others = net
+                .lines()
+                .iter()
+                .flat_map(|l| {
+                    [
+                        (&l.bus_from, &l.terminal_map_from),
+                        (&l.bus_to, &l.terminal_map_to),
+                    ]
+                })
+                .chain(net.switches().iter().flat_map(|s| {
+                    [
+                        (&s.bus_from, &s.terminal_map_from),
+                        (&s.bus_to, &s.terminal_map_to),
+                    ]
+                }))
+                .chain(
+                    net.transformers()
+                        .iter()
+                        .flat_map(|t| t.windings.iter().map(|w| (&w.bus, &w.terminal_map))),
+                )
+                .chain(
+                    net.loads()
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| !single_phase.contains(i))
+                        .map(|(_, l)| (&l.bus, &l.terminal_map)),
+                )
+                .chain(net.generators().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.ibrs().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.shunts().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.capacitors().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.sources().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .any(|(bus, map)| reaches(bus, map));
+            if others {
+                continue;
+            }
+            let name = net.loads()[index].name.clone();
+            self.warn(
+                &C::READ_RAVENS_DIST_VALUE_CONFLICT,
+                format!(
+                    "load {name}: a single phase wye load states grounded false, and no \
+                     equipment other than such loads reaches its neutral at node {node}; the \
+                     neutral floats, so the load does not draw its stated power (kept as \
+                     stated; the CIM reader grounds an ungrounded wye load instead)"
+                ),
+            );
+        }
     }
 
     // ----- per-length impedance ------------------------------------------
@@ -830,6 +902,7 @@ impl Mapper<'_> {
     #[allow(clippy::too_many_lines)] // one segment maps in one pass: terminals, phases, ampacity
     fn map_lines(&mut self) {
         self.claim(&["ACLineSegment", "ACLineSegmentPhase"]);
+        let mut computed = 0_usize;
         for obj in self.doc.sorted_of_kind("ACLineSegment") {
             if self.inactive(obj) {
                 continue;
@@ -837,25 +910,12 @@ impl Mapper<'_> {
             let name = obj.name.clone();
             let terminals = terminal_entries(&obj.props);
             let (Some(from), Some(to)) = (terminals.first(), terminals.get(1)) else {
-                self.keep_untyped(obj, "fewer than two terminals");
+                self.keep_unresolved(obj, "fewer than two terminals");
                 continue;
             };
-            let Some(code_name) = obj
-                .props
-                .get("ACLineSegment.PerLengthImpedance")
-                .and_then(pointer_name)
-                .map(str::to_owned)
-            else {
-                // Wire/spacing catalog construction (WireSpacingInfo +
-                // OverheadWireInfo) needs Carson's equations, which belong to
-                // the tool that owns them; the object is preserved verbatim.
-                self.keep_untyped(obj, "no PerLengthImpedance (wire-table lines are roadmap)");
-                continue;
-            };
-
             // Conductor order: the ACLineSegmentPhase records in sequence
             // order, else the terminal's phase code.
-            let mut phase_rows: Vec<(u64, String)> = obj
+            let mut phase_rows: Vec<(u64, String, &Map<String, Value>)> = obj
                 .props
                 .get("ACLineSegment.ACLineSegmentPhase")
                 .and_then(Value::as_array)
@@ -872,16 +932,39 @@ impl Mapper<'_> {
                                 .get("ACLineSegmentPhase.phase")
                                 .and_then(Value::as_str)
                                 .map(kind_suffix)?;
-                            Some((seq, letter.to_owned()))
+                            Some((seq, letter.to_owned(), p))
                         })
                         .collect()
                 })
                 .unwrap_or_default();
-            phase_rows.sort_by_key(|(seq, _)| *seq);
+            phase_rows.sort_by_key(|(seq, ..)| *seq);
+            // A neutral the terminals connect stays a conductor of its own;
+            // a wire catalog line reduces any other.
+            let terminal_neutral = from.phases.iter().any(|p| p == "N");
+            let code_name = match obj
+                .props
+                .get("ACLineSegment.PerLengthImpedance")
+                .and_then(pointer_name)
+            {
+                Some(code) => code.to_owned(),
+                None => match self.wire_catalog_code(obj, &phase_rows, terminal_neutral) {
+                    Ok(code) => {
+                        computed += 1;
+                        if !terminal_neutral {
+                            phase_rows.retain(|(_, letter, _)| letter != "N");
+                        }
+                        code
+                    }
+                    Err(why) => {
+                        self.keep_unresolved(obj, &why);
+                        continue;
+                    }
+                },
+            };
             let letters: Vec<String> = if phase_rows.is_empty() {
                 from.phases.clone()
             } else {
-                phase_rows.into_iter().map(|(_, l)| l).collect()
+                phase_rows.into_iter().map(|(_, l, _)| l).collect()
             };
             // Every conductor, the neutral included: a four wire segment
             // has four `ACLineSegmentPhase` records.
@@ -949,6 +1032,104 @@ impl Mapper<'_> {
             line.extras = extras;
             self.net.lines_mut().push(line);
         }
+        if computed > 0 {
+            self.warn(
+                &C::READ_RAVENS_DIST_VALUE_DEFAULTED,
+                format!(
+                    "{computed} ACLineSegment(s) take their impedance from wire catalog entries; \
+                     MG-RAVENS states no earth model, so OpenDSS's default (Deri, 100 ohm-m) \
+                     applies"
+                ),
+            );
+        }
+    }
+
+    /// The line code of a segment with no `PerLengthImpedance`, computed from
+    /// its `WireSpacingInfo` and the wire catalog entries its phases name by
+    /// [`crate::cim::wire_info::segment_impedance`]. `phases` are the
+    /// segment's phase records in conductor order; a neutral is Kron reduced
+    /// unless `terminal_neutral`. The error says why the impedance is
+    /// unknown.
+    fn wire_catalog_code(
+        &mut self,
+        obj: &Obj,
+        phases: &[(u64, String, &Map<String, Value>)],
+        terminal_neutral: bool,
+    ) -> std::result::Result<String, String> {
+        use crate::cim::wire_info::{
+            CATALOG_CLASSES, Catalog, Conductor, Position, segment_impedance,
+        };
+        let number = |v: &Value| v.as_f64().or_else(|| v.as_str()?.trim().parse().ok());
+        let spacing = obj
+            .props
+            .get("ACLineSegment.WireSpacingInfo")
+            .or_else(|| obj.props.get("PowerSystemResource.AssetDatasheet"))
+            .and_then(|p| self.doc.resolve(p))
+            .filter(|s| s.kind == "WireSpacingInfo")
+            .ok_or("no PerLengthImpedance and no WireSpacingInfo; its impedance is unknown")?;
+        let records: Vec<Position> = spacing
+            .props
+            .get("WireSpacingInfo.WirePositions")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(Value::as_object)
+            .map(|p| Position {
+                sequence: p.get("WirePosition.sequenceNumber").and_then(number),
+                x: p.get("WirePosition.xCoord").and_then(number),
+                y: p.get("WirePosition.yCoord").and_then(number),
+            })
+            .collect();
+        if phases.is_empty() {
+            return Err(
+                "names a WireSpacingInfo but no ACLineSegmentPhase naming its wires".into(),
+            );
+        }
+        let conductors: Vec<Conductor> = phases
+            .iter()
+            .map(|(_, letter, phase)| {
+                let label = phase
+                    .get("IdentifiedObject.name")
+                    .and_then(Value::as_str)
+                    .map_or_else(|| format!("{} {letter}", obj.name), str::to_owned);
+                let catalog = phase
+                    .get("PowerSystemResource.AssetDatasheet")
+                    .and_then(|p| self.doc.resolve(p))
+                    .filter(|info| CATALOG_CLASSES.contains(&info.kind.as_str()))
+                    .map(|info| Catalog {
+                        label: info.name.clone(),
+                        class: info.kind.clone(),
+                        value: Box::new(move |key| info.props.get(key).and_then(number)),
+                    });
+                Conductor {
+                    label,
+                    sequence: phase
+                        .get("ACLineSegmentPhase.sequenceNumber")
+                        .and_then(number),
+                    catalog,
+                    reduced: letter == "N" && !terminal_neutral,
+                }
+            })
+            .collect();
+        let impedance = segment_impedance(
+            &spacing.name,
+            &records,
+            &conductors,
+            self.net.base_frequency(),
+        )?;
+        for note in &impedance.notes {
+            self.warn(
+                &C::READ_RAVENS_DIST_VALUE_DEFAULTED,
+                format!("ACLineSegment {}: {note}", obj.name),
+            );
+        }
+        let name = crate::cim::wire_info::line_code_name(&obj.name, |candidate| {
+            self.net.linecode(candidate).is_some()
+        });
+        self.net
+            .line_codes_mut()
+            .push(impedance.line_code(name.clone()));
+        Ok(name)
     }
 
     // ----- switches -------------------------------------------------------
@@ -968,7 +1149,7 @@ impl Mapper<'_> {
             let name = obj.name.clone();
             let terminals = terminal_entries(&obj.props);
             let (Some(from), Some(to)) = (terminals.first(), terminals.get(1)) else {
-                self.keep_untyped(obj, "fewer than two terminals");
+                self.keep_unresolved(obj, "fewer than two terminals");
                 continue;
             };
             // Per-phase side mappings when the document has them.
@@ -1152,7 +1333,7 @@ impl Mapper<'_> {
                         Some("2") => vec!["2".into(), "3".into()],
                         Some("3") => vec!["3".into(), "1".into()],
                         _ => {
-                            self.keep_untyped(obj, "unresolvable delta branch");
+                            self.keep_unresolved(obj, "unresolvable delta branch");
                             continue;
                         }
                     };
@@ -1182,7 +1363,7 @@ impl Mapper<'_> {
                 if let Some(order) = candidate {
                     map = order.iter().map(ToString::to_string).collect();
                 } else {
-                    self.keep_untyped(obj, "unresolvable delta branches");
+                    self.keep_unresolved(obj, "unresolvable delta branches");
                     continue;
                 }
             } else if !delta {
@@ -1191,6 +1372,9 @@ impl Mapper<'_> {
                 map.push("4".to_owned());
                 if grounded {
                     self.ground_node(&at.node);
+                } else if phases == 1 {
+                    self.ungrounded_single_phase
+                        .push((self.net.loads().len(), at.node.clone()));
                 }
             }
 
@@ -1842,7 +2026,7 @@ impl Mapper<'_> {
                      no voltages or impedances and is kept untyped"
                     ),
                 );
-                self.keep_untyped(tank, "missing datasheet");
+                self.keep_unresolved(tank, "missing datasheet");
                 continue;
             };
 
@@ -1889,7 +2073,7 @@ impl Mapper<'_> {
                     &C::READ_RAVENS_DIST_RECORD_DROPPED,
                     format!("transformer tank {name}: fewer than two ends; kept untyped"),
                 );
-                self.keep_untyped(tank, "fewer than two ends");
+                self.keep_unresolved(tank, "fewer than two ends");
                 continue;
             }
 
@@ -1919,6 +2103,7 @@ impl Mapper<'_> {
                 .map(|items| items.iter().filter_map(Value::as_object).collect())
                 .unwrap_or_default();
             let mut windings = Vec::new();
+            let mut clocks = Vec::new();
             let mut phases = 1usize;
             let mut ok = true;
             for (num, end) in &ends {
@@ -1980,19 +2165,12 @@ impl Mapper<'_> {
                             DistWindingConn::Wye
                         }
                     };
-                if let Some(clock) = einfo
-                    .get("TransformerEndInfo.phaseAngleClock")
-                    .and_then(Value::as_u64)
-                    && clock != 0
-                {
-                    self.warn(
-                        &C::READ_RAVENS_DIST_FIELD_UNMAPPED,
-                        format!(
-                            "transformer tank {name}: end {num} phaseAngleClock {clock} is \
-                         not modeled (the model carries no vector-group shift)"
-                        ),
-                    );
-                }
+                // The clock is checked against the winding layout once
+                // every end is read.
+                clocks.push((
+                    *num,
+                    einfo.get("TransformerEndInfo.phaseAngleClock").cloned(),
+                ));
 
                 let mut map = letters_to_terminals(&letters);
                 if map.is_empty() {
@@ -2048,9 +2226,16 @@ impl Mapper<'_> {
                 windings.push(winding);
             }
             if !ok {
-                self.keep_untyped(tank, "incomplete ends");
+                self.keep_unresolved(tank, "incomplete ends");
                 continue;
             }
+            let leadlag = match clocks_leadlag(&windings, &clocks, phases == 3) {
+                Ok(leadlag) => leadlag,
+                Err(why) => {
+                    self.keep_unresolved(tank, &why);
+                    continue;
+                }
+            };
 
             // Short-circuit reactance: the test rides inline under the
             // energised end's catalog record; the pairing beyond two
@@ -2146,8 +2331,11 @@ impl Mapper<'_> {
                 .of_kind("PowerTransformer")
                 .find(|p| p.name == name)
                 .map_or_else(Extras::new, extras_with_mrid);
-            // No-load behavior: percent values on the winding-1 base, the
-            // dss `%noloadloss` / `%imag` properties.
+            // No-load behavior: the dss `%noloadloss` / `%imag` on the
+            // winding-1 base, read as distribution CIM reads the same test
+            // ([`crate::cim::no_load_test_pct`]: loss in kW, the whole
+            // exciting current).
+            let s_1 = windings.first().map_or(0.0, |w| w.s_rating);
             for einfo in end_infos.values() {
                 let Some(Value::Array(tests)) =
                     einfo.get("TransformerEndInfo.EnergisedEndNoLoadTests")
@@ -2158,22 +2346,20 @@ impl Mapper<'_> {
                     let Some(test) = test.as_object() else {
                         continue;
                     };
-                    let base_power = test
-                        .get("TransformerTest.basePower")
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0);
-                    if let Some(loss) = test.get("NoLoadTest.loss").and_then(Value::as_f64)
-                        && base_power > 0.0
-                        && loss.abs() > 0.0
-                    {
-                        extras.insert("%noloadloss".into(), (loss / base_power * 100.0).into());
+                    let number = |key: &str| test.get(key).and_then(Value::as_f64);
+                    let Some((loss, imag)) = crate::cim::no_load_test_pct(
+                        number("NoLoadTest.loss").unwrap_or(0.0),
+                        number("NoLoadTest.excitingCurrent").unwrap_or(0.0),
+                        number("TransformerTest.basePower").unwrap_or(s_1),
+                        s_1,
+                    ) else {
+                        continue;
+                    };
+                    if loss.abs() > 0.0 {
+                        extras.insert("%noloadloss".into(), loss.into());
                     }
-                    if let Some(current) = test
-                        .get("NoLoadTest.excitingCurrent")
-                        .and_then(Value::as_f64)
-                        && current.abs() > 0.0
-                    {
-                        extras.insert("%imag".into(), current.into());
+                    if imag.abs() > 0.0 {
+                        extras.insert("%imag".into(), imag.into());
                     }
                 }
                 break;
@@ -2189,6 +2375,11 @@ impl Mapper<'_> {
             self.apply_tap_changers(&name, pointed, &mut windings);
             let mut transformer = DistTransformer::new(name, windings, xsc_pct, phases.max(1));
             transformer.extras = extras;
+            if let Some(convention) = leadlag {
+                transformer
+                    .extras
+                    .insert("leadlag".into(), convention.into());
+            }
             self.net.transformers_mut().push(transformer);
         }
         Ok(())
@@ -2390,6 +2581,29 @@ impl Mapper<'_> {
         self.push_untyped(obj);
     }
 
+    /// Keep in-service equipment the reader cannot type, marked so the
+    /// readiness audit refuses canonical conversion
+    /// ([`crate::readiness::UNRESOLVED_RAVENS_KEY`]): dropping a line
+    /// segment, switch, transformer or load the source states in service
+    /// would disconnect or change the circuit.
+    fn keep_unresolved(&mut self, obj: &Obj, why: &str) {
+        self.warn(
+            &C::READ_RAVENS_DIST_RETAINED_SOURCE_ONLY,
+            format!(
+                "{} {}: {why}; preserved untyped (round-trips to MG-RAVENS; refused by \
+                 conversion to other formats)",
+                obj.kind, obj.name
+            ),
+        );
+        self.push_untyped(obj);
+        if let Some(object) = self.net.untyped_objects_mut().last_mut() {
+            object.props.push((
+                Some(crate::readiness::UNRESOLVED_RAVENS_KEY.into()),
+                why.to_owned(),
+            ));
+        }
+    }
+
     fn push_untyped(&mut self, obj: &Obj) {
         let raw = serde_json::to_string(&Value::Object(obj.props.clone())).unwrap_or_default();
         self.net.untyped_objects_mut().push(UntypedObject::new(
@@ -2429,6 +2643,44 @@ impl Mapper<'_> {
             );
         }
     }
+}
+
+/// The `leadlag` convention a tank's stated `phaseAngleClock`s need, or why
+/// they cannot be read: the model expresses a vector group by its winding
+/// connections and the delta orientation, so each stated clock must be one
+/// the winding layout represents under OpenDSS's default convention (a
+/// delta–wye pair is clock 1) or, for every end alike, under the European
+/// one (clock 11, `leadlag` `euro`) ([`crate::cim::clocks_leadlag`]). An
+/// absent clock takes the represented one.
+fn clocks_leadlag(
+    windings: &[DistWinding],
+    clocks: &[(u64, Option<Value>)],
+    three_phase: bool,
+) -> std::result::Result<Option<&'static str>, String> {
+    let mut stated = Vec::with_capacity(clocks.len());
+    for (num, clock) in clocks {
+        stated.push(match clock {
+            None => None,
+            Some(value) => match value.as_f64() {
+                Some(clock) if clock.fract() == 0.0 && (0.0..12.0).contains(&clock) => Some(clock),
+                _ => {
+                    return Err(format!(
+                        "end {num} phaseAngleClock {value} is not a clock number"
+                    ));
+                }
+            },
+        });
+    }
+    crate::cim::clocks_leadlag(windings, &stated, three_phase).map_err(|m| {
+        let num = clocks
+            .get(m.winding)
+            .map_or(m.winding as u64 + 1, |(num, _)| *num);
+        format!(
+            "end {num} phaseAngleClock {} is not represented by its winding layout \
+             (clock {}, or its European counterpart); the model has no other vector-group shift",
+            m.stated, m.represented
+        )
+    })
 }
 
 fn fbool_map(map: &Map<String, Value>, key: &str) -> Option<bool> {

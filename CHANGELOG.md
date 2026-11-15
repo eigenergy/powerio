@@ -100,6 +100,11 @@
   `IslandReferenceReport::de_energized_islands` (with each island's unserved load). Island
   partitions, island labels, the preparations' reference coverage check and the multiconductor node
   merge share one component labeling.
+- Fix: the `CANONICALIZE.ISLAND.DE_ENERGIZED` and `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`
+  findings of a normalized network printed its per unit unserved load and HVDC infeed labelled
+  MW (0.25 MW for 25 MW on a 100 MVA base); they now state MW, `base_mva` over
+  `per_unit_base`. `DeEnergizedIsland`'s unserved load keeps the network's own unit. Shipped in
+  0.12.0.
 
 **Shared formulas**
 
@@ -215,7 +220,14 @@
   `powerio_dist::overhead::calc_carson_impedance` (over a `CarsonEarth`, the earth return terms
   of a frequency and resistivity) and `calc_potential_coefficient` are the one simplified Carson
   equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
-  Geometry, Kron and lowered impedances can move in the last place.
+  The GridLAB-D overhead, underground and triplex readers and the triplex writer build its
+  Carson coefficients in one place, the underground reader eliminates its cable returns through
+  the one Kron reduction, and the concentric neutral ring, its equivalent GMR and distance, the
+  tape shield radius and the cable capacitance are each one calculation behind the OpenDSS
+  `CNData` and `TSData` line constants and the GridLAB-D underground reader. The OpenDSS
+  overhead and cable line constants form each conductor's internal impedance, the conductors'
+  self and mutual block and the reduction to line matrices in one place. Geometry, cable,
+  Kron and lowered impedances can move in the last place.
 - `powerio_dist::dense::invert_dense_matrix(matrix, singular_pivot, relative_pivot)` refuses a
   pivot that is NaN or infinite (the one by one case included), `singular_pivot` or smaller, or
   `relative_pivot` times its column's largest original magnitude or smaller. The dense PTDF
@@ -287,6 +299,63 @@
 - BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
   schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
   `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.
+- OpenDSS tape-shielded cables: `TSData` and the `tscable` and `tscables` properties of
+  `LineGeometry` and `Line` are read, and the geometry line constants calculate the tape shield
+  (resistance from its diameter, thickness and lap, GMR to the middle of the tape) as OpenDSS's
+  `TSLineConstants` does, beside the overhead and concentric-neutral models. A geometry mixing
+  `CNData` and `TSData` cables is refused. A line on a tape-shielded geometry was
+  `READ.DSS.GEOMETRY_UNRESOLVED` before.
+- Distribution CIM and MG-RAVENS segments without a `PerLengthImpedance` that name a
+  `WireSpacingInfo` take the impedance of their wire catalog entries (`OverheadWireInfo`,
+  `WireInfo`, `ConcentricNeutralCableInfo`, `TapeShieldCableInfo`) on their `WirePosition`s,
+  calculated by the same OpenDSS line constants under OpenDSS's default earth (Deri, 100 ohm-m).
+  A neutral phase the segment's terminals do not state is Kron reduced. A position no phase
+  names a wire for leaves the impedance unknown, so the segment stays refused
+  (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or untyped in MG-RAVENS), now with the position named.
+  The MG-RAVENS `IEEE13_Assets` example names no neutral wire on nine of its eleven segments
+  (650632, 632670, 670671, 671680, 632633, 632645, 671684, 684611, 684652), which stay refused;
+  its complete concentric neutral segment 692675 matches OpenDSS to 2e-5 (the exporter's
+  1609.3 m mile), 645646 states a `PerLengthImpedance`, and the same conductors stated
+  completely match to 1e-13 of each matrix's largest entry.
+- Transformer phase clocks in distribution CIM and MG-RAVENS are the vector group shift the
+  physics stamps (the delta orientation of `powerio_dist::transformer`), read and written. A
+  delta–wye unit is clock 1 when the high voltage winding leads (OpenDSS's default `leadlag`)
+  and clock 11 when the low voltage winding leads: a source stating `leadlag=euro` or `lead`
+  (Dy11), or a step-up unit whose first winding is the low voltage delta, was written as clock
+  1. Both readers read clock 11 on a delta–wye unit as `leadlag` euro, where they refused it,
+  and refuse any other clock with the represented clock named; a unit with an unknown `leadlag`
+  is refused by both writers. MG-RAVENS reads `phaseAngleClock` instead of reporting it
+  unmapped, its writer states each end's clock where it wrote 0, and its vector group carries
+  each winding's clock (`Dyn1`, `Dyn11`) instead of a fixed `0`. The CIM `PowerTransformerEnd`
+  form states its clocks whenever OpenDSS's default convention does not represent them: the
+  European ones, and clocks neither convention represents (a Y-D-D unit whose deltas roll
+  opposite ways), which the reader then refuses with the winding named.
+- Fix: MG-RAVENS reads and writes a `NoLoadTest` as distribution CIM does, through one
+  function. CIM100, which MG-RAVENS profiles, types `NoLoadTest.loss` as `KiloActivePower` and
+  `excitingCurrent` as the whole exciting current, which the MG-RAVENS exporter writes as
+  `sqrt(%imag² + %noloadloss²)`. The MG-RAVENS reader took the loss in W (1000 times low) and the
+  whole exciting current as the magnetizing `%imag`, and its writer stated the loss in W and the
+  magnetizing current; it shipped in 0.12.0. A 500 kVA unit with `%noloadloss=0.6 %imag=1.1`
+  now writes a 3 kW test exciting 1.253 percent and reads back as stated. The `IEEE13_Assets`
+  example's `fdrxfmr` test states a 0.03 kW loss where its source's `%noloadloss=0.6` is 3 kW,
+  though its exciting current (1.253) carries the 0.6, so it reads as the test states:
+  `%noloadloss` 0.006 and `%imag` 1.253, not the source's 0.6 and 1.1.
+- MG-RAVENS equipment the reader keeps untyped while the document states it in service (a
+  segment whose wires cannot be calculated, a switch or segment with fewer than two terminals, a
+  tank without a datasheet, ends or a clock either convention represents, a delta load with
+  unresolvable branches, an X/Y phase) is blocked as
+  `READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`: numerical use and conversion to another format
+  refuse it, as they refuse a CIM segment without impedance, instead of writing the feeder
+  without it. In 0.12.0, which calculated no wire catalog segment, converting the MG-RAVENS
+  `IEEE13_Assets` example to OpenDSS succeeded with ten of its eleven segments missing. The MG-RAVENS round trip keeps the equipment.
+- Fix: `powerio convert` reports the reader's findings before the error when the conversion is
+  refused, in text and in the `--diagnostics-format json` array; it printed only the error, so
+  converting the CIM `IEEE13_Assets` example to OpenDSS showed `BUILD.DIST.ELECTRICAL_INCOMPLETE`
+  without the `READ.CIM_DIST.IMPEDANCE_UNRESOLVED` finding naming each segment's missing wire.
+- MG-RAVENS reports a single phase wye load stating `grounded` false whose neutral no
+  equipment but such loads reaches (`READ.RAVENS_DIST.VALUE_CONFLICT`): its neutral floats, so
+  it does not draw its stated power. The load is kept as stated; the CIM reader grounds such a
+  load with its own finding.
 - Read three-phase pandapower networks, those with `asymmetric_load`,
   `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
   under the `pandapower-json` token (#846). A three-phase network with rows

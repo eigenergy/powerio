@@ -649,7 +649,8 @@ fn read_documents(
 
     let mut mapper = Mapper::new(&store, diags);
     mapper.validate_electrical_state()?;
-    let (line_codes, mut lines) = mapper.lines();
+    let base_frequency = mapper.base_frequency();
+    let (line_codes, mut lines) = mapper.lines(base_frequency);
     let loads = mapper.loads();
     let shunts = mapper.shunts()?;
     let switches = mapper.switches();
@@ -689,7 +690,6 @@ fn read_documents(
         locate_buses(&mut buses, &layout);
         layout.meta
     });
-    let base_frequency = mapper.base_frequency();
     let name = description
         .or_else(|| mapper.feeder_name())
         .or_else(|| name_hint.map(str::to_owned));
@@ -815,6 +815,8 @@ struct Mapper<'a> {
     catalogs: HashMap<String, Option<Rc<Catalog>>>,
     /// Core admittances a transformer read.
     core_read: HashSet<String>,
+    /// Segments whose impedance came from wire catalog entries.
+    catalog_lines: usize,
 }
 
 impl<'a> Mapper<'a> {
@@ -833,6 +835,7 @@ impl<'a> Mapper<'a> {
             consumed: HashSet::new(),
             catalogs: HashMap::new(),
             core_read: HashSet::new(),
+            catalog_lines: 0,
         };
         mapper.build_wiring();
         mapper.name_nodes();
@@ -1108,9 +1111,11 @@ impl<'a> Mapper<'a> {
 
     // -- lines -------------------------------------------------------------
 
-    fn lines(&mut self) -> (Vec<DistLineCode>, Vec<DistLine>) {
+    #[allow(clippy::too_many_lines)] // one segment maps in one pass: phases, impedance, ratings
+    fn lines(&mut self, frequency: f64) -> (Vec<DistLineCode>, Vec<DistLine>) {
         let phase_children =
             self.children_of("ACLineSegmentPhase", "ACLineSegmentPhase.ACLineSegment");
+        let wire_positions = self.children_of("WirePosition", "WirePosition.WireSpacingInfo");
         let impedance_data =
             self.children_of("PhaseImpedanceData", "PhaseImpedanceData.PhaseImpedance");
         let mut line_codes: Vec<DistLineCode> = Vec::new();
@@ -1129,7 +1134,8 @@ impl<'a> Mapper<'a> {
                 continue;
             };
             let children = phase_children.get(&id).cloned().unwrap_or_default();
-            let (map, rows): (Vec<String>, Vec<usize>) = if children.is_empty() {
+            let mut phases = Vec::new();
+            let (mut map, rows): (Vec<String>, Vec<usize>) = if children.is_empty() {
                 let map = self.fallback_map("ACLineSegment", &id);
                 let rows = (1..=map.len()).collect();
                 (map, rows)
@@ -1137,14 +1143,14 @@ impl<'a> Mapper<'a> {
                 for terminal in self.terminals(&id) {
                     self.store.consume(&terminal, "Terminal.phases");
                 }
-                let phases = self.phase_children(
+                phases = self.phase_children(
                     &children,
                     "ACLineSegmentPhase",
                     "ACLineSegmentPhase.phase",
                     Some("ACLineSegmentPhase.sequenceNumber"),
                 );
                 let rows = self.impedance_rows(&id, &phases);
-                (phases.into_iter().map(|(t, _)| t).collect(), rows)
+                (phases.iter().map(|(t, _)| t.clone()).collect(), rows)
             };
             if map.is_empty() {
                 self.drop_record("ACLineSegment", &id, "no conductor phase is readable");
@@ -1166,16 +1172,29 @@ impl<'a> Mapper<'a> {
             };
 
             let name = self.unique_name("line", "ACLineSegment", &id);
-            let (code, resolved) = self.line_code_for(
+            let catalog = self.wire_catalog_code(
                 &id,
                 &name,
-                &rows,
-                length,
+                &phases,
+                &mut map,
+                &wire_positions,
                 length_stated,
-                &impedance_data,
+                frequency,
                 &mut line_codes,
-                &mut seen,
             );
+            let (code, resolved) = match catalog {
+                Some(found) => found,
+                None => self.line_code_for(
+                    &id,
+                    &name,
+                    &rows,
+                    length,
+                    length_stated,
+                    &impedance_data,
+                    &mut line_codes,
+                    &mut seen,
+                ),
+            };
             let conductors = map.len();
             let mut line = DistLine::new(name, from, to, map.clone(), map, code, length);
             if let Some(rated) = self.wire_rating(&id) {
@@ -1191,6 +1210,16 @@ impl<'a> Mapper<'a> {
                 );
             }
             lines.push(line);
+        }
+        if self.catalog_lines > 0 {
+            self.diags.record(Diagnostic::of(
+                &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                format!(
+                    "{} ACLineSegment(s) take their impedance from wire catalog entries; CIM \
+                     states no earth model, so OpenDSS's default (Deri, 100 ohm-m) applies",
+                    self.catalog_lines
+                ),
+            ));
         }
         (line_codes, lines)
     }
@@ -1336,8 +1365,7 @@ impl<'a> Mapper<'a> {
                      r and x",
                     self.label(pli)
                 ),
-                None => "states neither a PerLengthImpedance nor series r and x (wire geometry \
-                         is not calculated)"
+                None => "states neither a PerLengthImpedance, a WireSpacingInfo nor series r and x"
                     .to_owned(),
             };
             self.note(
@@ -1368,6 +1396,184 @@ impl<'a> Mapper<'a> {
         );
         line_codes.push(code);
         (name, resolved)
+    }
+
+    /// The line code of a segment that names a `WireSpacingInfo` and no
+    /// `PerLengthImpedance`, computed from its wire catalog entries by
+    /// [`super::wire_info::segment_impedance`]. `None` leaves the segment to
+    /// [`Self::line_code_for`]: it has a per-length impedance or no spacing,
+    /// or its catalog is refused but it states series totals. A refused
+    /// catalog without totals yields a zero placeholder, unresolved. A
+    /// neutral phase the segment's terminal phases do not state is Kron
+    /// reduced and leaves `map`.
+    #[allow(clippy::too_many_arguments)]
+    fn wire_catalog_code(
+        &mut self,
+        line: &str,
+        line_name: &str,
+        phases: &[(String, String)],
+        map: &mut Vec<String>,
+        wire_positions: &HashMap<String, Vec<String>>,
+        length_stated: bool,
+        frequency: f64,
+        line_codes: &mut Vec<DistLineCode>,
+    ) -> Option<(String, bool)> {
+        use super::wire_info::segment_impedance;
+        if self
+            .store
+            .refv(line, "ACLineSegment.PerLengthImpedance")
+            .is_some()
+        {
+            return None;
+        }
+        let spacing = self.target("ACLineSegment", line, "ACLineSegment.WireSpacingInfo")?;
+        let store = self.store;
+        let (records, conductors, terminal_neutral) =
+            self.catalog_conductors(line, &spacing, phases, wire_positions);
+        let spacing_label = self.label(&spacing);
+        let label = self.label(line);
+        let computed = if conductors.is_empty() {
+            Err("it states no ACLineSegmentPhase naming its wires".to_owned())
+        } else {
+            segment_impedance(&spacing_label, &records, &conductors, frequency)
+        };
+        let taken = self.taken.entry("linecode").or_default();
+        let name = super::wire_info::line_code_name(line_name, |candidate| {
+            !taken.insert(candidate.to_ascii_lowercase())
+        });
+        let n = phases.len().max(1);
+        match computed {
+            Ok(impedance) => {
+                self.catalog_lines += 1;
+                if !terminal_neutral {
+                    map.retain(|t| t != "4");
+                }
+                for note in &impedance.notes {
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_DEFAULTED,
+                        "ACLineSegment",
+                        line,
+                        note.clone(),
+                    );
+                }
+                line_codes.push(impedance.line_code(name.clone()));
+                if !length_stated {
+                    self.note(
+                        &C::READ_CIM_DIST_IMPEDANCE_UNRESOLVED,
+                        "ACLineSegment",
+                        line,
+                        format!(
+                            "ACLineSegment {label}: its wire catalog impedance is per meter and \
+                             needs a positive Conductor.length; the segment has no series \
+                             impedance"
+                        ),
+                    );
+                }
+                Some((name, length_stated))
+            }
+            Err(why) => {
+                let totals = ["ACLineSegment.r", "ACLineSegment.x"]
+                    .iter()
+                    .any(|key| store.f(line, key).is_some());
+                if totals {
+                    self.note(
+                        &C::READ_CIM_DIST_VALUE_UNSUPPORTED,
+                        "ACLineSegment",
+                        line,
+                        format!(
+                            "ACLineSegment {label}: its wire catalog impedance is refused ({why}); \
+                             its series r and x are used"
+                        ),
+                    );
+                    // The unused name is released to the series code.
+                    self.taken
+                        .entry("linecode")
+                        .or_default()
+                        .remove(&name.to_ascii_lowercase());
+                    return None;
+                }
+                self.note(
+                    &C::READ_CIM_DIST_IMPEDANCE_UNRESOLVED,
+                    "ACLineSegment",
+                    line,
+                    format!(
+                        "ACLineSegment {label}: its wire catalog impedance is refused: {why}; the \
+                         segment has no series impedance"
+                    ),
+                );
+                let zero = vec![vec![0.0; n]; n];
+                line_codes.push(DistLineCode::new(name.clone(), zero.clone(), zero));
+                Some((name, false))
+            }
+        }
+    }
+
+    /// The positions of `spacing` and the segment's conductors on them, in
+    /// conductor order, for [`Self::wire_catalog_code`]; and whether the
+    /// segment's terminals connect a neutral. The records read are consumed.
+    fn catalog_conductors<'s>(
+        &mut self,
+        line: &str,
+        spacing: &str,
+        phases: &[(String, String)],
+        wire_positions: &HashMap<String, Vec<String>>,
+    ) -> (
+        Vec<super::wire_info::Position>,
+        Vec<super::wire_info::Conductor<'s>>,
+        bool,
+    )
+    where
+        'a: 's,
+    {
+        use super::wire_info::{CATALOG_CLASSES, Catalog, Conductor, Position};
+        let store = self.store;
+        self.consumed.insert(spacing.to_owned());
+        let records: Vec<Position> = wire_positions
+            .get(spacing)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .map(|p| {
+                self.consumed.insert(p.clone());
+                Position {
+                    sequence: store.f(p, "WirePosition.sequenceNumber"),
+                    x: store.f(p, "WirePosition.xCoord"),
+                    y: store.f(p, "WirePosition.yCoord"),
+                }
+            })
+            .collect();
+        // A neutral the terminals connect stays a conductor of its own.
+        let terminal_neutral = self
+            .terminals(line)
+            .first()
+            .and_then(|t| store.enum_value(t, "Terminal.phases"))
+            .is_some_and(|code| code.contains('N'));
+        let mut conductors = Vec::with_capacity(phases.len());
+        for (terminal, child) in phases {
+            let catalog = self
+                .target(
+                    "ACLineSegmentPhase",
+                    child,
+                    "PowerSystemResource.AssetDatasheet",
+                )
+                .and_then(|info| {
+                    let class = store.class_of(&info)?.to_owned();
+                    CATALOG_CLASSES.contains(&class.as_str()).then(|| {
+                        self.consumed.insert(info.clone());
+                        Catalog {
+                            label: self.label(&info),
+                            class,
+                            value: Box::new(move |key| store.f(&info, key)),
+                        }
+                    })
+                });
+            conductors.push(Conductor {
+                label: self.label(child),
+                sequence: store.f(child, "ACLineSegmentPhase.sequenceNumber"),
+                catalog,
+                reduced: terminal == "4" && !terminal_neutral,
+            });
+        }
+        (records, conductors, terminal_neutral)
     }
 
     /// The ampacity of a segment's conductors, amps: the `ratedCurrent` of
@@ -2380,11 +2586,16 @@ impl<'a> Mapper<'a> {
                 )?;
                 clocks.push(clock);
             }
-            self.check_clocks("PowerTransformer", &id, &windings, &clocks, false)?;
+            let leadlag = self.check_clocks("PowerTransformer", &id, &windings, &clocks, false)?;
             let xsc = self.short_circuit_pct(&id, &ends, &windings, &meshes_of);
             let no_load = self.core_admittance(&ends, &windings, &cores_of);
             let name = self.unique_name("transformer", "PowerTransformer", &id);
             let mut transformer = DistTransformer::new(name, windings, xsc, phases);
+            if let Some(convention) = leadlag {
+                transformer
+                    .extras
+                    .insert("leadlag".into(), convention.into());
+            }
             transformer
                 .extras
                 .insert("cim_mrid".into(), id.clone().into());
@@ -2638,7 +2849,7 @@ impl<'a> Mapper<'a> {
             );
         }
         let stated: Vec<Option<f64>> = clocks.iter().map(serde_json::Value::as_f64).collect();
-        self.check_clocks("TransformerTank", tank, &windings, &stated, true)?;
+        let leadlag = self.check_clocks("TransformerTank", tank, &windings, &stated, true)?;
         let mut xsc = Vec::new();
         let mut missing = Vec::new();
         for i in 0..numbers.len() {
@@ -2676,6 +2887,9 @@ impl<'a> Mapper<'a> {
         let pt_name = self.store.name_of(pt);
         let mut transformer = DistTransformer::new(name, windings, xsc, phases);
         let extras = &mut transformer.extras;
+        if let Some(convention) = leadlag {
+            extras.insert("leadlag".into(), convention.into());
+        }
         extras.insert("cim_mrid".into(), tank.to_owned().into());
         extras.insert(
             "cim_end_mrids".into(),
@@ -2716,10 +2930,12 @@ impl<'a> Mapper<'a> {
         Ok(())
     }
 
-    /// Refuse a transformer whose stated winding clocks differ from the
-    /// clocks its winding layout represents. An end without a clock takes
-    /// the represented one, noted when `note_absent` (the tank form).
-    #[allow(clippy::float_cmp)] // clock numbers are discrete
+    /// Refuse a transformer whose stated winding clocks its winding layout
+    /// represents under neither `leadlag` convention
+    /// ([`crate::cim::clocks_leadlag`]), and return the convention they need:
+    /// `Some("euro")` when the low voltage winding leads. An end without a
+    /// clock takes the represented one, noted when `note_absent` (the tank
+    /// form).
     fn check_clocks(
         &mut self,
         class: &str,
@@ -2727,31 +2943,36 @@ impl<'a> Mapper<'a> {
         windings: &[DistWinding],
         clocks: &[Option<f64>],
         note_absent: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<&'static str>> {
         let three_phase = windings[0]
             .terminal_map
             .iter()
             .filter(|t| *t != "4")
             .count()
             == 3;
-        for (i, winding) in windings.iter().enumerate() {
-            let represented = tank_phase_clock(&windings[0], winding, three_phase);
-            match clocks[i] {
-                Some(clock) if clock != represented => {
-                    return Err(format_error(format!(
-                        "{class} {}: winding {} phase-angle clock {clock} is not represented by its winding layout (clock {represented}); electrical conversion refused",
-                        self.label(id),
-                        i + 1,
-                    )));
-                }
-                None if note_absent => {
+        let leadlag = crate::cim::clocks_leadlag(windings, clocks, three_phase).map_err(|m| {
+            format_error(format!(
+                "{class} {}: winding {} phase-angle clock {} is not represented by its winding layout (clock {}, or its European counterpart); electrical conversion refused",
+                self.label(id),
+                m.winding + 1,
+                m.stated,
+                m.represented,
+            ))
+        })?;
+        if note_absent {
+            let mut probe = DistTransformer::new("", windings.to_vec(), Vec::new(), 1);
+            if let Some(convention) = leadlag {
+                probe.extras.insert("leadlag".into(), convention.into());
+            }
+            for (i, clock) in clocks.iter().enumerate() {
+                if clock.is_none() {
+                    let represented = tank_phase_clock(&probe, i, three_phase).unwrap_or(f64::NAN);
                     self.note(&C::READ_CIM_DIST_VALUE_DEFAULTED, class, id,
                         format!("{class} {}: winding {} has no phase-angle clock; represented clock {represented} is assumed", self.label(id), i + 1));
                 }
-                _ => {}
             }
         }
-        Ok(())
+        Ok(leadlag)
     }
 
     /// A `TransformerTankInfo` and everything under it, read once however

@@ -497,18 +497,42 @@ pub fn calc_delta_direction(transformer: &DistTransformer, winding: usize) -> Re
 }
 
 /// The positive sequence phase shift of a two winding unit, degrees: the
-/// angle by which the first winding's voltage leads the second's. Zero when
-/// both windings share a connection; otherwise thirty degrees, signed by the
-/// DELTA winding's orientation ([`calc_delta_direction`]): `-30 d` when the
-/// first winding is the DELTA, `+30 d` when the second is.
+/// angle by which the first winding's voltage leads the second's
+/// ([`calc_winding_phase_shift`] of winding 1).
 ///
 /// # Errors
 /// Fewer than two windings, or what [`calc_delta_direction`] refuses.
 pub fn calc_transformer_phase_shift(transformer: &DistTransformer) -> Result<f64> {
-    let [a, b, ..] = transformer.windings.as_slice() else {
+    if transformer.windings.len() < 2 {
         return Err(unsupported(
             &transformer.name,
             "a phase shift needs two windings",
+        ));
+    }
+    calc_winding_phase_shift(transformer, 1)
+}
+
+/// The positive sequence phase shift of winding `winding` against the first
+/// winding, degrees: the angle by which the first winding's voltage leads
+/// it. Zero when both share a connection; otherwise thirty degrees, signed
+/// by the DELTA winding's orientation ([`calc_delta_direction`]): `-30 d`
+/// when the first winding is the DELTA, `+30 d` when `winding` is. The one
+/// vector group shift: [`calc_transformer_phase_shift`] and the CIM and
+/// MG-RAVENS phase clocks read it.
+///
+/// # Errors
+/// A winding outside the unit, or what [`calc_delta_direction`] refuses.
+pub(crate) fn calc_winding_phase_shift(
+    transformer: &DistTransformer,
+    winding: usize,
+) -> Result<f64> {
+    let (Some(a), Some(b)) = (
+        transformer.windings.first(),
+        transformer.windings.get(winding),
+    ) else {
+        return Err(unsupported(
+            &transformer.name,
+            format!("winding {} is outside the unit", winding + 1),
         ));
     };
     if a.conn == b.conn {
@@ -517,7 +541,7 @@ pub fn calc_transformer_phase_shift(transformer: &DistTransformer) -> Result<f64
     if a.conn == DistWindingConn::Delta {
         Ok(-30.0 * f64::from(calc_delta_direction(transformer, 0)?))
     } else {
-        Ok(30.0 * f64::from(calc_delta_direction(transformer, 1)?))
+        Ok(30.0 * f64::from(calc_delta_direction(transformer, winding)?))
     }
 }
 

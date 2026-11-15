@@ -31,7 +31,7 @@ pub(super) struct State {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct LineMatrices {
+pub(crate) struct LineMatrices {
     pub r: Vec<Vec<f64>>,
     pub x: Vec<Vec<f64>>,
     pub b: Vec<Vec<f64>>,

@@ -41,6 +41,7 @@
 //! [`MulticonductorNetwork`]: crate::MulticonductorNetwork
 
 mod read;
+pub(crate) mod wire_info;
 mod write;
 mod xml;
 
@@ -177,27 +178,105 @@ enum LeakageReading {
 
 const LEAKAGE_READING: LeakageReading = LeakageReading::Magnitude;
 
-/// The phase clock represented by the existing OpenDSS winding convention:
-/// equal three-phase connections are clock 0; mixed D/Y connections use the
-/// default lagging clock 1. A reversed single-phase neutral pair is clock 6.
-/// Other vector groups need an explicit orientation mapping and are refused.
-fn tank_phase_clock(
-    primary: &crate::DistWinding,
-    winding: &crate::DistWinding,
+/// The phase clock of winding `winding` against the first, as CIM states it
+/// (`phaseAngleClock`: the thirty degree steps by which the end lags end
+/// 1). A polyphase unit's clock is its vector group shift
+/// ([`crate::transformer::calc_winding_phase_shift`], the delta orientation
+/// the physics stamps), so a delta–wye pair is clock 1 when the high voltage
+/// winding leads (OpenDSS's default `leadlag`) and clock 11 when the low
+/// voltage winding leads (`leadlag` `lead` or `euro`). A single phase
+/// winding whose neutral pair is reversed against the first is clock 6. The
+/// CIM and MG-RAVENS readers and writers all check and write clocks through
+/// this.
+///
+/// # Errors
+/// What [`crate::transformer::calc_winding_phase_shift`] refuses: a winding
+/// outside the unit or an unknown `leadlag` convention.
+pub(crate) fn tank_phase_clock(
+    transformer: &crate::DistTransformer,
+    winding: usize,
     three_phase: bool,
-) -> f64 {
+) -> Result<f64, powerio_core::Error> {
     if three_phase {
-        if primary.conn == winding.conn {
-            0.0
-        } else {
-            1.0
-        }
-    } else if (primary.terminal_map.first().is_some_and(|t| t == "4"))
-        != (winding.terminal_map.first().is_some_and(|t| t == "4"))
+        let shift = crate::transformer::calc_winding_phase_shift(transformer, winding)?;
+        return Ok((shift / 30.0).rem_euclid(12.0));
+    }
+    let neutral_first = |w: Option<&crate::DistWinding>| {
+        w.and_then(|w| w.terminal_map.first())
+            .is_some_and(|t| t == "4")
+    };
+    if neutral_first(transformer.windings.first())
+        == neutral_first(transformer.windings.get(winding))
     {
-        6.0
+        Ok(0.0)
     } else {
-        0.0
+        Ok(6.0)
+    }
+}
+
+/// Refuse a network holding a transformer whose phase clocks are unknown
+/// (an unknown `leadlag` convention on a delta–wye unit): the CIM and
+/// MG-RAVENS writers state every winding's clock, and dropping the unit
+/// would disconnect the feeder.
+pub(crate) fn require_phase_clocks(
+    net: &crate::MulticonductorNetwork,
+) -> Result<(), powerio_core::Error> {
+    for transformer in net.transformers() {
+        for winding in 1..transformer.windings.len() {
+            crate::transformer::calc_winding_phase_shift(transformer, winding)?;
+        }
+    }
+    Ok(())
+}
+
+/// A stated clock the winding layout cannot represent under either
+/// `leadlag` convention.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ClockMismatch {
+    /// The winding, zero based.
+    pub winding: usize,
+    /// The clock the source states.
+    pub stated: f64,
+    /// The clock the layout represents under OpenDSS's default convention.
+    pub represented: f64,
+}
+
+/// The `leadlag` convention a tank's stated clocks need ([`tank_phase_clock`]):
+/// `None` when the default (the high voltage winding leads) represents
+/// every stated clock, `Some("euro")` when only the European convention
+/// does, else the first clock neither represents. An absent clock takes the
+/// represented one.
+#[allow(clippy::float_cmp)] // clock numbers are discrete
+pub(crate) fn clocks_leadlag(
+    windings: &[crate::DistWinding],
+    stated: &[Option<f64>],
+    three_phase: bool,
+) -> Result<Option<&'static str>, ClockMismatch> {
+    let mut probe = crate::DistTransformer::new(
+        "",
+        windings.to_vec(),
+        Vec::new(),
+        if three_phase { 3 } else { 1 },
+    );
+    let mismatch = |probe: &crate::DistTransformer| {
+        stated.iter().enumerate().find_map(|(winding, clock)| {
+            let clock = (*clock)?;
+            // The probe states no unknown convention, so the clock exists.
+            let represented = tank_phase_clock(probe, winding, three_phase).unwrap_or(f64::NAN);
+            (clock != represented).then_some(ClockMismatch {
+                winding,
+                stated: clock,
+                represented,
+            })
+        })
+    };
+    let Some(default) = mismatch(&probe) else {
+        return Ok(None);
+    };
+    probe.extras.insert("leadlag".into(), "euro".into());
+    match mismatch(&probe) {
+        None => Ok(Some("euro")),
+        Some(_) => Err(default),
     }
 }
 
@@ -243,7 +322,21 @@ fn short_circuit_test_pct(
 /// A no-load test's loss (kW) and exciting current (percent of rated
 /// current at `base_power`) as the OpenDSS `(%noloadloss, %imag)` on winding
 /// 1's rating `s_1`. `None` when a power is not positive.
-fn no_load_test_pct(loss_kw: f64, exciting: f64, base_power: f64, s_1: f64) -> Option<(f64, f64)> {
+///
+/// The one reading of a `NoLoadTest`, for distribution CIM and MG-RAVENS
+/// alike. CIM100 (and the MG-RAVENS profile built on it) types
+/// `NoLoadTest.loss` as `KiloActivePower`, so the loss is in kW, and
+/// `excitingCurrent` is the whole exciting current, whose in-phase part is
+/// the core loss: OpenDSS's magnetizing `%imag` is the quadrature part,
+/// `sqrt(iexc² − loss²)`, as the MG-RAVENS exporter writes
+/// `excitingCurrent = sqrt(%imag² + %noloadloss²)`. A loss above the
+/// exciting current keeps the exciting current.
+pub(crate) fn no_load_test_pct(
+    loss_kw: f64,
+    exciting: f64,
+    base_power: f64,
+    s_1: f64,
+) -> Option<(f64, f64)> {
     if base_power <= 0.0 || s_1 <= 0.0 {
         return None;
     }
@@ -255,6 +348,49 @@ fn no_load_test_pct(loss_kw: f64, exciting: f64, base_power: f64, s_1: f64) -> O
         iexc
     };
     Some((loss, imag))
+}
+
+/// The `NoLoadTest` (loss in kW, exciting current in percent) on a test
+/// base of winding 1's rating `s_1` that [`no_load_test_pct`] reads back as
+/// `(loss_pct, imag)` exactly: the inverse both writers state.
+pub(crate) fn no_load_test_values(loss_pct: f64, imag: f64, s_1: f64) -> (f64, f64) {
+    let loss = exact_preimage(loss_pct, loss_pct * s_1 / 100.0 / 1000.0, |l| {
+        no_load_test_pct(l, 0.0, s_1, s_1).map_or(f64::NAN, |p| p.0)
+    });
+    let read_loss = no_load_test_pct(loss, 0.0, s_1, s_1).map_or(0.0, |p| p.0);
+    let forward = if read_loss > 0.0 {
+        imag.hypot(read_loss)
+    } else {
+        imag
+    };
+    let exciting = exact_preimage(imag, forward, |e| {
+        no_load_test_pct(loss, e, s_1, s_1).map_or(f64::NAN, |p| p.1)
+    });
+    (loss, exciting)
+}
+
+/// A value near `forward` that the reader's `inverse` maps back to `target`
+/// exactly, so a write, read, write cycle is byte stable. Unit conversions
+/// round, so the plain forward value can come back one bit away; the search
+/// steps outward a float at a time and keeps `forward` when no nearby value
+/// is exact.
+#[allow(clippy::float_cmp)] // exact equality is the property sought
+pub(crate) fn exact_preimage(target: f64, forward: f64, inverse: impl Fn(f64) -> f64) -> f64 {
+    if !forward.is_finite() || inverse(forward) == target {
+        return forward;
+    }
+    let (mut below, mut above) = (forward, forward);
+    for _ in 0..32 {
+        below = below.next_down();
+        above = above.next_up();
+        if inverse(below) == target {
+            return below;
+        }
+        if inverse(above) == target {
+            return above;
+        }
+    }
+    forward
 }
 
 #[cfg(test)]

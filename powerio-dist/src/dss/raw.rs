@@ -1640,6 +1640,7 @@ impl<L: Loader> Executor<'_, L> {
                 | "linecode"
                 | "wiredata"
                 | "cndata"
+                | "tsdata"
                 | "linegeometry"
                 | "linespacing"
                 | "xfmrcode"
@@ -1651,7 +1652,7 @@ impl<L: Loader> Executor<'_, L> {
             );
             if matches!(
                 self.raw.objects[idx].class.as_str(),
-                "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
+                "line" | "wiredata" | "cndata" | "tsdata" | "linegeometry" | "linespacing"
             ) {
                 self.raw
                     .geometry_timeline
@@ -1928,7 +1929,7 @@ impl<L: Loader> Executor<'_, L> {
                 self.raw.objects[idx].edits.extend(bounds);
                 if matches!(
                     class.as_str(),
-                    "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
+                    "line" | "wiredata" | "cndata" | "tsdata" | "linegeometry" | "linespacing"
                 ) {
                     self.raw
                         .geometry_timeline
@@ -1956,9 +1957,9 @@ impl<L: Loader> Executor<'_, L> {
             "linegeometry" | "line"
         ) && matches!(
             p.name.as_deref(),
-            Some("wire" | "wires" | "cncable" | "cncables")
+            Some("wire" | "wires" | "cncable" | "cncables" | "tscable" | "tscables")
         ) {
-            let names = if matches!(p.name.as_deref(), Some("wire" | "cncable")) {
+            let names = if matches!(p.name.as_deref(), Some("wire" | "cncable" | "tscable")) {
                 vec![p.value.text.clone()]
             } else {
                 p.value.to_string_list(Some(&self.raw.vars))
@@ -1976,8 +1977,11 @@ impl<L: Loader> Executor<'_, L> {
                 return false;
             }
             self.raw.total_props += names.len();
-            let class = if p.name.as_deref().unwrap().starts_with("cn") {
+            let name = p.name.as_deref().unwrap();
+            let class = if name.starts_with("cn") {
                 "cndata"
+            } else if name.starts_with("ts") {
+                "tsdata"
             } else {
                 "wiredata"
             };
@@ -2139,7 +2143,7 @@ impl<L: Loader> Executor<'_, L> {
             self.raw.objects[idx].props.push(p);
             if matches!(
                 self.raw.objects[idx].class.as_str(),
-                "line" | "wiredata" | "cndata" | "linegeometry" | "linespacing"
+                "line" | "wiredata" | "cndata" | "tsdata" | "linegeometry" | "linespacing"
             ) {
                 self.raw
                     .geometry_timeline
