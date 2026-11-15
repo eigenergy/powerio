@@ -115,11 +115,11 @@ impl PowerFlowJacobian {
         // this Jacobian; every refresh after that trusts the same pairing
         // and only asserts it in debug builds.
         let voltages = point_voltages(instance, point, &self.bus_ids, &view, false)?;
+        let injection = calc_injection(&self.admittance_rows, &voltages.magnitude, &voltages.angle);
         fill_values(
             &mut self.matrix,
             &self.admittance_rows,
-            &voltages.magnitude,
-            &voltages.angle,
+            &injection,
             self.coordinates,
         );
         Ok(())
@@ -165,14 +165,61 @@ impl PowerFlowJacobian {
         }
         check_voltage_lengths(n, vm, va)?;
         let mut jacobian = assemble(&admittance.g, &admittance.b, bus_ids, coordinates, None);
+        let injection = calc_injection(&jacobian.admittance_rows, vm, va);
         fill_values(
             &mut jacobian.matrix,
             &jacobian.admittance_rows,
-            vm,
-            va,
+            &injection,
             coordinates,
         );
         Ok(jacobian)
+    }
+
+    /// The bus power injection `S = diag(V) conj(Y V)` over this Jacobian's
+    /// admittance at the voltages `vm` (per unit) and `va` (radians) in bus
+    /// row order: the power flow mismatch's network term. Pass the result to
+    /// [`update_from_injection`](Self::update_from_injection) to refresh the
+    /// Jacobian at the same voltages without forming the injection again, so
+    /// a Newton step computes it once for the mismatch and the Jacobian.
+    ///
+    /// # Errors
+    /// `vm` or `va` whose length is not the bus count.
+    pub fn calc_bus_power_injection(
+        &self,
+        vm: &[f64],
+        va: &[f64],
+    ) -> Result<BusPowerInjection, Error> {
+        check_voltage_lengths(self.bus_ids.len(), vm, va)?;
+        Ok(calc_injection(&self.admittance_rows, vm, va))
+    }
+
+    /// Refresh the numerical values at the voltages an injection from
+    /// [`calc_bus_power_injection`](Self::calc_bus_power_injection) was
+    /// formed at, reusing its currents and powers. The injection must come
+    /// from this Jacobian (or one assembled over the same admittance); the
+    /// values are those [`update_from_voltages`](Self::update_from_voltages)
+    /// fills at the same voltages.
+    ///
+    /// # Errors
+    /// An injection whose bus count is not this Jacobian's.
+    pub fn update_from_injection(&mut self, injection: &BusPowerInjection) -> Result<(), Error> {
+        if injection.p.len() != self.bus_ids.len() {
+            return Err(Error::new(
+                &codes::BUILD_OPERATING_POINT_SHAPE_MISMATCH,
+                format!(
+                    "an injection over {} buses for a Jacobian over {}",
+                    injection.p.len(),
+                    self.bus_ids.len()
+                ),
+            ));
+        }
+        fill_values(
+            &mut self.matrix,
+            &self.admittance_rows,
+            injection,
+            self.coordinates,
+        );
+        Ok(())
     }
 
     /// Refresh the numerical values at the voltages `vm` (per unit) and `va`
@@ -182,15 +229,8 @@ impl PowerFlowJacobian {
     /// # Errors
     /// `vm` or `va` whose length is not the bus count.
     pub fn update_from_voltages(&mut self, vm: &[f64], va: &[f64]) -> Result<(), Error> {
-        check_voltage_lengths(self.bus_ids.len(), vm, va)?;
-        fill_values(
-            &mut self.matrix,
-            &self.admittance_rows,
-            vm,
-            va,
-            self.coordinates,
-        );
-        Ok(())
+        let injection = self.calc_bus_power_injection(vm, va)?;
+        self.update_from_injection(&injection)
     }
 }
 
@@ -198,7 +238,9 @@ impl PowerFlowJacobian {
 /// into active and reactive parts `(p, q)`, at the voltages `vm` (per unit)
 /// and `va` (radians) in the admittance matrix's bus order. The injections
 /// are the ones the Jacobian of [`PowerFlowJacobian::from_admittance`]
-/// differentiates.
+/// differentiates, formed by the same calculation as
+/// [`PowerFlowJacobian::calc_bus_power_injection`]; a solver that holds a
+/// Jacobian calls that method instead, which reuses its merged admittance.
 ///
 /// # Errors
 /// An admittance matrix that is not square, or voltages whose length is not
@@ -216,34 +258,8 @@ pub fn calc_bus_power_injection(
         ));
     }
     check_voltage_lengths(n, vm, va)?;
-    let (vr, vi): (Vec<f64>, Vec<f64>) = (0..n)
-        .map(|k| {
-            let (sin, cos) = va[k].sin_cos();
-            (vm[k] * cos, vm[k] * sin)
-        })
-        .unzip();
-    // I = (G + jB) V, read straight from the two CSR matrices.
-    let mut current_re = vec![0.0; n];
-    let mut current_im = vec![0.0; n];
-    for (k, row) in admittance.g.outer_iterator().enumerate() {
-        for (m, &g) in row.iter() {
-            current_re[k] += g * vr[m];
-            current_im[k] += g * vi[m];
-        }
-    }
-    for (k, row) in admittance.b.outer_iterator().enumerate() {
-        for (m, &b) in row.iter() {
-            current_re[k] -= b * vi[m];
-            current_im[k] += b * vr[m];
-        }
-    }
-    let p = (0..n)
-        .map(|k| vr[k] * current_re[k] + vi[k] * current_im[k])
-        .collect();
-    let q = (0..n)
-        .map(|k| vi[k] * current_re[k] - vr[k] * current_im[k])
-        .collect();
-    Ok((p, q))
+    let injection = calc_injection(&merge_admittance_rows(&admittance.g, &admittance.b), vm, va);
+    Ok((injection.p, injection.q))
 }
 
 fn check_voltage_lengths(n: usize, vm: &[f64], va: &[f64]) -> Result<(), Error> {
@@ -348,11 +364,15 @@ pub fn calc_power_flow_jacobian(
     })?;
 
     let mut jacobian = assemble(&parts.g, &parts.b, bus_ids, coordinates, Some(index_core));
-    fill_values(
-        &mut jacobian.matrix,
+    let injection = calc_injection(
         &jacobian.admittance_rows,
         &voltages.magnitude,
         &voltages.angle,
+    );
+    fill_values(
+        &mut jacobian.matrix,
+        &jacobian.admittance_rows,
+        &injection,
         coordinates,
     );
     Ok(jacobian)
@@ -448,27 +468,28 @@ fn point_voltages(
     Ok(Voltages { magnitude, angle })
 }
 
-/// Fill every value of the assembled structure at the given voltages. The
-/// fill walks each Jacobian row beside its merged admittance row (the layout
-/// [`assemble`] writes), so the cost follows the nonzero count, never the
-/// dense square, and needs one sine and cosine per bus, not per entry.
+/// Fill every value of the assembled structure at the voltages `injection`
+/// was formed at. The fill walks each Jacobian row beside its merged
+/// admittance row (the layout [`assemble`] writes), so the cost follows the
+/// nonzero count, never the dense square, and reuses the injection's one
+/// sine and cosine per bus.
 #[allow(clippy::many_single_char_names)] // k/m/n and G/B are the textbook notation
 fn fill_values(
     matrix: &mut SparseMatrix,
     admittance_rows: &[Vec<(usize, f64, f64)>],
-    vm: &[f64],
-    va: &[f64],
+    injection: &BusPowerInjection,
     coordinates: VoltageCoordinates,
 ) {
-    let n = vm.len();
-    let Injection {
+    let BusPowerInjection {
+        p,
+        q,
+        vm,
         cos,
         sin,
         current_re,
         current_im,
-        p,
-        q,
-    } = calc_injection(admittance_rows, vm, va);
+    } = injection;
+    let n = vm.len();
     let half = matrix.nnz() / 2;
     let data = matrix.data_mut();
     let (active, reactive) = data.split_at_mut(half);
@@ -564,18 +585,34 @@ fn merge_admittance_rows(
     admittance_rows
 }
 
-/// Current injection `I = Y V` and complex power `S = diag(V) conj(I)` at
-/// every bus, with the per bus angle cosines and sines they were built from.
-struct Injection {
+/// The bus power injection `S = diag(V) conj(Y V)` at one voltage point:
+/// `p` and `q` in bus row order, per unit on the admittance's base. It also
+/// keeps the voltages, per bus angle cosines and sines, and currents
+/// `I = Y V` it was formed from, so
+/// [`PowerFlowJacobian::update_from_injection`] refreshes the Jacobian at the
+/// same point without recomputing them.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct BusPowerInjection {
+    /// Active power injection per bus.
+    pub p: Vec<f64>,
+    /// Reactive power injection per bus.
+    pub q: Vec<f64>,
+    vm: Vec<f64>,
     cos: Vec<f64>,
     sin: Vec<f64>,
     current_re: Vec<f64>,
     current_im: Vec<f64>,
-    p: Vec<f64>,
-    q: Vec<f64>,
 }
 
-fn calc_injection(admittance_rows: &[Vec<(usize, f64, f64)>], vm: &[f64], va: &[f64]) -> Injection {
+/// The one calculation of `I = Y V` and `S = diag(V) conj(I)` over merged
+/// admittance rows: every injection this module reports or differentiates
+/// comes from here.
+fn calc_injection(
+    admittance_rows: &[Vec<(usize, f64, f64)>],
+    vm: &[f64],
+    va: &[f64],
+) -> BusPowerInjection {
     let n = vm.len();
     let (sin, cos): (Vec<f64>, Vec<f64>) = va.iter().map(|angle| angle.sin_cos()).unzip();
     let vr: Vec<f64> = (0..n).map(|k| vm[k] * cos[k]).collect();
@@ -598,12 +635,13 @@ fn calc_injection(admittance_rows: &[Vec<(usize, f64, f64)>], vm: &[f64], va: &[
     let q: Vec<f64> = (0..n)
         .map(|k| vi[k] * current_re[k] - vr[k] * current_im[k])
         .collect();
-    Injection {
+    BusPowerInjection {
+        p,
+        q,
+        vm: vm.to_vec(),
         cos,
         sin,
         current_re,
         current_im,
-        p,
-        q,
     }
 }

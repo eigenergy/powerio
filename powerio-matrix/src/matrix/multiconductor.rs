@@ -56,27 +56,13 @@ pub struct MulticonductorNodeIndex {
     grounded: BTreeSet<(String, String)>,
 }
 
-fn find(parent: &mut [usize], node: usize) -> usize {
-    let mut root = node;
-    while parent[root] != root {
-        root = parent[root];
-    }
-    let mut walk = node;
-    while parent[walk] != root {
-        let next = parent[walk];
-        parent[walk] = root;
-        walk = next;
-    }
-    root
-}
-
 impl MulticonductorNodeIndex {
     /// Build the index: bus table order, each bus's stated terminal order,
     /// with terminal `0` and explicitly grounded terminals excluded from the
     /// unknowns. Closed switches merge their paired terminals into one
     /// node — the first spelling encountered names the merged node.
     pub fn build(network: &MulticonductorNetwork) -> Result<Self> {
-        // Union-find over provisional slots, one per ungrounded terminal.
+        // Components over provisional slots, one per ungrounded terminal.
         let mut provisional: Vec<(String, String)> = Vec::new();
         let mut slot: BTreeMap<(String, String), usize> = BTreeMap::new();
         let mut grounded: BTreeSet<(String, String)> = BTreeSet::new();
@@ -95,7 +81,8 @@ impl MulticonductorNodeIndex {
         // Every union runs before any group is marked grounded, so a
         // grounding is a property of the finished group and the index is
         // identical under any declaration order of closed switches.
-        let mut parent: Vec<usize> = (0..provisional.len()).collect();
+        let mut joined_from: Vec<usize> = Vec::new();
+        let mut joined_to: Vec<usize> = Vec::new();
         let mut ground_touched: Vec<usize> = Vec::new();
         for switch in network.switches().iter().filter(|switch| !switch.open) {
             for (from, to) in switch
@@ -107,10 +94,8 @@ impl MulticonductorNodeIndex {
                 let to_key = (switch.bus_to.clone(), to.clone());
                 match (slot.get(&from_key), slot.get(&to_key)) {
                     (Some(&a), Some(&b)) => {
-                        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                        if ra != rb {
-                            parent[ra.max(rb)] = ra.min(rb);
-                        }
+                        joined_from.push(a);
+                        joined_to.push(b);
                     }
                     // A closed switch onto ground grounds the other side's
                     // whole finished group.
@@ -129,25 +114,28 @@ impl MulticonductorNodeIndex {
                 }
             }
         }
-        let grounded_roots: BTreeSet<usize> = ground_touched
+        // Groups are labeled in order of their first slot, so the first
+        // spelling in table order names a merged node; the one component
+        // labeling in powerio-tx joins them.
+        let labels =
+            powerio_tx::calc_dense_island_labels(provisional.len(), &joined_from, &joined_to);
+        let grounded_labels: BTreeSet<usize> = ground_touched
             .into_iter()
-            .map(|slot| find(&mut parent, slot))
+            .map(|slot| labels[slot])
             .collect();
 
-        // Dense rows: one per surviving root, in provisional (table) order.
-        let mut dense_of_root: BTreeMap<usize, usize> = BTreeMap::new();
+        // Dense rows: one per surviving group, in provisional (table) order.
+        let mut dense_of_label: BTreeMap<usize, usize> = BTreeMap::new();
         let mut nodes = Vec::new();
         let mut position = BTreeMap::new();
-        for index in 0..provisional.len() {
-            let root = find(&mut parent, index);
-            // A root whose group touched ground through a switch grounds the
-            // whole group.
-            if grounded_roots.contains(&root) {
+        for (index, &label) in labels.iter().enumerate() {
+            // A group that touched ground through a switch is grounded whole.
+            if grounded_labels.contains(&label) {
                 grounded.insert(provisional[index].clone());
                 continue;
             }
-            let dense = *dense_of_root.entry(root).or_insert_with(|| {
-                let (bus, terminal) = provisional[root].clone();
+            let dense = *dense_of_label.entry(label).or_insert_with(|| {
+                let (bus, terminal) = provisional[index].clone();
                 nodes.push(DistNode { bus, terminal });
                 nodes.len() - 1
             });

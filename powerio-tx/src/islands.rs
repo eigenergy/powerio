@@ -244,33 +244,42 @@ impl BalancedNetwork {
             .filter(|(_, bus)| bus.kind != BusType::Isolated)
             .map(|(index, bus)| (bus.id, index))
             .collect();
-        let mut sets = crate::union_find::UnionFind::new(buses.len());
-        let mut join = |a: BusId, b: BusId| {
-            if let (Some(&i), Some(&j)) = (index_of.get(&a), index_of.get(&b)) {
-                sets.union(i, j);
-            }
-        };
-        for branch in self.branches().iter().filter(|branch| branch.in_service) {
-            join(branch.from, branch.to);
-        }
-        for switch in self.switches().iter().filter(|switch| switch.closed) {
-            join(switch.from, switch.to);
-        }
-        for transformer in self.transformers_3w().iter().filter(|t| t.in_service) {
-            let connected: Vec<BusId> = transformer
-                .windings
-                .iter()
-                .zip(transformer.winding_in_service())
-                .filter(|(_, connected)| *connected)
-                .map(|(winding, _)| winding.bus)
-                .collect();
-            for (i, &a) in connected.iter().enumerate() {
-                for &b in &connected[i + 1..] {
-                    join(a, b);
-                }
-            }
-        }
-        let labels = sets.into_labeling();
+        let index = |bus: BusId| index_of.get(&bus).copied();
+        let branches = self
+            .branches()
+            .iter()
+            .filter(|branch| branch.in_service)
+            .map(|branch| (branch.from, branch.to));
+        let switches = self
+            .switches()
+            .iter()
+            .filter(|switch| switch.closed)
+            .map(|switch| (switch.from, switch.to));
+        let windings = self
+            .transformers_3w()
+            .iter()
+            .filter(|t| t.in_service)
+            .flat_map(|transformer| {
+                let connected: Vec<BusId> = transformer
+                    .windings
+                    .iter()
+                    .zip(transformer.winding_in_service())
+                    .filter(|(_, connected)| *connected)
+                    .map(|(winding, _)| winding.bus)
+                    .collect();
+                connected
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, &a)| connected[i + 1..].iter().map(move |&b| (a, b)))
+                    .collect::<Vec<_>>()
+            });
+        let labels = crate::union_find::calc_component_labels(
+            buses.len(),
+            branches
+                .chain(switches)
+                .chain(windings)
+                .filter_map(|(a, b)| Some((index(a)?, index(b)?))),
+        );
 
         let mut by_root: HashMap<usize, Island> = HashMap::new();
         let mut isolated = Vec::new();
@@ -408,41 +417,46 @@ impl BalancedNetwork {
                 });
                 continue;
             }
+            // Every policy but `DesignateMissing` counts only the stated
+            // references that host an in-service generator, demoting the
+            // others to PQ first.
+            let supplied = if policy == IslandReferencePolicy::DesignateMissing {
+                island.references.clone()
+            } else {
+                let supplied = island.supplied_references(self.generators());
+                let unsupplied: Vec<BusId> = island
+                    .references
+                    .iter()
+                    .copied()
+                    .filter(|bus| !supplied.contains(bus))
+                    .collect();
+                if !unsupplied.is_empty() {
+                    diagnostics.push(Diagnostic::of(
+                        &codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
+                        format!(
+                            "the island of {} bus(es) ({}) states reference bus(es) {} that \
+                             host no in-service generator and cannot balance it; they were \
+                             demoted to PQ",
+                            island.buses.len(),
+                            bus_list(&island.buses),
+                            bus_list(&unsupplied)
+                        ),
+                    ));
+                    demoted.extend(unsupplied.iter().map(|&bus| (bus, BusType::Pq)));
+                }
+                supplied
+            };
             if matches!(
                 policy,
                 IslandReferencePolicy::DesignateMissing
                     | IslandReferencePolicy::DesignateMissingSupplied
             ) {
-                let (kept, missing) = if policy == IslandReferencePolicy::DesignateMissing {
-                    (island.references.clone(), "states no reference bus")
+                let missing = if policy == IslandReferencePolicy::DesignateMissing {
+                    "states no reference bus"
                 } else {
-                    let supplied = island.supplied_references(self.generators());
-                    let unsupplied: Vec<BusId> = island
-                        .references
-                        .iter()
-                        .copied()
-                        .filter(|bus| !supplied.contains(bus))
-                        .collect();
-                    if !unsupplied.is_empty() {
-                        diagnostics.push(Diagnostic::of(
-                            &codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
-                            format!(
-                                "the island of {} bus(es) ({}) states reference bus(es) {} that \
-                                 host no in-service generator and cannot balance it; they were \
-                                 demoted to PQ",
-                                island.buses.len(),
-                                bus_list(&island.buses),
-                                bus_list(&unsupplied)
-                            ),
-                        ));
-                        demoted.extend(unsupplied.iter().map(|&bus| (bus, BusType::Pq)));
-                    }
-                    (
-                        supplied,
-                        "states no reference bus that hosts an in-service generator",
-                    )
+                    "states no reference bus that hosts an in-service generator"
                 };
-                if kept.is_empty()
+                if supplied.is_empty()
                     && let Some(bus) = largest_generator_bus(self.generators(), &island.generators)
                 {
                     diagnostics.push(Diagnostic::of(
@@ -457,26 +471,6 @@ impl BalancedNetwork {
                     designated.push(bus);
                 }
                 continue;
-            }
-            let supplied = island.supplied_references(self.generators());
-            let unsupplied: Vec<BusId> = island
-                .references
-                .iter()
-                .copied()
-                .filter(|bus| !supplied.contains(bus))
-                .collect();
-            if !unsupplied.is_empty() {
-                diagnostics.push(Diagnostic::of(
-                    &codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
-                    format!(
-                        "the island of {} bus(es) ({}) states reference bus(es) {} that host no \
-                         in-service generator and cannot balance it; they were demoted to PQ",
-                        island.buses.len(),
-                        bus_list(&island.buses),
-                        bus_list(&unsupplied)
-                    ),
-                ));
-                demoted.extend(unsupplied.iter().map(|&bus| (bus, BusType::Pq)));
             }
             let Some(kept) = island.calc_reference_choice(self.generators()) else {
                 continue;

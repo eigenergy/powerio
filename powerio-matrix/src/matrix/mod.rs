@@ -24,7 +24,10 @@ mod tests;
 pub use adjacency::calc_adjacency_matrix;
 pub use bdoubleprime::calc_bdoubleprime_matrix;
 pub use bprime::calc_bprime_matrix;
-pub(crate) use incidence::{IncidenceParts, build_incidence};
+pub(crate) use incidence::{
+    IncidenceParts, assemble_bus_branch_incidence, assemble_bus_indicator, build_incidence,
+    calc_dc_branch_flow, calc_dc_flow_offset,
+};
 pub use incidence::{calc_diagonal, calc_solver_branch_flow_matrix, calc_susceptance_diagonal};
 pub use lacpf::calc_lacpf_matrix;
 pub use laplacian::{
@@ -42,7 +45,10 @@ pub use ybus::{YbusParts, calc_admittance_matrix};
 // Crate-internal: the gridfm columnar export and the stated-state balance reuse
 // the per-branch admittance and flow kernels so their branch powers and Y_bus
 // agree with `calc_admittance_matrix` by construction.
-pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
+pub(crate) use ybus::{
+    AdmittanceStamp, YbusFlags, branch_admittance, branch_flows, calc_folded_self_loop,
+    calc_pi_admittance,
+};
 
 use sprs::CsMat;
 

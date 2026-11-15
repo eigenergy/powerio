@@ -83,7 +83,8 @@ mod stated_state;
 pub mod synth;
 
 pub use ac_jacobian::{
-    PowerFlowJacobian, VoltageCoordinates, calc_bus_power_injection, calc_power_flow_jacobian,
+    BusPowerInjection, PowerFlowJacobian, VoltageCoordinates, calc_bus_power_injection,
+    calc_power_flow_jacobian,
 };
 pub use acopf::{
     AcBranchData, AcBranchFlows, AcBusData, AcGeneratorData, AcOpfAssemblyOptions,
@@ -95,7 +96,8 @@ pub use dc_operators::{DcOperatorOptions, DcOperators, ReferenceConstrainedSyste
 pub use dcopf::{
     DcBranchParameters, DcGeneratorParameters, DcOpfAssemblyOptions, DcOpfBundleMetadata,
     DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorParameters,
-    Units, build_dc_opf_preparation, calc_dc_opf_matrices, emit_dcopf_bundle,
+    SynthesizedLimitWindow, Units, build_dc_opf_preparation, calc_dc_opf_matrices,
+    emit_dcopf_bundle,
 };
 pub use lindist3flow::{
     AffineScalarCoefficients, ConnectionPowerMap, CrossVoltageCoefficients, LinDist3FlowLineData,

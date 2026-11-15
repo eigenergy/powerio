@@ -113,22 +113,84 @@ pub(crate) fn build_incidence(
     }
 
     // Pass 2: assemble.
-    let m = cols.len();
-    let mut a = CooBuilder::with_capacity_rect(n, m, 2 * m);
-    let mut b = Vec::with_capacity(m);
-    let mut branch_indices = Vec::with_capacity(m);
-    for (k, col) in cols.iter().enumerate() {
-        a.add(col.i, k, 1.0);
-        a.add(col.j, k, -1.0);
-        b.push(col.b_e);
-        branch_indices.push(col.branch_index);
-    }
+    let a = assemble_bus_branch_incidence(n, cols.iter().map(|col| (col.i, col.j)));
+    let b = cols.iter().map(|col| col.b_e).collect();
+    let branch_indices = cols.iter().map(|col| col.branch_index).collect();
 
     Ok(IncidenceParts {
-        a: a.finish_csr(),
+        a,
         b,
         branch_indices,
     })
+}
+
+/// The signed bus by branch incidence matrix over `n` buses, `n × m` CSR for
+/// the `m` columns `endpoints` yields: column `e` has `+1` at its from bus
+/// and `-1` at its to bus. A self-loop column (`from == to`) sums to an empty
+/// column. Within each bus row the columns ascend.
+///
+/// Every incidence matrix in the crate (the sensitivity factor, the DC
+/// operators, a DC preparation's) is this one counting sort straight into
+/// CSR: one pass counts each bus row, a second places the columns.
+///
+/// # Panics
+/// Panics if an endpoint is `>= n`.
+pub(crate) fn assemble_bus_branch_incidence(
+    n: usize,
+    endpoints: impl ExactSizeIterator<Item = (usize, usize)> + Clone,
+) -> CsMat<f64> {
+    assemble_by_columns(
+        n,
+        endpoints.map(|(from, to)| {
+            if from == to {
+                [None, None]
+            } else {
+                [Some((from, 1.0)), Some((to, -1.0))]
+            }
+        }),
+    )
+}
+
+/// The bus by element indicator over `n` buses, `n × k` CSR with a `1` at
+/// row `bus_of[e]` of column `e`: the generator to bus map `Cg` of a
+/// preparation.
+///
+/// # Panics
+/// Panics if a bus is `>= n`.
+pub(crate) fn assemble_bus_indicator(n: usize, bus_of: &[usize]) -> CsMat<f64> {
+    assemble_by_columns(n, bus_of.iter().map(|&bus| [Some((bus, 1.0))]))
+}
+
+/// CSR over `n` rows from columns given in order, each with at most `K`
+/// entries in distinct rows, by a counting sort: the row pointer from one
+/// count pass, then the columns placed in ascending order.
+fn assemble_by_columns<const K: usize>(
+    n: usize,
+    columns: impl ExactSizeIterator<Item = [Option<(usize, f64)>; K]> + Clone,
+) -> CsMat<f64> {
+    let m = columns.len();
+    let mut indptr = vec![0_usize; n + 1];
+    for column in columns.clone() {
+        for (row, _) in column.into_iter().flatten() {
+            assert!(row < n, "incidence row {row} out of range for {n} rows");
+            indptr[row + 1] += 1;
+        }
+    }
+    for row in 0..n {
+        indptr[row + 1] += indptr[row];
+    }
+    let nnz = indptr[n];
+    let mut next = indptr[..n].to_vec();
+    let mut indices = vec![0_usize; nnz];
+    let mut data = vec![0.0; nnz];
+    for (index, column) in columns.enumerate() {
+        for (row, value) in column.into_iter().flatten() {
+            indices[next[row]] = index;
+            data[next[row]] = value;
+            next[row] += 1;
+        }
+    }
+    CsMat::new((n, m), indptr, indices, data)
 }
 
 struct Column {
@@ -136,6 +198,31 @@ struct Column {
     j: usize,
     b_e: f64,
     branch_index: usize,
+}
+
+/// The constant term of a DC branch flow, `-w * shift`, for positive factor
+/// weight `w` and phase shift `shift` (radians): the flow at equal angles.
+/// The one spelling of the offset, shared by every DC flow, offset and phase
+/// shift injection in the crate.
+#[inline]
+pub(crate) fn calc_dc_flow_offset(weight: f64, shift: f64) -> f64 {
+    -weight * shift
+}
+
+/// DC branch flows `w (theta_from - theta_to) - w shift` at bus angles
+/// `theta` (radians), one per `((from, to), w, shift)` column, with `w` the
+/// positive factor weight. The one flow from angles in the crate:
+/// `DcOpfPreparation::calc_branch_flow` and
+/// `DcOperators::calc_branch_flow_dc` both read it.
+pub(crate) fn calc_dc_branch_flow(
+    theta: &[f64],
+    columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
+) -> Vec<f64> {
+    columns
+        .map(|((from, to), weight, shift)| {
+            weight * (theta[from] - theta[to]) + calc_dc_flow_offset(weight, shift)
+        })
+        .collect()
 }
 
 /// Sparse diagonal matrix from `values` (square, `len × len`).

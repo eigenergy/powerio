@@ -12,11 +12,11 @@ use num_complex::Complex64;
 use powerio_core::Source;
 use powerio_matrix::{
     AcOpfAssemblyOptions, AcPfAssemblyOptions, BuildOptions, DcOperators, DcOpfAssemblyOptions,
-    Grounding, IndexedNetwork, PowerFlowJacobian, SparseMatrix, VoltageCoordinates,
-    build_ac_opf_preparation, build_ac_pf_preparation, build_dc_opf_preparation,
-    calc_admittance_matrix, calc_bus_power_injection, calc_dc_opf_matrices,
-    calc_power_flow_jacobian, calc_solver_branch_flow_matrix, calc_weighted_laplacian,
-    ground_at_each,
+    Grounding, IndexedNetwork, PowerFlowJacobian, SparseMatrix, SynthesizedLimitWindow, Units,
+    VoltageCoordinates, build_ac_opf_preparation, build_ac_pf_preparation,
+    build_dc_opf_preparation, calc_admittance_matrix, calc_bus_power_injection,
+    calc_dc_opf_matrices, calc_power_flow_jacobian, calc_solver_branch_flow_matrix,
+    calc_weighted_laplacian, ground_at_each,
 };
 use powerio_prob::{
     AcOpfInstance, AcPfInstance, BalancedOperatingPointBuilder, DcOpfInstance, DcPfInstance,
@@ -102,6 +102,16 @@ fn preparation_incidence_is_the_dc_opf_matrices_incidence() {
             name,
         );
         assert_same_matrix(&again.generator_bus, &matrices.generator_bus, name);
+        let generator_bus = preparation.calc_generator_bus_incidence();
+        assert_same_matrix(&generator_bus, &matrices.generator_bus, name);
+        // Row `i` lists the generators at bus `i`, ascending.
+        for (bus, row) in generator_bus.outer_iterator().enumerate() {
+            let listed: Vec<usize> = row.indices().to_vec();
+            let expected: Vec<usize> = (0..preparation.n_generators())
+                .filter(|&g| preparation.generators.bus_of_gen[g] == bus)
+                .collect();
+            assert_eq!(listed, expected, "{name}: generators at bus {bus}");
+        }
         assert_eq!(again.reference_selector, matrices.reference_selector);
 
         // The public pieces rebuild the same Laplacian and flow matrix.
@@ -140,6 +150,18 @@ fn preparation_incidence_matches_the_dc_operators() {
         let powermodels = operators.calc_incidence_matrix();
         let transposed = powermodels.transpose_view().to_csr();
         assert_same_matrix(&preparation.calc_bus_branch_incidence(), &transposed, name);
+        // Both flows from angles are the one DC flow over the same columns.
+        let theta: Vec<f64> = (0..preparation.n_buses)
+            .map(|k| 0.02 * (k as f64).cos())
+            .collect();
+        let ours = preparation.calc_branch_flow(&theta);
+        let theirs = operators.calc_branch_flow_dc(&theta).unwrap();
+        for (branch, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-12 * b.abs().max(1.0),
+                "{name}: branch {branch} flow {a} vs {b}"
+            );
+        }
         compared += 1;
     }
     assert!(
@@ -390,6 +412,25 @@ fn jacobian_from_admittance_matches_the_instance_jacobian() {
             .unwrap();
             assert_same_matrix(ours.matrix(), rebuilt.matrix(), name);
             assert!(ours.update_from_voltages(&vm2[1..], &va2).is_err());
+
+            // One injection serves the mismatch and the refresh: the
+            // Jacobian it fills is the voltage refresh's, bit for bit, and
+            // its powers are the free function's.
+            let injection = ours.calc_bus_power_injection(&vm, &va).unwrap();
+            ours.update_from_injection(&injection).unwrap();
+            let at_first = PowerFlowJacobian::from_admittance(
+                &admittance,
+                bus_ids.clone(),
+                coordinates,
+                &vm,
+                &va,
+            )
+            .unwrap();
+            assert_eq!(ours.matrix().data(), at_first.matrix().data(), "{name}");
+            let (p, q) = calc_bus_power_injection(&admittance, &vm, &va).unwrap();
+            assert_eq!(injection.p, p, "{name}");
+            assert_eq!(injection.q, q, "{name}");
+            assert!(ours.calc_bus_power_injection(&vm[1..], &va[1..]).is_err());
             // An admittance-built Jacobian has no instance to pair a point with.
             assert!(
                 ours.update(&instance, &operating_point(&network, &vm, &va))
@@ -442,7 +483,71 @@ fn bus_power_injection_is_v_conj_y_v() {
         assert!((balance[k].re - p[k]).abs() < 1e-10, "P balance at {k}");
         assert!((balance[k].im - q[k]).abs() < 1e-10, "Q balance at {k}");
     }
-    let labels = preparation.calc_island_labels();
+    let labels = powerio_tx::calc_dense_island_labels(
+        n,
+        &preparation.branches.from_bus,
+        &preparation.branches.to_bus,
+    );
     assert_eq!(labels.len(), n);
     assert!(labels.iter().all(|&label| label == 0));
+}
+
+/// A synthesized thermal limit spans the stated window by default and the
+/// selected (padded) one when asked, which is PowerModels' order: pad the
+/// angle bounds, then synthesize. case14 rates no branch and states ±360°.
+#[test]
+fn synthesized_limits_can_span_the_selected_angle_bounds() {
+    let network = case("case14.m");
+    let pad = powerio_tx::POWER_MODELS_ANGLE_BOUND_PAD;
+    let expected = |row: usize, window: f64| {
+        let branch = &network.branches()[row];
+        let bus = |id| network.buses().iter().find(|bus| bus.id == id).unwrap();
+        let (from, to) = (bus(branch.from), bus(branch.to));
+        branch.synthesize_rate_a(window, (from.vmin, from.vmax), (to.vmin, to.vmax))
+    };
+
+    let ac = AcOpfInstance::from_network(network.clone()).unwrap();
+    for window in [
+        SynthesizedLimitWindow::Stated,
+        SynthesizedLimitWindow::SelectedBounds,
+    ] {
+        let selected = window == SynthesizedLimitWindow::SelectedBounds;
+        let options = AcOpfAssemblyOptions::default()
+            .with_units(Units::PerUnit)
+            .with_synthesize_unrated_limits(true)
+            .with_synthesized_limit_window(window);
+        let preparation = build_ac_opf_preparation(&ac, &options).unwrap();
+        assert_eq!(preparation.synthesized_limit_window, window);
+        for (column, &row) in preparation.branches.analysis_rows.iter().enumerate() {
+            let window = if selected { pad } else { std::f64::consts::PI };
+            assert_eq!(preparation.branches.angle_max[column], pad);
+            assert_eq!(
+                preparation.branches.s_max[column],
+                expected(row, window),
+                "AC branch {row}, selected {selected}"
+            );
+        }
+    }
+
+    let dc = DcOpfInstance::from_network(network.clone()).unwrap();
+    for window in [
+        SynthesizedLimitWindow::Stated,
+        SynthesizedLimitWindow::SelectedBounds,
+    ] {
+        let selected = window == SynthesizedLimitWindow::SelectedBounds;
+        let options = DcOpfAssemblyOptions::default()
+            .with_units(Units::PerUnit)
+            .with_synthesize_unrated_limits(true)
+            .with_synthesized_limit_window(window);
+        let preparation = build_dc_opf_preparation(&dc, &options).unwrap();
+        assert_eq!(preparation.synthesized_limit_window, window);
+        for (column, &row) in preparation.branches.analysis_rows.iter().enumerate() {
+            let window = if selected { pad } else { std::f64::consts::PI };
+            assert_eq!(
+                preparation.branches.f_max[column],
+                expected(row, window),
+                "DC branch {row}, selected {selected}"
+            );
+        }
+    }
 }

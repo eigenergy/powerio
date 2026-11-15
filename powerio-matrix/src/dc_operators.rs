@@ -40,15 +40,6 @@ fn row_identity(uid: Option<&str>, table: &str, row: usize) -> String {
     uid.map_or_else(|| format!("{table}:{row}"), str::to_owned)
 }
 
-fn calc_incidence(bus_count: usize, endpoints: &[(usize, usize)]) -> SparseMatrix {
-    let mut incidence = crate::matrix::triplet::CooBuilder::new_rect(bus_count, endpoints.len());
-    for (column, &(from, to)) in endpoints.iter().enumerate() {
-        incidence.add(from, column, 1.0);
-        incidence.add(to, column, -1.0);
-    }
-    incidence.finish_csr()
-}
-
 /// The reference constrained linear system: the positive definite matrix a
 /// sparse solver factors, its right hand side, and the mapping from reduced
 /// rows back to bus rows.
@@ -276,7 +267,8 @@ impl DcOperators {
             endpoints.push((from, to));
         }
 
-        let incidence = calc_incidence(bus_ids.len(), &endpoints);
+        let incidence =
+            crate::matrix::assemble_bus_branch_incidence(bus_ids.len(), endpoints.iter().copied());
         let mut operators = Self {
             bus_ids,
             source_bus_ids,
@@ -490,7 +482,7 @@ impl DcOperators {
         self.branch_susceptance
             .iter()
             .zip(self.shift_radians.iter())
-            .map(|(&susceptance, &shift)| susceptance * shift)
+            .map(|(&susceptance, &shift)| crate::matrix::calc_dc_flow_offset(-susceptance, shift))
             .collect()
     }
 
@@ -531,15 +523,17 @@ impl DcOperators {
                 ),
             ));
         }
-        Ok(self
-            .endpoints
-            .iter()
-            .zip(self.branch_susceptance.iter())
-            .zip(self.shift_radians.iter())
-            .map(|((&(from, to), &susceptance), &shift)| {
-                -susceptance * (voltage_angles[from] - voltage_angles[to]) + susceptance * shift
-            })
-            .collect())
+        // The positive factor weight is the negated public susceptance; the
+        // flow is the crate's one DC flow over it.
+        Ok(crate::matrix::calc_dc_branch_flow(
+            voltage_angles,
+            self.endpoints
+                .iter()
+                .copied()
+                .zip(self.branch_susceptance.iter())
+                .zip(self.shift_radians.iter().copied())
+                .map(|((endpoints, &susceptance), shift)| (endpoints, -susceptance, shift)),
+        ))
     }
 
     /// Calculate DC active power injection in bus order from bus voltage
@@ -577,18 +571,11 @@ impl DcOperators {
             ));
         }
         let n = self.bus_ids.len();
-        let mut is_reference = vec![false; n];
-        for &row in &self.reference_rows {
-            is_reference[row] = true;
-        }
-        let mut reduced_of_full = vec![usize::MAX; n];
-        let mut retained_rows = Vec::with_capacity(n - self.reference_rows.len());
-        for (row, reduced) in reduced_of_full.iter_mut().enumerate() {
-            if !is_reference[row] {
-                *reduced = retained_rows.len();
-                retained_rows.push(row);
-            }
-        }
+        let grounding = crate::matrix::Grounding::new(&self.reference_rows);
+        let retained_rows = grounding.full_of_reduced(n);
+        let reduced_of_full: Vec<usize> = (0..n)
+            .map(|row| grounding.reduced(row).unwrap_or(usize::MAX))
+            .collect();
 
         let mut matrix = crate::matrix::triplet::CooBuilder::new(retained_rows.len());
         // A branch to an eliminated reference bus still carries an

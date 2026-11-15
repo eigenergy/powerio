@@ -51,8 +51,9 @@ pub fn ground_at_each(matrix: &CsMat<f64>, refs: &[usize]) -> CsMat<f64> {
 /// dense `[0, n − k)` range. This is the index map of [`ground_at_each`], so a
 /// solver that factors `ground_at_each(&laplacian, refs)` scatters its reduced
 /// solution back to full bus order through the same `Grounding::new(refs)`.
-/// [`GroundedIndexMap`] is the single-reference special case. The PTDF builder
-/// shares it, so the row/column removal lives in one place.
+/// [`GroundedIndexMap`] is the single-reference special case and reads the
+/// same index map. The PTDF builder and the DC operators' reference
+/// constrained system share it, so the row/column removal lives in one place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grounding {
     grounds: Vec<usize>,
@@ -98,15 +99,14 @@ impl Grounding {
     /// `i − (number of grounds strictly below i)`.
     #[must_use]
     pub fn reduced(&self, i: usize) -> Option<usize> {
-        // One search, not two: `below` is the count of grounds under `i`, and
-        // the entry at that position is `i` itself exactly when `i` is
-        // grounded.
-        let below = self.grounds.partition_point(|&g| g < i);
-        if self.grounds.get(below) == Some(&i) {
-            None
-        } else {
-            Some(i - below)
-        }
+        reduced_index(&self.grounds, i)
+    }
+
+    /// Reduced index → full index: the full index of the `reduced`-th
+    /// surviving row.
+    #[must_use]
+    pub fn full(&self, reduced: usize) -> usize {
+        full_index(&self.grounds, reduced)
     }
 
     /// Full indices of the surviving rows of an `n`-wide space, in reduced
@@ -115,6 +115,35 @@ impl Grounding {
     pub fn full_of_reduced(&self, n: usize) -> Vec<usize> {
         (0..n).filter(|&i| self.reduced(i).is_some()).collect()
     }
+}
+
+/// Full index → reduced index over the sorted, distinct `grounds`, or `None`
+/// for a grounded index: `i` less the count of grounds below it. The one
+/// index map behind [`Grounding`] and [`GroundedIndexMap`].
+fn reduced_index(grounds: &[usize], i: usize) -> Option<usize> {
+    // One search, not two: `below` is the count of grounds under `i`, and
+    // the entry at that position is `i` itself exactly when `i` is grounded.
+    let below = grounds.partition_point(|&g| g < i);
+    if grounds.get(below) == Some(&i) {
+        None
+    } else {
+        Some(i - below)
+    }
+}
+
+/// Reduced index → full index over the sorted, distinct `grounds`, the
+/// inverse of [`reduced_index`]: each ground at or below the running full
+/// index shifts it up by one.
+fn full_index(grounds: &[usize], reduced: usize) -> usize {
+    let mut full = reduced;
+    for &g in grounds {
+        if g <= full {
+            full += 1;
+        } else {
+            break;
+        }
+    }
+    full
 }
 
 /// Drop the rows and columns a [`Grounding`] marks, shifting survivors down.
@@ -145,8 +174,10 @@ pub(crate) fn ground_with(matrix: &CsMat<f64>, g: &Grounding) -> CsMat<f64> {
 }
 
 /// Maps indices between the full `[0, n)` space and the grounded `[0, n−1)`
-/// space (row/column `r` removed). Problem specific solvers use it to place a
-/// grounded solve back into full bus order.
+/// space (row/column `r` removed): the single-reference case of
+/// [`Grounding`], whose index map it reads. It predates [`Grounding`] and is
+/// kept for compatibility through the 0.12 series; new code uses
+/// `Grounding::new(&[r])`, which also covers several references.
 #[derive(Debug, Clone, Copy)]
 pub struct GroundedIndexMap {
     pub n: usize,
@@ -162,17 +193,13 @@ impl GroundedIndexMap {
     /// Full index → grounded index. `None` for the grounded-out bus `r`.
     #[inline]
     pub fn map_full_to_reduced(&self, i: usize) -> Option<usize> {
-        match i {
-            _ if i == self.r => None,
-            _ if i > self.r => Some(i - 1),
-            _ => Some(i),
-        }
+        reduced_index(&[self.r], i)
     }
 
     /// Grounded index → full index.
     #[inline]
     pub fn map_reduced_to_full(&self, i: usize) -> usize {
-        if i >= self.r { i + 1 } else { i }
+        full_index(&[self.r], i)
     }
 }
 
@@ -212,6 +239,32 @@ mod tests {
         assert_eq!(g.reduced(2), Some(1));
         assert_eq!(g.reduced(3), None);
         assert_eq!(g.reduced(4), Some(2));
+    }
+
+    #[test]
+    fn full_inverts_reduced() {
+        for grounds in [&[][..], &[0], &[2], &[1, 3], &[0, 1, 4]] {
+            let g = Grounding::new(grounds);
+            let survivors = g.full_of_reduced(6);
+            for (reduced, &full) in survivors.iter().enumerate() {
+                assert_eq!(g.full(reduced), full);
+                assert_eq!(g.reduced(full), Some(reduced));
+            }
+        }
+        // The single-reference map agrees with its own former arithmetic.
+        let map = GroundedIndexMap::new(5, 2);
+        assert_eq!(
+            (0..5)
+                .map(|i| map.map_full_to_reduced(i))
+                .collect::<Vec<_>>(),
+            [Some(0), Some(1), None, Some(2), Some(3)]
+        );
+        assert_eq!(
+            (0..4)
+                .map(|i| map.map_reduced_to_full(i))
+                .collect::<Vec<_>>(),
+            [0, 1, 3, 4]
+        );
     }
 
     #[test]

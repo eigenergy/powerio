@@ -72,8 +72,7 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
     // the matrix shipped with no error.
     case.network().check_base_mva()?;
     let n = case.n();
-    let mut g_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
-    let mut b_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
+    let mut stamp = AdmittanceStamp::with_capacity(n, case.branches().len());
 
     for (row_idx, br) in case.in_service_branches() {
         let i = case
@@ -92,28 +91,11 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
         } else {
             case.to_radians(br.shift)
         };
-        let Some([y_ii, y_ij, y_ji, y_jj]) = branch_admittance(br, flags, shift_rad, row_idx)?
-        else {
+        let Some(block) = branch_admittance(br, flags, shift_rad, row_idx)? else {
             // Zero-impedance branch (r² + x² = 0): no admittance to scatter.
             continue;
         };
-
-        if i == j {
-            // Self-loop branch: combine all four contributions onto bus i.
-            let combined = y_ii + y_jj + y_ij + y_ji;
-            g_coo.add(i, i, combined.re);
-            b_coo.add(i, i, combined.im);
-            continue;
-        }
-
-        g_coo.add(i, i, y_ii.re);
-        b_coo.add(i, i, y_ii.im);
-        g_coo.add(j, j, y_jj.re);
-        b_coo.add(j, j, y_jj.im);
-        g_coo.add(i, j, y_ij.re);
-        b_coo.add(i, j, y_ij.im);
-        g_coo.add(j, i, y_ji.re);
-        b_coo.add(j, i, y_ji.im);
+        stamp.add_branch(i, j, block);
     }
 
     if !flags.skip_bus_shunts {
@@ -121,15 +103,108 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
         // normalized network's shunts aren't divided by base a second time.
         let base = case.per_unit_base();
         for idx in 0..n {
-            g_coo.add(idx, idx, case.gs()[idx] / base);
-            b_coo.add(idx, idx, case.bs()[idx] / base);
+            stamp.add_shunt(
+                idx,
+                Complex64::new(case.gs()[idx] / base, case.bs()[idx] / base),
+            );
         }
     }
 
-    Ok(YbusParts {
-        g: g_coo.finish_csr(),
-        b: b_coo.finish_csr(),
-    })
+    Ok(stamp.finish(false))
+}
+
+/// The one bus admittance accumulator: every `Y_bus` in the crate, from a
+/// network view ([`calc_admittance_matrix`], `Bp`, `Bpp`) or from a
+/// preparation's branch columns, is stamped through it, so the scatter of a
+/// pi model block and the self-loop fold exist once.
+pub(crate) struct AdmittanceStamp {
+    g: CooBuilder,
+    b: CooBuilder,
+}
+
+impl AdmittanceStamp {
+    /// An `n × n` accumulator sized for `branches` pi model blocks.
+    pub(crate) fn with_capacity(n: usize, branches: usize) -> Self {
+        Self {
+            g: CooBuilder::with_capacity(n, 4 * branches + n),
+            b: CooBuilder::with_capacity(n, 4 * branches + n),
+        }
+    }
+
+    /// Scatter one branch block `[Yff, Yft, Ytf, Ytt]` between buses `i` and
+    /// `j`. A self-loop (`i == j`) lands its whole block on the diagonal.
+    pub(crate) fn add_branch(&mut self, i: usize, j: usize, block: [Complex64; 4]) {
+        let [y_ii, y_ij, y_ji, y_jj] = block;
+        if i == j {
+            self.add(i, i, calc_folded_self_loop(block));
+            return;
+        }
+        self.add(i, i, y_ii);
+        self.add(j, j, y_jj);
+        self.add(i, j, y_ij);
+        self.add(j, i, y_ji);
+    }
+
+    /// Add a bus shunt admittance to the diagonal.
+    pub(crate) fn add_shunt(&mut self, bus: usize, y: Complex64) {
+        self.add(bus, bus, y);
+    }
+
+    fn add(&mut self, i: usize, j: usize, y: Complex64) {
+        self.g.add(i, j, y.re);
+        self.b.add(i, j, y.im);
+    }
+
+    /// The CSR parts. With `every_diagonal`, both keep an entry at every
+    /// diagonal position, an explicit zero where nothing stamps it.
+    pub(crate) fn finish(self, every_diagonal: bool) -> YbusParts {
+        if every_diagonal {
+            YbusParts {
+                g: self.g.finish_csr_with_diagonal(),
+                b: self.b.finish_csr_with_diagonal(),
+            }
+        } else {
+            YbusParts {
+                g: self.g.finish_csr(),
+                b: self.b.finish_csr(),
+            }
+        }
+    }
+}
+
+/// The admittance a self-loop branch adds to its one bus: the sum of its
+/// four block entries, `Yff + Yft + Ytf + Ytt`.
+pub(crate) fn calc_folded_self_loop(block: [Complex64; 4]) -> Complex64 {
+    let [y_ii, y_ij, y_ji, y_jj] = block;
+    y_ii + y_jj + y_ij + y_ji
+}
+
+/// The pi model block `[Yff, Yft, Ytf, Ytt]` of a branch with series
+/// admittance `y_series`, terminal charging `y_fr` and `y_to`, tap magnitude
+/// `tap` and phase shift `shift_rad` (radians), in `makeYbus` form:
+///
+/// ```text
+/// Yff = (y + y_fr) / tap²    Yft = -y / conj(t)
+/// Ytf = -y / t               Ytt = y + y_to
+/// ```
+///
+/// with `t = tap e^{j shift}`. The one place the block is formed: the network
+/// builders reach it through [`branch_admittance`], and the preparations
+/// through `AcBranchData::calc_branch_admittance`.
+pub(crate) fn calc_pi_admittance(
+    y_series: Complex64,
+    y_fr: Complex64,
+    y_to: Complex64,
+    tap: f64,
+    shift_rad: f64,
+) -> [Complex64; 4] {
+    let a = Complex64::from_polar(tap, shift_rad);
+    let a_norm_sqr = tap * tap;
+    let y_ff = (y_series + y_fr) / a_norm_sqr;
+    let y_tt = y_series + y_to;
+    let y_ft = -y_series / a.conj();
+    let y_tf = -y_series / a;
+    [y_ff, y_ft, y_tf, y_tt]
 }
 
 /// The four entries of a branch's 2×2 nodal admittance block, in per-unit:
@@ -186,14 +261,7 @@ pub(crate) fn branch_admittance(
     // `shift_rad` is supplied already in radians and already zeroed when
     // `flags.zero_shifts` is set (the caller has the network, so it knows whether
     // the source angle is degrees or — for a normalized network — radians).
-    let a = Complex64::from_polar(tap_mag, shift_rad);
-    let a_norm_sqr = tap_mag * tap_mag;
-
-    let y_ff = (y_series + y_fr) / a_norm_sqr;
-    let y_tt = y_series + y_to;
-    let y_ft = -y_series / a.conj();
-    let y_tf = -y_series / a;
-    let out = [y_ff, y_ft, y_tf, y_tt];
+    let out = calc_pi_admittance(y_series, y_fr, y_to, tap_mag, shift_rad);
     // Each input is bounded on its own above; the products can still overflow
     // when several sit near their bound at once.
     if out.iter().any(|y| !y.re.is_finite() || !y.im.is_finite()) {

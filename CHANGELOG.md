@@ -6,25 +6,47 @@
 
 **Matrices and preparations**
 
-- `DcOpfPreparation::calc_bus_branch_incidence`, `calc_matrices`, `calc_branch_flow` and
-  `calc_island_labels` derive the incidence, every DC OPF matrix, branch flows and islands from a
-  preparation already in hand; `calc_solver_branch_flow_matrix` and `Grounding` (the multi-reference
-  index map of `ground_at_each`) are public.
+- `DcOpfPreparation::calc_bus_branch_incidence`, `calc_generator_bus_incidence`, `calc_matrices`
+  and `calc_branch_flow` derive the incidence, the generator to bus map, every DC OPF matrix and
+  the branch flows from a preparation already in hand, and `calc_solver_branch_flow_matrix` is
+  public. Every incidence matrix in `powerio-matrix` (the sensitivity factor, `DcOperators`, the
+  preparation) is now one counting sort straight into CSR, and every DC flow from angles and flow
+  offset is one calculation, so `calc_branch_flow` and `DcOperators::calc_branch_flow_dc` agree on
+  shared columns.
+- `Grounding` (sorted, distinct references and the reduced index map of `ground_at_each`, with
+  `reduced`, `full` and `full_of_reduced`) is public. `GroundedIndexMap`, its single-reference
+  case, now reads the same index map and stays for compatibility through 0.12.x.
 - `AcOpfPreparation::calc_admittance_matrix` and `AcPfPreparation::calc_admittance_matrix` stamp
   `Y` in dense bus order with every diagonal stored; `AcBranchData::calc_branch_admittance`,
   `calc_branch_flows` and `clear_jumper_charging` give the pi model blocks, terminal flows at given
-  voltages, and the jumper charging rule over the prepared columns.
+  voltages, and the jumper charging rule over the prepared columns. The pi model block, its
+  scatter into `Y` and the self-loop fold are each formed once, for `calc_admittance_matrix`, `Bp`,
+  `Bpp` and both preparations; a self-loop folded into a preparation's bus shunt can move in the
+  last place.
 - `PowerFlowJacobian::from_admittance` and `update_from_voltages` build and refresh the Jacobian
-  from `(G, B, vm, va)`, and `calc_bus_power_injection` gives `S = V conj(Y V)`. The Jacobian fill no
-  longer searches or evaluates trigonometry per entry: on a 78,484 bus case a build takes 6 ms instead
-  of 73 ms and a refresh 1.4 ms instead of 7 ms.
+  from `(G, B, vm, va)`. `PowerFlowJacobian::calc_bus_power_injection` returns a
+  `BusPowerInjection` (`S = V conj(Y V)` with the currents behind it) and `update_from_injection`
+  refreshes the Jacobian from it, so a Newton step forms the injection once for its mismatch and
+  its Jacobian; the free `calc_bus_power_injection` is the same calculation. The Jacobian fill no
+  longer searches or evaluates trigonometry per entry: on a 78,484 bus case a build takes 6 ms
+  instead of 73 ms and a refresh 1.4 ms instead of 7 ms.
+- `AcOpfAssemblyOptions::with_synthesized_limit_window` and the same on `DcOpfAssemblyOptions`
+  take a `SynthesizedLimitWindow`: `Stated` (the default, as before) or `SelectedBounds`, which
+  synthesizes an unrated branch's limit over the selected angle difference bounds, PowerModels'
+  order (pad, then `calc_thermal_limits!`). The preparations record it as
+  `synthesized_limit_window`, written only when it is not `Stated`.
+- `build_ac_opf_preparation` no longer scans every bus identity per prepared bus: case78484 builds
+  in 32 ms instead of 3.8 s. A constraint selection naming elements is matched through a set.
 - `BranchSusceptanceFormula::calc_susceptance_sensitivity_to_series_susceptance`,
-  `IndexedNetwork::is_analysis_branch`, `calc_dense_island_labels`,
-  `correct_angle_difference_bounds_with_pad`, `IslandReferencePolicy::DesignateMissing` (keep every
-  stated reference, designate only where an island has none),
-  `IslandReferencePolicy::DesignateMissingSupplied` (the same, counting only references that host an
-  in-service generator and demoting the others to PQ) and
-  `IslandReferenceReport::de_energized_islands` (with each island's unserved load).
+  `IndexedNetwork::is_analysis_branch`, `calc_dense_island_labels` (the islands of
+  `IndexedNetwork::calc_island_labels`, numbered `0..k` by first bus, over any edge list such as a
+  preparation's branch columns), `correct_angle_difference_bounds_with_pad`,
+  `IslandReferencePolicy::DesignateMissing` (keep every stated reference, designate only where an
+  island has none), `IslandReferencePolicy::DesignateMissingSupplied` (the same, counting only
+  references that host an in-service generator and demoting the others to PQ) and
+  `IslandReferenceReport::de_energized_islands` (with each island's unserved load). Island
+  partitions, island labels, the preparations' reference coverage check and the multiconductor node
+  merge share one component labeling.
 
 **Distribution**
 

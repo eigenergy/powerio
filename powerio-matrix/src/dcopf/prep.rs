@@ -5,7 +5,8 @@ use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, HvdcTreatment
 use crate::{AnalysisBranchSource, Error, Result};
 use powerio_prob::ReferenceBuses;
 
-use super::{limits, nodal};
+use super::limits::{self, SynthesizedLimitWindow};
+use super::nodal;
 use crate::{PiecewiseLinearCost, PreparedObjective};
 
 /// Unit system for power and generator cost data.
@@ -78,6 +79,9 @@ pub struct DcOpfOptions {
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval a synthesized limit spans.
+    #[serde(default)]
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Which angle difference bounds the prepared arrays carry.
     #[serde(default = "default_angle_difference_bounds")]
     pub angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
@@ -99,6 +103,7 @@ impl Default for DcOpfOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
+            synthesized_limit_window: SynthesizedLimitWindow::Stated,
             angle_difference_bounds: default_angle_difference_bounds(),
             hvdc_treatment: HvdcTreatment::default(),
             objective: PreparedObjective::default(),
@@ -216,6 +221,11 @@ pub struct DcOpfPreparation {
     /// their limits retain the old unsynthesized meaning.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval those limits span. Omitted from a
+    /// document when it is the stated one, so earlier documents read the
+    /// window they were built with.
+    #[serde(default, skip_serializing_if = "SynthesizedLimitWindow::is_stated")]
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
     /// Which angle difference bounds `angle_min` and `angle_max` carry.
@@ -302,10 +312,11 @@ impl DcOpfPreparation {
     /// of the public one.
     #[must_use]
     pub fn calc_branch_flow_offset(&self) -> Vec<f64> {
-        (0..self.n_branches())
-            .map(|branch| {
-                -self.branches.susceptance_magnitude[branch] * self.branches.shift[branch]
-            })
+        self.branches
+            .susceptance_magnitude
+            .iter()
+            .zip(&self.branches.shift)
+            .map(|(&weight, &shift)| crate::matrix::calc_dc_flow_offset(weight, shift))
             .collect()
     }
 
@@ -356,6 +367,7 @@ pub(crate) fn preparation_from_view(
     let (p_scale, b_scale) = options.units.power_scales(base);
     let thermal = limits::ThermalLimits {
         synthesize_unrated: options.synthesize_unrated_limits,
+        window: options.synthesized_limit_window,
         power_scale: p_scale,
         admittance_scale: b_scale,
     };
@@ -488,8 +500,11 @@ pub(crate) fn preparation_from_view(
             0.0
         };
         if shift_rad != 0.0 {
-            p_shift[from] -= branch_b * shift_rad;
-            p_shift[to] += branch_b * shift_rad;
+            // The flow offset enters at the from bus and leaves at the to
+            // bus, as a withdrawal.
+            let offset = crate::matrix::calc_dc_flow_offset(branch_b, shift_rad);
+            p_shift[from] += offset;
+            p_shift[to] -= offset;
         }
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
@@ -508,8 +523,8 @@ pub(crate) fn preparation_from_view(
         shift.push(shift_rad);
         f_max.push(thermal.of(
             branch,
-            source_amin,
-            source_amax,
+            (source_amin, source_amax),
+            (amin, amax),
             &buses[from_analysis],
             &buses[to_analysis],
         )?);
@@ -551,6 +566,7 @@ pub(crate) fn preparation_from_view(
         objective: options.objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
+        synthesized_limit_window: options.synthesized_limit_window,
         correct_angle_difference_bounds: options.angle_difference_bounds.is_padded(),
         angle_difference_bounds: Some(options.angle_difference_bounds),
         bus_ids: active_buses.bus_ids,

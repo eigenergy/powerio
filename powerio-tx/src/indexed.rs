@@ -429,17 +429,12 @@ impl<'n> IndexedNetwork<'n> {
     /// them for equality grouping (e.g. checking every island carries a
     /// reference bus to ground).
     pub fn calc_island_labels(&self) -> Vec<usize> {
-        let mut uf = crate::union_find::UnionFind::new(self.n());
         let edges = self
             .in_service_branches()
             .map(|(_, br)| (br.from, br.to))
-            .chain(self.closed_switches().map(|(_, sw)| (sw.from, sw.to)));
-        for (from, to) in edges {
-            if let (Some(i), Some(j)) = (self.bus_index(from), self.bus_index(to)) {
-                uf.union(i, j);
-            }
-        }
-        uf.into_labeling()
+            .chain(self.closed_switches().map(|(_, sw)| (sw.from, sw.to)))
+            .filter_map(|(from, to)| Some((self.bus_index(from)?, self.bus_index(to)?)));
+        crate::union_find::calc_component_labels(self.n(), edges)
     }
 
     /// Error unless every connected component of the in-service topology carries
@@ -524,10 +519,11 @@ impl ConnectivityReport {
 
 /// Dense island labels over `n` buses joined by the edges
 /// `from_bus[e]`–`to_bus[e]`: two buses share a label iff a path of edges
-/// joins them, and labels run `0..k` in order of each island's first bus. A
-/// preparation's branch columns give the islands of the problem it carries
-/// (`DcOpfPreparation::calc_island_labels` and the AC counterparts in
-/// `powerio-matrix`).
+/// joins them, and labels run `0..k` in order of each island's first bus.
+/// Over a preparation's `branches.from_bus` and `branches.to_bus` columns
+/// these are the islands of the problem it carries. The grouping is
+/// [`IndexedNetwork::calc_island_labels`]'s (one union-find), renumbered
+/// densely where that one labels each island by a representative bus.
 ///
 /// # Panics
 /// Panics if `from_bus` and `to_bus` differ in length or name a bus `>= n`.
@@ -540,11 +536,10 @@ pub fn calc_dense_island_labels(n: usize, from_bus: &[usize], to_bus: &[usize]) 
         from_bus.len(),
         to_bus.len()
     );
-    let mut uf = crate::union_find::UnionFind::new(n);
-    for (&from, &to) in from_bus.iter().zip(to_bus) {
-        uf.union(from, to);
-    }
-    let roots = uf.into_labeling();
+    let roots = crate::union_find::calc_component_labels(
+        n,
+        from_bus.iter().copied().zip(to_bus.iter().copied()),
+    );
     let mut label_of_root = vec![usize::MAX; n];
     let mut next = 0;
     roots

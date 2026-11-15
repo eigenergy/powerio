@@ -9,12 +9,9 @@ use serde::{Deserialize, Serialize};
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
 use powerio_tx::{AngleDifferenceBounds, BalancedNetwork, BusId, IndexedNetwork};
 
-use crate::dcopf::{Units, limits, nodal};
-use crate::matrix::YbusParts;
-use crate::matrix::triplet::CooBuilder;
-use crate::{
-    AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result, SparseMatrix,
-};
+use crate::dcopf::{SynthesizedLimitWindow, Units, limits, nodal};
+use crate::matrix::{AdmittanceStamp, YbusParts};
+use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
 
 /// Assembly choices that select the numerical content derived from an AC
 /// instance without changing the instance itself. There is no convention
@@ -34,6 +31,10 @@ pub struct AcOpfAssemblyOptions {
     /// states. If false, positive infinity is preserved in `s_max`.
     /// A stated finite zero is always kept, regardless of this option.
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval a synthesized limit spans: the source's
+    /// stated one (the default) or the selected bounds the preparation
+    /// carries ([`SynthesizedLimitWindow`]).
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
@@ -50,6 +51,7 @@ impl Default for AcOpfAssemblyOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
+            synthesized_limit_window: SynthesizedLimitWindow::Stated,
             correct_angle_difference_bounds: true,
             angle_difference_bounds: None,
         }
@@ -72,6 +74,13 @@ impl AcOpfAssemblyOptions {
     #[must_use]
     pub const fn with_synthesize_unrated_limits(mut self, synthesize: bool) -> Self {
         self.synthesize_unrated_limits = synthesize;
+        self
+    }
+
+    /// Select the angle difference interval a synthesized limit spans.
+    #[must_use]
+    pub const fn with_synthesized_limit_window(mut self, window: SynthesizedLimitWindow) -> Self {
+        self.synthesized_limit_window = window;
         self
     }
 
@@ -261,18 +270,6 @@ pub struct AcPfPreparation {
 }
 
 impl AcPfPreparation {
-    /// Dense island labels over this preparation's buses and branch columns:
-    /// labels run `0..k` in order of each island's first dense bus
-    /// ([`powerio_tx::calc_dense_island_labels`]).
-    #[must_use]
-    pub fn calc_island_labels(&self) -> Vec<usize> {
-        powerio_tx::calc_dense_island_labels(
-            self.n_buses,
-            &self.branches.from_bus,
-            &self.branches.to_bus,
-        )
-    }
-
     #[must_use]
     pub fn n_generators(&self) -> usize {
         self.generators.qg.len()
@@ -416,16 +413,13 @@ impl AcBranchData {
     /// Panics if `branch` is not an active branch column.
     #[must_use]
     pub fn calc_branch_admittance(&self, branch: usize) -> [Complex64; 4] {
-        let y_series = Complex64::new(self.g[branch], self.b[branch]);
-        let y_fr = Complex64::new(self.g_fr[branch], self.b_fr[branch]);
-        let y_to = Complex64::new(self.g_to[branch], self.b_to[branch]);
-        let tap = self.tap[branch];
-        let a = Complex64::from_polar(tap, self.shift[branch]);
-        let y_ff = (y_series + y_fr) / (tap * tap);
-        let y_tt = y_series + y_to;
-        let y_ft = -y_series / a.conj();
-        let y_tf = -y_series / a;
-        [y_ff, y_ft, y_tf, y_tt]
+        crate::matrix::calc_pi_admittance(
+            Complex64::new(self.g[branch], self.b[branch]),
+            Complex64::new(self.g_fr[branch], self.b_fr[branch]),
+            Complex64::new(self.g_to[branch], self.b_to[branch]),
+            self.tap[branch],
+            self.shift[branch],
+        )
     }
 
     /// The terminal flows of every active branch at the bus voltages
@@ -501,52 +495,22 @@ impl AcBranchData {
 
     /// Stamp the bus admittance matrix of these branches and the bus shunts
     /// `g_s + j b_s` over `n` dense buses, keeping an explicit entry at every
-    /// diagonal position.
+    /// diagonal position, through the same accumulator as
+    /// [`calc_admittance_matrix`](crate::calc_admittance_matrix).
     fn calc_admittance_matrix(&self, n: usize, g_s: &[f64], b_s: &[f64]) -> YbusParts {
-        let m = self.len();
-        let mut g_coo = CooBuilder::with_capacity(n, 4 * m + n);
-        let mut b_coo = CooBuilder::with_capacity(n, 4 * m + n);
-        for branch in 0..m {
-            let (i, j) = (self.from_bus[branch], self.to_bus[branch]);
-            let [y_ii, y_ij, y_ji, y_jj] = self.calc_branch_admittance(branch);
-            g_coo.add(i, i, y_ii.re);
-            b_coo.add(i, i, y_ii.im);
-            g_coo.add(j, j, y_jj.re);
-            b_coo.add(j, j, y_jj.im);
-            g_coo.add(i, j, y_ij.re);
-            b_coo.add(i, j, y_ij.im);
-            g_coo.add(j, i, y_ji.re);
-            b_coo.add(j, i, y_ji.im);
+        let mut stamp = AdmittanceStamp::with_capacity(n, self.len());
+        for branch in 0..self.len() {
+            stamp.add_branch(
+                self.from_bus[branch],
+                self.to_bus[branch],
+                self.calc_branch_admittance(branch),
+            );
         }
         for bus in 0..n {
-            g_coo.add(bus, bus, g_s[bus]);
-            b_coo.add(bus, bus, b_s[bus]);
+            stamp.add_shunt(bus, Complex64::new(g_s[bus], b_s[bus]));
         }
-        YbusParts {
-            g: with_every_diagonal(g_coo.finish_csr()),
-            b: with_every_diagonal(b_coo.finish_csr()),
-        }
+        stamp.finish(true)
     }
-}
-
-/// `matrix` with an explicit zero stored at every diagonal position it
-/// lacks, so a consumer can fill a Jacobian whose pattern includes the
-/// diagonal without searching for it.
-fn with_every_diagonal(matrix: SparseMatrix) -> SparseMatrix {
-    let n = matrix.rows();
-    if (0..n).all(|k| matrix.get(k, k).is_some()) {
-        return matrix;
-    }
-    let mut triplets = sprs::TriMat::with_capacity((n, matrix.cols()), matrix.nnz() + n);
-    for (&value, (row, column)) in &matrix {
-        triplets.add_triplet(row, column, value);
-    }
-    for k in 0..n {
-        if matrix.get(k, k).is_none() {
-            triplets.add_triplet(k, k, 0.0);
-        }
-    }
-    triplets.to_csr()
 }
 
 /// Generator data in generator column order.
@@ -662,6 +626,11 @@ pub struct AcOpfPreparation {
     pub skip_zero_impedance: bool,
     /// Whether absent source ratings were replaced with synthesized limits.
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval those limits span. Omitted from a
+    /// document when it is the stated one, so earlier documents read the
+    /// window they were built with.
+    #[serde(default, skip_serializing_if = "SynthesizedLimitWindow::is_stated")]
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
     /// Which angle difference bounds `angle_min` and `angle_max` carry.
@@ -684,18 +653,6 @@ pub struct AcOpfPreparation {
 }
 
 impl AcOpfPreparation {
-    /// Dense island labels over this preparation's buses and branch columns:
-    /// labels run `0..k` in order of each island's first dense bus
-    /// ([`powerio_tx::calc_dense_island_labels`]).
-    #[must_use]
-    pub fn calc_island_labels(&self) -> Vec<usize> {
-        powerio_tx::calc_dense_island_labels(
-            self.n_buses,
-            &self.branches.from_bus,
-            &self.branches.to_bus,
-        )
-    }
-
     #[must_use]
     pub fn n_generators(&self) -> usize {
         self.generators.q.len()
@@ -857,6 +814,7 @@ pub fn build_ac_pf_preparation(
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: false,
+            synthesized_limit_window: SynthesizedLimitWindow::Stated,
             correct_angle_difference_bounds: options.correct_angle_difference_bounds,
             angle_difference_bounds: options.angle_difference_bounds,
         },
@@ -976,6 +934,7 @@ fn preparation_from_view(
     let angle_bounds = options.selected_angle_difference_bounds();
     let thermal = limits::ThermalLimits {
         synthesize_unrated: options.synthesize_unrated_limits,
+        window: options.synthesized_limit_window,
         power_scale: p_scale,
         admittance_scale: y_scale,
     };
@@ -1158,19 +1117,19 @@ fn preparation_from_view(
         };
         let charging = branch.calc_terminal_charging();
         if from == to {
-            // A self-loop is not a flow element; its whole pi model stamp
-            // lands on the bus diagonal, exactly as `calc_admittance_matrix` folds it.
-            // With t = tap·e^{jθ}: Yff + Yft + Ytf + Ytt
-            //   = (y + y_fr)/tap² + (y + y_to) − y·2cos(θ)/tap.
-            let tap = branch.calc_divisible_tap(source_row)?;
-            let tap_squared = tap * tap;
-            let cross = 2.0 * case.to_radians(branch.shift).cos() / tap;
-            g_s[from] += ((series_g + charging.g_fr) / tap_squared + (series_g + charging.g_to)
-                - series_g * cross)
-                * y_scale;
-            b_s[from] += ((series_b + charging.b_fr) / tap_squared + (series_b + charging.b_to)
-                - series_b * cross)
-                * y_scale;
+            // A self-loop is not a flow element; its whole pi model block
+            // lands on the bus diagonal, folded exactly as
+            // `calc_admittance_matrix` folds it.
+            let block = crate::matrix::calc_pi_admittance(
+                Complex64::new(series_g, series_b),
+                Complex64::new(charging.g_fr, charging.b_fr),
+                Complex64::new(charging.g_to, charging.b_to),
+                branch.calc_divisible_tap(source_row)?,
+                case.to_radians(branch.shift),
+            );
+            let folded = crate::matrix::calc_folded_self_loop(block) * y_scale;
+            g_s[from] += folded.re;
+            b_s[from] += folded.im;
             continue;
         }
         from_bus.push(from);
@@ -1194,8 +1153,8 @@ fn preparation_from_view(
         shift.push(branch_shift);
         s_max.push(thermal.of(
             branch,
-            source_amin,
-            source_amax,
+            (source_amin, source_amax),
+            (amin, amax),
             &network.buses()[from_analysis],
             &network.buses()[to_analysis],
         )?);
@@ -1240,6 +1199,7 @@ fn preparation_from_view(
         objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
+        synthesized_limit_window: options.synthesized_limit_window,
         correct_angle_difference_bounds: angle_bounds.is_padded(),
         angle_difference_bounds: Some(angle_bounds),
         bus_ids: active_buses.bus_ids,
@@ -1343,15 +1303,21 @@ fn apply_instance_semantics(
         .enumerate()
         .map(|(row, branch)| crate::opf::row_identity(branch.uid.as_deref(), "branches", row))
         .collect();
+    // The source buses, then each prepared bus the source does not state (a
+    // star bus from three winding lowering). A set keeps the membership
+    // test constant time: a linear scan here made this quadratic in the bus
+    // count (seconds at 78,484 buses).
     let mut analysis_bus_ids: Vec<String> = source
         .buses()
         .iter()
         .map(|bus| bus.id.to_string())
         .collect();
-    for bus in &preparation.bus_ids {
-        let identity = bus.to_string();
-        if !analysis_bus_ids.iter().any(|known| known == &identity) {
-            analysis_bus_ids.push(identity);
+    let source_bus_set: std::collections::HashSet<BusId> =
+        source.buses().iter().map(|bus| bus.id).collect();
+    let mut added = std::collections::HashSet::new();
+    for &bus in &preparation.bus_ids {
+        if !source_bus_set.contains(&bus) && added.insert(bus) {
+            analysis_bus_ids.push(bus.to_string());
         }
     }
 

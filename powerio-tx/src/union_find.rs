@@ -53,6 +53,21 @@ impl UnionFind {
     }
 }
 
+/// Representative labels of the components `edges` join over `len` indices:
+/// two indices share a label iff a path of edges joins them, and a
+/// representative labels itself. The one component labeling behind every
+/// island partition and island label of the crate.
+pub(crate) fn calc_component_labels(
+    len: usize,
+    edges: impl IntoIterator<Item = (usize, usize)>,
+) -> Vec<usize> {
+    let mut sets = UnionFind::new(len);
+    for (first, second) in edges {
+        sets.union(first, second);
+    }
+    sets.into_labeling()
+}
+
 #[cfg(test)]
 mod tests {
     use super::UnionFind;
