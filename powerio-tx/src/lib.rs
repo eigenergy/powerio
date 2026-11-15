@@ -67,7 +67,8 @@ mod normalize;
 mod operations;
 pub mod pi_model;
 mod thermal_limit;
-mod union_find;
+// The workspace's one union-find lives in powerio-core.
+use powerio_core::union_find;
 #[doc(hidden)]
 pub mod version;
 

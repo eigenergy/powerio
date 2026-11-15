@@ -442,24 +442,6 @@ fn unique(family: &str, names: impl Iterator<Item = String>) -> Result<()> {
     }
     Ok(())
 }
-fn root(parent: &mut [usize], mut n: usize) -> usize {
-    while parent[n] != n {
-        parent[n] = parent[parent[n]];
-        n = parent[n];
-    }
-    n
-}
-fn join(parent: &mut [usize], a: usize, b: usize) -> bool {
-    let a = root(parent, a);
-    let b = root(parent, b);
-    if a == b {
-        false
-    } else {
-        parent[a] = b;
-        true
-    }
-}
-
 /// Prepare the AC multiconductor IVR profile without creating solver expressions.
 ///
 /// Supports coupled lines, shunts, capacitors, ideal switches/sources, WYE and
@@ -1342,7 +1324,7 @@ fn prepare_source_devices(
 }
 fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -> Result<()> {
     // Conservative structural checks. Do not classify numerical near-zero Z as ideal.
-    let mut ideal: Vec<_> = (0..terminals.len()).collect();
+    let mut ideal = powerio_core::union_find::UnionFind::new(terminals.len());
     for br in branches.iter().filter(|b| !b.open) {
         for k in 0..br.from.len() {
             if br.r[k].iter().chain(&br.x[k]).all(|x| *x == 0.0) {
@@ -1352,7 +1334,7 @@ fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -
                         "ideal row between fixed terminals has undetermined current",
                     ));
                 }
-                if !join(&mut ideal, br.from[k], br.to[k]) {
+                if !ideal.union(br.to[k], br.from[k]) {
                     return Err(invalid(&br.identity, "dependent ideal-conductor cycle"));
                 }
             }
@@ -1360,7 +1342,7 @@ fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -
     }
     let mut ideal_fixed = BTreeSet::new();
     for (i, t) in terminals.iter().enumerate() {
-        if t.fixed.is_some() && !ideal_fixed.insert(root(&mut ideal, i)) {
+        if t.fixed.is_some() && !ideal_fixed.insert(ideal.find(i)) {
             return Err(unsupported(
                 &t.bus,
                 "ideal path joins multiple fixed voltage references",
@@ -1370,20 +1352,21 @@ fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -
     Ok(())
 }
 fn check_topology(branches: &[McOpfBranch], terminals: &mut [McOpfTerminal]) -> Result<()> {
-    let mut connected: Vec<_> = (0..terminals.len()).collect();
-    for br in branches.iter().filter(|b| !b.open) {
-        for (&a, &b) in br.from.iter().zip(&br.to) {
-            join(&mut connected, a, b);
-        }
-    }
+    let connected = powerio_core::union_find::calc_component_labels(
+        terminals.len(),
+        branches
+            .iter()
+            .filter(|b| !b.open)
+            .flat_map(|br| br.from.iter().copied().zip(br.to.iter().copied())),
+    );
     let mut anchors = BTreeMap::new();
     for (i, t) in terminals.iter().enumerate() {
         if let Some(value) = t.fixed {
-            anchors.entry(root(&mut connected, i)).or_insert(value);
+            anchors.entry(connected[i]).or_insert(value);
         }
     }
     for (i, t) in terminals.iter_mut().enumerate() {
-        let Some(value) = anchors.get(&root(&mut connected, i)) else {
+        let Some(value) = anchors.get(&connected[i]) else {
             return Err(unsupported(
                 &format!("{}:{}", t.bus, t.terminal),
                 "conductor component has no fixed voltage reference",

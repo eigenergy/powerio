@@ -2326,28 +2326,16 @@ impl Writer {
     /// do not cover.
     #[allow(clippy::too_many_lines)] // zones, seeds, the flood through the ratios, then the fallbacks
     fn voltage_bases(&mut self, net: &MulticonductorNetwork) -> Vec<f64> {
-        fn find(parent: &mut [usize], i: usize) -> usize {
-            let mut i = i;
-            while parent[i] != i {
-                parent[i] = parent[parent[i]];
-                i = parent[i];
-            }
-            i
-        }
         let n = self.buses.len();
-        let mut parent: Vec<usize> = (0..n).collect();
-        let mut union = |a: usize, b: usize| {
-            let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-            if ra != rb {
-                parent[ra] = rb;
-            }
-        };
-        for obj in self.branches.iter().chain(&self.switches) {
-            if let (Some(f), Some(t)) = (obj.usize("f_bus"), obj.usize("t_bus")) {
-                union(f - 1, t - 1);
-            }
-        }
-        let zone: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
+        // The to bus's zone keeps its representative, as it always has; the
+        // representatives order the flood below.
+        let zone = powerio_core::union_find::calc_component_labels(
+            n,
+            self.branches
+                .iter()
+                .chain(&self.switches)
+                .filter_map(|obj| Some((obj.usize("t_bus")? - 1, obj.usize("f_bus")? - 1))),
+        );
         let mut zone_base: BTreeMap<usize, f64> = BTreeMap::new();
         for (bus, kv) in &self.settings.vbases_default {
             if let Some(&index) = self.bus_index.get(bus) {

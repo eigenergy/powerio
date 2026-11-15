@@ -6,7 +6,7 @@ use powerio_tx::{BalancedNetwork, BusId, BusType};
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
-use crate::transform::UnionFind;
+use powerio_core::union_find::UnionFind;
 
 /// How the feeder's computed demand enters the transmission balance.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -403,7 +403,7 @@ fn terminal_classes(
             )));
         }
         for (a, b) in switch.terminal_map_from.iter().zip(&switch.terminal_map_to) {
-            union.join(
+            union.union_keep_smaller(
                 index[&key(&switch.bus_from, a)],
                 index[&key(&switch.bus_to, b)],
             );
@@ -411,7 +411,7 @@ fn terminal_classes(
     }
     Ok(index
         .into_iter()
-        .map(|(node, row)| (node, union.root(row)))
+        .map(|(node, row)| (node, union.find(row)))
         .collect())
 }
 /// Within 30 degrees of `expected`, modulo a full turn. Opposite rotation is

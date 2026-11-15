@@ -387,7 +387,7 @@ impl<'a> LoweringState<'a> {
             .enumerate()
             .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
             .collect();
-        let mut union = UnionFind::new(net.buses().len());
+        let mut union = powerio_core::union_find::UnionFind::new(net.buses().len());
         let mut removed_switches = Vec::new();
         for sw in net.switches().iter().filter(|sw| !sw.open) {
             let (Some(&from), Some(&to)) = (
@@ -396,7 +396,7 @@ impl<'a> LoweringState<'a> {
             ) else {
                 continue;
             };
-            union.join(from, to);
+            union.union_keep_smaller(from, to);
             removed_switches.push(sw.name.clone());
             records.assumptions.push(format!(
                 "closed switch {} merged bus {} into bus {} and was removed; no impedance \
@@ -408,7 +408,7 @@ impl<'a> LoweringState<'a> {
         let mut merged_buses = BTreeMap::new();
         let mut number = BTreeMap::new();
         for (row, bus) in net.buses().iter().enumerate() {
-            let root = union.root(row);
+            let root = union.find(row);
             if root == row {
                 let id = BusId(number.len() + 1);
                 number.insert(row, id);
@@ -422,7 +422,7 @@ impl<'a> LoweringState<'a> {
             .iter()
             .map(|bus| {
                 let key = bus.id.to_ascii_lowercase();
-                let root = union.root(row_of[&key]);
+                let root = union.find(row_of[&key]);
                 (key, number[&root])
             })
             .collect();
@@ -530,13 +530,13 @@ impl<'a> LoweringState<'a> {
             .enumerate()
             .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
             .collect();
-        let mut zones = UnionFind::new(self.net.buses().len());
+        let mut zones = powerio_core::union_find::UnionFind::new(self.net.buses().len());
         for line in self.net.lines() {
             if let (Some(&from), Some(&to)) = (
                 row_of.get(&line.bus_from.to_ascii_lowercase()),
                 row_of.get(&line.bus_to.to_ascii_lowercase()),
             ) {
-                zones.join(from, to);
+                zones.union_keep_smaller(from, to);
             }
         }
         for sw in self.net.switches().iter().filter(|sw| !sw.open) {
@@ -544,7 +544,7 @@ impl<'a> LoweringState<'a> {
                 row_of.get(&sw.bus_from.to_ascii_lowercase()),
                 row_of.get(&sw.bus_to.to_ascii_lowercase()),
             ) {
-                zones.join(from, to);
+                zones.union_keep_smaller(from, to);
             }
         }
 
@@ -562,7 +562,7 @@ impl<'a> LoweringState<'a> {
                 continue;
             };
             if v1.norm().is_finite() && v1.norm() > 0.0 {
-                zone_base.entry(zones.root(row)).or_insert(v1.norm());
+                zone_base.entry(zones.find(row)).or_insert(v1.norm());
             }
         }
 
@@ -581,7 +581,7 @@ impl<'a> LoweringState<'a> {
         loop {
             let mut changed = false;
             for &(high_row, low_row, high_v, low_v) in &supported {
-                let (high_zone, low_zone) = (zones.root(high_row), zones.root(low_row));
+                let (high_zone, low_zone) = (zones.find(high_row), zones.find(low_row));
                 match (
                     zone_base.contains_key(&high_zone),
                     zone_base.contains_key(&low_zone),
@@ -603,7 +603,7 @@ impl<'a> LoweringState<'a> {
         }
 
         for (row, bus) in self.net.buses().iter().enumerate() {
-            let zone = zones.root(row);
+            let zone = zones.find(row);
             let base = zone_base.get(&zone).copied().unwrap_or_else(|| {
                 self.records.dropped_fields.push(format!(
                     "bus {} voltage base defaulted to the reference base",
@@ -1300,33 +1300,6 @@ struct VoltageBase {
 
 fn z_base_ohm_of(line_to_line_volts: f64, base_mva: f64) -> f64 {
     line_to_line_volts * line_to_line_volts / (base_mva * 1_000_000.0)
-}
-
-pub(crate) struct UnionFind {
-    parent: Vec<usize>,
-}
-
-impl UnionFind {
-    pub(crate) fn new(len: usize) -> Self {
-        Self {
-            parent: (0..len).collect(),
-        }
-    }
-
-    pub(crate) fn root(&mut self, mut node: usize) -> usize {
-        while self.parent[node] != node {
-            self.parent[node] = self.parent[self.parent[node]];
-            node = self.parent[node];
-        }
-        node
-    }
-
-    pub(crate) fn join(&mut self, a: usize, b: usize) {
-        let (a, b) = (self.root(a), self.root(b));
-        // The smaller row stays the root, so the canonical member is stable.
-        let (keep, fold) = if a <= b { (a, b) } else { (b, a) };
-        self.parent[fold] = keep;
-    }
 }
 
 #[derive(Clone, Copy)]

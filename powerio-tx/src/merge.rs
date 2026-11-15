@@ -452,7 +452,7 @@ pub struct RemovedFlows {
 /// admitting it is deferred, so for now normalization refuses it with
 /// `BUILD.SWITCH.CLOSED`.
 struct MergeSets {
-    parent: Vec<usize>,
+    sets: crate::union_find::UnionFind,
     /// Per root, the three winding transformers with a winding in the set.
     windings: HashMap<usize, Vec<usize>>,
     /// Keep the first argument's root on a join, so the roots are the
@@ -470,24 +470,14 @@ enum Join {
 impl MergeSets {
     fn new(n: usize, windings: HashMap<usize, Vec<usize>>, keep_first: bool) -> Self {
         Self {
-            parent: (0..n).collect(),
+            sets: crate::union_find::UnionFind::new(n),
             windings,
             keep_first,
         }
     }
 
     fn root(&mut self, node: usize) -> usize {
-        let mut root = node;
-        while self.parent[root] != root {
-            root = self.parent[root];
-        }
-        let mut walk = node;
-        while self.parent[walk] != root {
-            let next = self.parent[walk];
-            self.parent[walk] = root;
-            walk = next;
-        }
-        root
+        self.sets.find(node)
     }
 
     fn join(&mut self, a: usize, b: usize) -> Join {
@@ -505,7 +495,7 @@ impl MergeSets {
         } else {
             (rb, ra)
         };
-        self.parent[gone] = keep;
+        self.sets.union(keep, gone);
         if let Some(moved) = self.windings.remove(&gone) {
             self.windings.entry(keep).or_default().extend(moved);
         }

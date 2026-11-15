@@ -17,6 +17,7 @@ mod records;
 mod scenario;
 mod source;
 mod time_series;
+pub mod union_find;
 mod validation;
 
 pub use codes::CORE_DIAGNOSTIC_CODES;

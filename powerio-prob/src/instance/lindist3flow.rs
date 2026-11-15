@@ -979,42 +979,6 @@ struct Edge {
     conductor: usize,
 }
 
-struct UnionFind {
-    parent: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).collect(),
-        }
-    }
-
-    fn find(&mut self, node: usize) -> usize {
-        let mut root = node;
-        while self.parent[root] != root {
-            root = self.parent[root];
-        }
-        let mut cursor = node;
-        while self.parent[cursor] != root {
-            let next = self.parent[cursor];
-            self.parent[cursor] = root;
-            cursor = next;
-        }
-        root
-    }
-
-    fn join(&mut self, left: usize, right: usize) -> bool {
-        let left = self.find(left);
-        let right = self.find(right);
-        if left == right {
-            return false;
-        }
-        self.parent[left.max(right)] = left.min(right);
-        true
-    }
-}
-
 fn node_key(bus: &str, terminal: &str) -> (String, String) {
     (bus.to_ascii_lowercase(), terminal.to_owned())
 }
@@ -1050,8 +1014,8 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
         return Err("the network has no retained bus terminals".to_owned());
     }
 
-    let mut components = UnionFind::new(nodes.len());
-    let mut bus_components = UnionFind::new(bus_positions.len());
+    let mut components = powerio_core::union_find::UnionFind::new(nodes.len());
+    let mut bus_components = powerio_core::union_find::UnionFind::new(bus_positions.len());
     let mut edges = Vec::new();
     let mut meshed = false;
     for (line_row, line) in network.lines().iter().enumerate() {
@@ -1081,7 +1045,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
             })?;
         // Bus-level loops whose lines carry disjoint conductors are still a
         // conductor forest; only conductor joins below decide `meshed`.
-        bus_components.join(from_bus, to_bus);
+        bus_components.union_keep_smaller(from_bus, to_bus);
         for (conductor, (from_terminal, to_terminal)) in line
             .terminal_map_from
             .iter()
@@ -1104,7 +1068,7 @@ fn build_topology(network: &MulticonductorNetwork) -> Result<LinDist3FlowTopolog
                         line.name, line.bus_to
                     )
                 })?;
-            meshed |= !components.join(from, to);
+            meshed |= !components.union_keep_smaller(from, to);
             edges.push(Edge {
                 from,
                 to,
