@@ -131,7 +131,7 @@ impl Reader<'_> {
                     .unwrap_or(1.0);
                 // GridLAB-D's rounded permittivity of free space, F/mile.
                 let capacitance = calc_cable_capacitance(
-                    0.01420e-6 * permittivity,
+                    2.0 * std::f64::consts::PI * 0.01420e-6 * permittivity,
                     outer,
                     positive("conductor_diameter")? / 24.0,
                     strands,

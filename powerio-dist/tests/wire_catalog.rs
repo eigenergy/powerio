@@ -155,9 +155,9 @@ fn assert_matches(net: &MulticonductorNetwork, line: &str, reference: &Reference
             let k = i * n + j;
             let b = code.b_from[i][j] + code.b_to[i][j];
             for (what, got, want, tolerance) in [
-                ("r", code.r_series[i][j], reference.r[k], 1e-9 * z_scale),
-                ("x", code.x_series[i][j], reference.x[k], 1e-9 * z_scale),
-                ("b", b, reference.c_nf[k] * 1e-9 * omega, 1e-9 * b_scale),
+                ("r", code.r_series[i][j], reference.r[k], 1e-13 * z_scale),
+                ("x", code.x_series[i][j], reference.x[k], 1e-13 * z_scale),
+                ("b", b, reference.c_nf[k] * 1e-9 * omega, 1e-13 * b_scale),
             ] {
                 assert!(
                     (got - want).abs() <= tolerance,

@@ -395,8 +395,9 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
         let inner = outer - cable.inslayer;
         // OpenDSS takes the coaxial capacitance over the insulation for both
         // cable kinds, without Kersting's strand term.
-        row[i] =
-            TWO_PI * frequency * calc_cable_capacitance(EPSILON_0 * cable.epsr, outer, inner, None);
+        row[i] = TWO_PI
+            * frequency
+            * calc_cable_capacitance(TWO_PI * EPSILON_0 * cable.epsr, outer, inner, None);
     }
     let result = LineMatrices {
         r: z.iter()

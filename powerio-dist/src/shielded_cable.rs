@@ -6,8 +6,6 @@
 //! Every function works in the caller's own length unit; only ratios of
 //! lengths enter the logarithms.
 
-use std::f64::consts::PI;
-
 /// The radius of the circle through a concentric neutral's strand centres:
 /// half the cable's diameter over the neutral less one strand diameter.
 #[must_use]
@@ -43,21 +41,21 @@ pub(crate) fn calc_concentric_neutral_distance(
 }
 
 /// The shunt capacitance per unit length between a phase core of radius
-/// `inner_radius` and its grounded screen at `outer_radius`, for an
-/// insulation of absolute permittivity `permittivity` (farads per the
-/// caller's unit length):
+/// `inner_radius` and its grounded screen at `outer_radius`:
 ///
 /// ```text
 /// C = 2π ε / (ln(R / r) − ln(k r_s / R) / k)
 /// ```
 ///
-/// The strand term applies only to a concentric neutral of `k` strands of
-/// radius `r_s` stated through `strands` (Kersting); a solid screen, or the
-/// coaxial form OpenDSS uses for both cable kinds, passes `None` and reads
-/// `C = 2π ε / ln(R / r)`.
+/// `two_pi_permittivity` is `2π ε` for the insulation, in the caller's
+/// engine constants and unit (OpenDSS rounds 2π to 6.283185307 and states
+/// ε₀ per meter; GridLAB-D states 2π ε₀ per mile). The strand term applies
+/// only to a concentric neutral of `k` strands of radius `r_s` stated
+/// through `strands` (Kersting); a solid screen, or the coaxial form OpenDSS
+/// uses for both cable kinds, passes `None` and reads `C = 2π ε / ln(R / r)`.
 #[must_use]
 pub(crate) fn calc_cable_capacitance(
-    permittivity: f64,
+    two_pi_permittivity: f64,
     outer_radius: f64,
     inner_radius: f64,
     strands: Option<(f64, f64)>,
@@ -65,5 +63,5 @@ pub(crate) fn calc_cable_capacitance(
     let strand_term = strands.map_or(0.0, |(k, strand_radius)| {
         (k * strand_radius / outer_radius).ln() / k
     });
-    2.0 * PI * permittivity / ((outer_radius / inner_radius).ln() - strand_term)
+    two_pi_permittivity / ((outer_radius / inner_radius).ln() - strand_term)
 }

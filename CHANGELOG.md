@@ -272,7 +272,7 @@
   (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or untyped in MG-RAVENS), now with the position named.
   The MG-RAVENS `IEEE13_Assets` example names no neutral wire on ten of its eleven segments,
   which stay refused; its complete segment matches OpenDSS to 2e-5 (the exporter's 1609.3 m
-  mile), and the same conductors stated completely match to 1e-9.
+  mile), and the same conductors stated completely match to 1e-13 of each matrix's largest entry.
 - Transformer phase clocks in distribution CIM and MG-RAVENS are the vector group shift the
   physics stamps (the delta orientation of `powerio_dist::transformer`), read and written. A
   delta–wye unit is clock 1 when the high voltage winding leads (OpenDSS's default `leadlag`)

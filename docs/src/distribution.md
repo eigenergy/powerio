@@ -351,7 +351,8 @@ MG-RAVENS `IEEE13_Assets` example, as XML or JSON, is such a document: it
 names no wire for the neutral of ten of its eleven segments. Its one
 complete segment (`692675`, concentric neutral) matches OpenDSS to 2e-5,
 the difference of the exporter's 1609.3 m mile; the same conductors stated
-completely, neutral included, match OpenDSS to 1e-9.
+completely, neutral included, match OpenDSS to 1e-13 of each matrix's
+largest entry.
 
 Without a `BaseFrequency`, distribution CIM reads at 60 Hz in both CIM16 and
 CIM100, with a `READ.CIM_DIST.VALUE_DEFAULTED` finding. The namespace identifies

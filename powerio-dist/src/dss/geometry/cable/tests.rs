@@ -71,7 +71,9 @@ fn cable_and_bare_neutral_reduction_matches_pinned_native_values() {
     {
         assert!((actual - expected).abs() < 1e-15);
     }
-    assert!((matrices.b[0][0] - 1.311_763_202_020_904_5e-7).abs() < 1e-17);
+    // To a few ulps: an engine constant (OpenDSS's 2π is 6.283185307)
+    // shows at 3e-11.
+    assert!((matrices.b[0][0] / 1.311_763_202_020_904_5e-7 - 1.0).abs() < 1e-14);
     assert_eq!(matrices.b[0][1].to_bits(), 0.0_f64.to_bits());
     let mut unreduced = geometry();
     unreduced.reduce = false;
@@ -154,7 +156,7 @@ fn tape_shield_cable_matches_opendss() {
     assert!(close(matrices.r[0][0], 0.000_802_906_788_157_298_7));
     assert!(close(matrices.x[0][0], 0.000_429_278_946_174_020_5));
     let susceptance = 2.0 * std::f64::consts::PI * 60.0 * 1.663_587_801_621_559e-10;
-    assert!((matrices.b[0][0] - susceptance).abs() <= 1e-9 * susceptance);
+    assert!((matrices.b[0][0] - susceptance).abs() <= 1e-14 * susceptance);
 }
 
 #[test]
