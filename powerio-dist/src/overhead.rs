@@ -31,6 +31,16 @@ impl CarsonEarth {
     }
 }
 
+/// `ln D_e` of the equivalent earth return depth `D_e = 658.5 √(ρ / f)`
+/// metres, for an earth resistivity `rho` in ohm metres and a frequency in
+/// hertz. The one earth return depth: the OpenDSS geometry's
+/// [`CarsonEarth::log_depth`] and the OpenDSS line's earth return reactance
+/// coefficient `Kxg = Xg / ln D_e` read it.
+#[must_use]
+pub fn calc_earth_return_log_depth(rho: f64, frequency: f64) -> f64 {
+    (658.5 * (rho / frequency).sqrt()).ln()
+}
+
 /// The simplified Carson impedance of a conductor pair with earth return,
 /// per unit length, without the conductor's own internal impedance:
 ///

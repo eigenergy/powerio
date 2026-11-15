@@ -161,7 +161,7 @@ impl Geometry {
                 crate::overhead::CarsonEarth::new(
                     omega_mu / 8.0,
                     omega_mu / TWO_PI,
-                    (658.5 * (self.rho / frequency).sqrt()).ln(),
+                    crate::overhead::calc_earth_return_log_depth(self.rho, frequency),
                 ),
             );
         }

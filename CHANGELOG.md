@@ -228,7 +228,11 @@
   leakage round trip, neutral Kron reduction and the multiconductor to balanced lowering.
   `powerio_dist::overhead::calc_carson_impedance` (over a `CarsonEarth`, the earth return terms
   of a frequency and resistivity) and `calc_potential_coefficient` are the one simplified Carson
-  equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
+  equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry, and
+  `calc_earth_return_log_depth` (`ln(658.5 √(ρ / f))`) the one earth return depth behind the
+  OpenDSS geometry's Carson earth and the OpenDSS line's earth return coefficient `Kxg`. The
+  OpenDSS line code and line correct their matrices for frequency (`Rg (f/f₀ − 1)`,
+  `½ Kxg ln(f/f₀)`) in one place.
   The GridLAB-D overhead, underground and triplex readers and the triplex writer build its
   Carson coefficients in one place, the underground reader eliminates its cable returns through
   the one Kron reduction, and the concentric neutral ring, its equivalent GMR and distance, the

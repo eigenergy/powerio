@@ -37,6 +37,74 @@ pub(crate) struct LineMatrices {
     pub b: Vec<Vec<f64>>,
 }
 
+/// OpenDSS's earth return reactance coefficient,
+/// `Kxg := Xg / ln(658.5 * sqrt(rho / BaseFrequency))` (`Line.pas`, at
+/// creation, on `FetchLineCode` and on an `xg` or `rho` edit).
+pub(crate) fn calc_earth_return_kxg(xg: f64, rho: f64, base_frequency: f64) -> f64 {
+    xg / crate::overhead::calc_earth_return_log_depth(rho, base_frequency)
+}
+
+/// The length a frequency corrected matrix is scaled to.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LineScale {
+    /// The whole line: `(x − Xgmod) · length · f/f₀`, as `Line.CalcYPrim`
+    /// orders it.
+    Length(f64),
+    /// Per meter of a code shared by several lines:
+    /// `(x − Xgmod) · f/f₀ / meters`.
+    PerMeter(f64),
+}
+
+/// A line's earth return terms (`Rg`, `Xg` and the captured `Kxg`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EarthReturn {
+    pub rg: f64,
+    pub xg: f64,
+    pub kxg: f64,
+}
+
+impl EarthReturn {
+    /// OpenDSS's frequency correction of a line's matrices in place
+    /// (`Line.CalcYPrim` outside the long line model): every series entry
+    /// gains `Rg (f/f₀ − 1)` and loses `Xgmod = ½ Kxg ln(f/f₀)` (none when
+    /// `Xg = 0`), reactance and susceptance scale by `f/f₀`, and every
+    /// entry is scaled to `scale`. False when an entry becomes nonfinite.
+    /// The one correction of the line code and the line.
+    pub(crate) fn correct(
+        &self,
+        matrices: &mut LineMatrices,
+        ratio: f64,
+        scale: LineScale,
+    ) -> bool {
+        let xgmod = if self.xg == 0.0 {
+            0.0
+        } else {
+            0.5 * self.kxg * ratio.ln()
+        };
+        let LineMatrices { r, x, b } = matrices;
+        for ((r, x), b) in r.iter_mut().zip(x.iter_mut()).zip(b.iter_mut()) {
+            for ((r, x), b) in r.iter_mut().zip(x.iter_mut()).zip(b.iter_mut()) {
+                match scale {
+                    LineScale::Length(length) => {
+                        *r = (*r + self.rg * (ratio - 1.0)) * length;
+                        *x = (*x - xgmod) * length * ratio;
+                        *b *= length * ratio;
+                    }
+                    LineScale::PerMeter(meters) => {
+                        *r = (*r + self.rg * (ratio - 1.0)) / meters;
+                        *x = (*x - xgmod) * ratio / meters;
+                        *b = *b * ratio / meters;
+                    }
+                }
+                if !r.is_finite() || !x.is_finite() || !b.is_finite() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
 impl State {
     /// Total series impedance and whole-line charging for a direct linecode
     /// assignment, before further Line setters. Native FetchLineCode copies
@@ -67,13 +135,12 @@ impl State {
             length * line_meters / code_meters
         };
         let ratio = operating / self.frequency;
-        let xgmod = if self.xg == 0.0 {
-            0.0
-        } else {
-            let kxg = self.xg / (658.5 * (self.rho / self.frequency).sqrt()).ln();
-            0.5 * kxg * ratio.ln()
+        let earth = EarthReturn {
+            rg: self.rg,
+            xg: self.xg,
+            kxg: calc_earth_return_kxg(self.xg, self.rho, self.frequency),
         };
-        let (mut r, mut x, mut b) = if self.sequence && self.n == 1 {
+        let (r, x, b) = if self.sequence && self.n == 1 {
             (
                 vec![vec![self.seq[0]]],
                 vec![vec![self.seq[1]]],
@@ -82,17 +149,11 @@ impl State {
         } else {
             (self.r.clone(), self.x.clone(), self.b.clone())
         };
-        for i in 0..self.n {
-            for j in 0..self.n {
-                r[i][j] = (r[i][j] + self.rg * (ratio - 1.0)) * length;
-                x[i][j] = (x[i][j] - xgmod) * length * ratio;
-                b[i][j] *= length * ratio;
-                if !r[i][j].is_finite() || !x[i][j].is_finite() || !b[i][j].is_finite() {
-                    return Err("line primitive became nonfinite".into());
-                }
-            }
+        let mut matrices = LineMatrices { r, x, b };
+        if !earth.correct(&mut matrices, ratio, LineScale::Length(length)) {
+            return Err("line primitive became nonfinite".into());
         }
-        Ok(LineMatrices { r, x, b })
+        Ok(matrices)
     }
 
     pub(super) fn new(frequency: f64) -> Self {
