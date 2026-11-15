@@ -3701,17 +3701,18 @@ fn n_winding_base(w: &DistWinding, s: f64) -> Option<f64> {
     n_winding_impedance_base(n_winding_phase_count(w), n_winding_bmopf_v_nom(w), s)
 }
 
+/// The `delta_roll` of a DELTA winding: the one delta orientation
+/// ([`crate::transformer::calc_delta_direction`]), so a unit that states no
+/// roll writes the orientation it has (`+1` for a BMOPF n-winding unit, as
+/// BMOPFTools defaults it) and reads back unchanged. `None` for a WYE
+/// winding or an orientation the model cannot state.
 fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &DistWinding) -> Option<i64> {
     if w.conn != DistWindingConn::Delta {
         return None;
     }
-    t.extras
-        .get(BMOPF_DELTA_ROLLS_EXTRA)
-        .and_then(Value::as_object)
-        .and_then(|rolls| rolls.get(&(idx + 1).to_string()))
-        .and_then(Value::as_i64)
-        .filter(|roll| *roll == 1 || *roll == -1)
-        .or(Some(-1))
+    crate::transformer::calc_delta_direction(t, idx)
+        .ok()
+        .map(i64::from)
 }
 
 /// The phase and neutral label lists, from the bus terminal names. The rule

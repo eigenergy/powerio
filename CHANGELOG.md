@@ -143,6 +143,11 @@
   `powerio_dist::overhead::calc_carson_impedance` and `calc_potential_coefficient` are the one
   simplified Carson equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
   Geometry, Kron and lowered impedances can move in the last place.
+- Fix: the BMOPF writer states a DELTA winding's `delta_roll` from the one
+  delta orientation (`calc_delta_direction`). An n-winding unit that stated
+  no roll was written with `-1` and read back with that roll, against the
+  `+1` BMOPFTools default the model used, so a round trip reversed the ring;
+  it is now written `+1`, and an invalid stated roll is no longer written.
 - BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
   schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
   `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.
