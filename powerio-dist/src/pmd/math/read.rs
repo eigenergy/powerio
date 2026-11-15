@@ -1910,45 +1910,8 @@ pub(super) fn br2sc_impedance(
     out
 }
 
-/// Gauss-Jordan inverse of a small complex matrix; `None` when singular.
+/// The dense inverse ([`crate::dense::invert_dense_matrix`]); `None` when a
+/// pivot is 1e-300 or smaller.
 fn invert(a: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    let n = a.len();
-    let mut m: Vec<Vec<Complex64>> = a
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut r = row.clone();
-            r.extend((0..n).map(|j| {
-                if i == j {
-                    Complex64::new(1.0, 0.0)
-                } else {
-                    Complex64::default()
-                }
-            }));
-            r
-        })
-        .collect();
-    for col in 0..n {
-        let pivot = (col..n).max_by(|&a, &b| m[a][col].norm().total_cmp(&m[b][col].norm()))?;
-        if m[pivot][col].norm() < 1e-300 {
-            return None;
-        }
-        m.swap(col, pivot);
-        let p = m[col][col];
-        for v in &mut m[col] {
-            *v /= p;
-        }
-        for row in 0..n {
-            if row != col {
-                let factor = m[row][col];
-                if factor != Complex64::default() {
-                    let pivot_row = m[col].clone();
-                    for (v, pv) in m[row].iter_mut().zip(&pivot_row) {
-                        *v -= factor * pv;
-                    }
-                }
-            }
-        }
-    }
-    Some(m.into_iter().map(|row| row[n..].to_vec()).collect())
+    crate::dense::invert_dense_matrix(a, 1e-300)
 }

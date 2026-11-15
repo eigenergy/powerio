@@ -236,20 +236,20 @@ impl Geometry {
                 potential[j][i] = potential[i][j];
             }
         }
-        let inverse = inverse(potential)?;
+        let inverse = crate::dense::invert_dense_matrix(&potential, 0.0)
+            .ok_or("geometry potential matrix is singular")?;
         let keep = self
             .reduction_order
             .unwrap_or(if self.reduce { self.phases } else { n });
+        // OpenDSS eliminates one conductor at a time, the last first.
         for k in (keep..n).rev() {
-            if z[k][k] == Complex::default() {
-                return Err("geometry neutral reduction has a zero pivot".into());
-            }
-            for i in 0..k {
-                for j in 0..k {
-                    let correction = z[i][k] * z[k][j] / z[k][k];
-                    z[i][j] -= correction;
-                }
-            }
+            z = crate::kron::calc_kron_reduced_impedance(
+                &z,
+                &(0..k).collect::<Vec<_>>(),
+                &[k],
+                0.0,
+            )
+            .ok_or("geometry neutral reduction has a zero pivot")?;
         }
         let result = LineMatrices {
             r: z.iter()
@@ -283,41 +283,6 @@ impl Geometry {
         }
         Ok(result)
     }
-}
-
-fn inverse(mut a: Vec<Vec<f64>>) -> Result<Vec<Vec<f64>>, String> {
-    let n = a.len();
-    let mut inverse = vec![vec![0.0; n]; n];
-    for (i, row) in inverse.iter_mut().enumerate() {
-        row[i] = 1.0;
-    }
-    for k in 0..n {
-        let pivot = (k..n)
-            .max_by(|&i, &j| a[i][k].abs().total_cmp(&a[j][k].abs()))
-            .unwrap();
-        if a[pivot][k] == 0.0 {
-            return Err("geometry potential matrix is singular".into());
-        }
-        a.swap(k, pivot);
-        inverse.swap(k, pivot);
-        let diagonal = a[k][k];
-        for j in 0..n {
-            a[k][j] /= diagonal;
-            inverse[k][j] /= diagonal;
-        }
-        let row = a[k].clone();
-        let inverse_row = inverse[k].clone();
-        for i in 0..n {
-            if i != k {
-                let factor = a[i][k];
-                for j in 0..n {
-                    a[i][j] -= factor * row[j];
-                    inverse[i][j] -= factor * inverse_row[j];
-                }
-            }
-        }
-    }
-    Ok(inverse)
 }
 
 #[cfg(test)]

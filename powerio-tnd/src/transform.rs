@@ -1439,9 +1439,8 @@ fn kron_or_select(
     if matrix_is_near_zero(&m_pn) && matrix_is_near_zero(&m_np) && matrix_is_near_zero(&m_nn) {
         return Ok(m_pp);
     }
-    let inv_nn = invert_complex_matrix(&m_nn)?;
-    let correction = matmul(&matmul(&m_pn, &inv_nn), &m_np);
-    Ok(matrix_sub(&m_pp, &correction))
+    powerio_dist::kron::calc_kron_reduced_impedance(matrix, active, neutral, f64::EPSILON)
+        .ok_or_else(|| "neutral block is singular".to_owned())
 }
 
 fn matrix_is_near_zero(matrix: &[Vec<Complex64>]) -> bool {
@@ -1465,86 +1464,6 @@ fn validate_indices(matrix: &[Vec<Complex64>], indices: &[usize]) -> Result<(), 
 fn submatrix(matrix: &[Vec<Complex64>], rows: &[usize], cols: &[usize]) -> Vec<Vec<Complex64>> {
     rows.iter()
         .map(|&row| cols.iter().map(|&col| matrix[row][col]).collect())
-        .collect()
-}
-
-#[allow(clippy::needless_range_loop)]
-fn invert_complex_matrix(matrix: &[Vec<Complex64>]) -> Result<Vec<Vec<Complex64>>, String> {
-    let n = matrix.len();
-    if n == 0 || matrix.iter().any(|row| row.len() != n) {
-        return Err("neutral block is not square".to_owned());
-    }
-    let mut aug = vec![vec![Complex64::new(0.0, 0.0); 2 * n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            aug[i][j] = matrix[i][j];
-        }
-        aug[i][n + i] = Complex64::new(1.0, 0.0);
-    }
-
-    for col in 0..n {
-        let pivot = (col..n)
-            .max_by(|&a, &b| aug[a][col].norm_sqr().total_cmp(&aug[b][col].norm_sqr()))
-            .ok_or_else(|| "neutral block is singular".to_owned())?;
-        if aug[pivot][col].norm() <= f64::EPSILON {
-            return Err("neutral block is singular".to_owned());
-        }
-        if pivot != col {
-            aug.swap(pivot, col);
-        }
-        let pivot_value = aug[col][col];
-        for j in 0..(2 * n) {
-            aug[col][j] /= pivot_value;
-        }
-        for row in 0..n {
-            if row == col {
-                continue;
-            }
-            let factor = aug[row][col];
-            if factor.norm() <= f64::EPSILON {
-                continue;
-            }
-            for j in 0..(2 * n) {
-                let pivot_entry = aug[col][j];
-                aug[row][j] -= factor * pivot_entry;
-            }
-        }
-    }
-
-    Ok(aug
-        .into_iter()
-        .map(|row| row.into_iter().skip(n).collect())
-        .collect())
-}
-
-fn matmul(a: &[Vec<Complex64>], b: &[Vec<Complex64>]) -> Vec<Vec<Complex64>> {
-    if a.is_empty() || b.is_empty() {
-        return Vec::new();
-    }
-    let rows = a.len();
-    let cols = b[0].len();
-    let inner = b.len();
-    let mut out = vec![vec![Complex64::new(0.0, 0.0); cols]; rows];
-    for i in 0..rows {
-        for k in 0..inner {
-            for j in 0..cols {
-                out[i][j] += a[i][k] * b[k][j];
-            }
-        }
-    }
-    out
-}
-
-fn matrix_sub(a: &[Vec<Complex64>], b: &[Vec<Complex64>]) -> Vec<Vec<Complex64>> {
-    a.iter()
-        .zip(b.iter())
-        .map(|(a_row, b_row)| {
-            a_row
-                .iter()
-                .zip(b_row.iter())
-                .map(|(&a_value, &b_value)| a_value - b_value)
-                .collect()
-        })
         .collect()
 }
 

@@ -276,79 +276,10 @@ impl MulticonductorAdmittance {
 /// as singular.
 const SINGULAR_PIVOT_OHMS: f64 = 1e-14;
 
-/// Small dense complex inverse by Gaussian elimination with partial
-/// pivoting, for conductor count sized matrices. `None` when a pivot is
+/// The dense inverse of a series impedance: `None` when a pivot is
 /// [`SINGULAR_PIVOT_OHMS`] or smaller (or NaN).
 fn invert(matrix: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    invert_above(matrix, SINGULAR_PIVOT_OHMS)
-}
-
-/// [`invert`] with the pivot magnitude at or below which the matrix is
-/// singular stated by the caller; zero refuses only exact singularity.
-fn invert_above(matrix: &[Vec<Complex64>], singular_pivot: f64) -> Option<Vec<Vec<Complex64>>> {
-    let n = matrix.len();
-    // A scalar's inverse is its scaled reciprocal (`Complex::finv`), which
-    // neither overflows nor underflows for an extreme impedance.
-    if let [row] = matrix
-        && let [z] = row.as_slice()
-    {
-        let magnitude = z.norm();
-        if magnitude.is_nan() || magnitude <= singular_pivot {
-            return None;
-        }
-        return Some(vec![vec![z.finv()]]);
-    }
-    let mut work: Vec<Vec<Complex64>> = matrix.to_vec();
-    let mut inverse: Vec<Vec<Complex64>> = (0..n)
-        .map(|row| {
-            (0..n)
-                .map(|column| {
-                    if row == column {
-                        Complex64::new(1.0, 0.0)
-                    } else {
-                        Complex64::new(0.0, 0.0)
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    for pivot in 0..n {
-        // The first of equal largest magnitudes, and a pivot no larger than
-        // `SINGULAR_PIVOT_OHMS` is singular: a near zero jumper's impedance
-        // would otherwise stamp an admittance of order 1e14 and beyond.
-        let mut best = pivot;
-        for row in pivot + 1..n {
-            if work[row][pivot].norm() > work[best][pivot].norm() {
-                best = row;
-            }
-        }
-        if work[best][pivot].norm().is_nan() || work[best][pivot].norm() <= singular_pivot {
-            return None;
-        }
-        work.swap(pivot, best);
-        inverse.swap(pivot, best);
-        let lead = work[pivot][pivot];
-        for column in 0..n {
-            work[pivot][column] /= lead;
-            inverse[pivot][column] /= lead;
-        }
-        for row in 0..n {
-            if row == pivot {
-                continue;
-            }
-            let factor = work[row][pivot];
-            if factor.norm() == 0.0 {
-                continue;
-            }
-            for column in 0..n {
-                let w = work[pivot][column];
-                let i = inverse[pivot][column];
-                work[row][column] -= factor * w;
-                inverse[row][column] -= factor * i;
-            }
-        }
-    }
-    Some(inverse)
+    powerio_dist::dense::invert_dense_matrix(matrix, SINGULAR_PIVOT_OHMS)
 }
 
 struct Stamper {

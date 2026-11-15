@@ -57,6 +57,7 @@ mod collect;
 mod connection;
 pub mod convert;
 mod current_form;
+pub mod dense;
 pub mod diagnostics;
 pub mod dss;
 pub mod error;

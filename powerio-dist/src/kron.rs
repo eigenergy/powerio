@@ -272,6 +272,86 @@ fn submatrix(matrix: &ConductorMatrix, keep: &[usize]) -> ConductorMatrix {
         .collect()
 }
 
+/// Kron reduction of a series impedance matrix: the impedance seen at the
+/// `keep` conductors when the `eliminate` conductors carry no voltage,
+///
+/// ```text
+/// Z_red = Z_kk − Z_ke Z_ee⁻¹ Z_ek
+/// ```
+///
+/// with rows and columns of the result in `keep` order. A single eliminated
+/// conductor `n` reduces entrywise as `z_ij − z_in z_nj / z_nn`. `None` when
+/// `Z_ee` has a pivot of `singular_pivot` or smaller
+/// ([`crate::dense::invert_dense_matrix`]), or an index lies outside the
+/// matrix. The one neutral elimination: [`neutral_kron_reduce`] and the
+/// multiconductor to balanced lowering in `powerio-tnd` read it.
+#[must_use]
+pub fn calc_kron_reduced_impedance(
+    matrix: &[Vec<Complex64>],
+    keep: &[usize],
+    eliminate: &[usize],
+    singular_pivot: f64,
+) -> Option<Vec<Vec<Complex64>>> {
+    let n = matrix.len();
+    if matrix.iter().any(|row| row.len() != n) || keep.iter().chain(eliminate).any(|&i| i >= n) {
+        return None;
+    }
+    if let [neutral] = eliminate {
+        let z_nn = matrix[*neutral][*neutral];
+        if z_nn.norm().is_nan() || z_nn.norm() <= singular_pivot {
+            return None;
+        }
+        return Some(
+            keep.iter()
+                .map(|&row| {
+                    keep.iter()
+                        .map(|&column| {
+                            matrix[row][column]
+                                - matrix[row][*neutral] * matrix[*neutral][column] / z_nn
+                        })
+                        .collect()
+                })
+                .collect(),
+        );
+    }
+    let block = |rows: &[usize], columns: &[usize]| -> Vec<Vec<Complex64>> {
+        rows.iter()
+            .map(|&row| columns.iter().map(|&column| matrix[row][column]).collect())
+            .collect()
+    };
+    let inverse = crate::dense::invert_dense_matrix(&block(eliminate, eliminate), singular_pivot)?;
+    let product = |a: &[Vec<Complex64>], b: &[Vec<Complex64>]| -> Vec<Vec<Complex64>> {
+        a.iter()
+            .map(|row| {
+                (0..b.first().map_or(0, Vec::len))
+                    .map(|column| {
+                        row.iter()
+                            .zip(b)
+                            .fold(Complex64::new(0.0, 0.0), |sum, (x, b_row)| {
+                                sum + x * b_row[column]
+                            })
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    let correction = product(
+        &product(&block(keep, eliminate), &inverse),
+        &block(eliminate, keep),
+    );
+    Some(
+        keep.iter()
+            .zip(&correction)
+            .map(|(&row, correction)| {
+                keep.iter()
+                    .zip(correction)
+                    .map(|(&column, value)| matrix[row][column] - value)
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
 fn reduce_series(
     r: &ConductorMatrix,
     x: &ConductorMatrix,
@@ -309,11 +389,18 @@ fn reduce_series(
         .iter()
         .map(|&column| -z(neutral, column) / z_nn)
         .collect::<Vec<_>>();
+    let full: Vec<Vec<Complex64>> = (0..n)
+        .map(|row| (0..n).map(|column| z(row, column)).collect())
+        .collect();
+    let reduced = calc_kron_reduced_impedance(&full, &keep, &[neutral], 0.0).ok_or_else(|| {
+        fail(format!(
+            "{label} neutral self impedance is singular or near-singular"
+        ))
+    })?;
     let mut r_reduced = vec![vec![0.0; keep.len()]; keep.len()];
     let mut x_reduced = vec![vec![0.0; keep.len()]; keep.len()];
-    for (out_row, &row) in keep.iter().enumerate() {
-        for (out_column, &column) in keep.iter().enumerate() {
-            let value = z(row, column) - z(row, neutral) * z(neutral, column) / z_nn;
+    for (out_row, row) in reduced.iter().enumerate() {
+        for (out_column, value) in row.iter().enumerate() {
             if !value.re.is_finite() || !value.im.is_finite() {
                 return Err(fail(format!(
                     "{label} produced a non-finite reduced impedance"

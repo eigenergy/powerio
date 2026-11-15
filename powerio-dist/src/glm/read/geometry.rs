@@ -115,9 +115,13 @@ impl Reader<'_> {
         let mut code = DistLineCode::new(name, resistance, reactance);
         if self.line_capacitance {
             let potential = self.geometry_potential(spacing, &labels, &conductors)?;
-            let capacitance = inverse(&potential).ok_or_else(|| {
-                self.error(config, "geometry potential matrix is singular or nonfinite")
-            })?;
+            // Singular or nonfinite inputs fail instead of fabricating
+            // capacitance.
+            let capacitance = crate::dense::invert_dense_matrix(&potential, 0.0)
+                .filter(|inverse| inverse.iter().flatten().all(|v| v.is_finite()))
+                .ok_or_else(|| {
+                    self.error(config, "geometry potential matrix is singular or nonfinite")
+                })?;
             let factor =
                 2.0 * std::f64::consts::PI.powi(2) * self.net.base_frequency() * 0.014_240e-6
                     / METERS_PER_MILE;
@@ -228,45 +232,6 @@ impl Reader<'_> {
         }
         Ok(potential)
     }
-}
-
-// At most four conductors. Partial pivoting avoids phase-order-dependent zero
-// pivots; singular/nonfinite inputs fail instead of fabricating capacitance.
-fn inverse(matrix: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
-    let n = matrix.len();
-    let mut a = matrix.to_vec();
-    let mut result = vec![vec![0.0; n]; n];
-    for (i, row) in result.iter_mut().enumerate() {
-        row[i] = 1.0;
-    }
-    for i in 0..n {
-        let pivot = (i..n).max_by(|&j, &k| a[j][i].abs().total_cmp(&a[k][i].abs()))?;
-        a.swap(i, pivot);
-        result.swap(i, pivot);
-        let divisor = a[i][i];
-        if divisor == 0.0 || !divisor.is_finite() {
-            return None;
-        }
-        for j in 0..n {
-            a[i][j] /= divisor;
-            result[i][j] /= divisor;
-        }
-        for j in 0..n {
-            if i == j {
-                continue;
-            }
-            let factor = a[j][i];
-            for k in 0..n {
-                a[j][k] -= factor * a[i][k];
-                result[j][k] -= factor * result[i][k];
-            }
-        }
-    }
-    result
-        .iter()
-        .flatten()
-        .all(|v| v.is_finite())
-        .then_some(result)
 }
 
 pub(super) fn rating_property(class: &str, name: &str) -> bool {

@@ -5,52 +5,17 @@ use num_complex::Complex64 as Complex;
 
 type Matrix = Vec<Vec<Complex>>;
 
-fn inverse(mut matrix: Matrix) -> Result<Matrix, String> {
-    let n = matrix.len();
-    let mut result = vec![vec![Complex::default(); n]; n];
-    for (i, row) in result.iter_mut().enumerate() {
-        row[i] = Complex::new(1.0, 0.0);
-    }
-    for k in 0..n {
-        let pivot = (k..n)
-            .max_by(|&a, &b| matrix[a][k].norm_sqr().total_cmp(&matrix[b][k].norm_sqr()))
-            .unwrap();
-        if matrix[pivot][k] == Complex::default() {
-            return Err("open Line series impedance is singular".into());
-        }
-        matrix.swap(k, pivot);
-        result.swap(k, pivot);
-        let diagonal = matrix[k][k];
-        for j in 0..n {
-            matrix[k][j] /= diagonal;
-            result[k][j] /= diagonal;
-        }
-        let row = matrix[k].clone();
-        let inv_row = result[k].clone();
-        for i in 0..n {
-            if i == k {
-                continue;
-            }
-            let factor = matrix[i][k];
-            for j in 0..n {
-                matrix[i][j] -= factor * row[j];
-                result[i][j] -= factor * inv_row[j];
-            }
-        }
-    }
-    Ok(result)
-}
-
 fn primitive(code: &DistLineCode, length: f64, closed: &[Vec<bool>; 2]) -> Result<Matrix, String> {
     let n = code.r_series.len();
-    let impedance = (0..n)
+    let impedance: Matrix = (0..n)
         .map(|i| {
             (0..n)
                 .map(|j| Complex::new(code.r_series[i][j], code.x_series[i][j]) * length)
                 .collect()
         })
         .collect();
-    let series = inverse(impedance)?;
+    let series = crate::dense::invert_dense_matrix(&impedance, 0.0)
+        .ok_or("open Line series impedance is singular")?;
     let mut matrix = vec![vec![Complex::default(); 2 * n]; 2 * n];
     for i in 0..n {
         for j in 0..n {
