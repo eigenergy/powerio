@@ -83,10 +83,11 @@ impl LoadPower {
                 }
             }
         } else {
-            self.kvar = self.kw * (1.0 / (self.pf * self.pf) - 1.0).sqrt();
-            if self.pf < 0.0 {
-                self.kvar = -self.kvar;
-            }
+            self.kvar = self.kw
+                * crate::electrical::calc_reactive_ratio(
+                    self.pf,
+                    crate::electrical::ReactiveRatioForm::OpenDss,
+                );
         }
     }
 }

@@ -42,17 +42,39 @@ pub fn calc_power_factor_sine(pf: f64) -> f64 {
     ((1.0 - magnitude) * (1.0 + magnitude)).sqrt()
 }
 
-/// The reactive over active power ratio a power factor fixes, OpenDSS and
-/// BMOPF by sign: `Q / P = tan(acos |pf|)` with `pf > 0`, Q on the same side
-/// as P, and the opposite sign for `pf < 0`. This is
-/// [`calc_power_factor_sine`]` / pf`, infinite at `pf = ±0` (signed as the
-/// zero) and `NaN` when `|pf| > 1`.
-#[must_use]
-pub fn calc_reactive_ratio(pf: f64) -> f64 {
-    calc_power_factor_sine(pf) / pf
+/// How [`calc_reactive_ratio`] forms `tan(acos |pf|)`. The forms are the
+/// same ratio and can differ in the last place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReactiveRatioForm {
+    /// [`calc_power_factor_sine`]` / pf`, free of the cancellation of
+    /// `1 − pf²` near unity: every reader and model that follows no
+    /// engine's rounding.
+    Sine,
+    /// `√(1 / pf² − 1)`, negated for `pf < 0`: OpenDSS's `Load`,
+    /// `Generator`, `Storage` and `PVSystem`
+    /// (`kvarBase := kWBase * Sqrt(1.0 / Sqr(PFNominal) - 1.0)`, DSS C-API
+    /// 0.14.5).
+    OpenDss,
 }
 
-/// The derivative of [`calc_reactive_ratio`] with respect to `pf`,
+/// The reactive over active power ratio a power factor fixes, OpenDSS and
+/// BMOPF by sign: `Q / P = tan(acos |pf|)` with `pf > 0`, Q on the same side
+/// as P, and the opposite sign for `pf < 0`, formed as `form` states.
+/// Infinite at `pf = ±0` and `NaN` when `|pf| > 1`.
+#[must_use]
+pub fn calc_reactive_ratio(pf: f64, form: ReactiveRatioForm) -> f64 {
+    match form {
+        ReactiveRatioForm::Sine => calc_power_factor_sine(pf) / pf,
+        ReactiveRatioForm::OpenDss => {
+            let ratio = (1.0 / (pf * pf) - 1.0).sqrt();
+            if pf < 0.0 { -ratio } else { ratio }
+        }
+    }
+}
+
+/// The derivative of [`calc_reactive_ratio`] with respect to `pf` (either
+/// form),
 /// `−1 / (pf² √(1 − pf²))` on `0 < |pf| < 1`.
 #[must_use]
 pub fn calc_reactive_ratio_derivative(pf: f64) -> f64 {
@@ -61,7 +83,7 @@ pub fn calc_reactive_ratio_derivative(pf: f64) -> f64 {
 
 /// The coefficients `[a, b]` of a fixed power factor written as the row
 /// `a P + b Q = 0`: `a = √((1 − |pf|)(1 + |pf|))` and `b = −pf`, so that
-/// `Q / P = a / pf` ([`calc_reactive_ratio`]) and a tiny nonzero power factor
+/// `Q / P = a / pf` ([`calc_reactive_ratio`]'s [`ReactiveRatioForm::Sine`]) and a tiny nonzero power factor
 /// keeps a finite row.
 #[must_use]
 pub fn calc_power_factor_coefficients(pf: f64) -> [f64; 2] {
@@ -150,12 +172,15 @@ mod tests {
     fn power_factor_relations_agree_with_the_trigonometric_forms() {
         for pf in [0.9_f64, -0.85, 0.3, 1.0, -1.0] {
             let ratio = pf.abs().acos().tan().copysign(pf);
-            assert!((calc_reactive_ratio(pf) - ratio).abs() < 1e-12);
+            assert!((calc_reactive_ratio(pf, ReactiveRatioForm::Sine) - ratio).abs() < 1e-12);
+            assert!((calc_reactive_ratio(pf, ReactiveRatioForm::OpenDss) - ratio).abs() < 1e-12);
             let [a, b] = calc_power_factor_coefficients(pf);
             assert!((-a / b - ratio).abs() < 1e-12);
         }
         let (pf, h) = (0.8_f64, 1e-6);
-        let fd = (calc_reactive_ratio(pf + h) - calc_reactive_ratio(pf - h)) / (2.0 * h);
+        let fd = (calc_reactive_ratio(pf + h, ReactiveRatioForm::Sine)
+            - calc_reactive_ratio(pf - h, ReactiveRatioForm::Sine))
+            / (2.0 * h);
         assert!((calc_reactive_ratio_derivative(pf) - fd).abs() < 1e-6);
         let fd = (calc_power_factor_coefficients(pf + h)[0]
             - calc_power_factor_coefficients(pf - h)[0])

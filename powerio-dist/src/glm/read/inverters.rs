@@ -107,7 +107,13 @@ impl Reader<'_> {
         } else {
             Complex64::new(
                 available,
-                -(available * powerio_core::electrical::calc_reactive_ratio(pf).abs()).copysign(pf),
+                -(available
+                    * powerio_core::electrical::calc_reactive_ratio(
+                        pf,
+                        powerio_core::electrical::ReactiveRatioForm::Sine,
+                    )
+                    .abs())
+                .copysign(pf),
             )
         };
         let maximum = rating * maps.len() as f64;

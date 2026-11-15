@@ -204,7 +204,13 @@ pub(super) fn load(
             if pf > 1.0 {
                 return Err(row.bad("cosphi", "power factor exceeds one"));
             }
-            (p, p * powerio_core::electrical::calc_reactive_ratio(pf))
+            (
+                p,
+                p * powerio_core::electrical::calc_reactive_ratio(
+                    pf,
+                    powerio_core::electrical::ReactiveRatioForm::Sine,
+                ),
+            )
         }
         _ => return Err(row.bad("Flag_Lf", "unsupported balanced load mode")),
     };

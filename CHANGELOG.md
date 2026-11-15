@@ -112,17 +112,20 @@
   `powerio_dist::electrical`) holds the scalar formulas both network families share:
   `calc_impedance_base` (`V² / S`, `None` for an unusable base) and `calc_admittance_base`
   (`S / (V · V)`, the same refusals), `calc_power_factor_sine`,
-  `calc_reactive_ratio` and `calc_power_factor_coefficients` with
+  `calc_reactive_ratio` (with `ReactiveRatioForm`: `Sine`, `√(1 − pf²)/pf`, or `OpenDss`,
+  OpenDSS's `√(1/pf² − 1)` signed as `pf`) and `calc_power_factor_coefficients` with
   `calc_reactive_ratio_derivative` and `calc_power_factor_coefficients_derivative`, and the
   voltage power law term `calc_voltage_power_term` (and `calc_voltage_power_terms`) with its
   ratio floor `LOAD_VOLTAGE_RATIO_FLOOR`. The per unit bases of the BMOPF, PMD, CGMES, UCTE,
   XIIDM, Sienna, balanced MG-RAVENS, SINCAL, OpenDSS (source, motor), GridLAB-D (regulator) and
   multiconductor OPF code, every `Q = P tan(acos pf)` of the OpenDSS (load, generator, storage),
   GridLAB-D, SINCAL, PSS/E (VSC converter) and multiconductor OPF code, and every load law
-  evaluation call it. Behaviour changes, each in the last place: a GridLAB-D regulator's
-  resistance, an OpenDSS no-load percentage written from a terminal coil shunt, OpenDSS storage
-  reactive power (`√(1/pf² − 1)` became `√(1 − pf²)/pf`) and a PSS/E VSC converter's reactive
-  power. The admittance bases of the CGMES reader and writer, the balanced MG-RAVENS reader and
+  evaluation call it. The OpenDSS load, generator and storage readers take the `OpenDss` form,
+  the pinned engine's arithmetic, and every other caller the `Sine` form. Behaviour changes,
+  each in the last place: a GridLAB-D regulator's resistance, an OpenDSS no-load percentage
+  written from a terminal coil shunt, an OpenDSS generator's reactive power from `kW` and `pf`
+  (`tan(acos pf)` became the engine's `√(1/pf² − 1)`) and a PSS/E VSC converter's reactive
+  power. OpenDSS load and storage reactive power is unchanged. The admittance bases of the CGMES reader and writer, the balanced MG-RAVENS reader and
   writer, the Sienna reader (`NATURAL_UNITS`), the BMOPF writer's no-load shunt and the
   GridLAB-D FBS default core call `calc_admittance_base`, bit for bit as before.
   A base formed over a zero, negative or nonfinite voltage or power (or whose quotient

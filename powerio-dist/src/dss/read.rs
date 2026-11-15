@@ -697,10 +697,11 @@ impl Reader<'_> {
                     }
                 }
             } else {
-                s.kvar = s.kw * (1.0 / (s.pf * s.pf) - 1.0).sqrt();
-                if s.pf < 0.0 {
-                    s.kvar = -s.kvar;
-                }
+                s.kvar = s.kw
+                    * crate::electrical::calc_reactive_ratio(
+                        s.pf,
+                        crate::electrical::ReactiveRatioForm::OpenDss,
+                    );
             }
         }
         s
@@ -1525,7 +1526,11 @@ impl Reader<'_> {
                         q_written = true;
                     }
                     if pf != 0.0 {
-                        kvar = kw * powerio_core::electrical::calc_reactive_ratio(pf);
+                        kvar = kw
+                            * powerio_core::electrical::calc_reactive_ratio(
+                                pf,
+                                powerio_core::electrical::ReactiveRatioForm::OpenDss,
+                            );
                     }
                 }
                 _ => {
