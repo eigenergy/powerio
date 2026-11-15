@@ -240,8 +240,12 @@ fn neutral_grounded(net: &MulticonductorNetwork, bus: &str) -> bool {
         .is_some_and(|b| b.grounded.iter().any(|t| terminal_phase(t) == Some("N")))
 }
 
-/// Whether a terminal name is a phase conductor: anything the shared phase
-/// vocabulary does not read as the neutral (`4`, `n`, `N`).
+/// Whether a terminal name is a phase conductor: anything the CIM wire
+/// convention ([`powerio_core::cim::terminal_phase`]) does not write as the
+/// neutral `N` (`4`, `n`, `N`), which the readers read back as terminal `4`
+/// on any bus. This is not [`crate::model::calc_terminal_role`], which calls
+/// a `4` neutral only in an exact `1` to `4` set: a CIM read single phase
+/// bus `[1, 4]` would count its neutral as a phase.
 fn is_hot(terminal: &str) -> bool {
     terminal_phase(terminal) != Some("N")
 }

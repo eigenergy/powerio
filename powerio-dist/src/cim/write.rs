@@ -57,20 +57,18 @@ fn esc_text(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// A terminal name to its `SinglePhaseKind`: the OpenDSS node numbers
-/// (`1` to `4`) or the phase letters BMOPF documents use (`a`, `b`, `c`,
-/// `n`, either case).
+/// A terminal name to its `SinglePhaseKind` letter: the one mapping
+/// ([`powerio_core::cim::terminal_phase`]).
 fn phase_letter(terminal: &str) -> Option<&'static str> {
-    match terminal {
-        "1" | "a" | "A" => Some("A"),
-        "2" | "b" | "B" => Some("B"),
-        "3" | "c" | "C" => Some("C"),
-        "4" | "n" | "N" => Some("N"),
-        _ => None,
-    }
+    powerio_core::cim::terminal_phase(terminal)
 }
 
-/// Whether a terminal name is the neutral.
+/// Whether a terminal is written as the neutral conductor `N`: the CIM
+/// wire convention's letter ([`powerio_core::cim::terminal_phase`]), which
+/// the CIM readers read back as terminal `4` on any bus. This is not
+/// [`crate::model::calc_terminal_role`], which calls a `4` neutral only in an
+/// exact `1` to `4` set: a CIM read single phase bus `[1, 4]` would classify
+/// its neutral as a phase and a round trip would double the source voltage.
 fn is_neutral(terminal: &str) -> bool {
     phase_letter(terminal) == Some("N")
 }
