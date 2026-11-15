@@ -42,6 +42,19 @@ calculations and conversion to another format reject it, as they reject an
 OpenDSS geometry line, and a same format write of a single source document
 still returns its bytes.
 
+## MG-RAVENS equipment the reader cannot type
+
+The MG-RAVENS reader keeps an in-service `ACLineSegment`, `Switch`,
+`TransformerTank` or `EnergyConsumer` it cannot type (an incomplete wire
+catalog, fewer than two terminals, a tank without a datasheet or with
+phase clocks neither `leadlag` convention represents, an unresolvable delta
+load) as an untyped object, with a `READ.RAVENS_DIST.RETAINED_SOURCE_ONLY`
+warning naming the reason. It round trips to MG-RAVENS. The audit blocks
+it as `READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`, so numerical
+calculations and conversion to another format refuse it instead of writing
+a feeder with the equipment missing. Out-of-service equipment is retained
+the same way but not blocked, since it contributes no network equation.
+
 ## Other structural checks
 
 The audit checks source-specific identifier equality, unresolved line endpoints

@@ -61,6 +61,7 @@ pub(crate) fn parse_ravens_collecting(
         node_grounded: BTreeSet::new(),
         node_grounds: BTreeMap::new(),
         consumed: BTreeSet::new(),
+        ungrounded_single_phase: Vec::new(),
     };
     mapper.warn(
         &C::READ_RAVENS_DIST_VALUE_DEFAULTED,
@@ -592,6 +593,8 @@ struct Mapper<'a> {
     node_grounds: BTreeMap<String, Vec<String>>,
     /// Concrete kinds a typed mapping claimed (nested helpers included).
     consumed: BTreeSet<&'static str>,
+    /// Single phase wye loads stating `grounded` false: (load index, node).
+    ungrounded_single_phase: Vec<(usize, String)>,
 }
 
 impl Mapper<'_> {
@@ -618,7 +621,7 @@ impl Mapper<'_> {
             self.preserve_dependencies(obj);
             true
         } else if unsupported_phase(&Value::Object(obj.props.clone())) {
-            self.keep_untyped(
+            self.keep_unresolved(
                 obj,
                 "unspecified X/Y phase identity has no wire-coordinate mapping",
             );
@@ -743,9 +746,78 @@ impl Mapper<'_> {
         self.map_sources();
         self.map_transformers()?;
         self.map_grounds();
+        self.report_isolated_load_neutrals();
         self.finish_buses();
         self.preserve_unclaimed();
         Ok(())
+    }
+
+    /// A single phase wye load stating `grounded` false whose neutral no
+    /// equipment but such loads reaches hangs from a floating node: alone it
+    /// draws no current, and with its neighbours it forms a star the source
+    /// never states, so the stated power is not what it draws. The reader
+    /// keeps the document's statement, as a PowerIO round trip needs, and
+    /// says so for every such load. (The CIM reader instead grounds every
+    /// ungrounded wye load, with its own warning.) A neutral other equipment
+    /// carries, a four wire feeder, is not reported.
+    fn report_isolated_load_neutrals(&mut self) {
+        let pending = std::mem::take(&mut self.ungrounded_single_phase);
+        let single_phase: BTreeSet<usize> = pending.iter().map(|(index, _)| *index).collect();
+        for (index, node) in pending {
+            if self.grounded_terminals(&node).iter().any(|t| t == "4") {
+                continue;
+            }
+            let net = &self.net;
+            let reaches = |bus: &str, map: &[String]| {
+                bus.eq_ignore_ascii_case(&node) && map.iter().any(|t| t == "4")
+            };
+            let others = net
+                .lines()
+                .iter()
+                .flat_map(|l| {
+                    [
+                        (&l.bus_from, &l.terminal_map_from),
+                        (&l.bus_to, &l.terminal_map_to),
+                    ]
+                })
+                .chain(net.switches().iter().flat_map(|s| {
+                    [
+                        (&s.bus_from, &s.terminal_map_from),
+                        (&s.bus_to, &s.terminal_map_to),
+                    ]
+                }))
+                .chain(
+                    net.transformers()
+                        .iter()
+                        .flat_map(|t| t.windings.iter().map(|w| (&w.bus, &w.terminal_map))),
+                )
+                .chain(
+                    net.loads()
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| !single_phase.contains(i))
+                        .map(|(_, l)| (&l.bus, &l.terminal_map)),
+                )
+                .chain(net.generators().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.ibrs().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.shunts().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.capacitors().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .chain(net.sources().iter().map(|g| (&g.bus, &g.terminal_map)))
+                .any(|(bus, map)| reaches(bus, map));
+            if others {
+                continue;
+            }
+            let name = net.loads()[index].name.clone();
+            self.warn(
+                &C::READ_RAVENS_DIST_VALUE_CONFLICT,
+                format!(
+                    "load {name}: a single phase wye load states grounded false, and no \
+                     equipment other than such loads reaches its neutral at node {node}; the \
+                     neutral floats, so the load does not draw its stated power (kept as \
+                     stated; the CIM reader grounds an ungrounded wye load instead)"
+                ),
+            );
+        }
     }
 
     // ----- per-length impedance ------------------------------------------
@@ -838,7 +910,7 @@ impl Mapper<'_> {
             let name = obj.name.clone();
             let terminals = terminal_entries(&obj.props);
             let (Some(from), Some(to)) = (terminals.first(), terminals.get(1)) else {
-                self.keep_untyped(obj, "fewer than two terminals");
+                self.keep_unresolved(obj, "fewer than two terminals");
                 continue;
             };
             // Conductor order: the ACLineSegmentPhase records in sequence
@@ -884,7 +956,7 @@ impl Mapper<'_> {
                         code
                     }
                     Err(why) => {
-                        self.keep_untyped(obj, &why);
+                        self.keep_unresolved(obj, &why);
                         continue;
                     }
                 },
@@ -1086,7 +1158,7 @@ impl Mapper<'_> {
             let name = obj.name.clone();
             let terminals = terminal_entries(&obj.props);
             let (Some(from), Some(to)) = (terminals.first(), terminals.get(1)) else {
-                self.keep_untyped(obj, "fewer than two terminals");
+                self.keep_unresolved(obj, "fewer than two terminals");
                 continue;
             };
             // Per-phase side mappings when the document has them.
@@ -1270,7 +1342,7 @@ impl Mapper<'_> {
                         Some("2") => vec!["2".into(), "3".into()],
                         Some("3") => vec!["3".into(), "1".into()],
                         _ => {
-                            self.keep_untyped(obj, "unresolvable delta branch");
+                            self.keep_unresolved(obj, "unresolvable delta branch");
                             continue;
                         }
                     };
@@ -1300,7 +1372,7 @@ impl Mapper<'_> {
                 if let Some(order) = candidate {
                     map = order.iter().map(ToString::to_string).collect();
                 } else {
-                    self.keep_untyped(obj, "unresolvable delta branches");
+                    self.keep_unresolved(obj, "unresolvable delta branches");
                     continue;
                 }
             } else if !delta {
@@ -1309,6 +1381,9 @@ impl Mapper<'_> {
                 map.push("4".to_owned());
                 if grounded {
                     self.ground_node(&at.node);
+                } else if phases == 1 {
+                    self.ungrounded_single_phase
+                        .push((self.net.loads().len(), at.node.clone()));
                 }
             }
 
@@ -1960,7 +2035,7 @@ impl Mapper<'_> {
                      no voltages or impedances and is kept untyped"
                     ),
                 );
-                self.keep_untyped(tank, "missing datasheet");
+                self.keep_unresolved(tank, "missing datasheet");
                 continue;
             };
 
@@ -2007,7 +2082,7 @@ impl Mapper<'_> {
                     &C::READ_RAVENS_DIST_RECORD_DROPPED,
                     format!("transformer tank {name}: fewer than two ends; kept untyped"),
                 );
-                self.keep_untyped(tank, "fewer than two ends");
+                self.keep_unresolved(tank, "fewer than two ends");
                 continue;
             }
 
@@ -2160,13 +2235,13 @@ impl Mapper<'_> {
                 windings.push(winding);
             }
             if !ok {
-                self.keep_untyped(tank, "incomplete ends");
+                self.keep_unresolved(tank, "incomplete ends");
                 continue;
             }
             let leadlag = match clocks_leadlag(&windings, &clocks, phases == 3) {
                 Ok(leadlag) => leadlag,
                 Err(why) => {
-                    self.keep_untyped(tank, &why);
+                    self.keep_unresolved(tank, &why);
                     continue;
                 }
             };
@@ -2512,6 +2587,29 @@ impl Mapper<'_> {
             ),
         );
         self.push_untyped(obj);
+    }
+
+    /// Keep in-service equipment the reader cannot type, marked so the
+    /// readiness audit refuses canonical conversion
+    /// ([`crate::readiness::UNRESOLVED_RAVENS_KEY`]): dropping a line
+    /// segment, switch, transformer or load the source states in service
+    /// would disconnect or change the circuit.
+    fn keep_unresolved(&mut self, obj: &Obj, why: &str) {
+        self.warn(
+            &C::READ_RAVENS_DIST_RETAINED_SOURCE_ONLY,
+            format!(
+                "{} {}: {why}; preserved untyped (round-trips to MG-RAVENS; refused by \
+                 conversion to other formats)",
+                obj.kind, obj.name
+            ),
+        );
+        self.push_untyped(obj);
+        if let Some(object) = self.net.untyped_objects_mut().last_mut() {
+            object.props.push((
+                Some(crate::readiness::UNRESOLVED_RAVENS_KEY.into()),
+                why.to_owned(),
+            ));
+        }
     }
 
     fn push_untyped(&mut self, obj: &Obj) {

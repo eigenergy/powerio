@@ -392,3 +392,74 @@ Solve
         refused.warnings
     );
 }
+
+/// A single phase wye load stating `grounded` false whose neutral no
+/// equipment but such loads reaches hangs from a floating node, so it does
+/// not draw its stated power. The reader keeps the statement, as a round
+/// trip needs, and says so for every such load; a neutral a four wire line
+/// carries is not reported.
+#[test]
+fn isolated_single_phase_load_neutrals_are_reported() {
+    let deck = |line_conductors: &str| {
+        let n = line_conductors.split('.').count();
+        let diagonal = |v: &str| {
+            (0..n)
+                .map(|i| {
+                    (0..=i)
+                        .map(|j| if i == j { v } else { "0" })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        format!(
+            "Clear
+New Circuit.c basekv=4.16 pu=1 phases=3 bus1=src
+New Linecode.lc nphases={n} rmatrix=[{r}] xmatrix=[{x}] units=km
+New Line.l bus1=src.{line_conductors} bus2=lv.{line_conductors} linecode=lc length=1 units=km phases={n}
+New Load.a bus1=lv.1.4 phases=1 kv=2.4 kw=100 kvar=10
+New Load.b bus1=lv.2.4 phases=1 kv=2.4 kw=50 kvar=5
+Set VoltageBases=[4.16]
+Calcvoltagebases
+Solve
+",
+            r = diagonal("0.1"),
+            x = diagonal("0.2"),
+        )
+    };
+    let read = |conductors: &str| {
+        let written = parse_dss_str(&deck(conductors))
+            .emit_value(DistTargetFormat::RavensJson)
+            .text;
+        parse_str(&written, "ravens-json").unwrap()
+    };
+    let three_wire = read("1.2.3");
+    let reported: Vec<&String> = three_wire
+        .warnings
+        .iter()
+        .filter(|w| w.contains("the neutral floats"))
+        .collect();
+    assert_eq!(reported.len(), 2, "{:#?}", three_wire.warnings);
+    assert!(reported.iter().any(|w| w.contains("load a:")));
+    assert!(reported.iter().any(|w| w.contains("load b:")));
+    // Kept as stated: the neutral is not grounded.
+    assert!(
+        !three_wire
+            .bus("lv")
+            .unwrap()
+            .grounded
+            .iter()
+            .any(|t| t == "4")
+    );
+
+    let four_wire = read("1.2.3.4");
+    assert!(
+        !four_wire
+            .warnings
+            .iter()
+            .any(|w| w.contains("the neutral floats")),
+        "{:#?}",
+        four_wire.warnings
+    );
+}

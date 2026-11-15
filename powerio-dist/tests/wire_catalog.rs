@@ -555,4 +555,37 @@ fn an_unstated_neutral_wire_is_refused_with_its_position() {
     assert!(net.warnings.iter().any(|w| w.contains("ACLineSegment ts")
         && w.contains("position(s) 2")
         && w.contains("RETAINED_SOURCE_ONLY")));
+
+    // Neither reader lets a conversion drop the refused segments: both
+    // block canonical output instead of writing a disconnected feeder.
+    for (source, format, blocked) in [
+        (cim(true), "cim-dist", "the CIM source states no impedance"),
+        (
+            ravens(true),
+            "ravens-json",
+            "ACLineSegment oh: the MG-RAVENS source states this equipment in service and the \
+             reader cannot type it (WireSpacingInfo s601 places 4 conductors",
+        ),
+    ] {
+        let net = parse_str(&source, format).unwrap();
+        for target in [DistTargetFormat::Dss, DistTargetFormat::PmdJson] {
+            let error = powerio_dist::emit(
+                &powerio_core::PioModule::new((*net).clone()),
+                target,
+                powerio_core::Destination::memory("out").unwrap(),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("ELECTRICAL_INCOMPLETE"), "{format}: {error}");
+            assert!(error.contains(blocked), "{format}: {error}");
+        }
+    }
+    // The MG-RAVENS round trip keeps the refused segment verbatim.
+    let net = parse_str(&ravens(true), "ravens-json").unwrap();
+    let echo = powerio_dist::emit(
+        &net.module,
+        DistTargetFormat::RavensJson,
+        powerio_core::Destination::memory("out").unwrap(),
+    );
+    assert!(echo.is_ok());
 }

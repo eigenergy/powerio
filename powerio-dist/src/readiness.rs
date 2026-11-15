@@ -18,11 +18,18 @@ pub(crate) const DEFERRED_GEOMETRY_KEYS: [&str; 5] =
 /// impedance it can read. The segment's line code is a zero placeholder.
 pub(crate) const UNRESOLVED_IMPEDANCE_KEY: &str = "cim_impedance_unresolved";
 
-/// Blocker codes that stop canonical conversion: the line exists, but its
-/// impedance is not in the canonical matrices.
-const CONVERSION_BLOCKERS: [&str; 2] = [
+/// The untyped object property the MG-RAVENS reader sets, with the reason,
+/// on in-service equipment it cannot type (a line segment whose wire
+/// catalog is incomplete, a transformer tank whose ends or clocks it cannot
+/// read). Dropping such an object would disconnect or change the circuit.
+pub(crate) const UNRESOLVED_RAVENS_KEY: &str = "ravens_unresolved";
+
+/// Blocker codes that stop canonical conversion: the equipment exists, but
+/// its impedance is not in the canonical model.
+const CONVERSION_BLOCKERS: [&str; 3] = [
     "READINESS.DSS.GEOMETRY_DEFERRED",
     "READINESS.CIM_DIST.IMPEDANCE_UNRESOLVED",
+    "READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED",
 ];
 
 /// Reject incomplete electrical data before numerical use.
@@ -290,6 +297,20 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
                 .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("storage."))
     });
     for object in net.untyped_objects() {
+        if let Some((_, why)) = object
+            .props
+            .iter()
+            .find(|(key, _)| key.as_deref() == Some(UNRESOLVED_RAVENS_KEY))
+        {
+            report.block(
+                "READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED",
+                &format!("{} {}", object.class, object.name),
+                format!(
+                    "the MG-RAVENS source states this equipment in service and the reader \
+                     cannot type it ({why}); omitting it would disconnect or change the circuit"
+                ),
+            );
+        }
         let explicitly_disabled = object
             .props
             .iter()
