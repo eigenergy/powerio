@@ -300,51 +300,93 @@ fn source_auxiliary_names_respect_case_insensitive_network_identity() {
     );
 }
 
-/// A delta–wye tank is clock 1 in OpenDSS's convention, the shift the
-/// model's winding connections express. The writer states that clock and
-/// the reader accepts it; a clock the winding layout does not represent is
-/// refused with both clocks named, never read as the layout's.
+/// A tank's clocks are its vector group shift, the delta orientation the
+/// physics stamps: a delta–wye tank is clock 1 when the high voltage winding
+/// leads (OpenDSS's default) and clock 11 when the low voltage winding leads
+/// (`leadlag=euro`, or a step-up unit whose first winding is the low voltage
+/// delta). The writer states that clock and the vector group, the reader
+/// reads clock 11 back as `leadlag` euro, and a clock neither convention
+/// represents is refused with the represented clock named.
 #[test]
 fn phase_angle_clock_follows_the_winding_layout() {
-    let dss = "Clear
+    let deck = |kvs: &str, leadlag: &str| {
+        format!(
+            "Clear
 New Circuit.c basekv=115 pu=1 phases=3 bus1=src
-New Transformer.sub phases=3 windings=2 buses=[src lv] conns=[delta wye] kvs=[115 4.16] kvas=[5000 5000] xhl=8
+New Transformer.sub phases=3 windings=2 buses=[src lv] conns=[delta wye] kvs=[{kvs}] kvas=[5000 5000] xhl=8 {leadlag}
 New Load.l bus1=lv.1.2.3 phases=3 kv=4.16 kw=100 kvar=10
 Set VoltageBases=[115 4.16]
 Calcvoltagebases
 Solve
-";
-    let written = parse_dss_str(dss)
-        .emit_value(DistTargetFormat::RavensJson)
-        .text;
-    let mut doc: Value = serde_json::from_str(&written).unwrap();
-    let mut clocks = Vec::new();
-    visit(&mut doc, "TransformerEndInfo", &mut |info| {
-        clocks.push((
-            info["TransformerEndInfo.endNumber"].as_u64().unwrap(),
-            info["TransformerEndInfo.phaseAngleClock"].as_f64().unwrap(),
-        ));
-    });
-    clocks.sort_by_key(|(end, _)| *end);
-    assert_eq!(clocks, [(1, 0.0), (2, 1.0)]);
-    let read = parse_str(&written, "ravens-json").unwrap();
-    assert_eq!(read.transformers().len(), 1, "{:#?}", read.warnings);
-    assert!(
-        !read.warnings.iter().any(|w| w.contains("phaseAngleClock")),
-        "{:#?}",
-        read.warnings
-    );
+"
+        )
+    };
+    let clocks_of = |doc: &mut Value| {
+        let mut clocks = Vec::new();
+        visit(doc, "TransformerEndInfo", &mut |info| {
+            clocks.push((
+                info["TransformerEndInfo.endNumber"].as_u64().unwrap(),
+                info["TransformerEndInfo.phaseAngleClock"].as_f64().unwrap(),
+            ));
+        });
+        clocks.sort_by_key(|(end, _)| *end);
+        clocks
+    };
+    let shift = |net: &MulticonductorNetwork| {
+        powerio_dist::transformer::calc_transformer_phase_shift(&net.transformers()[0]).unwrap()
+    };
+    for (kvs, leadlag, clock, group, degrees) in [
+        ("115 4.16", "", 1.0, "Dyn1", 30.0),
+        ("115 4.16", "leadlag=euro", 11.0, "Dyn11", -30.0),
+        ("115 4.16", "leadlag=lead", 11.0, "Dyn11", -30.0),
+        ("4.16 115", "", 11.0, "Dyn11", -30.0),
+    ] {
+        let source = parse_dss_str(&deck(kvs, leadlag));
+        assert_eq!(shift(&source), degrees, "{kvs} {leadlag}");
+        let out = source.emit_value(DistTargetFormat::RavensJson);
+        assert!(
+            !out.warnings.iter().any(|w| w.contains("leadlag")),
+            "{:#?}",
+            out.warnings
+        );
+        let mut doc: Value = serde_json::from_str(&out.text).unwrap();
+        assert_eq!(
+            clocks_of(&mut doc),
+            [(1, 0.0), (2, clock)],
+            "{kvs} {leadlag}"
+        );
+        let mut groups = Vec::new();
+        visit(&mut doc, "PowerTransformer", &mut |pt| {
+            groups.push(pt["PowerTransformer.vectorGroup"].clone());
+        });
+        assert_eq!(groups, [json!(group)]);
+        let read = parse_str(&out.text, "ravens-json").unwrap();
+        assert_eq!(read.transformers().len(), 1, "{:#?}", read.warnings);
+        assert!(
+            !read.warnings.iter().any(|w| w.contains("phaseAngleClock")),
+            "{:#?}",
+            read.warnings
+        );
+        assert_eq!(shift(&read), degrees, "{kvs} {leadlag}");
+    }
 
+    let mut doc: Value = serde_json::from_str(
+        &parse_dss_str(&deck("115 4.16", ""))
+            .emit_value(DistTargetFormat::RavensJson)
+            .text,
+    )
+    .unwrap();
     visit(&mut doc, "TransformerEndInfo", &mut |info| {
         if info["TransformerEndInfo.endNumber"].as_u64() == Some(2) {
-            info["TransformerEndInfo.phaseAngleClock"] = json!(11);
+            info["TransformerEndInfo.phaseAngleClock"] = json!(5);
         }
     });
     let refused = parse_str(&doc.to_string(), "ravens-json").unwrap();
     assert_eq!(refused.transformers().len(), 0);
     assert!(
         refused.warnings.iter().any(|w| w.contains(
-            "end 2 phaseAngleClock 11 is not represented by its winding layout (clock 1)"
+            "end 2 phaseAngleClock 5 is not represented by its winding layout (clock 1, or its \
+             European counterpart)"
         )),
         "{:#?}",
         refused.warnings

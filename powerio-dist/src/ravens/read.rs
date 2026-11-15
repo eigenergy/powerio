@@ -2163,10 +2163,13 @@ impl Mapper<'_> {
                 self.keep_untyped(tank, "incomplete ends");
                 continue;
             }
-            if let Some(why) = clock_mismatch(&windings, &clocks, phases == 3) {
-                self.keep_untyped(tank, &why);
-                continue;
-            }
+            let leadlag = match clocks_leadlag(&windings, &clocks, phases == 3) {
+                Ok(leadlag) => leadlag,
+                Err(why) => {
+                    self.keep_untyped(tank, &why);
+                    continue;
+                }
+            };
 
             // Short-circuit reactance: the test rides inline under the
             // energised end's catalog record; the pairing beyond two
@@ -2305,6 +2308,11 @@ impl Mapper<'_> {
             self.apply_tap_changers(&name, pointed, &mut windings);
             let mut transformer = DistTransformer::new(name, windings, xsc_pct, phases.max(1));
             transformer.extras = extras;
+            if let Some(convention) = leadlag {
+                transformer
+                    .extras
+                    .insert("leadlag".into(), convention.into());
+            }
             self.net.transformers_mut().push(transformer);
         }
         Ok(())
@@ -2547,39 +2555,42 @@ impl Mapper<'_> {
     }
 }
 
-/// Why a tank's stated `phaseAngleClock`s cannot be read, if they cannot:
-/// the model expresses a vector group by its winding connections, so each
-/// stated clock must be the one the winding layout represents
-/// ([`crate::cim::tank_phase_clock`], OpenDSS's convention: a delta–wye pair
-/// is clock 1). An absent clock takes the represented one.
-#[allow(clippy::float_cmp)] // clock numbers are discrete
-fn clock_mismatch(
+/// The `leadlag` convention a tank's stated `phaseAngleClock`s need, or why
+/// they cannot be read: the model expresses a vector group by its winding
+/// connections and the delta orientation, so each stated clock must be one
+/// the winding layout represents under OpenDSS's default convention (a
+/// delta–wye pair is clock 1) or, for every end alike, under the European
+/// one (clock 11, `leadlag` `euro`) ([`crate::cim::clocks_leadlag`]). An
+/// absent clock takes the represented one.
+fn clocks_leadlag(
     windings: &[DistWinding],
     clocks: &[(u64, Option<Value>)],
     three_phase: bool,
-) -> Option<String> {
-    let first = windings.first()?;
-    for (winding, (num, stated)) in windings.iter().zip(clocks) {
-        let Some(stated) = stated else {
-            continue;
-        };
-        let represented = crate::cim::tank_phase_clock(first, winding, three_phase);
-        match stated.as_f64() {
-            Some(clock) if clock == represented => {}
-            Some(clock) if clock.fract() == 0.0 && (0.0..12.0).contains(&clock) => {
-                return Some(format!(
-                    "end {num} phaseAngleClock {clock} is not represented by its winding layout \
-                     (clock {represented}); the model has no other vector-group shift"
-                ));
-            }
-            _ => {
-                return Some(format!(
-                    "end {num} phaseAngleClock {stated} is not a clock number"
-                ));
-            }
-        }
+) -> std::result::Result<Option<&'static str>, String> {
+    let mut stated = Vec::with_capacity(clocks.len());
+    for (num, clock) in clocks {
+        stated.push(match clock {
+            None => None,
+            Some(value) => match value.as_f64() {
+                Some(clock) if clock.fract() == 0.0 && (0.0..12.0).contains(&clock) => Some(clock),
+                _ => {
+                    return Err(format!(
+                        "end {num} phaseAngleClock {value} is not a clock number"
+                    ));
+                }
+            },
+        });
     }
-    None
+    crate::cim::clocks_leadlag(windings, &stated, three_phase).map_err(|m| {
+        let num = clocks
+            .get(m.winding)
+            .map_or(m.winding as u64 + 1, |(num, _)| *num);
+        format!(
+            "end {num} phaseAngleClock {} is not represented by its winding layout \
+             (clock {}, or its European counterpart); the model has no other vector-group shift",
+            m.stated, m.represented
+        )
+    })
 }
 
 fn fbool_map(map: &Map<String, Value>, key: &str) -> Option<bool> {

@@ -178,29 +178,90 @@ enum LeakageReading {
 
 const LEAKAGE_READING: LeakageReading = LeakageReading::Magnitude;
 
-/// The phase clock represented by the existing OpenDSS winding convention:
-/// equal three-phase connections are clock 0; mixed D/Y connections use the
-/// default lagging clock 1. A reversed single-phase neutral pair is clock 6.
-/// Other vector groups need an explicit orientation mapping and are refused.
-/// The CIM and MG-RAVENS readers and writers all check and write clocks
-/// through this.
+/// The phase clock of winding `winding` against the first, as CIM states it
+/// (`phaseAngleClock`: the thirty degree steps by which the end lags end
+/// 1). A polyphase unit's clock is its vector group shift
+/// ([`crate::transformer::calc_winding_phase_shift`], the delta orientation
+/// the physics stamps), so a delta–wye pair is clock 1 when the high voltage
+/// winding leads (OpenDSS's default `leadlag`) and clock 11 when the low
+/// voltage winding leads (`leadlag` `lead` or `euro`). A single phase
+/// winding whose neutral pair is reversed against the first is clock 6. The
+/// CIM and MG-RAVENS readers and writers all check and write clocks through
+/// this.
+///
+/// # Errors
+/// What [`crate::transformer::calc_winding_phase_shift`] refuses: a winding
+/// outside the unit or an unknown `leadlag` convention.
 pub(crate) fn tank_phase_clock(
-    primary: &crate::DistWinding,
-    winding: &crate::DistWinding,
+    transformer: &crate::DistTransformer,
+    winding: usize,
     three_phase: bool,
-) -> f64 {
+) -> Result<f64, powerio_core::Error> {
     if three_phase {
-        if primary.conn == winding.conn {
-            0.0
-        } else {
-            1.0
-        }
-    } else if (primary.terminal_map.first().is_some_and(|t| t == "4"))
-        != (winding.terminal_map.first().is_some_and(|t| t == "4"))
+        let shift = crate::transformer::calc_winding_phase_shift(transformer, winding)?;
+        return Ok((shift / 30.0).rem_euclid(12.0));
+    }
+    let neutral_first = |w: Option<&crate::DistWinding>| {
+        w.and_then(|w| w.terminal_map.first())
+            .is_some_and(|t| t == "4")
+    };
+    if neutral_first(transformer.windings.first())
+        != neutral_first(transformer.windings.get(winding))
     {
-        6.0
+        Ok(6.0)
     } else {
-        0.0
+        Ok(0.0)
+    }
+}
+
+/// A stated clock the winding layout cannot represent under either
+/// `leadlag` convention.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ClockMismatch {
+    /// The winding, zero based.
+    pub winding: usize,
+    /// The clock the source states.
+    pub stated: f64,
+    /// The clock the layout represents under OpenDSS's default convention.
+    pub represented: f64,
+}
+
+/// The `leadlag` convention a tank's stated clocks need ([`tank_phase_clock`]):
+/// `None` when the default (the high voltage winding leads) represents
+/// every stated clock, `Some("euro")` when only the European convention
+/// does, else the first clock neither represents. An absent clock takes the
+/// represented one.
+#[allow(clippy::float_cmp)] // clock numbers are discrete
+pub(crate) fn clocks_leadlag(
+    windings: &[crate::DistWinding],
+    stated: &[Option<f64>],
+    three_phase: bool,
+) -> Result<Option<&'static str>, ClockMismatch> {
+    let mut probe = crate::DistTransformer::new(
+        "",
+        windings.to_vec(),
+        Vec::new(),
+        if three_phase { 3 } else { 1 },
+    );
+    let mismatch = |probe: &crate::DistTransformer| {
+        stated.iter().enumerate().find_map(|(winding, clock)| {
+            let clock = (*clock)?;
+            // The probe states no unknown convention, so the clock exists.
+            let represented = tank_phase_clock(probe, winding, three_phase).unwrap_or(f64::NAN);
+            (clock != represented).then_some(ClockMismatch {
+                winding,
+                stated: clock,
+                represented,
+            })
+        })
+    };
+    let Some(default) = mismatch(&probe) else {
+        return Ok(None);
+    };
+    probe.extras.insert("leadlag".into(), "euro".into());
+    match mismatch(&probe) {
+        None => Ok(Some("euro")),
+        Some(_) => Err(default),
     }
 }
 

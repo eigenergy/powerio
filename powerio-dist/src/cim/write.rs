@@ -799,15 +799,42 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
         .iter()
         .map(|xf| tank_phase_codes(&mut doc, xf))
         .collect();
+    // Each winding's phase clock, the vector group shift the physics
+    // stamps (`leadlag` included); a unit whose shift is unknown is refused.
+    let clocks: Vec<Option<Vec<f64>>> = net
+        .transformers()
+        .iter()
+        .zip(&tank_codes)
+        .map(|(xf, codes)| {
+            let three_phase = match codes {
+                Some(codes) => codes.first() == Some(&"ABC"),
+                None => xf.phases == 3,
+            };
+            let clocks = (0..xf.windings.len())
+                .map(|k| tank_phase_clock(xf, k, three_phase))
+                .collect::<Result<Vec<f64>, powerio_core::Error>>();
+            clocks
+                .map_err(|error| {
+                    doc.warn(
+                        &C::EMIT_CIM_DIST_RECORD_DROPPED,
+                        format!("transformer {}: no phase-angle clock: {error}", xf.name),
+                    );
+                })
+                .ok()
+        })
+        .collect();
     let mut groups: std::collections::HashMap<String, Vec<usize>> =
         std::collections::HashMap::new();
     for (k, xf) in net.transformers().iter().enumerate() {
-        if tank_codes[k].is_some() {
+        if tank_codes[k].is_some() && clocks[k].is_some() {
             groups.entry(tank_group(xf)).or_default().push(k);
         }
     }
     let mut catalogs = TankCatalogs::default();
     for (k, xf) in net.transformers().iter().enumerate() {
+        let Some(xf_clocks) = clocks[k].as_deref() else {
+            continue;
+        };
         if xf.windings.len() < 2 {
             doc.warn(
                 &C::EMIT_CIM_DIST_RECORD_DROPPED,
@@ -852,7 +879,10 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
                     &mut doc,
                     &mut catalogs,
                     tank,
-                    codes,
+                    TankLayout {
+                        codes,
+                        clocks: clocks[m].as_deref().unwrap_or_default(),
+                    },
                     &buses,
                     &pt,
                     &mut sequence,
@@ -861,7 +891,7 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
             continue;
         }
         let buses: Vec<String> = xf.windings.iter().map(|w| node(&mut doc, &w.bus)).collect();
-        write_end_form(&mut doc, xf, &buses);
+        write_end_form(&mut doc, xf, xf_clocks, &buses);
     }
     catalogs.write(&mut doc);
 
@@ -983,13 +1013,16 @@ fn write_changer(doc: &mut Doc, what: &str, name: &str, end: &str, number: usize
 /// the pair reactance on end 1 (two windings) or as mesh impedances (more),
 /// and the no-load extras as a `TransformerCoreAdmittance` on end 1.
 #[allow(clippy::too_many_lines)] // one object family per block, in output order
-fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
+fn write_end_form(doc: &mut Doc, xf: &DistTransformer, clocks: &[f64], buses: &[String]) {
     let id = doc.mrid_of(&xf.extras, "xf", &xf.name);
     let what = format!("transformer {}", xf.name);
     doc.named("PowerTransformer", &id, &xf.name);
     doc.close("PowerTransformer");
     let imported_ends = imported_end_ids(xf);
     let s_base = xf.windings[0].s_rating;
+    let stated: Vec<Option<f64>> = clocks.iter().copied().map(Some).collect();
+    let european = crate::cim::clocks_leadlag(&xf.windings, &stated, xf.phases == 3)
+        .is_ok_and(|leadlag| leadlag.is_some());
     short_circuit_count(doc, xf);
     let mut end_ids = Vec::with_capacity(xf.windings.len());
     for (index, winding) in xf.windings.iter().enumerate() {
@@ -1025,6 +1058,15 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
             "PowerTransformerEnd.connectionKind",
             &format!("WindingConnection.{kind}"),
         );
+        // An absent clock reads as OpenDSS's default convention, so only a
+        // unit that needs the European one states its clocks.
+        if european {
+            doc.number(
+                &what,
+                "PowerTransformerEnd.phaseAngleClock",
+                clocks.get(index).copied().unwrap_or(0.0),
+            );
+        }
         doc.number(&what, "PowerTransformerEnd.r", winding_r_ohm(winding));
         // Two windings carry the pair reactance on end 1; more windings
         // state each pair as a TransformerMeshImpedance.
@@ -1091,7 +1133,14 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
         "transformer",
         &xf.name,
         &xf.extras,
-        &["cim_mrid", "cim_end_mrids", "%noloadloss", "%imag"],
+        // `leadlag` rides in the phase clocks.
+        &[
+            "cim_mrid",
+            "cim_end_mrids",
+            "%noloadloss",
+            "%imag",
+            "leadlag",
+        ],
     );
 }
 
@@ -1214,6 +1263,13 @@ fn tank_phase_codes(doc: &mut Doc, xf: &DistTransformer) -> Option<Vec<&'static 
     Some(codes)
 }
 
+/// A tank's phase code and phase clock per winding.
+#[derive(Clone, Copy)]
+struct TankLayout<'a> {
+    codes: &'a [&'static str],
+    clocks: &'a [f64],
+}
+
 /// One tank: the `TransformerTank`, a `TransformerTankEnd` per winding on
 /// a terminal of the group's `PowerTransformer`, tap changers on its ends,
 /// and its place in a shared catalog entry.
@@ -1221,7 +1277,7 @@ fn write_tank(
     doc: &mut Doc,
     catalogs: &mut TankCatalogs,
     xf: &DistTransformer,
-    codes: &[&'static str],
+    layout: TankLayout<'_>,
     buses: &[String],
     pt: &str,
     sequence: &mut usize,
@@ -1249,7 +1305,7 @@ fn write_tank(
         );
         doc.enumeration(
             "TransformerTankEnd.phases",
-            &format!("PhaseCode.{}", codes[index]),
+            &format!("PhaseCode.{}", layout.codes[index]),
         );
         doc.reference("TransformerTankEnd.TransformerTank", &id);
         doc.integer("TransformerEnd.endNumber", number);
@@ -1258,7 +1314,7 @@ fn write_tank(
         doc.close("TransformerTankEnd");
         write_tap(doc, &what, &xf.name, &end, number, winding.tap);
     }
-    catalogs.add(doc, xf, codes, id);
+    catalogs.add(doc, xf, layout, id);
     doc.extras_dropped(
         "transformer",
         &xf.name,
@@ -1273,6 +1329,8 @@ fn write_tank(
             "cim_phase_angle_clock",
             "%noloadloss",
             "%imag",
+            // Rides in the phase clocks.
+            "leadlag",
         ],
     );
 }
@@ -1312,16 +1370,17 @@ impl TankCatalogs {
     /// that entry states the same data, else the first entry with
     /// bit-identical data, else a new one.
     #[allow(clippy::float_cmp)] // phase clocks are discrete
-    fn add(&mut self, doc: &mut Doc, xf: &DistTransformer, codes: &[&'static str], tank: String) {
+    fn add(&mut self, doc: &mut Doc, xf: &DistTransformer, layout: TankLayout<'_>, tank: String) {
         let clocks = xf
             .extras
             .get("cim_phase_angle_clock")
             .and_then(serde_json::Value::as_array);
-        let three_phase = codes.first() == Some(&"ABC");
+        let three_phase = layout.codes.first() == Some(&"ABC");
         let windings: Vec<CatalogWinding> = xf
             .windings
             .iter()
-            .map(|w| CatalogWinding {
+            .enumerate()
+            .map(|(k, w)| CatalogWinding {
                 v_ref: w.v_ref,
                 s_rating: w.s_rating,
                 r_pct: w.r_pct,
@@ -1330,7 +1389,7 @@ impl TankCatalogs {
                     (true, _) => "Y",
                     (false, _) => "I",
                 },
-                clock: tank_phase_clock(&xf.windings[0], w, three_phase),
+                clock: layout.clocks.get(k).copied().unwrap_or(0.0),
             })
             .collect();
         if clocks.is_some_and(|old| {

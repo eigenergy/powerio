@@ -2586,11 +2586,16 @@ impl<'a> Mapper<'a> {
                 )?;
                 clocks.push(clock);
             }
-            self.check_clocks("PowerTransformer", &id, &windings, &clocks, false)?;
+            let leadlag = self.check_clocks("PowerTransformer", &id, &windings, &clocks, false)?;
             let xsc = self.short_circuit_pct(&id, &ends, &windings, &meshes_of);
             let no_load = self.core_admittance(&ends, &windings, &cores_of);
             let name = self.unique_name("transformer", "PowerTransformer", &id);
             let mut transformer = DistTransformer::new(name, windings, xsc, phases);
+            if let Some(convention) = leadlag {
+                transformer
+                    .extras
+                    .insert("leadlag".into(), convention.into());
+            }
             transformer
                 .extras
                 .insert("cim_mrid".into(), id.clone().into());
@@ -2844,7 +2849,7 @@ impl<'a> Mapper<'a> {
             );
         }
         let stated: Vec<Option<f64>> = clocks.iter().map(serde_json::Value::as_f64).collect();
-        self.check_clocks("TransformerTank", tank, &windings, &stated, true)?;
+        let leadlag = self.check_clocks("TransformerTank", tank, &windings, &stated, true)?;
         let mut xsc = Vec::new();
         let mut missing = Vec::new();
         for i in 0..numbers.len() {
@@ -2882,6 +2887,9 @@ impl<'a> Mapper<'a> {
         let pt_name = self.store.name_of(pt);
         let mut transformer = DistTransformer::new(name, windings, xsc, phases);
         let extras = &mut transformer.extras;
+        if let Some(convention) = leadlag {
+            extras.insert("leadlag".into(), convention.into());
+        }
         extras.insert("cim_mrid".into(), tank.to_owned().into());
         extras.insert(
             "cim_end_mrids".into(),
@@ -2922,10 +2930,12 @@ impl<'a> Mapper<'a> {
         Ok(())
     }
 
-    /// Refuse a transformer whose stated winding clocks differ from the
-    /// clocks its winding layout represents. An end without a clock takes
-    /// the represented one, noted when `note_absent` (the tank form).
-    #[allow(clippy::float_cmp)] // clock numbers are discrete
+    /// Refuse a transformer whose stated winding clocks its winding layout
+    /// represents under neither `leadlag` convention
+    /// ([`crate::cim::clocks_leadlag`]), and return the convention they need:
+    /// `Some("euro")` when the low voltage winding leads. An end without a
+    /// clock takes the represented one, noted when `note_absent` (the tank
+    /// form).
     fn check_clocks(
         &mut self,
         class: &str,
@@ -2933,31 +2943,36 @@ impl<'a> Mapper<'a> {
         windings: &[DistWinding],
         clocks: &[Option<f64>],
         note_absent: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<&'static str>> {
         let three_phase = windings[0]
             .terminal_map
             .iter()
             .filter(|t| *t != "4")
             .count()
             == 3;
-        for (i, winding) in windings.iter().enumerate() {
-            let represented = tank_phase_clock(&windings[0], winding, three_phase);
-            match clocks[i] {
-                Some(clock) if clock != represented => {
-                    return Err(format_error(format!(
-                        "{class} {}: winding {} phase-angle clock {clock} is not represented by its winding layout (clock {represented}); electrical conversion refused",
-                        self.label(id),
-                        i + 1,
-                    )));
-                }
-                None if note_absent => {
+        let leadlag = crate::cim::clocks_leadlag(windings, clocks, three_phase).map_err(|m| {
+            format_error(format!(
+                "{class} {}: winding {} phase-angle clock {} is not represented by its winding layout (clock {}, or its European counterpart); electrical conversion refused",
+                self.label(id),
+                m.winding + 1,
+                m.stated,
+                m.represented,
+            ))
+        })?;
+        if note_absent {
+            let mut probe = DistTransformer::new("", windings.to_vec(), Vec::new(), 1);
+            if let Some(convention) = leadlag {
+                probe.extras.insert("leadlag".into(), convention.into());
+            }
+            for (i, clock) in clocks.iter().enumerate() {
+                if clock.is_none() {
+                    let represented = tank_phase_clock(&probe, i, three_phase).unwrap_or(f64::NAN);
                     self.note(&C::READ_CIM_DIST_VALUE_DEFAULTED, class, id,
                         format!("{class} {}: winding {} has no phase-angle clock; represented clock {represented} is assumed", self.label(id), i + 1));
                 }
-                _ => {}
             }
         }
-        Ok(())
+        Ok(leadlag)
     }
 
     /// A `TransformerTankInfo` and everything under it, read once however
