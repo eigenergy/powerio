@@ -129,6 +129,13 @@
   partition (lines and closed switches), read by the multiconductor to balanced lowering and the
   load nominal voltage inference, and `calc_flooded_zone_bases` the one zone base flood across
   transformers, read by the lowering and the PMD MATHEMATICAL writer.
+- `DistLoadVoltageModel::power_scale_in_envelope` evaluates any load law inside an OpenDSS style
+  voltage envelope (`u²` at or below `v_low_pu`, the constant power current transition up to
+  `v_min_pu`, `(u/max)²` above `v_max_pu`); a bounded exponential law is its exponential law in
+  that envelope and the bounded ZIP law reads the same bands, so a bounded exponential factor can
+  move in the last place. `calc_load_nominal_admittance` is a branch's `conj(S) / V²`.
+- `powerio_tx::union_find` (the workspace's one union-find and component labeling) is public, and
+  `powerio_tx::geo::calc_haversine_km` with `EARTH_RADIUS_KM` is the one great circle distance.
 - `powerio_dist::dense::invert_dense_matrix` is the one small dense inverse (real or complex) and
   `powerio_dist::kron::calc_kron_reduced_impedance` the one Kron reduction, behind the line and
   switch series admittances, the open line Schur complement, both geometry readers, the PMD

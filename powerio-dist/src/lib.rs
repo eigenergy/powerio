@@ -127,3 +127,4 @@ pub use readiness::{
 pub use terminal_index::{MulticonductorTerminalIndex, TerminalIndexError};
 
 mod load_voltage;
+pub use load_voltage::calc_load_nominal_admittance;

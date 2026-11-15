@@ -16,6 +16,22 @@ pub use pwd::{
 
 use serde::{Deserialize, Serialize};
 
+/// Mean Earth radius, kilometres (IUGG 1980).
+pub const EARTH_RADIUS_KM: f64 = 6371.0;
+
+/// The great circle distance in kilometres between two longitude/latitude
+/// points in degrees, by the haversine formula on a sphere of
+/// [`EARTH_RADIUS_KM`]. The one great circle distance: every caller that
+/// measures a span between geographic coordinates reads it.
+#[must_use]
+pub fn calc_haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let dp = p2 - p1;
+    let dl = (lon2 - lon1).to_radians();
+    let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_KM * a.sqrt().min(1.0).asin()
+}
+
 /// A point attached to one model element.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -113,11 +113,11 @@ impl DistLoadVoltageModel {
                 v_min_pu,
                 v_max_pu,
                 ..
-            } => bounded_exponential_scale(
-                voltage_pu,
-                [exponent(gamma_p, 0)?, exponent(gamma_q, 1)?],
-                [*v_low_pu, *v_min_pu, *v_max_pu],
-            )?,
+            } => {
+                let gamma = [exponent(gamma_p, 0)?, exponent(gamma_q, 1)?];
+                envelope_scale(voltage_pu, [*v_low_pu, *v_min_pu, *v_max_pu])?
+                    .unwrap_or_else(|| gamma.map(|exponent| voltage_pu.powf(exponent)))
+            }
             Self::Zip {
                 alpha_z,
                 alpha_i,
@@ -155,7 +155,8 @@ impl DistLoadVoltageModel {
                                 "load voltage thresholds must be finite and nonnegative".into()
                             );
                         }
-                        if voltage_pu <= *low {
+                        let band = envelope_band(voltage_pu, [*low, *min, *max]);
+                        if band == EnvelopeBand::Low {
                             // Native low-voltage continuation is the full nominal
                             // impedance, even when ZIP coefficients do not sum to one.
                             return if (voltage_pu * voltage_pu).is_finite() {
@@ -168,19 +169,16 @@ impl DistLoadVoltageModel {
                                 Err("load power evaluation became nonfinite".into())
                             };
                         }
-                        let (current_scale, power_scale) = if voltage_pu <= *min {
-                            let weight = (voltage_pu - low) / (min - low);
-                            (
+                        let (current_scale, power_scale) = match band {
+                            EnvelopeBand::Transition(weight) => (
                                 voltage_pu * (low + (1.0 - low) * weight),
-                                voltage_pu * (low + (1.0 / min - low) * weight),
-                            )
-                        } else if voltage_pu > *max {
-                            (
+                                transition_power_scale(voltage_pu, *low, *min, weight),
+                            ),
+                            EnvelopeBand::High => (
                                 voltage_pu * voltage_pu / if *max == 0.0 { 1.0 } else { *max },
-                                voltage_pu * voltage_pu / if *max == 0.0 { 1.0 } else { max * max },
-                            )
-                        } else {
-                            (voltage_pu, 1.0)
+                                high_power_scale(voltage_pu, *max),
+                            ),
+                            _ => (voltage_pu, 1.0),
                         };
                         let dropout = if *cutoff > 0.0 {
                             f64::midpoint(1.0, (500.0 * (voltage_pu - cutoff)).tanh())
@@ -212,6 +210,50 @@ impl DistLoadVoltageModel {
             Err("load power evaluation became nonfinite".into())
         } else {
             Ok(value)
+        }
+    }
+
+    /// [`power_scale_where`](Self::power_scale_where) of this law inside a
+    /// voltage envelope `[v_low_pu, v_min_pu, v_max_pu]`, OpenDSS's load
+    /// voltage limits: both factors are `u²` (the nominal impedance) at or
+    /// below `v_low_pu`, `u * (low + (1/min - low) * (u - low)/(min - low))`
+    /// (current magnitude moving linearly to the constant power current at
+    /// `v_min_pu`) up to `v_min_pu`, `(u/max)²` above `v_max_pu`, and this
+    /// law's own factors between. A bounded exponential law is exactly its
+    /// exponential law inside its own envelope; this applies the same bands
+    /// to any law, as a solver's envelope option does.
+    ///
+    /// # Errors
+    /// Thresholds that are not finite and nonnegative, or what
+    /// [`power_scale_where`](Self::power_scale_where) refuses in the middle
+    /// band.
+    pub fn power_scale_in_envelope(
+        &self,
+        phase: usize,
+        voltage: f64,
+        envelope: [f64; 3],
+        evaluate: [bool; 2],
+    ) -> Result<[f64; 2], String> {
+        if !voltage.is_finite() || voltage < 0.0 {
+            return Err("load voltage magnitude must be finite and nonnegative".into());
+        }
+        let nominal = *self
+            .v_nom()
+            .get(phase)
+            .ok_or("missing nominal load voltage")?;
+        if !nominal.is_finite() || nominal <= 0.0 {
+            return Err("nominal load voltage must be positive and finite".into());
+        }
+        match envelope_scale(voltage / nominal, envelope)? {
+            Some(scale) => {
+                let value = [0, 1].map(|c| if evaluate[c] { scale[c] } else { 0.0 });
+                if value.iter().any(|v| !v.is_finite()) {
+                    Err("load power evaluation became nonfinite".into())
+                } else {
+                    Ok(value)
+                }
+            }
+            None => self.power_scale_where(phase, voltage, evaluate),
         }
     }
 
@@ -279,24 +321,64 @@ impl DistLoadVoltageModel {
     }
 }
 
-fn bounded_exponential_scale(
-    u: f64,
-    gamma: [f64; 2],
-    bounds: [f64; 3],
-) -> Result<[f64; 2], String> {
+/// Where a per unit voltage falls in a load voltage envelope
+/// `[low, min, max]`, in the native branch order (so overlapping thresholds
+/// keep it): at or below `low`, up to `min` (with the transition weight
+/// `(u - low)/(min - low)`), above `max`, or in the middle band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EnvelopeBand {
+    Low,
+    Transition(f64),
+    High,
+    Middle,
+}
+
+fn envelope_band(u: f64, [low, min, max]: [f64; 3]) -> EnvelopeBand {
+    if u <= low {
+        EnvelopeBand::Low
+    } else if u <= min {
+        EnvelopeBand::Transition((u - low) / (min - low))
+    } else if u > max {
+        EnvelopeBand::High
+    } else {
+        EnvelopeBand::Middle
+    }
+}
+
+/// The constant power factor between `low` and `min`: current magnitude
+/// moving linearly from the nominal impedance's to `1/min`.
+fn transition_power_scale(u: f64, low: f64, min: f64, weight: f64) -> f64 {
+    u * (low + (1.0 / min - low) * weight)
+}
+
+/// The constant power factor above `max`: `(u/max)²`, `u²` for a zero `max`.
+fn high_power_scale(u: f64, max: f64) -> f64 {
+    u * u / if max == 0.0 { 1.0 } else { max * max }
+}
+
+/// Both factors of a law inside the envelope's outer bands, or `None` in the
+/// middle band, where the law's own factors hold.
+fn envelope_scale(u: f64, bounds: [f64; 3]) -> Result<Option<[f64; 2]>, String> {
     if bounds.iter().any(|v| !v.is_finite() || *v < 0.0) {
         return Err("load voltage thresholds must be finite and nonnegative".into());
     }
     let [low, min, max] = bounds;
-    // Preserve the native branch order even when thresholds overlap.
-    let scale = if u <= low {
-        u * u
-    } else if u <= min {
-        u * (low + (1.0 / min - low) * (u - low) / (min - low))
-    } else if u > max {
-        u * u / if max == 0.0 { 1.0 } else { max * max }
-    } else {
-        return Ok(gamma.map(|exponent| u.powf(exponent)));
-    };
-    Ok([scale; 2])
+    Ok(match envelope_band(u, bounds) {
+        EnvelopeBand::Low => Some([u * u; 2]),
+        EnvelopeBand::Transition(weight) => Some([transition_power_scale(u, low, min, weight); 2]),
+        EnvelopeBand::High => Some([high_power_scale(u, max); 2]),
+        EnvelopeBand::Middle => None,
+    })
+}
+
+/// The nominal admittance of a load branch drawing `power` at `v_nom`:
+/// `conj(S) / V²`, siemens, the constant impedance law's admittance and the
+/// current `Y U` every law reduces to at or below its low voltage
+/// threshold.
+#[must_use]
+pub fn calc_load_nominal_admittance(
+    power: num_complex::Complex64,
+    v_nom: f64,
+) -> num_complex::Complex64 {
+    power.conj() / (v_nom * v_nom)
 }
