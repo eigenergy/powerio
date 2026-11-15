@@ -2216,14 +2216,16 @@ impl Writer {
                 let mut test = identified("NoLoadTest", &format!("{info_name}_1_noload"), None);
                 let energised = self.num(w1.v_ref, &what);
                 test.insert("NoLoadTest.energisedEndVoltage".into(), energised);
-                if let Some(pct) = imag {
-                    let pct = self.num(pct, &what);
-                    test.insert("NoLoadTest.excitingCurrent".into(), pct);
-                }
-                if let Some(pct) = noloadloss {
-                    let loss = stable_fixed(pct / 100.0 * w1.s_rating, |v| {
-                        (v / w1.s_rating * 100.0) / 100.0 * w1.s_rating
-                    });
+                // The loss in kW and the whole exciting current, the test
+                // distribution CIM writes ([`crate::cim::no_load_test_values`]).
+                let (loss, exciting) = crate::cim::no_load_test_values(
+                    noloadloss.unwrap_or(0.0),
+                    imag.unwrap_or(0.0),
+                    w1.s_rating,
+                );
+                let exciting = self.num(exciting, &what);
+                test.insert("NoLoadTest.excitingCurrent".into(), exciting);
+                if noloadloss.is_some() {
                     let loss = self.num(loss, &what);
                     test.insert("NoLoadTest.loss".into(), loss);
                 }

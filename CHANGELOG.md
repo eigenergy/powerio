@@ -286,6 +286,16 @@
   form states its clocks whenever OpenDSS's default convention does not represent them: the
   European ones, and clocks neither convention represents (a Y-D-D unit whose deltas roll
   opposite ways), which the reader then refuses with the winding named.
+- Fix: MG-RAVENS reads and writes a `NoLoadTest` as distribution CIM does, through one
+  function. CIM100, which MG-RAVENS profiles, types `NoLoadTest.loss` as `KiloActivePower` and
+  `excitingCurrent` as the whole exciting current, which the MG-RAVENS exporter writes as
+  `sqrt(%imag² + %noloadloss²)`. The MG-RAVENS reader took the loss in W (1000 times low) and the
+  whole exciting current as the magnetizing `%imag`, and its writer stated the loss in W and the
+  magnetizing current; it shipped in 0.12.0. A 500 kVA unit with `%noloadloss=0.6 %imag=1.1`
+  now writes a 3 kW test exciting 1.253 percent and reads back as stated. The `IEEE13_Assets`
+  example's `fdrxfmr` test states a 0.03 kW loss where its source's `%noloadloss=0.6` is 3 kW,
+  though its exciting current (1.253) carries the 0.6, so it reads as the test states:
+  `%noloadloss` 0.006 and `%imag` 1.253, not the source's 0.6 and 1.1.
 - MG-RAVENS equipment the reader keeps untyped while the document states it in service (a
   segment whose wires cannot be calculated, a switch or segment with fewer than two terminals, a
   tank without a datasheet, ends or a clock either convention represents, a delta load with

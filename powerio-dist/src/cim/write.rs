@@ -25,8 +25,8 @@ use crate::model::{
 
 use super::read::SWITCH_CLASSES;
 use super::{
-    LEAKAGE_READING, no_load_test_pct, sequence_to_phase, short_circuit_test_pct, tank_phase_clock,
-    wrap_angle, z_base,
+    LEAKAGE_READING, exact_preimage, no_load_test_values, sequence_to_phase,
+    short_circuit_test_pct, tank_phase_clock, wrap_angle, z_base,
 };
 use crate::ravens::MRID_KEY as RAVENS_MRID_KEY;
 
@@ -1561,18 +1561,7 @@ impl TankCatalogs {
                 }
             }
             if let Some((loss_pct, imag)) = entry.no_load {
-                let loss = exact_preimage(loss_pct, loss_pct * s_1 / 100.0 / 1000.0, |l| {
-                    no_load_test_pct(l, 0.0, s_1, s_1).map_or(f64::NAN, |p| p.0)
-                });
-                let read_loss = no_load_test_pct(loss, 0.0, s_1, s_1).map_or(0.0, |p| p.0);
-                let forward = if read_loss > 0.0 {
-                    imag.hypot(read_loss)
-                } else {
-                    imag
-                };
-                let exciting = exact_preimage(imag, forward, |e| {
-                    no_load_test_pct(loss, e, s_1, s_1).map_or(f64::NAN, |p| p.1)
-                });
+                let (loss, exciting) = no_load_test_values(loss_pct, imag, s_1);
                 let test = det_mrid("xfnltest", &entry.id);
                 doc.named("NoLoadTest", &test, &format!("{}_1", entry.name));
                 doc.reference("NoLoadTest.EnergisedEnd", &end_ids[0]);
@@ -1876,28 +1865,4 @@ fn has_off_diagonal(m: &ConductorMatrix) -> bool {
     m.iter()
         .enumerate()
         .any(|(i, row)| row.iter().enumerate().any(|(j, v)| i != j && *v != 0.0))
-}
-
-/// A value near `forward` that the reader's `inverse` maps back to `target`
-/// exactly, so a write, read, write cycle is byte stable. Unit conversions
-/// round, so the plain forward value can come back one bit away; the search
-/// steps outward a float at a time and keeps `forward` when no nearby value
-/// is exact.
-#[allow(clippy::float_cmp)] // exact equality is the property sought
-fn exact_preimage(target: f64, forward: f64, inverse: impl Fn(f64) -> f64) -> f64 {
-    if !forward.is_finite() || inverse(forward) == target {
-        return forward;
-    }
-    let (mut below, mut above) = (forward, forward);
-    for _ in 0..32 {
-        below = below.next_down();
-        above = above.next_up();
-        if inverse(below) == target {
-            return below;
-        }
-        if inverse(above) == target {
-            return above;
-        }
-    }
-    forward
 }

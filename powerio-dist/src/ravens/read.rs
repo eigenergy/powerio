@@ -2331,8 +2331,11 @@ impl Mapper<'_> {
                 .of_kind("PowerTransformer")
                 .find(|p| p.name == name)
                 .map_or_else(Extras::new, extras_with_mrid);
-            // No-load behavior: percent values on the winding-1 base, the
-            // dss `%noloadloss` / `%imag` properties.
+            // No-load behavior: the dss `%noloadloss` / `%imag` on the
+            // winding-1 base, read as distribution CIM reads the same test
+            // ([`crate::cim::no_load_test_pct`]: loss in kW, the whole
+            // exciting current).
+            let s_1 = windings.first().map_or(0.0, |w| w.s_rating);
             for einfo in end_infos.values() {
                 let Some(Value::Array(tests)) =
                     einfo.get("TransformerEndInfo.EnergisedEndNoLoadTests")
@@ -2343,22 +2346,20 @@ impl Mapper<'_> {
                     let Some(test) = test.as_object() else {
                         continue;
                     };
-                    let base_power = test
-                        .get("TransformerTest.basePower")
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0);
-                    if let Some(loss) = test.get("NoLoadTest.loss").and_then(Value::as_f64)
-                        && base_power > 0.0
-                        && loss.abs() > 0.0
-                    {
-                        extras.insert("%noloadloss".into(), (loss / base_power * 100.0).into());
+                    let number = |key: &str| test.get(key).and_then(Value::as_f64);
+                    let Some((loss, imag)) = crate::cim::no_load_test_pct(
+                        number("NoLoadTest.loss").unwrap_or(0.0),
+                        number("NoLoadTest.excitingCurrent").unwrap_or(0.0),
+                        number("TransformerTest.basePower").unwrap_or(s_1),
+                        s_1,
+                    ) else {
+                        continue;
+                    };
+                    if loss.abs() > 0.0 {
+                        extras.insert("%noloadloss".into(), loss.into());
                     }
-                    if let Some(current) = test
-                        .get("NoLoadTest.excitingCurrent")
-                        .and_then(Value::as_f64)
-                        && current.abs() > 0.0
-                    {
-                        extras.insert("%imag".into(), current.into());
+                    if imag.abs() > 0.0 {
+                        extras.insert("%imag".into(), imag.into());
                     }
                 }
                 break;

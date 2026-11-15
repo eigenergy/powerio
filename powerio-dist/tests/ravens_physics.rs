@@ -480,3 +480,46 @@ Solve
         four_wire.warnings
     );
 }
+
+/// MG-RAVENS and distribution CIM read and write a `NoLoadTest` alike, by
+/// CIM100's units: `NoLoadTest.loss` is `KiloActivePower` and
+/// `excitingCurrent` is the whole exciting current, whose quadrature part is
+/// OpenDSS's magnetizing `%imag`. IEEE13_Assets' `FdrXfmr` (500 kVA,
+/// `%NoLoadLoss=0.6 %imag=1.1`) is a 3 kW test exciting
+/// `sqrt(0.6² + 1.1²)` percent, the current the MG-RAVENS exporter writes.
+#[test]
+fn no_load_test_is_kilowatts_and_the_whole_exciting_current() {
+    let deck = "Clear
+New Circuit.c basekv=4.16 pu=1 phases=3 bus1=src
+New Transformer.xfm1 phases=3 windings=2 buses=[src lv] conns=[wye wye] kvs=[4.16 0.48] kvas=[500 500] xhl=2 %r=0.55 %noloadloss=0.6 %imag=1.1
+New Load.l bus1=lv.1.2.3 phases=3 kv=0.48 kw=100 kvar=10
+Set VoltageBases=[4.16 0.48]
+Calcvoltagebases
+Solve
+";
+    let source = parse_dss_str(deck);
+    let out = source.emit_value(DistTargetFormat::RavensJson);
+    let mut doc: Value = serde_json::from_str(&out.text).unwrap();
+    let mut tests = Vec::new();
+    visit(&mut doc, "NoLoadTest", &mut |t| tests.push(t.clone()));
+    assert_eq!(tests.len(), 1, "{tests:#?}");
+    let loss = tests[0]["NoLoadTest.loss"].as_f64().unwrap();
+    let exciting = tests[0]["NoLoadTest.excitingCurrent"].as_f64().unwrap();
+    assert!((loss - 3.0).abs() < 1e-12, "{loss}");
+    assert!((exciting - 0.6_f64.hypot(1.1)).abs() < 1e-12, "{exciting}");
+
+    // The reader gives back the source percentages exactly.
+    let back = parse_str(&out.text, "ravens-json").unwrap();
+    let extras = &back.transformers()[0].extras;
+    assert_eq!(extras["%noloadloss"], json!(0.6));
+    assert_eq!(extras["%imag"], json!(1.1));
+
+    // The exporter's own test (IEEE13_Assets states the exciting current
+    // 1.252996408614167) reads as the magnetizing current, not the total.
+    visit(&mut doc, "NoLoadTest", &mut |t| {
+        t["NoLoadTest.excitingCurrent"] = json!(1.252_996_408_614_167);
+    });
+    let back = parse_str(&doc.to_string(), "ravens-json").unwrap();
+    let imag = back.transformers()[0].extras["%imag"].as_f64().unwrap();
+    assert!((imag - 1.1).abs() < 1e-12, "{imag}");
+}

@@ -322,7 +322,21 @@ fn short_circuit_test_pct(
 /// A no-load test's loss (kW) and exciting current (percent of rated
 /// current at `base_power`) as the OpenDSS `(%noloadloss, %imag)` on winding
 /// 1's rating `s_1`. `None` when a power is not positive.
-fn no_load_test_pct(loss_kw: f64, exciting: f64, base_power: f64, s_1: f64) -> Option<(f64, f64)> {
+///
+/// The one reading of a `NoLoadTest`, for distribution CIM and MG-RAVENS
+/// alike. CIM100 (and the MG-RAVENS profile built on it) types
+/// `NoLoadTest.loss` as `KiloActivePower`, so the loss is in kW, and
+/// `excitingCurrent` is the whole exciting current, whose in-phase part is
+/// the core loss: OpenDSS's magnetizing `%imag` is the quadrature part,
+/// `sqrt(iexc² − loss²)`, as the MG-RAVENS exporter writes
+/// `excitingCurrent = sqrt(%imag² + %noloadloss²)`. A loss above the
+/// exciting current keeps the exciting current.
+pub(crate) fn no_load_test_pct(
+    loss_kw: f64,
+    exciting: f64,
+    base_power: f64,
+    s_1: f64,
+) -> Option<(f64, f64)> {
     if base_power <= 0.0 || s_1 <= 0.0 {
         return None;
     }
@@ -334,6 +348,49 @@ fn no_load_test_pct(loss_kw: f64, exciting: f64, base_power: f64, s_1: f64) -> O
         iexc
     };
     Some((loss, imag))
+}
+
+/// The `NoLoadTest` (loss in kW, exciting current in percent) on a test
+/// base of winding 1's rating `s_1` that [`no_load_test_pct`] reads back as
+/// `(loss_pct, imag)` exactly: the inverse both writers state.
+pub(crate) fn no_load_test_values(loss_pct: f64, imag: f64, s_1: f64) -> (f64, f64) {
+    let loss = exact_preimage(loss_pct, loss_pct * s_1 / 100.0 / 1000.0, |l| {
+        no_load_test_pct(l, 0.0, s_1, s_1).map_or(f64::NAN, |p| p.0)
+    });
+    let read_loss = no_load_test_pct(loss, 0.0, s_1, s_1).map_or(0.0, |p| p.0);
+    let forward = if read_loss > 0.0 {
+        imag.hypot(read_loss)
+    } else {
+        imag
+    };
+    let exciting = exact_preimage(imag, forward, |e| {
+        no_load_test_pct(loss, e, s_1, s_1).map_or(f64::NAN, |p| p.1)
+    });
+    (loss, exciting)
+}
+
+/// A value near `forward` that the reader's `inverse` maps back to `target`
+/// exactly, so a write, read, write cycle is byte stable. Unit conversions
+/// round, so the plain forward value can come back one bit away; the search
+/// steps outward a float at a time and keeps `forward` when no nearby value
+/// is exact.
+#[allow(clippy::float_cmp)] // exact equality is the property sought
+pub(crate) fn exact_preimage(target: f64, forward: f64, inverse: impl Fn(f64) -> f64) -> f64 {
+    if !forward.is_finite() || inverse(forward) == target {
+        return forward;
+    }
+    let (mut below, mut above) = (forward, forward);
+    for _ in 0..32 {
+        below = below.next_down();
+        above = above.next_up();
+        if inverse(below) == target {
+            return below;
+        }
+        if inverse(above) == target {
+            return above;
+        }
+    }
+    forward
 }
 
 #[cfg(test)]
