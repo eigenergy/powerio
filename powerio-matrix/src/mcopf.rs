@@ -193,6 +193,23 @@ pub struct McOpfLoadLaw {
     /// Active then reactive terms; each `[coefficient, exponent]` contributes coefficient * (|U| / nominal)^exponent in per-unit power.
     pub terms: [Vec<[f64; 2]>; 2],
 }
+impl McOpfLoadLaw {
+    /// The law's per unit active and reactive power at the per unit voltage
+    /// magnitude `voltage` (on `V_base`), each with its derivative with
+    /// respect to `voltage`: the terms summed by the one power law term
+    /// evaluation ([`powerio_core::electrical::calc_voltage_power_term`]) at
+    /// the ratio `voltage / nominal`.
+    #[must_use]
+    pub fn calc_power(&self, voltage: f64) -> [(f64, f64); 2] {
+        let ratio = voltage / self.nominal;
+        self.terms.each_ref().map(|terms| {
+            let (value, slope) =
+                powerio_core::electrical::calc_voltage_power_terms(terms, ratio);
+            (value, slope / self.nominal)
+        })
+    }
+}
+
 /// Smooth clipped piecewise-linear controller, with SI-derived per-unit knots.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -1408,22 +1425,40 @@ fn prepare_load_laws(
     if matches!(model, Law::ConstantPower { .. }) {
         return Ok(vec![None; n]);
     }
-    let at = |v: &[f64], k: usize, default: f64| -> Result<f64> {
-        if v.is_empty() {
-            return Ok(default);
-        }
-        if v.len() != 1 && v.len() != n {
-            return Err(invalid(
-                &load.name,
-                "load law vector must be scalar or per coil",
-            ));
-        }
-        finite(&load.name, v)?;
-        Ok(v[if v.len() == 1 { 0 } else { k }])
+    if matches!(
+        model,
+        Law::BoundedZip { .. } | Law::BoundedExponential { .. } | Law::BoundedConstantPower { .. }
+    ) {
+        return Err(unsupported(
+            &load.name,
+            "voltage-bounded load laws require piecewise IVR equations; a nominal-law approximation is not implicit (opt in with BoundedLoadLawPolicy::ProjectToNominal)",
+        ));
+    }
+    let axis_ok = |v: &[f64]| v.is_empty() || v.len() == n;
+    let axes: Vec<&[f64]> = match model {
+        Law::Exponential {
+            gamma_p, gamma_q, ..
+        } => vec![gamma_p, gamma_q],
+        Law::Zip {
+            alpha_z,
+            alpha_i,
+            alpha_p,
+            beta_z,
+            beta_i,
+            beta_p,
+            ..
+        } => vec![alpha_z, alpha_i, alpha_p, beta_z, beta_i, beta_p],
+        _ => Vec::new(),
     };
+    if !axis_ok(model.v_nom()) || axes.iter().any(|v| !axis_ok(v)) {
+        return Err(invalid(
+            &load.name,
+            "load law vector must state one entry per coil",
+        ));
+    }
     (0..n)
         .map(|k| {
-            let nominal = at(model.v_nom(), k, f64::NAN)? / vb;
+            let nominal = model.nominal_voltage(k).unwrap_or(f64::NAN) / vb;
             if !nominal.is_finite() || nominal <= 0.0 {
                 return Err(invalid(
                     &load.name,
@@ -1432,45 +1467,23 @@ fn prepare_load_laws(
             }
             let p = load.p_nom[k] / sb;
             let q = load.q_nom[k] / sb;
-            let terms = match &model {
-                Law::ConstantImpedance { .. } => [vec![[p, 2.0]], vec![[q, 2.0]]],
-                Law::ConstantCurrent { .. } => [vec![[p, 1.0]], vec![[q, 1.0]]],
-                Law::Exponential {
-                    gamma_p, gamma_q, ..
-                } => [
-                    vec![[p, at(gamma_p, k, 0.0)?]],
-                    vec![[q, at(gamma_q, k, 0.0)?]],
-                ],
-                Law::Zip {
-                    alpha_z,
-                    alpha_i,
-                    alpha_p,
-                    beta_z,
-                    beta_i,
-                    beta_p,
-                    ..
-                } => {
-                    let a_empty = alpha_z.is_empty() && alpha_i.is_empty() && alpha_p.is_empty();
-                    let b_empty = beta_z.is_empty() && beta_i.is_empty() && beta_p.is_empty();
-                    [
-                        vec![
-                            [p * at(alpha_z, k, 0.0)?, 2.0],
-                            [p * at(alpha_i, k, 0.0)?, 1.0],
-                            [p * at(alpha_p, k, f64::from(a_empty))?, 0.0],
-                        ],
-                        vec![
-                            [q * at(beta_z, k, 0.0)?, 2.0],
-                            [q * at(beta_i, k, 0.0)?, 1.0],
-                            [q * at(beta_p, k, f64::from(b_empty))?, 0.0],
-                        ],
-                    ]
-                }
-                Law::BoundedZip { .. } | Law::BoundedExponential { .. } | Law::BoundedConstantPower { .. } => {
-                    return Err(unsupported(&load.name, "voltage-bounded load laws require piecewise IVR equations; a nominal-law approximation is not implicit (opt in with BoundedLoadLawPolicy::ProjectToNominal)"));
-                }
-                _ => return Err(unsupported(&load.name, "unknown load voltage law")),
-            };
-            let terms = terms.map(|v| v.into_iter().filter(|t| t[0] != 0.0).collect::<Vec<_>>());
+            // The one term form of the law (`DistLoadVoltageModel::calc_power_terms`),
+            // scaled to this coil's per unit nominal power.
+            let fractions = model
+                .calc_power_terms(k)
+                .map_err(|error| invalid(&load.name, &error))?
+                .ok_or_else(|| unsupported(&load.name, "unknown load voltage law"))?;
+            let terms = [p, q]
+                .into_iter()
+                .zip(fractions)
+                .map(|(power, row)| {
+                    row.into_iter()
+                        .map(|[fraction, exponent]| [power * fraction, exponent])
+                        .filter(|t| t[0] != 0.0)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let terms: [Vec<[f64; 2]>; 2] = terms.try_into().expect("two components");
             for row in &terms {
                 for t in row {
                     finite(&load.name, t)?;

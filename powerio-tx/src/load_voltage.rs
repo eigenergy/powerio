@@ -16,11 +16,9 @@
 
 use crate::network::{Load, LoadVoltageModel};
 
-/// Below this ratio `vm / vn` a term with exponent below one is continued by
-/// its tangent at the floor ([`LoadVoltageTerm::calc_power`]): `x^γ` has an
-/// unbounded slope at zero for `γ < 1` (and is itself unbounded for `γ < 0`),
-/// and a Newton iterate can pass near zero on its way to a solution.
-pub const LOAD_VOLTAGE_RATIO_FLOOR: f64 = 1e-3;
+/// The voltage ratio floor of the one power law term evaluation
+/// ([`powerio_core::electrical::calc_voltage_power_term`]).
+pub use powerio_core::electrical::LOAD_VOLTAGE_RATIO_FLOOR;
 
 /// One voltage dependent part of a load: `coefficient · (vm / v_nom)^exponent`
 /// in the load's power unit.
@@ -50,27 +48,18 @@ impl LoadVoltageTerm {
     }
 
     /// The term's power at magnitude `vm` (per unit) and its derivative with
-    /// respect to `vm`: with `x = vm / v_nom`, `(c x^γ, γ c x^(γ−1) / v_nom)`.
-    /// Exponents 1 and 2 are evaluated without `powf`. For `γ < 1` and `x`
-    /// below [`LOAD_VOLTAGE_RATIO_FLOOR`] the term follows its tangent at the
-    /// floor, `c (f₀ + f₀' (x − x₀))`, so value and slope stay finite and
-    /// consistent as a voltage approaches zero.
+    /// respect to `vm`: with `x = vm / v_nom`, `(c x^γ, γ c x^(γ−1) / v_nom)`,
+    /// the one power law term
+    /// ([`powerio_core::electrical::calc_voltage_power_term`], which follows
+    /// the tangent at [`LOAD_VOLTAGE_RATIO_FLOOR`] for `γ < 1`).
     #[must_use]
-    #[allow(clippy::float_cmp)] // the integer exponents are exact spellings
     pub fn calc_power(&self, vm: f64) -> (f64, f64) {
-        let (c, g, vn) = (self.coefficient, self.exponent, self.v_nom);
-        let x = vm / vn;
-        if g == 1.0 {
-            (c * x, c / vn)
-        } else if g == 2.0 {
-            (c * x * x, 2.0 * c * x / vn)
-        } else if g < 1.0 && x < LOAD_VOLTAGE_RATIO_FLOOR {
-            let f0 = LOAD_VOLTAGE_RATIO_FLOOR.powf(g);
-            let d0 = g * LOAD_VOLTAGE_RATIO_FLOOR.powf(g - 1.0);
-            (c * (f0 + d0 * (x - LOAD_VOLTAGE_RATIO_FLOOR)), c * d0 / vn)
-        } else {
-            (c * x.powf(g), c * g * x.powf(g - 1.0) / vn)
-        }
+        let (value, slope) = powerio_core::electrical::calc_voltage_power_term(
+            self.coefficient,
+            self.exponent,
+            vm / self.v_nom,
+        );
+        (value, slope / self.v_nom)
     }
 
     /// Whether `vm` lies below the term's ratio floor: a collapsed voltage

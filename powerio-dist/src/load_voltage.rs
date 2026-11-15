@@ -54,20 +54,14 @@ impl DistLoadVoltageModel {
         if matches!(self, Self::ConstantPower { .. }) {
             return Ok(evaluate.map(|on| if on { 1.0 } else { 0.0 }));
         }
-        let nominal = *self
-            .v_nom()
-            .get(phase)
+        let nominal = self
+            .nominal_voltage(phase)
             .ok_or("missing nominal load voltage")?;
         if !nominal.is_finite() || nominal <= 0.0 {
             return Err("nominal load voltage must be positive and finite".into());
         }
         let voltage_pu = voltage / nominal;
-        let at = |v: &[f64]| -> Result<f64, String> {
-            v.get(phase)
-                .copied()
-                .filter(|v| v.is_finite())
-                .ok_or_else(|| "missing or nonfinite load coefficient".into())
-        };
+        let at = |v: &[f64]| coefficient(v, phase);
         // An inactive component's exponent is never read; zero stands in, so
         // its factor stays finite until it is cleared below.
         let exponent = |v: &[f64], component: usize| -> Result<f64, String> {
@@ -75,14 +69,24 @@ impl DistLoadVoltageModel {
         };
         let value = match self {
             Self::ConstantPower { .. } => unreachable!(),
-            Self::ConstantCurrent { .. } => [voltage_pu; 2],
-            Self::ConstantImpedance { .. } => [voltage_pu * voltage_pu; 2],
-            Self::Exponential {
-                gamma_p, gamma_q, ..
-            } => [
-                voltage_pu.powf(exponent(gamma_p, 0)?),
-                voltage_pu.powf(exponent(gamma_q, 1)?),
-            ],
+            Self::ConstantCurrent { .. }
+            | Self::ConstantImpedance { .. }
+            | Self::Exponential { .. }
+            | Self::Zip { .. } => {
+                let mut value = [0.0; 2];
+                for (component, out) in value.iter_mut().enumerate() {
+                    if evaluate[component] {
+                        let terms = self
+                            .component_terms(phase, component == 1)?
+                            .expect("an unbounded law has power law terms");
+                        *out = powerio_core::electrical::calc_voltage_power_terms(
+                            &terms, voltage_pu,
+                        )
+                        .0;
+                    }
+                }
+                value
+            }
             Self::BoundedConstantPower {
                 v_min_pu,
                 v_max_pu,
@@ -118,16 +122,7 @@ impl DistLoadVoltageModel {
                 envelope_scale(voltage_pu, [*v_low_pu, *v_min_pu, *v_max_pu])?
                     .unwrap_or_else(|| gamma.map(|exponent| voltage_pu.powf(exponent)))
             }
-            Self::Zip {
-                alpha_z,
-                alpha_i,
-                alpha_p,
-                beta_z,
-                beta_i,
-                beta_p,
-                ..
-            }
-            | Self::BoundedZip {
+            Self::BoundedZip {
                 alpha_z,
                 alpha_i,
                 alpha_p,
@@ -138,14 +133,17 @@ impl DistLoadVoltageModel {
             } => {
                 let active = [at(alpha_z)?, at(alpha_i)?, at(alpha_p)?];
                 let reactive = [at(beta_z)?, at(beta_i)?, at(beta_p)?];
-                let (impedance_scale, current_scale, power_scale, dropout) =
-                    if let Self::BoundedZip {
+                let (impedance_scale, current_scale, power_scale, dropout) = {
+                    let Self::BoundedZip {
                         v_low_pu: low,
                         v_min_pu: min,
                         v_max_pu: max,
                         cutoff_pu: cutoff,
                         ..
                     } = self
+                    else {
+                        unreachable!()
+                    };
                     {
                         if [low, min, max, cutoff]
                             .iter()
@@ -186,9 +184,8 @@ impl DistLoadVoltageModel {
                             1.0
                         };
                         (voltage_pu * voltage_pu, current_scale, power_scale, dropout)
-                    } else {
-                        (voltage_pu * voltage_pu, voltage_pu, 1.0, 1.0)
-                    };
+                    }
+                };
                 [
                     active[0] * impedance_scale
                         + active[1] * current_scale
@@ -211,6 +208,74 @@ impl DistLoadVoltageModel {
         } else {
             Ok(value)
         }
+    }
+
+    /// The nominal voltage of channel `channel`, volts, `None` when the law
+    /// states no entry for it.
+    #[must_use]
+    pub fn nominal_voltage(&self, channel: usize) -> Option<f64> {
+        channel_entry(self.v_nom(), channel)
+    }
+
+    /// The law of channel `channel` as voltage power law terms
+    /// `[fraction, exponent]`, active then reactive: each contributes
+    /// `fraction · nominal power · (|V| / V_nom)^exponent`. Constant power is
+    /// `[1, 0]`, constant current `[1, 1]`, constant impedance `[1, 2]`, an
+    /// exponential law `[1, γ]` and a ZIP law its three fractions at
+    /// exponents 2, 1 and 0. `None` for a voltage bounded law, which is
+    /// piecewise. Every coefficient is required, one entry per channel, as the
+    /// BMOPF schema states them.
+    ///
+    /// The one term form of the unbounded laws: [`power_scale`](Self::power_scale)
+    /// evaluates these terms with
+    /// [`powerio_core::electrical::calc_voltage_power_term`], and the
+    /// multiconductor OPF load law states them in per unit.
+    ///
+    /// # Errors
+    /// A missing or nonfinite coefficient.
+    pub fn calc_power_terms(&self, channel: usize) -> Result<Option<[Vec<[f64; 2]>; 2]>, String> {
+        let Some(active) = self.component_terms(channel, false)? else {
+            return Ok(None);
+        };
+        let reactive = self
+            .component_terms(channel, true)?
+            .expect("both components of an unbounded law have terms");
+        Ok(Some([active, reactive]))
+    }
+
+    fn component_terms(
+        &self,
+        channel: usize,
+        reactive: bool,
+    ) -> Result<Option<Vec<[f64; 2]>>, String> {
+        let at = |v: &[f64]| coefficient(v, channel);
+        Ok(Some(match self {
+            Self::ConstantPower { .. } => vec![[1.0, 0.0]],
+            Self::ConstantCurrent { .. } => vec![[1.0, 1.0]],
+            Self::ConstantImpedance { .. } => vec![[1.0, 2.0]],
+            Self::Exponential {
+                gamma_p, gamma_q, ..
+            } => vec![[1.0, at(if reactive { gamma_q } else { gamma_p })?]],
+            Self::Zip {
+                alpha_z,
+                alpha_i,
+                alpha_p,
+                beta_z,
+                beta_i,
+                beta_p,
+                ..
+            } => {
+                let [z, i, p] = if reactive {
+                    [beta_z, beta_i, beta_p]
+                } else {
+                    [alpha_z, alpha_i, alpha_p]
+                };
+                vec![[at(z)?, 2.0], [at(i)?, 1.0], [at(p)?, 0.0]]
+            }
+            Self::BoundedZip { .. }
+            | Self::BoundedExponential { .. }
+            | Self::BoundedConstantPower { .. } => return Ok(None),
+        }))
     }
 
     /// [`power_scale_where`](Self::power_scale_where) of this law inside a
@@ -237,9 +302,8 @@ impl DistLoadVoltageModel {
         if !voltage.is_finite() || voltage < 0.0 {
             return Err("load voltage magnitude must be finite and nonnegative".into());
         }
-        let nominal = *self
-            .v_nom()
-            .get(phase)
+        let nominal = self
+            .nominal_voltage(phase)
             .ok_or("missing nominal load voltage")?;
         if !nominal.is_finite() || nominal <= 0.0 {
             return Err("nominal load voltage must be positive and finite".into());
@@ -319,6 +383,19 @@ impl DistLoadVoltageModel {
             beta_p: beta_p.clone(),
         }
     }
+}
+
+/// A per channel entry: one entry per channel, in channel order, as the
+/// BMOPF schema states every load coefficient ("one entry per sub-load").
+fn channel_entry(values: &[f64], channel: usize) -> Option<f64> {
+    values.get(channel).copied()
+}
+
+/// A finite per channel load coefficient ([`channel_entry`]).
+fn coefficient(values: &[f64], channel: usize) -> Result<f64, String> {
+    channel_entry(values, channel)
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| "missing or nonfinite load coefficient".into())
 }
 
 /// Where a per unit voltage falls in a load voltage envelope
