@@ -743,25 +743,20 @@ fn derive_current_limits(base: &AcOpfInstance) -> Vec<Option<f64>> {
             if !(active_f && active_t) {
                 return None;
             }
-            let mut limit: Option<f64> = None;
-            let impedance = branch.r.hypot(branch.x);
-            if impedance > 0.0 {
-                let theta_max = if constraints.angle_bounds.selects(&identity) {
-                    let (angmin, angmax) = if normalized {
-                        (branch.angmin, branch.angmax)
-                    } else {
-                        (branch.angmin.to_radians(), branch.angmax.to_radians())
-                    };
-                    let (angmin, angmax) = correct_angle_difference_bounds(angmin, angmax);
-                    angmin.abs().max(angmax.abs())
+            let theta_max = if constraints.angle_bounds.selects(&identity) {
+                let (angmin, angmax) = if normalized {
+                    (branch.angmin, branch.angmax)
                 } else {
-                    std::f64::consts::PI
+                    (branch.angmin.to_radians(), branch.angmax.to_radians())
                 };
-                // PowerModels' arithmetic, term for term.
-                let spread =
-                    vmax_f * vmax_f + vmax_t * vmax_t - 2.0 * vmax_f * vmax_t * theta_max.cos();
-                limit = Some(spread.max(0.0).sqrt() / impedance);
-            }
+                let (angmin, angmax) = correct_angle_difference_bounds(angmin, angmax);
+                angmin.abs().max(angmax.abs())
+            } else {
+                std::f64::consts::PI
+            };
+            // PowerModels' bound: the widest separation of the two voltage
+            // ceilings over the window, over |z|.
+            let mut limit = branch.calc_current_bound(theta_max, vmax_f, vmax_t);
             if branch.rate_a.is_finite()
                 && constraints.thermal_limits.selects(&identity)
                 // S = V I only bounds current when the voltage floor is
