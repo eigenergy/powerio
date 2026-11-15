@@ -271,6 +271,25 @@ pub fn audit_electrical_readiness(net: &MulticonductorNetwork) -> ElectricalRead
     report
 }
 
+/// In-service MG-RAVENS equipment the reader could not type
+/// ([`UNRESOLVED_RAVENS_KEY`]).
+fn audit_unresolved_ravens(object: &crate::model::UntypedObject, report: &mut ElectricalReadiness) {
+    if let Some((_, why)) = object
+        .props
+        .iter()
+        .find(|(key, _)| key.as_deref() == Some(UNRESOLVED_RAVENS_KEY))
+    {
+        report.block(
+            "READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED",
+            &format!("{} {}", object.class, object.name),
+            format!(
+                "the MG-RAVENS source states this equipment in service and the reader \
+                 cannot type it ({why}); omitting it would disconnect or change the circuit"
+            ),
+        );
+    }
+}
+
 fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) {
     let autotrans_state_command = net.commands().iter().any(|(verb, args)| {
         matches!(verb.as_str(), "enable" | "disable" | "open" | "close")
@@ -297,20 +316,7 @@ fn audit_untyped(net: &MulticonductorNetwork, report: &mut ElectricalReadiness) 
                 .is_some_and(|p| p.value.text.to_ascii_lowercase().starts_with("storage."))
     });
     for object in net.untyped_objects() {
-        if let Some((_, why)) = object
-            .props
-            .iter()
-            .find(|(key, _)| key.as_deref() == Some(UNRESOLVED_RAVENS_KEY))
-        {
-            report.block(
-                "READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED",
-                &format!("{} {}", object.class, object.name),
-                format!(
-                    "the MG-RAVENS source states this equipment in service and the reader \
-                     cannot type it ({why}); omitting it would disconnect or change the circuit"
-                ),
-            );
-        }
+        audit_unresolved_ravens(object, report);
         let explicitly_disabled = object
             .props
             .iter()

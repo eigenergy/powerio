@@ -206,11 +206,11 @@ pub(crate) fn tank_phase_clock(
             .is_some_and(|t| t == "4")
     };
     if neutral_first(transformer.windings.first())
-        != neutral_first(transformer.windings.get(winding))
+        == neutral_first(transformer.windings.get(winding))
     {
-        Ok(6.0)
-    } else {
         Ok(0.0)
+    } else {
+        Ok(6.0)
     }
 }
 

@@ -197,6 +197,7 @@ fn three_phase_returns_reduce_together() {
         }
     }
 }
+#[allow(clippy::unreadable_literal)] // the earlier code's output, verbatim
 const PNNL_CN: &[f64] = &[
     0.732150509442567,
     0.25380178380673735,
@@ -226,6 +227,7 @@ const PNNL_CN: &[f64] = &[
     0.0,
     4.830491682802676e-05,
 ];
+#[allow(clippy::unreadable_literal)] // the earlier code's output, verbatim
 const PNNL_TS: &[f64] = &[
     0.7972872645389057,
     0.32816983925632937,
@@ -255,6 +257,7 @@ const PNNL_TS: &[f64] = &[
     0.0,
     8.915443923605262e-05,
 ];
+#[allow(clippy::unreadable_literal)] // the earlier code's output, verbatim
 const ARRAS_TS: &[f64] = &[
     1.0820868387260298,
     0.5910684879482453,
