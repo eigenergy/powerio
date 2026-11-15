@@ -2321,8 +2321,12 @@ impl Writer {
     /// base, an ideal transformer scales it by its nominal ratio, and the
     /// stated bases seed the flood.
     ///
-    /// This is not `McAcPfInstance::calc_inferred_load_nominal_voltages`
-    /// (powerio-prob), and the two share only their zone labeling
+    /// The flood is the one zone base flood
+    /// (`crate::voltage_zones::calc_flooded_zone_bases`, which the
+    /// multiconductor to balanced lowering also reads); this writer states
+    /// only PMD's crossing rule, the `tm_nom` ratio. It is not
+    /// `McAcPfInstance::calc_inferred_load_nominal_voltages` (powerio-prob),
+    /// which shares its zone labeling
     /// (`powerio_core::union_find::calc_component_labels`). Here the zones
     /// are over the lowered MATHEMATICAL buses (internal buses included),
     /// joined by every MATHEMATICAL branch and by every switch, open or
@@ -2372,8 +2376,10 @@ impl Writer {
             }
         }
         // Transformer edges between zones, with the ratio from the from side
-        // to the to side.
-        let mut edges: BTreeMap<usize, Vec<(usize, f64)>> = BTreeMap::new();
+        // to the to side, flooded from the stated bases
+        // (`crate::voltage_zones::calc_flooded_zone_bases`).
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        let mut ratios: Vec<f64> = Vec::new();
         for xf in &self.transformers {
             let (Some(f), Some(t), Some(tm_nom)) =
                 (xf.usize("f_bus"), xf.usize("t_bus"), xf.f("tm_nom"))
@@ -2389,25 +2395,18 @@ impl Writer {
             if !(tm_nom.is_finite() && tm_nom > 0.0) {
                 continue;
             }
-            edges
-                .entry(zone[f - 1])
-                .or_default()
-                .push((zone[t - 1], 1.0 / tm_nom));
-            edges
-                .entry(zone[t - 1])
-                .or_default()
-                .push((zone[f - 1], tm_nom));
+            edges.push((zone[f - 1], zone[t - 1]));
+            ratios.push(tm_nom);
         }
-        let mut stack: Vec<usize> = zone_base.keys().copied().collect();
-        while let Some(from) = stack.pop() {
-            let base = zone_base[&from];
-            for (to, scale) in edges.get(&from).cloned().unwrap_or_default() {
-                if let std::collections::btree_map::Entry::Vacant(entry) = zone_base.entry(to) {
-                    entry.insert(base * scale);
-                    stack.push(to);
-                }
-            }
-        }
+        let seeds: Vec<(usize, f64)> = zone_base.iter().map(|(&z, &b)| (z, b)).collect();
+        let mut zone_base =
+            crate::voltage_zones::calc_flooded_zone_bases(seeds, &edges, |k, forward, base| {
+                Some(if forward {
+                    base * (1.0 / ratios[k])
+                } else {
+                    base * ratios[k]
+                })
+            });
         // An island no stated base reaches (a transformer a previous hop
         // dropped) takes the nominal voltage of a load in it, else 1 kV, and
         // says so: PMD's `calc_voltage_bases` stops at such an island.

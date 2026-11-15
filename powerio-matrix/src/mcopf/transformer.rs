@@ -1,10 +1,16 @@
 //! Winding-current descriptor; no inverse of a leakage impedance is formed.
 use super::{
-    Configuration, Context, Deserialize, McAcOpfAssemblyOptions, McOpfBranch, McOpfShunt,
-    McOpfTerminal, Result, Serialize, caps, extras, finite, invalid, unsupported,
+    Context, Deserialize, McAcOpfAssemblyOptions, McOpfBranch, McOpfShunt, McOpfTerminal, Result,
+    Serialize, caps, extras, finite, invalid, unsupported,
 };
-use crate::matrix::multiconductor::TransformerLeakageBase;
+use num_complex::Complex64;
 use powerio_dist::DistWindingConn;
+use powerio_dist::transformer::{
+    TransformerLeakageBase, TransformerMagnetizing, WindingNeutralGrounding,
+    calc_coil_shunt_primitive, calc_coil_voltage, calc_reduced_leakage, calc_regulator_series_ohms,
+    calc_transformer_leakage_impedances, calc_transformer_magnetizing, calc_winding_connection,
+    calc_winding_neutral_grounding, transformer_extra_number,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[non_exhaustive]
@@ -69,6 +75,54 @@ pub struct McOpfTransformer {
     /// Rows multiplied by the tap multiplier, aligned with equations; empty for fixed taps.
     pub tap_equations: Vec<McOpfComplexRow>,
 }
+impl McOpfTransformer {
+    /// The physical tap at a tap multiplier `t`: `tap_nominal * t`, or
+    /// `tap_nominal / t` for a regulator (`tap_inverse`). The one tap
+    /// convention, with its inverse [`Self::calc_tap_multiplier`] and the
+    /// derivatives below.
+    #[must_use]
+    pub fn calc_physical_tap(&self, multiplier: f64) -> f64 {
+        if self.tap_inverse {
+            self.tap_nominal / multiplier
+        } else {
+            self.tap_nominal * multiplier
+        }
+    }
+
+    /// The tap multiplier of a physical tap: `physical / tap_nominal`, or
+    /// `tap_nominal / physical` for a regulator. The preparation maps its
+    /// physical tap bounds through it.
+    #[must_use]
+    pub fn calc_tap_multiplier(&self, physical: f64) -> f64 {
+        if self.tap_inverse {
+            self.tap_nominal / physical
+        } else {
+            physical / self.tap_nominal
+        }
+    }
+
+    /// `d physical / d t` at the multiplier `t`: `tap_nominal`, or
+    /// `-tap_nominal / t²` for a regulator.
+    #[must_use]
+    pub fn calc_physical_tap_derivative(&self, multiplier: f64) -> f64 {
+        if self.tap_inverse {
+            -self.tap_nominal / multiplier.powi(2)
+        } else {
+            self.tap_nominal
+        }
+    }
+
+    /// `d t / d physical` at a physical tap: `1 / tap_nominal`, or
+    /// `-tap_nominal / physical²` for a regulator.
+    #[must_use]
+    pub fn calc_tap_multiplier_derivative(&self, physical: f64) -> f64 {
+        if self.tap_inverse {
+            -self.tap_nominal / physical.powi(2)
+        } else {
+            self.tap_nominal.recip()
+        }
+    }
+}
 fn add_voltage(row: &mut McOpfComplexRow, coil: &McOpfTransformerCoil, value: f64) {
     row.voltage.push((coil.positive, [value, 0.0]));
     if let Some(n) = coil.negative {
@@ -76,12 +130,10 @@ fn add_voltage(row: &mut McOpfComplexRow, coil: &McOpfTransformerCoil, value: f6
     }
 }
 fn extra_number(t: &powerio_dist::DistTransformer, key: &str, default: f64) -> Result<f64> {
-    let v = t
-        .extras
-        .get(key)
-        .map_or(Some(default), serde_json::Value::as_f64)
-        .ok_or_else(|| invalid(&t.name, format!("invalid {key}")))?;
-    finite(&t.name, &[v])?;
+    let v = transformer_extra_number(&t.extras, key).unwrap_or(default);
+    if !v.is_finite() {
+        return Err(invalid(&t.name, format!("invalid {key}")));
+    }
     Ok(v)
 }
 fn extra_vector(t: &powerio_dist::DistTransformer, key: &str) -> Result<Option<Vec<f64>>> {
@@ -93,6 +145,8 @@ fn extra_vector(t: &powerio_dist::DistTransformer, key: &str) -> Result<Option<V
         })
         .transpose()
 }
+/// A per unit admittance `g + j b` across one coil, as a local shunt
+/// ([`calc_coil_shunt_primitive`]).
 fn stamp_shunt(
     shunts: &mut Vec<McOpfShunt>,
     name: String,
@@ -103,24 +157,20 @@ fn stamp_shunt(
     if g == 0.0 && b == 0.0 {
         return;
     }
-    let (terminals, matrix) = if let Some(n) = coil.negative {
-        (
-            vec![coil.positive, n],
-            vec![vec![1.0, -1.0], vec![-1.0, 1.0]],
-        )
-    } else {
-        (vec![coil.positive], vec![vec![1.0]])
-    };
+    let matrix = calc_coil_shunt_primitive(Complex64::new(g, b), coil.negative.is_none());
+    let terminals = std::iter::once(coil.positive)
+        .chain(coil.negative)
+        .collect();
     shunts.push(McOpfShunt {
         identity: name,
         terminals,
         g: matrix
             .iter()
-            .map(|r| r.iter().map(|x| x * g).collect())
+            .map(|row| row.iter().map(|y| y.re).collect())
             .collect(),
         b: matrix
             .iter()
-            .map(|r| r.iter().map(|x| x * b).collect())
+            .map(|row| row.iter().map(|y| y.im).collect())
             .collect(),
     });
 }
@@ -134,6 +184,8 @@ struct TransformerProfile<'a> {
     zb: f64,
     ib: f64,
     sb: f64,
+    /// The magnetizing branch the unit states, siemens per coil.
+    core: Option<TransformerMagnetizing>,
 }
 type TerminalRatings = (Option<Vec<f64>>, Option<f64>);
 type WindingGeometry = (Vec<super::CoilPairs>, Vec<f64>);
@@ -189,7 +241,7 @@ pub(super) fn prepare(
         if m < 2 || t.xsc_pct.len() != m * (m - 1) / 2 {
             return Err(invalid(&t.name, "invalid winding/leakage dimensions"));
         }
-        let (maps, mut noms) = winding_geometry(ctx, t, subtype, nw)?;
+        let (maps, mut noms) = winding_geometry(ctx, t, subtype)?;
         let phases = maps[0].len();
         if maps.iter().any(|p| p.len() != phases) {
             return Err(invalid(&t.name, "all windings must have equal coil count"));
@@ -206,67 +258,46 @@ pub(super) fn prepare(
             zb,
             ib,
             sb,
+            core: calc_transformer_magnetizing(t).map_err(|error| invalid(&t.name, error))?,
         };
         let mut tx = leakage_descriptor(&profile, &maps, &noms)?;
-        prepare_ports(&profile, ctx, &maps, &mut tx, shunts)?;
+        prepare_ports(&profile, ctx, &maps, &mut tx, shunts, terminals)?;
         for row in &tx.equations {
             for (_, c) in row.voltage.iter().chain(&row.current) {
                 finite(&t.name, c)?;
             }
         }
-        explicit_core(&profile, &tx, shunts)?;
+        core_shunts(&profile, &tx, shunts);
         prepare_tap(&profile, &noms, &mut tx)?;
         out.push(tx);
     }
     Ok(out)
 }
-fn explicit_core(
+/// The magnetizing branch ([`calc_transformer_magnetizing`]) as one per
+/// unit shunt across each coil of its winding.
+fn core_shunts(
     profile: &TransformerProfile<'_>,
     tx: &McOpfTransformer,
     shunts: &mut Vec<McOpfShunt>,
-) -> Result<()> {
-    let TransformerProfile { t, phases, zb, .. } = *profile;
-    let m = t.windings.len();
-    if let Some(core) = t.extras.get("no_load_shunt") {
-        if t.extras.contains_key("g_no_load") || t.extras.contains_key("b_no_load") {
-            return Err(invalid(&t.name, "competing no-load representations"));
-        }
-        let object = core
-            .as_object()
-            .ok_or_else(|| invalid(&t.name, "no_load_shunt must be an object"))?;
-        if object
-            .keys()
-            .any(|k| !["winding", "g", "b"].contains(&k.as_str()))
-        {
-            return Err(unsupported(&t.name, "unknown no-load field"));
-        }
-        let winding = core["winding"]
-            .as_u64()
-            .and_then(|v| usize::try_from(v).ok())
-            .filter(|v| *v > 0 && *v <= m)
-            .ok_or_else(|| invalid(&t.name, "invalid no-load winding"))?
-            - 1;
-        let g = core["g"]
-            .as_f64()
-            .ok_or_else(|| invalid(&t.name, "missing no-load conductance"))?;
-        let b = core["b"]
-            .as_f64()
-            .ok_or_else(|| invalid(&t.name, "missing no-load susceptance"))?;
-        finite(&t.name, &[g, b])?;
-        if g < 0.0 {
-            return Err(invalid(&t.name, "negative no-load conductance"));
-        }
+) {
+    let TransformerProfile {
+        t,
+        phases,
+        zb,
+        core,
+        ..
+    } = *profile;
+    if let Some(core) = core {
         for k in 0..phases {
             stamp_shunt(
                 shunts,
-                format!("transformer:{}:explicit_core:{k}", t.name),
-                &tx.coils[winding * phases + k],
-                g * zb,
-                b * zb,
+                format!("transformer:{}:core:{k}", t.name),
+                &tx.coils[core.winding * phases + k],
+                core.admittance.re * zb,
+                core.admittance.im * zb,
             );
         }
     }
-    Ok(())
 }
 
 fn prepare_tap(
@@ -333,11 +364,8 @@ fn prepare_tap(
         // A regulator's `tap_ratio` is the regulated over source voltage ratio
         // for both ANSI types; `regulator_type` records the hardware only.
         tx.tap_inverse = regulator;
-        tx.tap_bounds = Some(if tx.tap_inverse {
-            [tx.tap_nominal / hi, tx.tap_nominal / lo]
-        } else {
-            [lo / tx.tap_nominal, hi / tx.tap_nominal]
-        });
+        let [a, b] = [tx.calc_tap_multiplier(lo), tx.calc_tap_multiplier(hi)];
+        tx.tap_bounds = Some([a.min(b), a.max(b)]);
         tap_equations(profile, noms, tx)?;
     }
     Ok(())
@@ -349,34 +377,27 @@ fn prepare_ports(
     maps: &[super::CoilPairs],
     tx: &mut McOpfTransformer,
     shunts: &mut Vec<McOpfShunt>,
+    terminals: &[McOpfTerminal],
 ) -> Result<()> {
     let TransformerProfile {
         t,
         subtype,
         nw,
-        regulator,
         phases,
         zb,
         ib,
         sb,
+        core,
+        ..
     } = *profile;
-    let shunt_side = usize::from(!regulator);
-    let shunt_divisor = if nw || subtype == "center_tap" || regulator {
-        1.0
-    } else {
-        phases as f64
+    // A rated port on the magnetized winding carries the per unit core
+    // admittance of its coil.
+    let core_on = |winding: usize| -> [f64; 2] {
+        core.filter(|core| core.winding == winding)
+            .map_or([0.0, 0.0], |core| {
+                [core.admittance.re * zb, core.admittance.im * zb]
+            })
     };
-    let g = extra_number(t, "g_no_load", 0.0)? * zb / shunt_divisor;
-    let b = extra_number(t, "b_no_load", 0.0)? * zb / shunt_divisor;
-    for k in 0..phases {
-        stamp_shunt(
-            shunts,
-            format!("transformer:{}:core:{k}", t.name),
-            &tx.coils[shunt_side * phases + k],
-            g,
-            b,
-        );
-    }
     for (j, w) in t.windings.iter().enumerate() {
         let meta = t
             .extras
@@ -406,7 +427,7 @@ fn prepare_ports(
         // Native Yd/Dy current ratings apply to terminal line currents; n-winding ratings to coils.
         let (imax, neutral_cap) = terminal_current_ratings(profile, ctx, &maps[j], j, imax)?;
         if let Some(cap) = neutral_cap {
-            neutral_port(profile, tx, &maps[j], j, [g, b], cap)?;
+            neutral_port(profile, tx, &maps[j], j, core_on(1), cap)?;
         }
         let imax = caps(&t.name, imax.as_ref(), phases, ib)?;
         let rating = if nw {
@@ -427,18 +448,21 @@ fn prepare_ports(
             phases,
             sb,
         )?;
-        phase_ports(profile, tx, j, &imax, &smax, [g, b]);
-        grounding(profile, w, &maps[j], j, shunts)?;
+        let magnetized = usize::from(subtype != "single_phase_autotransformer");
+        phase_ports(profile, tx, j, &imax, &smax, core_on(magnetized));
+        grounding(profile, &maps[j], j, shunts, terminals)?;
     }
     Ok(())
 }
 
+/// Each winding's coils over global terminals, from the one winding
+/// connection ([`calc_winding_connection`], which orients DELTA rings), and
+/// its coil turns ([`calc_coil_voltage`] times tap).
 #[allow(clippy::float_cmp)] // Tap=1 is an exact schema sentinel, not a numerical tolerance.
 fn winding_geometry(
     ctx: &Context<'_>,
     t: &powerio_dist::DistTransformer,
     subtype: &str,
-    nw: bool,
 ) -> Result<WindingGeometry> {
     let mut maps = Vec::new();
     let mut noms = Vec::new();
@@ -447,58 +471,25 @@ fn winding_geometry(
         if w.v_ref <= 0.0 || w.s_rating <= 0.0 || w.tap <= 0.0 || w.r_pct < 0.0 {
             return Err(invalid(&t.name, "invalid winding nameplate/tap"));
         }
-        let config = if w.conn == DistWindingConn::Delta {
-            Configuration::Delta
-        } else if w.terminal_map.len() == 2 && (!nw || t.phases == 1) {
-            Configuration::SinglePhase
-        } else {
-            Configuration::Wye
-        };
-        let (_, mut pairs) = ctx.coils(&t.name, &w.bus, &w.terminal_map, config)?;
-        if subtype == "n_winding" && w.conn == DistWindingConn::Delta && w.terminal_map.len() == 2 {
-            let ids = ctx.resolve(&t.name, &w.bus, &w.terminal_map)?;
-            pairs = vec![(ids[0], Some(ids[1])), (ids[1], Some(ids[0]))];
-        }
         if subtype == "n_winding" && w.tap != 1.0 {
             return Err(unsupported(
                 &t.name,
                 "n-winding tap fields are not supported by BMOPFTools",
             ));
         }
-        let n = pairs.len();
+        let ids = ctx.resolve(&t.name, &w.bus, &w.terminal_map)?;
         if w.conn == DistWindingConn::Delta {
-            let roll = t
-                .extras
-                .get("bmopf_delta_rolls")
-                .and_then(|v| v.get((j + 1).to_string()))
-                .map(|v| {
-                    v.as_i64()
-                        .ok_or_else(|| invalid(&t.name, "invalid delta roll"))
-                })
-                .transpose()?
-                .unwrap_or(if subtype == "delta_wye" { -1 } else { 1 });
-            if roll != 1 && roll != -1 {
-                return Err(invalid(&t.name, "delta roll must be +1 or -1"));
-            }
-            if roll == -1 && n > 2 {
-                let positives: Vec<_> = pairs.iter().map(|p| p.0).collect();
-                for k in 0..n {
-                    pairs[k].1 = Some(positives[(k + n - 1) % n]);
-                }
-            }
+            ctx.require_phase_terminals(&t.name, &w.bus, &w.terminal_map)?;
         }
-        let nominal = if nw {
-            if w.conn == DistWindingConn::Wye && n > 1 {
-                w.v_ref / 3f64.sqrt()
-            } else {
-                w.v_ref
-            }
-        } else if w.conn == DistWindingConn::Delta {
-            w.v_ref * 3f64.sqrt()
-        } else {
-            w.v_ref
-        };
-        noms.push(nominal * w.tap);
+        let pairs: super::CoilPairs = calc_winding_connection(ctx.net, t, j)
+            .map_err(|error| invalid(&t.name, error))?
+            .iter()
+            .map(|coil| (ids[coil.from], coil.to.map(|to| ids[to])))
+            .collect();
+        if pairs.is_empty() {
+            return Err(invalid(&t.name, "no coils"));
+        }
+        noms.push(calc_coil_voltage(t, j) * w.tap);
         maps.push(pairs);
     }
     Ok((maps, noms))
@@ -592,13 +583,10 @@ fn leakage_descriptor(
     } = *profile;
     let m = t.windings.len();
     let ratios: Vec<_> = noms.iter().map(|n| n / noms[0]).collect();
-    let mut zpair = vec![vec![[0.0, 0.0]; m]; m];
-    let ref_base = if nw {
-        (noms[0] / t.windings[0].tap).powi(2) * winding_base_phases(&t.windings[0], phases)
-            / extra_number(t, "bmopf_power_base", t.windings[0].s_rating)?
-    } else {
-        (noms[0] / t.windings[0].tap).powi(2) / t.windings[0].s_rating
-    };
+    // The first winding's coil impedance base: its coil voltage squared over
+    // its per phase power base.
+    let ref_base = calc_coil_voltage(t, 0).powi(2) * winding_base_phases(&t.windings[0], phases)
+        / extra_number(t, "bmopf_power_base", t.windings[0].s_rating)?;
     if ref_base <= 0.0 {
         return Err(invalid(&t.name, "nonpositive transformer power base"));
     }
@@ -623,19 +611,26 @@ fn leakage_descriptor(
     } else {
         TransformerLeakageBase::Nameplate
     };
-    let leakage = crate::matrix::multiconductor::calc_transformer_leakage_impedances(t, &base)
-        .map_err(|error| invalid(&t.name, error))?;
+    let leakage =
+        calc_transformer_leakage_impedances(t, &base).map_err(|error| invalid(&t.name, error))?;
     let scale = ref_base * t.windings[0].tap.powi(2) / zb;
-    for (a, row) in zpair.iter_mut().enumerate() {
-        for (b, value) in row.iter_mut().enumerate() {
-            let z = leakage[a][b];
-            *value = if regulator {
-                [z.re / zb, z.im / zb]
-            } else {
-                [z.re * scale, z.im * scale]
-            };
-        }
-    }
+    let per_unit: Vec<Vec<Complex64>> = leakage
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|z| {
+                    if regulator {
+                        Complex64::new(z.re / zb, z.im / zb)
+                    } else {
+                        Complex64::new(z.re * scale, z.im * scale)
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    // The winding difference impedances against the first winding, kept in
+    // impedance form: row `a - 1` is winding `a` less winding one.
+    let reduced = calc_reduced_leakage(&per_unit, 0);
     let mut tx = McOpfTransformer {
         identity: t.name.clone(),
         coils: Vec::new(),
@@ -662,16 +657,9 @@ fn leakage_descriptor(
             add_voltage(&mut row, &tx.coils[k], 1.0);
             add_voltage(&mut row, &tx.coils[a * phases + k], -1.0 / ratios[a]);
             for b in 1..m {
-                let z = if a == b {
-                    zpair[0][a]
-                } else {
-                    [
-                        (zpair[0][a][0] + zpair[0][b][0] - zpair[a][b][0]) * 0.5,
-                        (zpair[0][a][1] + zpair[0][b][1] - zpair[a][b][1]) * 0.5,
-                    ]
-                };
+                let z = reduced[a - 1][b - 1];
                 row.current
-                    .push((b * phases + k, [z[0] * ratios[b], z[1] * ratios[b]]));
+                    .push((b * phases + k, [z.re * ratios[b], z.im * ratios[b]]));
             }
             tx.equations.push(row);
         }
@@ -679,41 +667,44 @@ fn leakage_descriptor(
     Ok(tx)
 }
 
+/// A winding's neutral grounding ([`calc_winding_neutral_grounding`]) at the
+/// neutral its coils return through: a finite impedance is a per unit shunt
+/// to ground, a solid grounding must land on a terminal the network already
+/// grounds (the descriptor states no extra exact zero voltage), and an
+/// unstated or floating neutral adds nothing.
 fn grounding(
     profile: &TransformerProfile<'_>,
-    w: &powerio_dist::DistWinding,
     map: &super::CoilPairs,
     j: usize,
     shunts: &mut Vec<McOpfShunt>,
+    terminals: &[McOpfTerminal],
 ) -> Result<()> {
     let TransformerProfile { t, zb, .. } = *profile;
-    let rn = w.r_neutral.unwrap_or(0.0);
-    let xn = w.x_neutral.unwrap_or(0.0);
-    finite(&t.name, &[rn, xn])?;
-    if rn < 0.0 {
-        return Err(unsupported(
-            &t.name,
-            "negative neutral resistance must be normalized to an explicit open grounding branch",
-        ));
-    }
-    if rn != 0.0 || xn != 0.0 {
-        if w.conn == DistWindingConn::Delta {
-            return Err(unsupported(&t.name, "delta neutral impedance"));
-        }
-        let neutral = map[0]
+    let grounding =
+        calc_winding_neutral_grounding(t, j).map_err(|error| unsupported(&t.name, error))?;
+    let neutral = || {
+        map[0]
             .1
-            .ok_or_else(|| invalid(&t.name, "neutral impedance without neutral"))?;
-        let d = rn * rn + xn * xn;
-        stamp_shunt(
+            .ok_or_else(|| invalid(&t.name, "neutral impedance without neutral"))
+    };
+    match grounding {
+        WindingNeutralGrounding::Impedance(y) => stamp_shunt(
             shunts,
             format!("transformer:{}:neutral:{j}", t.name),
             &McOpfTransformerCoil {
-                positive: neutral,
+                positive: neutral()?,
                 negative: None,
             },
-            rn / d * zb,
-            -xn / d * zb,
-        );
+            y.re * zb,
+            y.im * zb,
+        ),
+        WindingNeutralGrounding::Solid if !terminals[neutral()?].grounded => {
+            return Err(unsupported(
+                &t.name,
+                "a solidly grounded winding neutral on a terminal the network does not ground needs an exact zero voltage",
+            ));
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -916,6 +907,8 @@ fn tap_equations(
         t, regulator, zb, ..
     } = *profile;
     if regulator {
+        let [r_from, x_from, r_to, x_to] =
+            calc_regulator_series_ohms(t).map_err(|error| invalid(&t.name, error))?;
         let ratio = noms[0] / noms[1];
         let mut balance = McOpfComplexRow::default();
         balance.current.push((1, [1.0, 0.0]));
@@ -923,22 +916,12 @@ fn tap_equations(
         dynamic_balance.current.push((0, [ratio, 0.0]));
         let mut drop = McOpfComplexRow::default();
         add_voltage(&mut drop, &tx.coils[0], 1.0);
-        drop.current.push((
-            0,
-            [
-                -extra_number(t, "r_series_from", 0.0)? / zb,
-                -extra_number(t, "x_series_from", 0.0)? / zb,
-            ],
-        ));
+        drop.current.push((0, [-r_from / zb, -x_from / zb]));
         let mut dynamic_drop = McOpfComplexRow::default();
         add_voltage(&mut dynamic_drop, &tx.coils[1], -ratio);
-        dynamic_drop.current.push((
-            1,
-            [
-                ratio * extra_number(t, "r_series_to", 0.0)? / zb,
-                ratio * extra_number(t, "x_series_to", 0.0)? / zb,
-            ],
-        ));
+        dynamic_drop
+            .current
+            .push((1, [ratio * r_to / zb, ratio * x_to / zb]));
         tx.equations = vec![balance, drop];
         tx.tap_equations = vec![dynamic_balance, dynamic_drop];
     } else {
@@ -971,6 +954,9 @@ pub(super) const INTERPRETED_EXTRAS: &[&str] = &[
     "no_load_shunt",
     "g_no_load",
     "b_no_load",
+    "%noloadloss",
+    "%imag",
+    "leadlag",
     "i_max_from",
     "i_max_to",
     "regulator_type",

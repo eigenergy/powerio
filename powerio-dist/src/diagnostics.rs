@@ -183,6 +183,10 @@ pub mod codes {
             "line geometry remains source data without calculated conductor impedances";
         BUILD_DIST_ELECTRICAL_INCOMPLETE = "BUILD.DIST.ELECTRICAL_INCOMPLETE", Error,
             "distribution equipment lacks the electrical data required for numerical use", category = Data;
+        BUILD_DIST_TRANSFORMER_INVALID = "BUILD.DIST.TRANSFORMER_INVALID", Error,
+            "a transformer's nameplate, tap, terminal map, neutral or magnetizing data is not usable", category = Data;
+        BUILD_DIST_TRANSFORMER_UNSUPPORTED = "BUILD.DIST.TRANSFORMER_UNSUPPORTED", Error,
+            "a transformer's shape or stated property has no supported winding equations", category = Data;
         TRANSFORM_DIST_LINDIST3FLOW_PREPARATION_FAILED =
             "TRANSFORM.DIST.LINDIST3FLOW_PREPARATION_FAILED", Error,
             "a distribution component cannot be prepared for LinDist3Flow", category = Data;

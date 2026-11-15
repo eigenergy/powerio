@@ -1,6 +1,6 @@
-//! The channels of a typed load or injection connection.
+//! The channels of a typed load, injection, capacitor or winding connection.
 
-use crate::Configuration;
+use crate::{Configuration, MulticonductorNetwork};
 
 /// One channel of a connection: the terminal its power enters and the
 /// terminal it returns through, as positions in the element's terminal map.
@@ -32,8 +32,9 @@ impl ConnectionChannel {
 ///   `k + 1`, the last back to the first.
 ///
 /// `neutral` is read only for a wye with an explicit neutral. The one
-/// connection rule: the LinDist3Flow incidence, the GridLAB-D writer and
-/// every load evaluation over terminal pairs read it.
+/// connection rule: the LinDist3Flow incidence, the GridLAB-D writer,
+/// [`calc_element_connection`] (every load, capacitor, inverter, source and
+/// transformer winding the multiconductor calculations connect) read it.
 ///
 /// # Errors
 /// A configuration and arity that describe none of these connections, or a
@@ -81,6 +82,116 @@ pub fn calc_connection_channels(
         }
     };
     Ok(channels)
+}
+
+/// Whether the LinDist3Flow model carries a connection: its
+/// [`calc_connection_channels`] exist and need no explicit neutral and no
+/// split delta, so every WYE channel returns through ground and a DELTA
+/// connection is one terminal pair or the three phase ring. The one
+/// LinDist3Flow connection rule: the instance shape check and the incidence
+/// builder read it.
+#[must_use]
+pub fn lindist3flow_carries_connection(
+    configuration: Configuration,
+    terminal_count: usize,
+    channel_count: usize,
+) -> bool {
+    calc_connection_channels(configuration, terminal_count, channel_count, None).is_ok_and(
+        |channels| match configuration {
+            Configuration::Wye => channels.iter().all(|channel| channel.to.is_none()),
+            Configuration::Delta => {
+                channels.len() == 1 || (channels.len() == 3 && terminal_count == 3)
+            }
+            _ => true,
+        },
+    )
+}
+
+/// The position of a WYE connection's explicit neutral in an element's
+/// terminal map: the one mapped terminal that the bus's terminal
+/// conventions (the network's `bmopf_terminal_conventions`, else the
+/// `n` and four wire `4` spellings, [`crate::DistBus::phase_indices`]) do
+/// not list as a phase, or ground terminal `0`. `None` when every mapped
+/// terminal is a phase.
+///
+/// # Errors
+/// A bus the network does not declare, or more than one mapped terminal
+/// that is not a phase.
+pub fn calc_wye_neutral_position(
+    network: &MulticonductorNetwork,
+    bus: &str,
+    terminal_map: &[String],
+) -> Result<Option<usize>, String> {
+    let declared = network
+        .bus(bus)
+        .ok_or_else(|| format!("bus `{bus}` is not declared"))?;
+    let phases: Vec<&str> = declared
+        .phase_indices(network.extras().get("bmopf_terminal_conventions"))
+        .into_iter()
+        .map(|index| declared.terminals[index].as_str())
+        .filter(|terminal| *terminal != "0")
+        .collect();
+    let mut nonphase = terminal_map
+        .iter()
+        .enumerate()
+        .filter(|(_, terminal)| !phases.contains(&terminal.as_str()))
+        .map(|(position, _)| position);
+    let neutral = nonphase.next();
+    if nonphase.next().is_some() {
+        return Err(format!(
+            "bus `{bus}` maps more than one non-phase terminal: the WYE neutral is ambiguous"
+        ));
+    }
+    Ok(neutral)
+}
+
+/// The channels of an element's connection at `bus` over its terminal map
+/// ([`calc_connection_channels`]), with a WYE neutral found by
+/// [`calc_wye_neutral_position`]. `channel_count` is the element's number of
+/// stated powers or phases; `None` reads it from the map: a WYE has one
+/// channel per phase terminal, a two terminal DELTA or single phase element
+/// one channel, and any other DELTA one channel per terminal (a ring).
+///
+/// The one rule for which terminal pair each coil of a connection spans:
+/// the multiconductor OPF, the capacitor primitive, the transformer
+/// primitive and its ideal constraints read it.
+///
+/// # Errors
+/// An undeclared bus, an ambiguous WYE neutral, or a connection
+/// [`calc_connection_channels`] refuses.
+pub fn calc_element_connection(
+    network: &MulticonductorNetwork,
+    bus: &str,
+    terminal_map: &[String],
+    configuration: Configuration,
+    channel_count: Option<usize>,
+) -> Result<Vec<ConnectionChannel>, String> {
+    let neutral = if configuration == Configuration::Wye {
+        calc_wye_neutral_position(network, bus, terminal_map)?
+    } else {
+        None
+    };
+    let count = terminal_map.len();
+    let channels = channel_count.unwrap_or(match configuration {
+        Configuration::Wye => count - usize::from(neutral.is_some()),
+        _ if count == 2 => 1,
+        _ => count,
+    });
+    calc_connection_channels(configuration, count, channels, neutral)
+}
+
+/// Orient a DELTA ring of channels: `+1` keeps each channel from terminal
+/// `k` to the next terminal of the ring, `-1` returns each to the preceding
+/// one. A ring of fewer than three channels has one orientation.
+pub fn orient_delta_ring(channels: &mut [ConnectionChannel], direction: i8) {
+    let n = channels.len();
+    if direction >= 0 || n < 3 {
+        return;
+    }
+    let positives: Vec<usize> = channels.iter().map(|channel| channel.from).collect();
+    for (k, channel) in channels.iter_mut().enumerate() {
+        channel.to = Some(positives[(k + n - 1) % n]);
+    }
 }
 
 #[cfg(test)]

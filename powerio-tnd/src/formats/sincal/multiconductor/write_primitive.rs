@@ -267,7 +267,7 @@ fn equivalent(y: &Primitive, volts: [f64; 2]) -> Result<DistTransformer> {
                 "leadlag".into(),
                 serde_json::json!(if lead { "lead" } else { "lag" }),
             );
-            let expected = coil_primitive(&t, reverse)?;
+            let expected = coil_primitive(&t)?;
             if matches(y, &expected) {
                 return Ok(t);
             }

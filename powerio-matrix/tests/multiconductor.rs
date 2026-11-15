@@ -328,7 +328,7 @@ fn unsupported_stamps_are_structured_diagnostics() {
     // Leakage stated, but a three winding unit that is no BMOPF centre tap
     // has no primitive.
     let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
-    assert_eq!(error.code().code, "BUILD.MULTI.PHYSICS_UNSUPPORTED");
+    assert_eq!(error.code().code, "BUILD.DIST.TRANSFORMER_UNSUPPORTED");
     assert!(error.to_string().contains("3 windings"), "{error}");
 }
 
@@ -419,6 +419,56 @@ fn a_leakage_transformer_stamps_its_primitive() {
     assert_eq!(system.augmented().labels, [] as [String; 0]);
 }
 
+/// A source that already fixes a solidly grounded neutral at zero settles
+/// it: a second `v = 0` row would leave the constraint rows rank deficient.
+/// A nonzero source voltage on that node is a contradiction, refused.
+#[test]
+fn a_source_on_a_solid_neutral_is_not_constrained_twice() {
+    let build = |neutral_volts: f64| {
+        let mut net = MulticonductorNetwork::default();
+        net.buses_mut()
+            .push(DistBus::new("p", strings(&["1", "n"])));
+        net.buses_mut()
+            .push(DistBus::new("s", strings(&["1", "n"])));
+        let mut primary = DistWinding::new(
+            "p",
+            strings(&["1", "n"]),
+            DistWindingConn::Wye,
+            7200.0,
+            25000.0,
+        );
+        primary.r_pct = 0.5;
+        primary.r_neutral = Some(0.0);
+        primary.x_neutral = Some(0.0);
+        let mut secondary = DistWinding::new(
+            "s",
+            strings(&["1", "n"]),
+            DistWindingConn::Wye,
+            240.0,
+            25000.0,
+        );
+        secondary.r_pct = 0.5;
+        net.transformers_mut().push(DistTransformer::new(
+            "t",
+            vec![primary, secondary],
+            vec![2.0],
+            1,
+        ));
+        net.sources_mut().push(VoltageSource::new(
+            "vs",
+            "p",
+            strings(&["1", "n"]),
+            vec![7200.0, neutral_volts],
+            vec![0.0, 0.0],
+        ));
+        calc_multiconductor_admittance_matrix(&net)
+    };
+    let system = build(0.0).unwrap();
+    assert_eq!(system.augmented().labels, ["source:vs:1", "source:vs:n"]);
+    let error = build(5.0).unwrap_err();
+    assert!(error.to_string().contains("grounds neutral"), "{error}");
+}
+
 #[test]
 fn a_solidly_grounded_leakage_neutral_is_an_exact_row() {
     let mut net = MulticonductorNetwork::default();
@@ -459,7 +509,7 @@ fn a_solidly_grounded_leakage_neutral_is_an_exact_row() {
     assert_eq!(row[0][neutral], 1.0);
     assert_eq!(row[0].iter().filter(|value| **value != 0.0).count(), 1);
     // The passive system is exactly the primitive's scatter.
-    let primitive = calc_transformer_primitive_admittance(&net.transformers()[0]).unwrap();
+    let primitive = calc_transformer_primitive_admittance(&net, &net.transformers()[0]).unwrap();
     let g = dense(system.conductance());
     for (r, &(bus, terminal)) in primitive.terminals.iter().enumerate() {
         for (c, &(bus_c, terminal_c)) in primitive.terminals.iter().enumerate() {
@@ -706,11 +756,13 @@ fn the_nodal_system_is_the_scatter_of_the_element_primitives() {
         calc_capacitor_primitive_admittance, calc_line_primitive_admittance,
         calc_shunt_primitive_admittance,
     };
+    // `n` is each bus's neutral by the terminal conventions, so the WYE
+    // bank's coils return through it.
     let mut net = MulticonductorNetwork::default();
     net.buses_mut()
-        .push(DistBus::new("a", strings(&["1", "2", "4"])));
+        .push(DistBus::new("a", strings(&["1", "2", "n"])));
     net.buses_mut()
-        .push(DistBus::new("b", strings(&["1", "2", "4"])));
+        .push(DistBus::new("b", strings(&["1", "2", "n"])));
     let mut code = DistLineCode::new(
         "lc",
         vec![vec![0.3, 0.1], vec![0.1, 0.3]],
@@ -732,7 +784,7 @@ fn the_nodal_system_is_the_scatter_of_the_element_primitives() {
     let shunt = DistShunt::new(
         "sh",
         "b",
-        strings(&["1", "4"]),
+        strings(&["1", "n"]),
         vec![vec![0.01, -0.01], vec![-0.01, 0.01]],
         vec![vec![0.02, -0.02], vec![-0.02, 0.02]],
     );
@@ -740,7 +792,7 @@ fn the_nodal_system_is_the_scatter_of_the_element_primitives() {
     let capacitor = DistCapacitor::new(
         "c",
         "a",
-        strings(&["1", "2", "4"]),
+        strings(&["1", "2", "n"]),
         Configuration::Wye,
         3.0e4,
         400.0,
@@ -775,17 +827,17 @@ fn the_nodal_system_is_the_scatter_of_the_element_primitives() {
         &line_primitive,
     );
     scatter(
-        &[node("b", "1"), node("b", "4")],
+        &[node("b", "1"), node("b", "n")],
         &calc_shunt_primitive_admittance(&shunt),
     );
-    let capacitor_primitive = calc_capacitor_primitive_admittance(&capacitor)
+    let capacitor_primitive = calc_capacitor_primitive_admittance(&net, &capacitor)
         .unwrap()
         .expect("wye bank");
     // Two phase coils to the neutral, each q / 2 / (v / sqrt 3)^2.
     let coil = 3.0e4 / 2.0 / (400.0 / 3f64.sqrt()).powi(2);
     assert!((capacitor_primitive[2][2].im - 2.0 * coil).abs() < 1e-12);
     scatter(
-        &[node("a", "1"), node("a", "2"), node("a", "4")],
+        &[node("a", "1"), node("a", "2"), node("a", "n")],
         &capacitor_primitive,
     );
     let g = dense(system.conductance());
@@ -900,8 +952,10 @@ fn the_passive_element_list_states_each_family_in_table_order() {
         1000.0,
         240.0,
     ));
-    let (primitives, findings) = calc_passive_primitives(&net).unwrap();
+    let listed = calc_passive_primitives(&net).unwrap();
+    let (primitives, findings) = (&listed.elements, &listed.diagnostics);
     assert_eq!(findings.len(), 0, "{findings:?}");
+    assert!(listed.grounded.is_empty() && listed.ideal_transformers.is_empty());
     let families: Vec<_> = primitives.iter().map(|p| p.family).collect();
     assert_eq!(families, [PassiveFamily::Line, PassiveFamily::Capacitor]);
     assert_eq!(primitives[0].terminals, [("a", "1"), ("b", "1")]);

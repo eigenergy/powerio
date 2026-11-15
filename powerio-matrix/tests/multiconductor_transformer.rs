@@ -7,15 +7,40 @@
 #![allow(clippy::unreadable_literal)]
 
 use num_complex::Complex64;
-use powerio_dist::{DistTransformer, DistWinding, DistWindingConn};
-use powerio_matrix::{TransformerPrimitive, calc_transformer_primitive_admittance};
+use powerio_dist::{DistBus, DistTransformer, DistWinding, DistWindingConn, MulticonductorNetwork};
+use powerio_matrix::TransformerPrimitive;
 use serde_json::Value;
+
+/// The primitive over a network that declares each winding bus with the
+/// terminals the windings name, in first named order.
+fn calc_transformer_primitive_admittance(
+    transformer: &DistTransformer,
+) -> powerio_matrix::Result<TransformerPrimitive<'_>> {
+    let mut network = MulticonductorNetwork::default();
+    for winding in &transformer.windings {
+        let buses = network.buses_mut();
+        let index = buses
+            .iter()
+            .position(|bus| bus.id == winding.bus)
+            .unwrap_or_else(|| {
+                buses.push(DistBus::new(winding.bus.clone(), Vec::new()));
+                buses.len() - 1
+            });
+        for terminal in &winding.terminal_map {
+            if !buses[index].terminals.contains(terminal) {
+                buses[index].terminals.push(terminal.clone());
+            }
+        }
+    }
+    powerio_matrix::calc_transformer_primitive_admittance(&network, transformer)
+        .map_err(powerio_matrix::Error::from)
+}
 
 fn assert_unsupported<T: std::fmt::Debug>(result: powerio_matrix::Result<T>) {
     let error = result.unwrap_err();
     assert_eq!(
         error.code().code,
-        "BUILD.MULTI.PHYSICS_UNSUPPORTED",
+        "BUILD.DIST.TRANSFORMER_UNSUPPORTED",
         "{error}"
     );
 }

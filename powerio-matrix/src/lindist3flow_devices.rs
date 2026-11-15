@@ -167,18 +167,8 @@ pub fn lindist3flow_connection_incidence(
     terminal_count: usize,
     channel_count: usize,
 ) -> Result<Vec<Vec<f64>>> {
-    // The LinDist3Flow slice carries the grounded wye, the two terminal
-    // single phase or delta channel, and the three phase delta ring.
-    let carried = match configuration {
-        Configuration::SinglePhase | Configuration::Delta
-            if terminal_count == 2 && channel_count == 1 =>
-        {
-            true
-        }
-        Configuration::Wye | Configuration::SinglePhase => terminal_count == channel_count,
-        Configuration::Delta => terminal_count == 3 && channel_count == 3,
-        _ => false,
-    };
+    let carried =
+        powerio_dist::lindist3flow_carries_connection(configuration, terminal_count, channel_count);
     let unsupported = || {
         invalid(format!(
             "{configuration:?} connection with {terminal_count} terminals and {channel_count} channels is unsupported"

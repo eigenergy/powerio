@@ -705,6 +705,30 @@ impl Context<'_> {
             })
             .collect()
     }
+    /// A DELTA edge joins phases: grounding a phase does not change its role,
+    /// so the declared terminal conventions decide, not voltage or names.
+    fn require_phase_terminals(&self, name: &str, bus_id: &str, tm: &[String]) -> Result<()> {
+        let bus = self
+            .net
+            .bus(bus_id)
+            .ok_or_else(|| invalid(name, "unknown bus"))?;
+        let phases: Vec<&str> = bus
+            .phase_indices(self.net.extras().get("bmopf_terminal_conventions"))
+            .into_iter()
+            .map(|i| bus.terminals[i].as_str())
+            .filter(|t| *t != "0")
+            .collect();
+        if let Some(t) = tm.iter().find(|t| !phases.contains(&t.as_str())) {
+            return Err(invalid(
+                name,
+                format!("delta requires phase terminals; {bus_id}:{t} is neutral or earth"),
+            ));
+        }
+        Ok(())
+    }
+    /// The coils of a WYE, DELTA or single phase connection over global
+    /// terminals: the one connection rule
+    /// ([`powerio_dist::calc_element_connection`]).
     fn coils(
         &self,
         name: &str,
@@ -713,61 +737,25 @@ impl Context<'_> {
         config: Configuration,
     ) -> Result<(Vec<usize>, CoilPairs)> {
         let ids = self.resolve(name, bus_id, tm)?;
-        let bus = self
-            .net
-            .bus(bus_id)
-            .ok_or_else(|| invalid(name, "unknown bus"))?;
-        let phases: Vec<_> = bus
-            .phase_indices(self.net.extras().get("bmopf_terminal_conventions"))
-            .into_iter()
-            .filter(|&i| bus.terminals[i] != "0")
-            .collect();
-        let nonphase: Vec<_> = tm
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| !phases.iter().any(|i| bus.terminals[*i] == **t))
-            .map(|(i, _)| i)
-            .collect();
-        let coils = match config {
+        match config {
             Configuration::Delta => {
-                // A delta edge joins phases. Grounding a phase does not change
-                // its role; use the declared conventions, not voltage or names.
-                if let Some(&i) = nonphase.first() {
-                    return Err(invalid(
-                        name,
-                        format!(
-                            "delta requires phase terminals; {bus_id}:{} is neutral or earth",
-                            tm[i]
-                        ),
-                    ));
-                }
-                if ids.len() == 2 {
-                    vec![(ids[0], Some(ids[1]))]
-                } else if ids.len() == 3 {
-                    (0..3).map(|i| (ids[i], Some(ids[(i + 1) % 3]))).collect()
-                } else {
+                self.require_phase_terminals(name, bus_id, tm)?;
+                if !matches!(ids.len(), 2 | 3) {
                     return Err(invalid(name, "delta requires two or three terminals"));
                 }
             }
-            Configuration::SinglePhase => {
-                if ids.len() != 2 {
-                    return Err(invalid(name, "single-phase requires two terminals"));
-                }
-                vec![(ids[0], Some(ids[1]))]
+            Configuration::SinglePhase if ids.len() != 2 => {
+                return Err(invalid(name, "single-phase requires two terminals"));
             }
-            Configuration::Wye => {
-                if nonphase.len() > 1 {
-                    return Err(invalid(name, "ambiguous neutral"));
-                }
-                let neutral = nonphase.first().map(|i| ids[*i]);
-                ids.iter()
-                    .enumerate()
-                    .filter(|(i, _)| !nonphase.contains(i))
-                    .map(|(_, id)| (*id, neutral))
-                    .collect()
-            }
+            Configuration::Wye | Configuration::SinglePhase => {}
             _ => return Err(unsupported(name, "unknown configuration")),
-        };
+        }
+        let coils: CoilPairs =
+            powerio_dist::calc_element_connection(self.net, bus_id, tm, config, None)
+                .map_err(|reason| invalid(name, reason))?
+                .iter()
+                .map(|coil| (ids[coil.from], coil.to.map(|to| ids[to])))
+                .collect();
         if coils.is_empty() {
             return Err(invalid(name, "no coils"));
         }
@@ -1037,47 +1025,36 @@ fn prepare_shunts(ctx: &Context<'_>, zb: f64) -> Result<Vec<McOpfShunt>> {
     }
     for cap in net.capacitors() {
         extras(&cap.name, &cap.extras, &[])?;
-        let (ids, pairs) = ctx.coils(&cap.name, &cap.bus, &cap.terminal_map, cap.configuration)?;
-        let n = pairs.len();
-        let ratings = vec![cap.q_rated / n as f64; n];
-        // The canonical WYE bank nameplate is line-to-line when it has an
-        // explicit return, including a one-coil bank. SINGLE_PHASE is across
-        // its two terminals. BMOPF per-coil arrays already arrive as shunts.
-        let nominal = if cap.configuration == Configuration::Wye && ids.len() > 1 {
-            cap.v_nom / 3f64.sqrt()
-        } else {
-            cap.v_nom
-        };
+        let ids = resolve(&cap.name, &cap.bus, &cap.terminal_map)?;
+        if cap.configuration == Configuration::Delta {
+            ctx.require_phase_terminals(&cap.name, &cap.bus, &cap.terminal_map)?;
+        }
         finite(&cap.name, &[cap.q_rated, cap.v_nom])?;
-        if nominal <= 0.0 || !nominal.is_finite() || ratings.iter().any(|q| *q < 0.0) {
+        if cap.q_rated < 0.0 {
             return Err(invalid(
                 &cap.name,
                 "capacitor requires positive voltage and nonnegative var",
             ));
         }
-        let mut b = vec![vec![0.0; ids.len()]; ids.len()];
-        for (k, (p, q)) in pairs.iter().enumerate() {
-            let positive_slot = ids
+        // The one capacitor stamp, siemens, written per unit.
+        let primitive =
+            crate::matrix::multiconductor::calc_capacitor_primitive_admittance(net, cap)
+                .map_err(|error| invalid(&cap.name, error))?
+                .ok_or_else(|| unsupported(&cap.name, "unknown configuration"))?;
+        let scaled = |part: fn(&num_complex::Complex64) -> f64| -> Result<Vec<Vec<f64>>> {
+            primitive
                 .iter()
-                .position(|v| v == p)
-                .ok_or_else(|| invalid(&cap.name, "missing capacitor terminal"))?;
-            let admittance = ratings[k] / nominal.powi(2) * zb;
-            finite(&cap.name, &[admittance])?;
-            b[positive_slot][positive_slot] += admittance;
-            if let Some(q) = q {
-                let negative_slot = ids
-                    .iter()
-                    .position(|v| v == q)
-                    .ok_or_else(|| invalid(&cap.name, "missing capacitor return"))?;
-                b[negative_slot][negative_slot] += admittance;
-                b[positive_slot][negative_slot] -= admittance;
-                b[negative_slot][positive_slot] -= admittance;
-            }
-        }
+                .map(|row| {
+                    let row: Vec<f64> = row.iter().map(|y| part(y) * zb).collect();
+                    finite(&cap.name, &row)?;
+                    Ok(row)
+                })
+                .collect()
+        };
         shunts.push(McOpfShunt {
             identity: format!("capacitor:{}", cap.name),
-            g: vec![vec![0.0; ids.len()]; ids.len()],
-            b,
+            g: scaled(|y| y.re)?,
+            b: scaled(|y| y.im)?,
             terminals: ids,
         });
     }

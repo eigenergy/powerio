@@ -13,20 +13,15 @@ pub(super) struct ExpectedTransformer {
     pub primitive: [[Complex64; 6]; 6],
 }
 
-// OpenDSS-compatible generic winding convention: ANSI/Lag is the default;
-// Lead/Euro reverses the HV/LV rotation. The order is determined by rated
-// winding voltage, not operating voltage or fixed tap position.
-fn group(t: &DistTransformer) -> Result<(i64, bool)> {
-    let mut lead = false;
+// The vector group follows the one delta orientation
+// (`powerio_dist::transformer::calc_transformer_phase_shift`): OpenDSS's
+// ANSI/Lag default, Lead/Euro reversing the HV/LV rotation, the order set by
+// rated winding voltage. `reverse` is a negative shift from the first
+// winding to the second.
+fn group(t: &DistTransformer) -> Result<i64> {
     for (key, value) in &t.extras {
         match key.as_str() {
-            "leadlag" => {
-                lead = match value.as_str().map(str::to_ascii_lowercase).as_deref() {
-                    Some("lead" | "euro") => true,
-                    Some("lag" | "ansi") => false,
-                    _ => return Err(error("transformer has an unknown leadlag convention")),
-                };
-            }
+            "leadlag" => {}
             "%noloadloss" | "%imag" | "ppm_antifloat" if value.as_f64() == Some(0.0) => {}
             _ => {
                 return Err(error(format!(
@@ -36,7 +31,9 @@ fn group(t: &DistTransformer) -> Result<(i64, bool)> {
             }
         }
     }
-    let reverse = lead ^ (t.windings[0].v_ref < t.windings[1].v_ref);
+    let reverse = powerio_dist::transformer::calc_transformer_phase_shift(t)
+        .map_err(|_| error("transformer has an unknown leadlag convention"))?
+        < 0.0;
     let code = match (&t.windings[0].conn, &t.windings[1].conn, reverse) {
         (DistWindingConn::Delta, DistWindingConn::Delta, _) => 1,
         (DistWindingConn::Delta, DistWindingConn::Wye, false) => 10,
@@ -49,7 +46,7 @@ fn group(t: &DistTransformer) -> Result<(i64, bool)> {
             ));
         }
     };
-    Ok((code, reverse))
+    Ok(code)
 }
 
 fn validate_windings(net: &MulticonductorNetwork, t: &DistTransformer) -> Result<()> {
@@ -115,7 +112,7 @@ pub(super) fn transformers(
                 "zero/overflowing transformer leakage needs a separate ideal constraint",
             ));
         }
-        let (code, reverse) = group(t)?;
+        let code = group(t)?;
         let volts = [p.v_ref * p.tap, s.v_ref * s.tap];
         if volts.iter().any(|v| !v.is_finite() || *v <= 0.0) {
             return Err(error(
@@ -158,7 +155,7 @@ pub(super) fn transformers(
         ] {
             real(&mut input, key, value);
         }
-        let primitive = coil_primitive(t, reverse)?;
+        let primitive = phase_primitive(net, t)?;
         let id = tables.element(
             "TwoWindingTransformer",
             input,
@@ -174,33 +171,34 @@ pub(super) fn transformers(
     Ok(())
 }
 
-/// Direct winding-incidence construction, independent of the native reader's
-/// symmetrical-component transformation. Zero-sequence current is eliminated
-/// on delta ports by the coil incidence itself, not by balancing the circuit.
-pub(super) fn coil_primitive(t: &DistTransformer, reverse: bool) -> Result<[[Complex64; 6]; 6]> {
-    let mut incidence = [[0.0; 6]; 3];
-    let mixed = t.windings[0].conn != t.windings[1].conn;
+/// The transformer primitive
+/// (`powerio_dist::transformer::calc_transformer_primitive_admittance`)
+/// over each winding's three phase terminals, first winding then second. A
+/// WYE star is solidly grounded, so its neutral row and column drop exactly;
+/// zero-sequence current is eliminated on delta ports by the coil incidence
+/// itself, not by balancing the circuit.
+fn phase_primitive(
+    net: &MulticonductorNetwork,
+    t: &DistTransformer,
+) -> Result<[[Complex64; 6]; 6]> {
+    let primitive = powerio_dist::transformer::calc_transformer_primitive_admittance(net, t)
+        .map_err(|e| error(format!("transformer {}: {e}", t.name)))?;
+    let mut rows = [0usize; 6];
     for (side, w) in t.windings.iter().enumerate() {
-        let is_delta = w.conn == DistWindingConn::Delta;
-        let v = w.v_ref * w.tap / if is_delta { 1.0 } else { 3.0_f64.sqrt() };
-        let scale = if side == 0 { 1.0 / v } else { -1.0 / v };
-        // For mixed windings, Delta->Wye lag uses preceding phases;
-        // Wye->Delta lag uses following phases. Lead reverses that choice.
-        let previous = mixed && ((side == 0) ^ reverse);
-        for (coil, row) in incidence.iter_mut().enumerate() {
-            row[3 * side + coil] = scale;
-            if is_delta {
-                row[3 * side + (coil + if previous { 2 } else { 1 }) % 3] = -scale;
-            }
+        for phase in 0..3 {
+            rows[3 * side + phase] = primitive
+                .terminals
+                .iter()
+                .position(|&(bus, terminal)| {
+                    bus.eq_ignore_ascii_case(&w.bus) && terminal == w.terminal_map[phase]
+                })
+                .ok_or_else(|| error("transformer primitive lost a phase terminal"))?;
         }
     }
-    let z = Complex64::new(t.windings[0].r_pct + t.windings[1].r_pct, t.xsc_pct[0])
-        * (0.03 / t.windings[0].s_rating);
-    let y = Complex64::new(1.0, 0.0) / z;
     let mut result = [[Complex64::new(0.0, 0.0); 6]; 6];
     for (i, row) in result.iter_mut().enumerate() {
         for (j, value) in row.iter_mut().enumerate() {
-            *value = y * incidence.iter().map(|a| a[i] * a[j]).sum::<f64>();
+            *value = primitive.primitive[rows[i]][rows[j]];
             if !value.re.is_finite() || !value.im.is_finite() {
                 return Err(error(
                     "transformer conductor admittance overflows/underflows",
@@ -212,6 +210,21 @@ pub(super) fn coil_primitive(t: &DistTransformer, reverse: bool) -> Result<[[Com
         return Err(error("transformer conductor admittance underflows"));
     }
     Ok(result)
+}
+
+/// [`phase_primitive`] of a candidate unit on its own: each winding on a bus
+/// of its own declaring the winding's terminals.
+pub(super) fn coil_primitive(t: &DistTransformer) -> Result<[[Complex64; 6]; 6]> {
+    let mut unit = t.clone();
+    let mut net = MulticonductorNetwork::new();
+    for (side, w) in unit.windings.iter_mut().enumerate() {
+        w.bus = format!("winding-{side}");
+        net.buses_mut().push(powerio_dist::DistBus::new(
+            w.bus.clone(),
+            w.terminal_map.clone(),
+        ));
+    }
+    phase_primitive(&net, &unit)
 }
 
 pub(super) fn verify(net: &MulticonductorNetwork, expected: &[ExpectedTransformer]) -> Result<()> {

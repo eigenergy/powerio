@@ -293,7 +293,7 @@ fn incomplete_windings_ratios_and_additional_physics_are_rejected() {
             // property the typed model does not carry.
             9 => {
                 t.windings[0].r_pct = 1.0;
-                t.extras.insert("leadlag".into(), serde_json::json!("lag"));
+                t.extras.insert("xrconst".into(), serde_json::json!("yes"));
             }
             _ => {
                 t.extras
@@ -304,11 +304,14 @@ fn incomplete_windings_ratios_and_additional_physics_are_rejected() {
             t.windings[1].v_ref = f64::MIN_POSITIVE;
         }
         let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
-        assert_eq!(
-            error.code().code,
-            "BUILD.MULTI.PHYSICS_UNSUPPORTED",
-            "case {case}"
-        );
+        // The ideal constraints refuse with the builder's code, the leakage
+        // primitive with the transformer's own.
+        let expected = if case == 9 {
+            "BUILD.DIST.TRANSFORMER_UNSUPPORTED"
+        } else {
+            "BUILD.MULTI.PHYSICS_UNSUPPORTED"
+        };
+        assert_eq!(error.code().code, expected, "case {case}");
     }
     // Leakage alone is a primitive, not a refusal.
     let mut net = single_phase();

@@ -530,23 +530,10 @@ impl<'a> LoweringState<'a> {
             .enumerate()
             .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
             .collect();
-        let mut zones = powerio_core::union_find::UnionFind::new(self.net.buses().len());
-        for line in self.net.lines() {
-            if let (Some(&from), Some(&to)) = (
-                row_of.get(&line.bus_from.to_ascii_lowercase()),
-                row_of.get(&line.bus_to.to_ascii_lowercase()),
-            ) {
-                zones.union_keep_smaller(from, to);
-            }
-        }
-        for sw in self.net.switches().iter().filter(|sw| !sw.open) {
-            if let (Some(&from), Some(&to)) = (
-                row_of.get(&sw.bus_from.to_ascii_lowercase()),
-                row_of.get(&sw.bus_to.to_ascii_lowercase()),
-            ) {
-                zones.union_keep_smaller(from, to);
-            }
-        }
+        // Preflight refused a network whose lines or switches name unknown
+        // buses; should one slip through, each bus is its own zone.
+        let zones = powerio_dist::voltage_zones::calc_voltage_zone_labels(self.net)
+            .unwrap_or_else(|_| (0..self.net.buses().len()).collect());
 
         let mut zone_base: BTreeMap<usize, f64> = BTreeMap::new();
         for source in self.net.sources() {
@@ -562,10 +549,12 @@ impl<'a> LoweringState<'a> {
                 continue;
             };
             if v1.norm().is_finite() && v1.norm() > 0.0 {
-                zone_base.entry(zones.find(row)).or_insert(v1.norm());
+                zone_base.entry(zones[row]).or_insert(v1.norm());
             }
         }
 
+        // A supported transformer bases the far zone with the far winding's
+        // rated voltage.
         let supported: Vec<(usize, usize, f64, f64)> = self
             .net
             .transformers()
@@ -575,35 +564,22 @@ impl<'a> LoweringState<'a> {
                     classify_transformer(self.net, transformer, &self.neutral_terminals).ok()?;
                 let high_row = *row_of.get(&high.bus.to_ascii_lowercase())?;
                 let low_row = *row_of.get(&low.bus.to_ascii_lowercase())?;
-                Some((high_row, low_row, high.v_ref, low.v_ref))
+                Some((zones[high_row], zones[low_row], high.v_ref, low.v_ref))
             })
             .collect();
-        loop {
-            let mut changed = false;
-            for &(high_row, low_row, high_v, low_v) in &supported {
-                let (high_zone, low_zone) = (zones.find(high_row), zones.find(low_row));
-                match (
-                    zone_base.contains_key(&high_zone),
-                    zone_base.contains_key(&low_zone),
-                ) {
-                    (true, false) => {
-                        zone_base.insert(low_zone, low_v);
-                        changed = true;
-                    }
-                    (false, true) => {
-                        zone_base.insert(high_zone, high_v);
-                        changed = true;
-                    }
-                    _ => {}
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
+        let edges: Vec<(usize, usize)> = supported.iter().map(|&(h, l, _, _)| (h, l)).collect();
+        let seeds: Vec<(usize, f64)> = zone_base.iter().map(|(&z, &b)| (z, b)).collect();
+        let zone_base =
+            powerio_dist::voltage_zones::calc_flooded_zone_bases(seeds, &edges, |k, forward, _| {
+                Some(if forward {
+                    supported[k].3
+                } else {
+                    supported[k].2
+                })
+            });
 
         for (row, bus) in self.net.buses().iter().enumerate() {
-            let zone = zones.find(row);
+            let zone = zones[row];
             let base = zone_base.get(&zone).copied().unwrap_or_else(|| {
                 self.records.dropped_fields.push(format!(
                     "bus {} voltage base defaulted to the reference base",
@@ -1052,16 +1028,26 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             let tap = (high.v_ref * high.tap / base_from) / (low.v_ref * low.tap / base_to);
             let z_scale = (self.options.base_mva * 1_000_000.0 / high.s_rating)
                 * (high.v_ref / base_from).powi(2);
-            // Each winding states %R on its own power rating; the low winding
-            // figure converts onto the high winding base before the sum.
+            // The pair's nameplate leakage on the first winding's rating
+            // (each winding's %R referred from its own rating), and the
+            // connection shift of the one delta orientation.
             let low_rating_scale = high.s_rating / low.s_rating;
-            let r = ((high.r_pct + low.r_pct * low_rating_scale) / 100.0) * z_scale;
-            let x = (transformer.xsc_pct[0] / 100.0) * z_scale;
-            let shift = if high.v_ref >= low.v_ref { 30.0 } else { -30.0 };
+            let Ok(leakage) = powerio_dist::transformer::calc_transformer_leakage_impedances(
+                transformer,
+                &powerio_dist::transformer::TransformerLeakageBase::Nameplate,
+            ) else {
+                continue;
+            };
+            let r = leakage[0][1].re * z_scale;
+            let x = leakage[0][1].im * z_scale;
+            let Ok(shift) = powerio_dist::transformer::calc_transformer_phase_shift(transformer)
+            else {
+                continue;
+            };
             let rate = high.s_rating / 1_000_000.0;
             self.records.assumptions.push(format!(
-                "transformer {} lowered as a balanced branch with tap {tap:.6} and the ANSI \
-                 {shift} degree connection shift (high voltage side leads)",
+                "transformer {} lowered as a balanced branch with tap {tap:.6} and its \
+                 {shift} degree connection shift",
                 transformer.name
             ));
             if (low_rating_scale - 1.0).abs() > 1e-9 {
@@ -1080,12 +1066,6 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             {
                 self.records.dropped_fields.push(format!(
                     "transformer {} neutral grounding impedance dropped",
-                    transformer.name
-                ));
-            }
-            if transformer.xsc_pct.len() > 1 {
-                self.records.dropped_fields.push(format!(
-                    "transformer {} extra short circuit reactances dropped",
                     transformer.name
                 ));
             }
@@ -2043,9 +2023,12 @@ fn classify_transformer<'net>(
     if !(low.s_rating.is_finite() && low.s_rating > 0.0) {
         return Err("has no finite positive low winding power rating".to_owned());
     }
-    match transformer.xsc_pct.first() {
-        Some(x) if x.is_finite() && *x >= 0.0 => {}
-        _ => return Err("states no finite short circuit reactance".to_owned()),
+    match transformer.xsc_pct.as_slice() {
+        [x] if x.is_finite() && *x >= 0.0 => {}
+        _ => return Err("states no single finite short circuit reactance".to_owned()),
+    }
+    if let Err(error) = powerio_dist::transformer::calc_transformer_phase_shift(transformer) {
+        return Err(error.to_string());
     }
     Ok([high, low])
 }

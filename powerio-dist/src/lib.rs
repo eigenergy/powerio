@@ -76,13 +76,18 @@ pub mod terminal_index;
 #[cfg(test)]
 pub(crate) mod testkit;
 mod transform_audit;
+pub mod transformer;
+pub mod voltage_zones;
 
 pub use bmopf::{BMOPF_SCHEMA_ID, BmopfEmitOptions};
 pub use cim::{
     CIM_DIST_HEAD_BYTES, looks_like_cim_dist, looks_like_cim_dist_header,
     source_looks_like_cim_dist,
 };
-pub use connection::{ConnectionChannel, calc_connection_channels};
+pub use connection::{
+    ConnectionChannel, calc_connection_channels, calc_element_connection,
+    calc_wye_neutral_position, lindist3flow_carries_connection, orient_delta_ring,
+};
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
     parse_dist_target_format,

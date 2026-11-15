@@ -45,20 +45,44 @@
   with its primitive and `(bus, terminal)` rows, `scatter_primitive_admittance` is the one scatter
   of a primitive into a nodal system, and `MulticonductorNodeIndex::terminals` and
   `resolve_position` expose the flat terminal index underneath the node index.
-- `calc_transformer_primitive_admittance` gives a finite leakage transformer's primitive
-  admittance over its physical terminals (`TransformerPrimitive`), the OpenDSS `CalcY_Terminal`
-  path: WYE and DELTA windings, fixed taps, the magnetizing branch and finite neutral impedances,
-  for two winding units of one to three phases, the BMOPF centre tap and the BMOPF single phase
-  autotransformer, with each solidly grounded neutral listed. `calc_multiconductor_admittance_matrix`
-  now stamps every transformer that states leakage instead of refusing it, and writes a solidly
-  grounded neutral as an exact zero voltage row of the augmented system; a two winding unit that
-  states no leakage is an ideal constraint as before. A single phase autotransformer stating its
-  series impedance in its extras now stamps that impedance; it was read as an ideal ratio.
+- `calc_transformer_primitive_admittance(network, transformer)` gives a finite leakage
+  transformer's primitive admittance over its physical terminals (`TransformerPrimitive`), the
+  OpenDSS `CalcY_Terminal` path: WYE and DELTA windings, fixed taps, the magnetizing branch and
+  finite neutral impedances, for two winding units of one to three phases, the BMOPF centre tap
+  and the BMOPF single phase autotransformer, with each solidly grounded neutral listed.
+  `calc_multiconductor_admittance_matrix` now stamps every transformer that states leakage instead
+  of refusing it, and writes a solidly grounded neutral as an exact zero voltage row of the
+  augmented system; a two winding unit that states no leakage is an ideal constraint as before. A
+  single phase autotransformer stating its series impedance in its extras now stamps that
+  impedance; it was read as an ideal ratio. A source row that already fixes a grounded neutral at
+  zero settles it (no second, rank deficient row), and a nonzero source voltage there is refused
+  (`GroundedNeutral::needs_zero_voltage_row`, the one rule for that meeting).
+- `calc_passive_primitives` returns `NetworkPrimitives`: every line, shunt, capacitor bank and
+  leakage transformer (`PassiveFamily::Transformer`) with its primitive, the solidly grounded
+  neutrals (`GroundedNeutral`) and the ideal transformers left for exact constraints, the one
+  element list `calc_multiconductor_admittance_matrix` scatters.
+  `calc_capacitor_primitive_admittance` takes the network, reads the bank's coils from the one
+  connection rule and states a one terminal WYE bank's coil voltage as its nameplate; the
+  multiconductor OPF writes this same stamp per unit. A WYE bank whose terminals the bus
+  conventions all call phases has coils to ground, as the OPF read it.
 - `calc_transformer_leakage_impedances` takes a `TransformerLeakageBase`: OpenDSS nameplate
   percentages, a BMOPF n-winding unit's phase bases, or a regulator's stated ohms. It is the one
-  leakage derivation behind `calc_transformer_winding_admittance`, the transformer primitive and the
-  multiconductor OPF transformer descriptor, whose n-winding and regulator leakage can move in the
-  last place. A fixed regulator's stated series resistance or reactance must be nonnegative.
+  leakage derivation behind `calc_transformer_winding_admittance`, the transformer primitive, the
+  multiconductor OPF transformer descriptor and the multiconductor to balanced lowering, whose
+  n-winding, regulator and lowered leakage can move in the last place. A regulator's stated series
+  resistance or reactance must be nonnegative.
+- The multiconductor OPF transformer descriptor reads every winding quantity from
+  `powerio_dist::transformer`, the same as the primitive, so the power flow and the OPF stamp the
+  same unit: coil voltage and turns (`calc_coil_voltage`), the reduced leakage
+  (`calc_reduced_leakage`, against the first winding), the delta orientation, the magnetizing
+  branch, the neutral grounding and a regulator's stated ohms. Visible changes: a canonical
+  (OpenDSS) mixed WYE/DELTA unit takes OpenDSS's orientation (a DELTA high voltage winding with the
+  default `leadlag` is `-1`; it was `+1`); `leadlag`, `%noloadloss` and `%imag` are read rather
+  than refused; a negative `r_neutral` is OpenDSS's floating neutral rather than a refusal; a solid
+  neutral (both impedances zero) on a terminal the network does not ground is refused rather than
+  left floating; and a stated `no_load_shunt` on the rated winding of a single phase or centre tap
+  unit enters that port's current as `g_no_load` did. `McOpfTransformer::calc_physical_tap`,
+  `calc_tap_multiplier` and their derivatives state the one tap multiplier convention.
 - `AcOpfAssemblyOptions::with_synthesized_limit_window` and the same on `DcOpfAssemblyOptions`
   take a `SynthesizedLimitWindow`: `Stated` (the default, as before) or `SelectedBounds`, which
   synthesizes an unrated branch's limit over the selected angle difference bounds, PowerModels'
@@ -79,6 +103,39 @@
 
 **Distribution**
 
+- `powerio_dist::transformer` is the one home of transformer winding physics:
+  `calc_transformer_leakage_impedances` and `TransformerLeakageBase`, `calc_reduced_leakage`,
+  `calc_transformer_winding_admittance`, `calc_coil_voltage`, `calc_delta_direction`,
+  `calc_transformer_phase_shift`, `calc_winding_connection`, `calc_transformer_magnetizing`
+  (`TransformerMagnetizing`), `calc_winding_neutral_grounding` (`WindingNeutralGrounding`),
+  `calc_coil_shunt_primitive`, `calc_regulator_series_ohms`, `transformer_extra_number`,
+  `transformer_states_no_leakage`, `is_transformer_regulator` and
+  `calc_transformer_primitive_admittance` (`TransformerPrimitive`), which `powerio-matrix`
+  re-exports. Its failures carry `BUILD.DIST.TRANSFORMER_INVALID` and
+  `BUILD.DIST.TRANSFORMER_UNSUPPORTED` (category data). The primitive reads `leadlag` (Lead or
+  Euro reverses the delta orientation) instead of refusing it, finds a WYE winding's neutral by the
+  bus terminal conventions, and places BMOPF `g_no_load`/`b_no_load` on the second winding (the
+  first of a regulator), divided across the phases of a `single_phase`, `wye_delta` or `delta_wye`
+  unit, as the OPF did. The multiconductor to balanced lowering takes its leakage and its
+  connection shift from the same module, so a `leadlag` of Lead or Euro and the BMOPF
+  orientations lower with their own shift, and a two winding unit stating more than one short
+  circuit reactance is refused rather than truncated. The SINCAL writer's expected transformer
+  primitive is this primitive.
+- `calc_element_connection` (with `calc_wye_neutral_position` and `orient_delta_ring`) is the one
+  rule for the coils of a load, capacitor, inverter, source or winding connection: a WYE neutral
+  is the one mapped terminal the bus conventions do not call a phase.
+  `lindist3flow_carries_connection` is the one LinDist3Flow connection rule.
+- `powerio_dist::voltage_zones::calc_voltage_zone_labels` is the one network voltage zone
+  partition (lines and closed switches), read by the multiconductor to balanced lowering and the
+  load nominal voltage inference, and `calc_flooded_zone_bases` the one zone base flood across
+  transformers, read by the lowering and the PMD MATHEMATICAL writer.
+- `powerio_dist::dense::invert_dense_matrix` is the one small dense inverse (real or complex) and
+  `powerio_dist::kron::calc_kron_reduced_impedance` the one Kron reduction, behind the line and
+  switch series admittances, the open line Schur complement, both geometry readers, the PMD
+  leakage round trip, neutral Kron reduction and the multiconductor to balanced lowering.
+  `powerio_dist::overhead::calc_carson_impedance` and `calc_potential_coefficient` are the one
+  simplified Carson equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry.
+  Geometry, Kron and lowered impedances can move in the last place.
 - BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
   schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
   `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.

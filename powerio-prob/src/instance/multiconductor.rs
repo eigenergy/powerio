@@ -458,22 +458,8 @@ impl McAcPfInstance {
                 .ok_or_else(|| unresolved(format!("{label} references unknown bus `{bus}`")))
         };
         // Voltage zones: the buses lines and closed switches join.
-        let mut edges = Vec::new();
-        for line in network.lines() {
-            let label = format!("line `{}`", line.name);
-            edges.push((
-                position_of(&line.bus_from, &label)?,
-                position_of(&line.bus_to, &label)?,
-            ));
-        }
-        for switch in network.switches().iter().filter(|switch| !switch.open) {
-            let label = format!("switch `{}`", switch.name);
-            edges.push((
-                position_of(&switch.bus_from, &label)?,
-                position_of(&switch.bus_to, &label)?,
-            ));
-        }
-        let zone = powerio_core::union_find::calc_component_labels(network.buses().len(), edges);
+        let zone =
+            powerio_dist::voltage_zones::calc_voltage_zone_labels(network).map_err(unresolved)?;
 
         let conventions = network.extras().get("bmopf_terminal_conventions");
         let phase_to_phase = |position: usize, terminals: &[String]| {

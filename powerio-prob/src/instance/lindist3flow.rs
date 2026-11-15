@@ -9,9 +9,8 @@ use std::collections::BTreeMap;
 
 use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, Error};
 use powerio_dist::{
-    Configuration, DistLoadVoltageModel, LinDist3FlowPreparationAction,
-    LinDist3FlowPreparationActionKind, LinDist3FlowPreparationReport, MulticonductorNetwork,
-    prepare_lindist3flow_network,
+    DistLoadVoltageModel, LinDist3FlowPreparationAction, LinDist3FlowPreparationActionKind,
+    LinDist3FlowPreparationReport, MulticonductorNetwork, prepare_lindist3flow_network,
 };
 use serde::{Deserialize, Serialize};
 
@@ -559,17 +558,6 @@ fn check_objective(instance: &McAcOpfInstance, diagnostics: &mut Vec<Diagnostic>
     }
 }
 
-fn supported_connection(configuration: Configuration, terminals: usize, channels: usize) -> bool {
-    match configuration {
-        Configuration::Wye => terminals == channels,
-        Configuration::SinglePhase => terminals == channels || (terminals == 2 && channels == 1),
-        Configuration::Delta => {
-            (terminals == 2 && channels == 1) || (terminals == 3 && channels == 3)
-        }
-        _ => false,
-    }
-}
-
 fn scalar_or_channels(values: &[f64], channels: usize) -> bool {
     matches!(values.len(), 1) || values.len() == channels
 }
@@ -622,7 +610,11 @@ fn check_device_shapes(instance: &McAcOpfInstance, diagnostics: &mut Vec<Diagnos
             && load.q_nom.len() == channels
             && load.p_nom.iter().all(|value| value.is_finite())
             && load.q_nom.iter().all(|value| value.is_finite())
-            && supported_connection(load.configuration, load.terminal_map.len(), channels);
+            && powerio_dist::lindist3flow_carries_connection(
+                load.configuration,
+                load.terminal_map.len(),
+                channels,
+            );
         valid &= match &load.voltage_model {
             DistLoadVoltageModel::ConstantPower { .. }
             | DistLoadVoltageModel::ConstantCurrent { .. }
@@ -675,7 +667,7 @@ fn check_device_shapes(instance: &McAcOpfInstance, diagnostics: &mut Vec<Diagnos
             && generator.q_nom.len() == channels
             && generator.p_nom.iter().all(|value| value.is_finite())
             && generator.q_nom.iter().all(|value| value.is_finite())
-            && supported_connection(
+            && powerio_dist::lindist3flow_carries_connection(
                 generator.configuration,
                 generator.terminal_map.len(),
                 channels,
