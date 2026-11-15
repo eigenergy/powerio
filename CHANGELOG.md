@@ -277,9 +277,11 @@
   A neutral phase the segment's terminals do not state is Kron reduced. A position no phase
   names a wire for leaves the impedance unknown, so the segment stays refused
   (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or untyped in MG-RAVENS), now with the position named.
-  The MG-RAVENS `IEEE13_Assets` example names no neutral wire on ten of its eleven segments,
-  which stay refused; its complete segment matches OpenDSS to 2e-5 (the exporter's 1609.3 m
-  mile), and the same conductors stated completely match to 1e-13 of each matrix's largest entry.
+  The MG-RAVENS `IEEE13_Assets` example names no neutral wire on nine of its eleven segments
+  (650632, 632670, 670671, 671680, 632633, 632645, 671684, 684611, 684652), which stay refused;
+  its complete concentric neutral segment 692675 matches OpenDSS to 2e-5 (the exporter's
+  1609.3 m mile), 645646 states a `PerLengthImpedance`, and the same conductors stated
+  completely match to 1e-13 of each matrix's largest entry.
 - Transformer phase clocks in distribution CIM and MG-RAVENS are the vector group shift the
   physics stamps (the delta orientation of `powerio_dist::transformer`), read and written. A
   delta–wye unit is clock 1 when the high voltage winding leads (OpenDSS's default `leadlag`)
@@ -309,8 +311,8 @@
   unresolvable branches, an X/Y phase) is blocked as
   `READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`: numerical use and conversion to another format
   refuse it, as they refuse a CIM segment without impedance, instead of writing the feeder
-  without it. Converting the MG-RAVENS `IEEE13_Assets` example to OpenDSS succeeded with ten of
-  its eleven segments missing. The MG-RAVENS round trip keeps the equipment.
+  without it. In 0.12.0, which calculated no wire catalog segment, converting the MG-RAVENS
+  `IEEE13_Assets` example to OpenDSS succeeded with ten of its eleven segments missing. The MG-RAVENS round trip keeps the equipment.
 - MG-RAVENS reports a single phase wye load stating `grounded` false whose neutral no
   equipment but such loads reaches (`READ.RAVENS_DIST.VALUE_CONFLICT`): its neutral floats, so
   it does not draw its stated power. The load is kept as stated; the CIM reader grounds such a

@@ -348,8 +348,10 @@ changes every phase entry), and the segment is refused with the position
 named: `READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or an untyped segment in
 MG-RAVENS; either way conversion to another format refuses it. The
 MG-RAVENS `IEEE13_Assets` example, as XML or JSON, is such a document: it
-names no wire for the neutral of ten of its eleven segments. Its one
-complete segment (`692675`, concentric neutral) matches OpenDSS to 2e-5,
+names no wire for the neutral of nine of its eleven segments (`650632`,
+`632670`, `670671`, `671680`, `632633`, `632645`, `671684`, `684611` and
+`684652`); `645646` states a `PerLengthImpedance`. Its one complete wire
+catalog segment (`692675`, concentric neutral) matches OpenDSS to 2e-5,
 the difference of the exporter's 1609.3 m mile; the same conductors stated
 completely, neutral included, match OpenDSS to 1e-13 of each matrix's
 largest entry.
