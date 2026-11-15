@@ -138,15 +138,39 @@ impl Geometry {
         Ok(())
     }
 
+    /// The conductor pair's loop impedance with earth return, without the
+    /// internal impedance: the simplified Carson equation whole, or the
+    /// free space term `j ω μ₀ / 2π · ln(1 / D)` plus the earth model's
+    /// correction.
+    pub(super) fn conductor_loop(
+        &self,
+        i: usize,
+        j: usize,
+        distance: f64,
+        frequency: f64,
+    ) -> Complex {
+        let omega_mu = TWO_PI * frequency * MU_0;
+        if matches!(self.earth_model, EarthModel::Carson) {
+            return crate::overhead::calc_carson_impedance(
+                distance,
+                crate::overhead::CarsonEarth::new(
+                    omega_mu / 8.0,
+                    omega_mu / TWO_PI,
+                    (658.5 * (self.rho / frequency).sqrt()).ln(),
+                ),
+            );
+        }
+        Complex::new(0.0, omega_mu / TWO_PI * (1.0 / distance).ln()) + self.earth(i, j, frequency)
+    }
+
     fn earth(&self, i: usize, j: usize, frequency: f64) -> Complex {
         let first = &self.wires[i];
         let second = &self.wires[j];
         let omega_mu = TWO_PI * frequency * MU_0;
         match self.earth_model {
-            EarthModel::Carson => Complex::new(
-                omega_mu / 8.0,
-                omega_mu / TWO_PI * (658.5 * (self.rho / frequency).sqrt()).ln(),
-            ),
+            EarthModel::Carson => {
+                unreachable!("the simplified Carson self and mutual terms are formed whole")
+            }
             EarthModel::Deri => {
                 let depth = 1.0 / Complex::new(0.0, omega_mu / self.rho).sqrt();
                 let height = first.height.abs() + second.height.abs() + 2.0 * depth;
@@ -198,7 +222,6 @@ impl Geometry {
         self.validate(frequency)?;
         let n = self.wires.len();
         let omega = TWO_PI * frequency;
-        let factor = omega * MU_0 / TWO_PI;
         let mut z = vec![vec![Complex::default(); n]; n];
         let mut potential = vec![vec![0.0; n]; n];
         for i in 0..n {
@@ -221,18 +244,20 @@ impl Geometry {
             } else {
                 wire.radius
             };
-            z[i][i] = internal
-                + Complex::new(0.0, factor * (1.0 / radius).ln())
-                + self.earth(i, i, frequency);
-            potential[i][i] = (2.0 * wire.height / wire.capacitance_radius).ln();
+            z[i][i] = internal + self.conductor_loop(i, i, radius, frequency);
+            potential[i][i] = crate::overhead::calc_potential_coefficient(
+                2.0 * wire.height,
+                wire.capacitance_radius,
+            );
             for j in 0..i {
                 let other = &self.wires[j];
                 let distance = (wire.x - other.x).hypot(wire.height - other.height);
-                z[i][j] =
-                    Complex::new(0.0, factor * (1.0 / distance).ln()) + self.earth(i, j, frequency);
+                z[i][j] = self.conductor_loop(i, j, distance, frequency);
                 z[j][i] = z[i][j];
-                potential[i][j] =
-                    ((wire.x - other.x).hypot(wire.height + other.height) / distance).ln();
+                potential[i][j] = crate::overhead::calc_potential_coefficient(
+                    (wire.x - other.x).hypot(wire.height + other.height),
+                    distance,
+                );
                 potential[j][i] = potential[i][j];
             }
         }

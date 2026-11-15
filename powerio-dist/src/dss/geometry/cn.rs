@@ -162,7 +162,6 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
     let n = input.wires.len();
     let phases = input.phases;
     let order = n + phases;
-    let factor = Complex::new(0.0, TWO_PI * frequency * MU_0 / TWO_PI);
     let mut z = vec![vec![Complex::default(); order]; order];
     for (i, wire) in input.wires.iter().enumerate() {
         let mut zi = internal(input, i, frequency);
@@ -172,10 +171,10 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
         } else {
             wire.radius
         };
-        z[i][i] = zi + factor * (1.0 / radius).ln() + input.earth(i, i, frequency);
+        z[i][i] = zi + input.conductor_loop(i, i, radius, frequency);
         for (j, other) in input.wires.iter().enumerate().take(i) {
             let distance = (wire.x - other.x).hypot(wire.height - other.height);
-            z[i][j] = factor * (1.0 / distance).ln() + input.earth(i, j, frequency);
+            z[i][j] = input.conductor_loop(i, j, distance, frequency);
             z[j][i] = z[i][j];
         }
     }
@@ -186,11 +185,10 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
         let radius = 0.5 * (cable.diacable - cable.diastrand);
         let gmr = (cable.gmrstrand * k * radius.powf(k - 1.0)).powf(1.0 / k);
         let index = n + i;
-        z[index][index] =
-            cable.rstrand / k + factor * (1.0 / gmr).ln() + input.earth(i, i, frequency);
+        z[index][index] = cable.rstrand / k + input.conductor_loop(i, i, gmr, frequency);
         for (j, other) in input.wires.iter().enumerate().take(i) {
             let distance = (wire.x - other.x).hypot(wire.height - other.height);
-            z[index][n + j] = factor * (1.0 / distance).ln() + input.earth(i, j, frequency);
+            z[index][n + j] = input.conductor_loop(i, j, distance, frequency);
             z[n + j][index] = z[index][n + j];
         }
         for (j, other) in input.wires.iter().enumerate() {
@@ -200,7 +198,7 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
                 let d = (wire.x - other.x).hypot(wire.height - other.height);
                 (d.powf(k) - radius.powf(k)).powf(1.0 / k)
             };
-            z[index][j] = factor * (1.0 / distance).ln() + input.earth(i, j, frequency);
+            z[index][j] = input.conductor_loop(i, j, distance, frequency);
             z[j][index] = z[index][j];
         }
     }

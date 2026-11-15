@@ -96,15 +96,18 @@ impl Reader<'_> {
         }
         let z = self.geometry_impedance(spacing, &labels, &conductors)?;
         let n = phases.len();
+        let keep: Vec<usize> = (0..n).collect();
+        let reduced = if neutral {
+            crate::kron::calc_kron_reduced_impedance(&z, &keep, &[n], 0.0)
+                .ok_or_else(|| self.error(config, "geometry impedance reduction is nonfinite"))?
+        } else {
+            z
+        };
         let mut resistance = vec![vec![0.0; n]; n];
         let mut reactance = resistance.clone();
         for i in 0..n {
             for j in 0..n {
-                let value = if neutral {
-                    z[i][j] - z[i][n] * z[n][j] / z[n][n]
-                } else {
-                    z[i][j]
-                } / METERS_PER_MILE;
+                let value = reduced[i][j] / METERS_PER_MILE;
                 if !value.re.is_finite() || !value.im.is_finite() {
                     return Err(self.error(config, "geometry impedance reduction is nonfinite"));
                 }
@@ -160,7 +163,14 @@ impl Reader<'_> {
         conductors: &[ObjectKey],
     ) -> Result<Vec<Vec<Complex64>>, Error> {
         let f = self.net.base_frequency();
-        let earth = (100.0 / f).ln() / 2.0 + 7.6786;
+        // GridLAB-D's simplified Carson coefficients, ohms per mile with
+        // distances in feet, at its fixed 100 ohm-metre earth resistivity:
+        // ln D_e = 7.6786 + ln(ρ / f) / 2.
+        let earth = crate::overhead::CarsonEarth::new(
+            0.001_588_36 * f,
+            0.002_022_37 * f,
+            (100.0 / f).ln() / 2.0 + 7.6786,
+        );
         let mut z = vec![vec![Complex64::default(); labels.len()]; labels.len()];
         for (i, &wire) in conductors.iter().enumerate() {
             let gmr = self.positive_geometry(wire, "geometric_mean_radius")?;
@@ -191,10 +201,8 @@ impl Reader<'_> {
                         "native geometry reciprocal overflows or underflows",
                     ));
                 }
-                let value = Complex64::new(
-                    if i == j { resistance } else { 0.0 } + 0.001_588_36 * f,
-                    0.002_022_37 * f * (earth - distance.ln()),
-                );
+                let value = crate::overhead::calc_carson_impedance(distance, earth)
+                    + if i == j { resistance } else { 0.0 };
                 if !value.re.is_finite() || !value.im.is_finite() {
                     return Err(self.error(spacing, "geometry primitive impedance overflows"));
                 }
@@ -221,12 +229,12 @@ impl Reader<'_> {
             if heights[i] <= radius {
                 return Err(self.error(wire, "conductor intersects its earth image"));
             }
-            potential[i][i] = (2.0 * heights[i] / radius).ln();
+            potential[i][i] = crate::overhead::calc_potential_coefficient(2.0 * heights[i], radius);
             for j in i + 1..labels.len() {
                 let distance = self
                     .positive_geometry(spacing, &format!("distance_{}{}", labels[i], labels[j]))?;
                 let image = distance.hypot(2.0 * (heights[i] * heights[j]).sqrt());
-                potential[i][j] = (image / distance).ln();
+                potential[i][j] = crate::overhead::calc_potential_coefficient(image, distance);
                 potential[j][i] = potential[i][j];
             }
         }
