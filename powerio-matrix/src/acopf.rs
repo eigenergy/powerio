@@ -520,8 +520,15 @@ impl AcBranchData {
     /// Stamp the bus admittance matrix of these branches and the bus shunts
     /// `g_s + j b_s` over `n` dense buses, keeping an explicit entry at every
     /// diagonal position, through the same accumulator as
-    /// [`calc_admittance_matrix`](crate::calc_admittance_matrix).
-    fn calc_admittance_matrix(&self, n: usize, g_s: &[f64], b_s: &[f64]) -> YbusParts {
+    /// [`calc_admittance_matrix`](crate::calc_admittance_matrix). With zero
+    /// shunts it is the branch admittance alone, whose injection
+    /// `V conj(Y V)` is the power each bus sends into its branches.
+    ///
+    /// # Panics
+    /// Panics if a branch endpoint is `>= n` or `g_s`/`b_s` is shorter than
+    /// `n`.
+    #[must_use]
+    pub fn calc_admittance_matrix(&self, n: usize, g_s: &[f64], b_s: &[f64]) -> YbusParts {
         let mut stamp = AdmittanceStamp::with_capacity(n, self.len());
         for branch in 0..self.len() {
             stamp.add_branch(
