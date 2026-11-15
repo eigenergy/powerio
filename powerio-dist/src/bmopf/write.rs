@@ -2846,7 +2846,7 @@ impl Writer {
         let voltage = t
             .windings
             .get(1)
-            .map(|w| crate::model::winding_coil_voltage(w, t.phases));
+            .map(|w| crate::transformer::calc_coil_voltage(t, 1) * w.tap);
         if let Some(voltage) = voltage
             && let Some(y_base) =
                 crate::electrical::calc_admittance_base(voltage, s / t.phases.max(1) as f64)

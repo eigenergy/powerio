@@ -542,7 +542,7 @@ fn validate_transformer_bases(name: &str, ends: &BTreeMap<u64, &Map<String, Valu
                             || end
                                 .get("TransformerEndInfo.ratedU")
                                 .and_then(Value::as_f64)
-                                .and_then(|v| crate::model::n_winding_impedance_base(1, v, power))
+                                .and_then(|v| crate::electrical::calc_impedance_base(v, power))
                                 .is_some_and(|base| base.is_finite() && base > 0.0))
                 });
                 if !usable {
@@ -562,7 +562,7 @@ fn validate_transformer_bases(name: &str, ends: &BTreeMap<u64, &Map<String, Valu
             let power = end.get("TransformerEndInfo.ratedS").and_then(Value::as_f64);
             let base = voltage
                 .zip(power)
-                .and_then(|(v, s)| crate::model::n_winding_impedance_base(1, v, s));
+                .and_then(|(v, s)| crate::electrical::calc_impedance_base(v, s));
             if !base.is_some_and(|base| base.is_finite() && base > 0.0) {
                 return Err(Error::FormatRead {
                     format: FMT,
@@ -2195,7 +2195,7 @@ impl Mapper<'_> {
                 let s_rating = iget("TransformerEndInfo.ratedS").unwrap_or(0.0);
                 let mut winding =
                     DistWinding::new(node.clone(), map.clone(), conn, v_ref, s_rating);
-                let z_base = crate::model::n_winding_impedance_base(1, v_ref, s_rating);
+                let z_base = crate::electrical::calc_impedance_base(v_ref, s_rating);
                 if let (Some(r), Some(z_base)) = (iget("TransformerEndInfo.r"), z_base) {
                     winding.r_pct = r / z_base * 100.0;
                 }
@@ -2271,7 +2271,7 @@ impl Mapper<'_> {
                         .and_then(Value::as_f64)
                         .unwrap_or(0.0);
                     if let Some(z_base) =
-                        crate::model::n_winding_impedance_base(1, rated_u, base_power)
+                        crate::electrical::calc_impedance_base(rated_u, base_power)
                     {
                         if !found_sc {
                             // The MG-RAVENS tools' leakage impedance: percent

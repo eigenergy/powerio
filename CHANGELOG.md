@@ -292,7 +292,11 @@
   BMOPF n-winding unit reads every WYE winding's rated voltage over the unit's phase count, as
   `calc_coil_voltage` divides it (a single phase WYE winding of a polyphase unit read a coil
   voltage `√3` below its `v_nom`), and the OPF counts a WYE winding's base phases from its
-  terminal map. The OPF tells a regulator by `is_transformer_regulator`.
+  terminal map. The OPF tells a regulator by `is_transformer_regulator`. The MG-RAVENS reader and
+  writer and the PMD MATHEMATICAL reader form a winding's own base with `calc_impedance_base`,
+  and the BMOPF writer's no-load shunt and the OpenDSS no-load percentages take the tapped coil
+  voltage as `calc_coil_voltage` times the tap (it was the rated voltage times the tap over the
+  coil ratio), which can move them in the last place for a tapped polyphase WYE winding.
 - `DistLoadVoltageModel::calc_power_terms` states every unbounded load law (constant power,
   current and impedance, exponential, ZIP) as power law terms and `nominal_voltage` reads a
   channel's nominal; `power_scale` and `power_scale_where` evaluate those terms with the one term

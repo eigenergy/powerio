@@ -1261,8 +1261,7 @@ impl<'a> Reader<'a> {
                         b.index("f_bus")
                     };
                     star.push(other.unwrap_or_else(|| t_bus.clone()));
-                    let z_w =
-                        crate::model::n_winding_impedance_base(1, windings[w].v_ref, s_rating);
+                    let z_w = crate::electrical::calc_impedance_base(windings[w].v_ref, s_rating);
                     if let Some(z_w) = z_w {
                         windings[w].r_pct = r_int * ratios[w] * ratios[w] / z_w * 100.0;
                     }
@@ -1297,8 +1296,7 @@ impl<'a> Reader<'a> {
                 zbr.insert((i.min(j), j.max(i)), Complex64::new(r, x));
             }
             let zsc = br2sc_impedance(&zbr, nrw);
-            if let Some(z1) = crate::model::n_winding_impedance_base(1, windings[0].v_ref, s_rating)
-            {
+            if let Some(z1) = crate::electrical::calc_impedance_base(windings[0].v_ref, s_rating) {
                 for (k, pair) in crate::model::pair_keys(nrw).iter().enumerate() {
                     if let Some(z) = zsc.get(pair) {
                         xsc_pct[k] = z.im * ratios[0] * ratios[0] / z1 * 100.0;

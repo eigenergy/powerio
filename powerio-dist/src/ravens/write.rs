@@ -88,7 +88,7 @@ fn validate_transformer_bases(net: &MulticonductorNetwork) -> Result<(), powerio
             continue;
         }
         for (index, winding) in transformer.windings.iter().enumerate() {
-            if !crate::model::n_winding_impedance_base(1, winding.v_ref, winding.s_rating)
+            if !crate::electrical::calc_impedance_base(winding.v_ref, winding.s_rating)
                 .is_some_and(|base| base.is_finite() && base > 0.0)
             {
                 return Err(powerio_core::Error::new(
@@ -2123,8 +2123,7 @@ impl Writer {
                 let rated_s = self.num(w.s_rating, &what);
                 info.insert("TransformerEndInfo.ratedU".into(), rated_u);
                 info.insert("TransformerEndInfo.ratedS".into(), rated_s);
-                if let Some(z_base) = crate::model::n_winding_impedance_base(1, w.v_ref, w.s_rating)
-                {
+                if let Some(z_base) = crate::electrical::calc_impedance_base(w.v_ref, w.s_rating) {
                     let r = self.num(written_r_ohm(w.r_pct, z_base), &what);
                     info.insert("TransformerEndInfo.r".into(), r);
                 }
@@ -2158,7 +2157,7 @@ impl Writer {
             // exactly that. Ohms here would read back as an impedance below
             // the winding resistance.
             let w1 = &xf.windings[0];
-            if let Some(z_base) = crate::model::n_winding_impedance_base(1, w1.v_ref, w1.s_rating) {
+            if let Some(z_base) = crate::electrical::calc_impedance_base(w1.v_ref, w1.s_rating) {
                 let xhl = xf.xsc_pct.first().copied().unwrap_or(0.0);
                 // The pair resistance as the reader recovers it from the
                 // written `TransformerEndInfo.r`, so the cycle below is the
@@ -2169,7 +2168,7 @@ impl Writer {
                     .map(|w| {
                         let mut w = w.clone();
                         if let Some(z_base) =
-                            crate::model::n_winding_impedance_base(1, w.v_ref, w.s_rating)
+                            crate::electrical::calc_impedance_base(w.v_ref, w.s_rating)
                         {
                             w.r_pct = written_r_ohm(w.r_pct, z_base) / z_base * 100.0;
                         }

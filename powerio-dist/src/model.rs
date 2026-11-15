@@ -1382,17 +1382,6 @@ fn matrix_extent(m: &ConductorMatrix) -> usize {
     m.iter().map(Vec::len).fold(m.len(), usize::max)
 }
 
-/// `phases * v_nom^2 / s`, the impedance base for an n-winding transformer
-/// winding on its per phase power `s / phases`
-/// ([`powerio_core::electrical::calc_impedance_base`]), or `None` if any
-/// input isn't a positive finite number.
-pub(crate) fn n_winding_impedance_base(phases: usize, v_nom: f64, s: f64) -> Option<f64> {
-    if phases == 0 {
-        return None;
-    }
-    powerio_core::electrical::calc_impedance_base(v_nom, s / phases as f64)
-}
-
 /// The two phase conductors of a line to line regulating winding: exactly
 /// two terminals, both named 1..=3, distinct, in terminal map order.
 pub(crate) fn winding_phase_pair(winding: &DistWinding) -> Option<(u8, u8)> {
@@ -1454,11 +1443,6 @@ pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
     pairs
 }
 
-/// Actual coil voltage base, including the fixed winding tap.
-pub(crate) fn winding_coil_voltage(winding: &DistWinding, phases: usize) -> f64 {
-    winding.v_ref * winding.tap / crate::transformer::calc_coil_voltage_ratio(winding.conn, phases)
-}
-
 /// OpenDSS no-load percentages for an explicit winding-2 terminal-coil shunt.
 /// Other winding locations cannot use the OpenDSS exciting-branch parameters.
 pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f64, f64)> {
@@ -1468,7 +1452,7 @@ pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f6
     }
     let g = shunt.get("g")?.as_f64()?;
     let b = shunt.get("b")?.as_f64()?;
-    let voltage = winding_coil_voltage(t.windings.get(1)?, t.phases);
+    let voltage = crate::transformer::calc_coil_voltage(t, 1) * t.windings.get(1)?.tap;
     let rating = t.windings.first()?.s_rating;
     if !voltage.is_finite()
         || voltage <= 0.0
