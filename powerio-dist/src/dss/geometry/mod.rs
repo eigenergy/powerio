@@ -219,6 +219,48 @@ impl Geometry {
         }
     }
 
+    /// A conductor's self impedance: its internal impedance
+    /// ([`calc_internal_impedance`]) plus its loop with earth return at its
+    /// GMR. Outside power frequencies (40 to 1000 Hz) the loop is taken at
+    /// the radius and the internal reactance kept, as `LineConstants` does.
+    fn conductor_self_impedance(&self, i: usize, frequency: f64) -> Complex {
+        let wire = &self.wires[i];
+        let mut internal = calc_internal_impedance(wire, self.earth_model, frequency);
+        let radius = if frequency > 40.0 && frequency < 1000.0 {
+            internal.im = 0.0;
+            wire.gmr
+        } else {
+            wire.radius
+        };
+        internal + self.conductor_loop(i, i, radius, frequency)
+    }
+
+    /// The conductors' series impedance block, self and mutual, in wire
+    /// order: what the overhead and the cable models both start from.
+    fn conductor_block(&self, frequency: f64) -> Vec<Vec<Complex>> {
+        let n = self.wires.len();
+        let mut z = vec![vec![Complex::default(); n]; n];
+        for (i, wire) in self.wires.iter().enumerate() {
+            z[i][i] = self.conductor_self_impedance(i, frequency);
+            for (j, other) in self.wires.iter().enumerate().take(i) {
+                let distance = (wire.x - other.x).hypot(wire.height - other.height);
+                z[i][j] = self.conductor_loop(i, j, distance, frequency);
+                z[j][i] = z[i][j];
+            }
+        }
+        z
+    }
+
+    /// The conductors this geometry keeps: its Kron order, else its phases
+    /// when it reduces, else every conductor.
+    fn kept_conductors(&self) -> usize {
+        self.reduction_order.unwrap_or(if self.reduce {
+            self.phases
+        } else {
+            self.wires.len()
+        })
+    }
+
     pub fn calculate(&self, frequency: f64) -> Result<LineMatrices, String> {
         if self.wires.iter().any(|w| w.cable.is_some()) {
             return cable::calculate(self, frequency);
@@ -226,92 +268,94 @@ impl Geometry {
         self.validate(frequency)?;
         let n = self.wires.len();
         let omega = TWO_PI * frequency;
-        let mut z = vec![vec![Complex::default(); n]; n];
+        let z = self.conductor_block(frequency);
         let mut potential = vec![vec![0.0; n]; n];
-        for i in 0..n {
-            let wire = &self.wires[i];
-            let mut internal = match self.earth_model {
-                EarthModel::Carson | EarthModel::FullCarson => {
-                    Complex::new(wire.rac, omega * MU_0 / (8.0 * PI))
-                }
-                EarthModel::Deri => {
-                    let alpha = Complex::new(1.0, 1.0) * (frequency * MU_0 / wire.rdc).sqrt();
-                    Complex::new(1.0, 1.0)
-                        * bessel_ratio(alpha)
-                        * (wire.rdc * frequency * MU_0).sqrt()
-                        / 2.0
-                }
-            };
-            let radius = if frequency > 40.0 && frequency < 1000.0 {
-                internal.im = 0.0;
-                wire.gmr
-            } else {
-                wire.radius
-            };
-            z[i][i] = internal + self.conductor_loop(i, i, radius, frequency);
+        for (i, wire) in self.wires.iter().enumerate() {
             potential[i][i] = crate::overhead::calc_potential_coefficient(
                 2.0 * wire.height,
                 wire.capacitance_radius,
             );
-            for j in 0..i {
-                let other = &self.wires[j];
-                let distance = (wire.x - other.x).hypot(wire.height - other.height);
-                z[i][j] = self.conductor_loop(i, j, distance, frequency);
-                z[j][i] = z[i][j];
+            for (j, other) in self.wires.iter().enumerate().take(i) {
                 potential[i][j] = crate::overhead::calc_potential_coefficient(
                     (wire.x - other.x).hypot(wire.height + other.height),
-                    distance,
+                    (wire.x - other.x).hypot(wire.height - other.height),
                 );
                 potential[j][i] = potential[i][j];
             }
         }
         let inverse = crate::dense::invert_dense_matrix(&potential, 0.0)
             .ok_or("geometry potential matrix is singular")?;
-        let keep = self
-            .reduction_order
-            .unwrap_or(if self.reduce { self.phases } else { n });
-        // OpenDSS eliminates one conductor at a time, the last first.
-        for k in (keep..n).rev() {
-            z = crate::kron::calc_kron_reduced_impedance(
-                &z,
-                &(0..k).collect::<Vec<_>>(),
-                &[k],
-                0.0,
-            )
-            .ok_or("geometry neutral reduction has a zero pivot")?;
-        }
-        let result = LineMatrices {
-            r: z.iter()
-                .take(keep)
-                .map(|row| row.iter().take(keep).map(|v| v.re).collect())
-                .collect(),
-            x: z.iter()
-                .take(keep)
-                .map(|row| row.iter().take(keep).map(|v| v.im).collect())
-                .collect(),
-            // Native reduction retains the phase block of the inverted full
-            // potential matrix; it does not Kron-reduce that admittance.
-            b: inverse
-                .iter()
-                .take(keep)
-                .map(|row| {
-                    row.iter()
-                        .take(keep)
-                        .map(|v| v * TWO_PI * EPSILON_0 * omega)
-                        .collect()
-                })
-                .collect(),
-        };
-        if [&result.r, &result.x, &result.b]
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|v| !v.is_finite())
-        {
-            return Err("geometry calculation became nonfinite".into());
-        }
-        Ok(result)
+        let keep = self.kept_conductors();
+        // Native reduction retains the phase block of the inverted full
+        // potential matrix; it does not Kron-reduce that admittance.
+        let b = inverse
+            .iter()
+            .take(keep)
+            .map(|row| {
+                row.iter()
+                    .take(keep)
+                    .map(|v| v * TWO_PI * EPSILON_0 * omega)
+                    .collect()
+            })
+            .collect();
+        reduce_to_line_matrices(z, keep, b, "geometry")
     }
+}
+
+/// A conductor's internal impedance per meter: its AC resistance and the
+/// solid round conductor's `ω μ₀ / 8π` under Carson's earth, or the Bessel
+/// skin effect from its DC resistance under Deri's, as `LineConstants`
+/// forms it. The one internal impedance of the overhead and cable models.
+fn calc_internal_impedance(wire: &Wire, earth_model: EarthModel, frequency: f64) -> Complex {
+    match earth_model {
+        EarthModel::Carson | EarthModel::FullCarson => {
+            Complex::new(wire.rac, TWO_PI * frequency * MU_0 / (8.0 * PI))
+        }
+        EarthModel::Deri => {
+            let alpha = Complex::new(1.0, 1.0) * (frequency * MU_0 / wire.rdc).sqrt();
+            Complex::new(1.0, 1.0) * bessel_ratio(alpha) * (wire.rdc * frequency * MU_0).sqrt()
+                / 2.0
+        }
+    }
+}
+
+/// Kron reduce `z` to its first `keep` conductors, one at a time and the
+/// last first as OpenDSS does, and return it with the shunt block `b`,
+/// refusing a zero pivot or a nonfinite entry. `what` names the model in
+/// the refusal.
+fn reduce_to_line_matrices(
+    mut z: Vec<Vec<Complex>>,
+    keep: usize,
+    b: Vec<Vec<f64>>,
+    what: &str,
+) -> Result<LineMatrices, String> {
+    if keep == 0 || keep > z.len() {
+        return Err(format!("invalid {what} reduction order"));
+    }
+    for k in (keep..z.len()).rev() {
+        z = crate::kron::calc_kron_reduced_impedance(&z, &(0..k).collect::<Vec<_>>(), &[k], 0.0)
+            .ok_or_else(|| format!("{what} reduction has a zero pivot"))?;
+    }
+    let result = LineMatrices {
+        r: z.iter()
+            .take(keep)
+            .map(|row| row.iter().take(keep).map(|v| v.re).collect())
+            .collect(),
+        x: z.iter()
+            .take(keep)
+            .map(|row| row.iter().take(keep).map(|v| v.im).collect())
+            .collect(),
+        b,
+    };
+    if [&result.r, &result.x, &result.b]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|v| !v.is_finite())
+    {
+        return Err(format!("{what} calculation became nonfinite"));
+    }
+    Ok(result)
 }
 
 /// Line constants for a reader whose source states its conductors and their

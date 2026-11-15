@@ -197,7 +197,9 @@
   Carson coefficients in one place, the underground reader eliminates its cable returns through
   the one Kron reduction, and the concentric neutral ring, its equivalent GMR and distance, the
   tape shield radius and the cable capacitance are each one calculation behind the OpenDSS
-  `CNData` and `TSData` line constants and the GridLAB-D underground reader. Geometry, cable,
+  `CNData` and `TSData` line constants and the GridLAB-D underground reader. The OpenDSS
+  overhead and cable line constants form each conductor's internal impedance, the conductors'
+  self and mutual block and the reduction to line matrices in one place. Geometry, cable,
   Kron and lowered impedances can move in the last place.
 - `powerio_dist::dense::invert_dense_matrix` also refuses a pivot at most `n ε` times its
   column's largest original magnitude, and an infinite pivot, the rule the dense PTDF fallback

@@ -1,3 +1,4 @@
+use super::super::EarthModel;
 use super::*;
 
 fn geometry() -> Geometry {

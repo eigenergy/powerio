@@ -5,7 +5,7 @@
 //! first, then one screen (neutral ring or tape shield) per phase cable, which
 //! Kron reduction always eliminates. Only the screen's resistance, its own
 //! GMR and its distance to the cores differ between the two.
-use super::{EPSILON_0, EarthModel, Geometry, MU_0, TWO_PI, bessel_ratio, wire::meters};
+use super::{EPSILON_0, Geometry, TWO_PI, wire::meters};
 use crate::dss::linecode::LineMatrices;
 use crate::shielded_cable::{
     calc_cable_capacitance, calc_concentric_neutral_distance, calc_concentric_neutral_gmr,
@@ -13,7 +13,6 @@ use crate::shielded_cable::{
 };
 use num_complex::Complex64 as Complex;
 use serde::{Deserialize, Serialize};
-use std::f64::consts::PI;
 
 /// The screen around a phase core, in native units until `si`.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -322,41 +321,17 @@ fn validate(input: &Geometry, frequency: f64) -> Result<(), String> {
     Ok(())
 }
 
-fn internal(input: &Geometry, i: usize, frequency: f64) -> Complex {
-    let wire = &input.wires[i];
-    match input.earth_model {
-        EarthModel::Carson | EarthModel::FullCarson => {
-            Complex::new(wire.rac, TWO_PI * frequency * MU_0 / (8.0 * PI))
-        }
-        EarthModel::Deri => {
-            let alpha = Complex::new(1.0, 1.0) * (frequency * MU_0 / wire.rdc).sqrt();
-            Complex::new(1.0, 1.0) * bessel_ratio(alpha) * (wire.rdc * frequency * MU_0).sqrt()
-                / 2.0
-        }
-    }
-}
-
 pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices, String> {
     validate(input, frequency)?;
     let n = input.wires.len();
     let phases = input.phases;
     let order = n + phases;
-    let mut z = vec![vec![Complex::default(); order]; order];
-    for (i, wire) in input.wires.iter().enumerate() {
-        let mut zi = internal(input, i, frequency);
-        let radius = if frequency > 40.0 && frequency < 1000.0 {
-            zi.im = 0.0;
-            wire.gmr
-        } else {
-            wire.radius
-        };
-        z[i][i] = zi + input.conductor_loop(i, i, radius, frequency);
-        for (j, other) in input.wires.iter().enumerate().take(i) {
-            let distance = (wire.x - other.x).hypot(wire.height - other.height);
-            z[i][j] = input.conductor_loop(i, j, distance, frequency);
-            z[j][i] = z[i][j];
-        }
+    // The conductors' block, then one screen per phase cable after them.
+    let mut z = input.conductor_block(frequency);
+    for row in &mut z {
+        row.resize(order, Complex::default());
     }
+    z.resize(order, vec![Complex::default(); order]);
     for i in 0..phases {
         let wire = &input.wires[i];
         let cable = wire.cable.unwrap();
@@ -376,17 +351,9 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
             z[j][index] = z[index][j];
         }
     }
-    let keep = input
-        .reduction_order
-        .unwrap_or(if input.reduce { phases } else { n });
+    let keep = input.kept_conductors();
     if keep == 0 || keep > n {
         return Err("invalid cable reduction order".into());
-    }
-    // Cable screens are always eliminated, before optional bare neutrals,
-    // one conductor at a time and the last first, as OpenDSS does.
-    for k in (keep..order).rev() {
-        z = crate::kron::calc_kron_reduced_impedance(&z, &(0..k).collect::<Vec<_>>(), &[k], 0.0)
-            .ok_or("cable reduction has a zero pivot")?;
     }
     let mut b = vec![vec![0.0; keep]; keep];
     for (i, row) in b.iter_mut().enumerate().take(phases) {
@@ -399,26 +366,8 @@ pub(super) fn calculate(input: &Geometry, frequency: f64) -> Result<LineMatrices
             * frequency
             * calc_cable_capacitance(TWO_PI * EPSILON_0 * cable.epsr, outer, inner, None);
     }
-    let result = LineMatrices {
-        r: z.iter()
-            .take(keep)
-            .map(|row| row.iter().take(keep).map(|v| v.re).collect())
-            .collect(),
-        x: z.iter()
-            .take(keep)
-            .map(|row| row.iter().take(keep).map(|v| v.im).collect())
-            .collect(),
-        b,
-    };
-    if [&result.r, &result.x, &result.b]
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|v| !v.is_finite())
-    {
-        return Err("cable calculation became nonfinite".into());
-    }
-    Ok(result)
+    // Cable screens are always eliminated, before optional bare neutrals.
+    super::reduce_to_line_matrices(z, keep, b, "cable")
 }
 
 #[cfg(test)]
