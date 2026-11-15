@@ -20,7 +20,7 @@ use crate::model::{
     ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, DistWinding,
     DistWindingConn, Extras, MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
-    VoltVarControl, VoltWattControl, VoltageSource, n_winding_impedance_base,
+    VoltVarControl, VoltWattControl, VoltageSource,
     open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
@@ -2504,7 +2504,10 @@ impl Writer {
                 wj.insert("terminal_map".into(), json!(w.terminal_map));
                 wj.insert(
                     "v_nom".into(),
-                    self.num(n_winding_bmopf_v_nom(w), "transformer winding v_nom"),
+                    self.num(
+                        crate::transformer::calc_coil_voltage(t, idx),
+                        "transformer winding v_nom",
+                    ),
                 );
                 wj.insert(
                     "configuration".into(),
@@ -2513,7 +2516,8 @@ impl Writer {
                         DistWindingConn::Delta => "DELTA",
                     }),
                 );
-                let zbase = n_winding_base(w, w.s_rating).unwrap_or(f64::NAN);
+                let zbase = crate::transformer::calc_winding_impedance_base(t, idx, w.s_rating)
+                    .unwrap_or(f64::NAN);
                 wj.insert(
                     "r_winding".into(),
                     self.num(w.r_pct / 100.0 * zbase, "transformer winding r_winding"),
@@ -2556,10 +2560,9 @@ impl Writer {
             })
             .collect();
         o.insert("windings".into(), Value::Array(windings));
-        let base_z = t
-            .windings
-            .first()
-            .and_then(|w| n_winding_base(w, s))
+        let base_z = (!t.windings.is_empty())
+            .then(|| crate::transformer::calc_winding_impedance_base(t, 0, s))
+            .flatten()
             .unwrap_or(f64::NAN);
         let x_sc = self.n_winding_x_sc(t, base_z);
         o.insert("x_sc".into(), Value::Object(x_sc));
@@ -3685,21 +3688,6 @@ fn base_impedance(v_ref: f64, s: f64) -> Option<f64> {
     powerio_core::electrical::calc_impedance_base(v_ref, s)
 }
 
-fn n_winding_phase_count(w: &DistWinding) -> usize {
-    crate::model::n_winding_phase_count(w.conn, &w.terminal_map)
-}
-
-fn n_winding_bmopf_v_nom(w: &DistWinding) -> f64 {
-    if w.conn == DistWindingConn::Wye && n_winding_phase_count(w) >= 2 {
-        w.v_ref / 3f64.sqrt()
-    } else {
-        w.v_ref
-    }
-}
-
-fn n_winding_base(w: &DistWinding, s: f64) -> Option<f64> {
-    n_winding_impedance_base(n_winding_phase_count(w), n_winding_bmopf_v_nom(w), s)
-}
 
 /// The `delta_roll` of a DELTA winding: the one delta orientation
 /// ([`crate::transformer::calc_delta_direction`]), so a unit that states no

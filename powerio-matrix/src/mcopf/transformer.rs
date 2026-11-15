@@ -9,7 +9,8 @@ use powerio_dist::transformer::{
     TransformerLeakageBase, TransformerMagnetizing, WindingNeutralGrounding,
     calc_coil_shunt_primitive, calc_coil_voltage, calc_reduced_leakage, calc_regulator_series_ohms,
     calc_transformer_leakage_impedances, calc_transformer_magnetizing, calc_winding_connection,
-    calc_winding_neutral_grounding, transformer_extra_number,
+    calc_winding_impedance_base, calc_winding_neutral_grounding, calc_winding_phase_count,
+    is_transformer_regulator, transformer_extra_number,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -220,10 +221,7 @@ pub(super) fn prepare(
             })
             .transpose()?
             .unwrap_or("canonical");
-        let regulator = matches!(
-            subtype,
-            "single_phase_autotransformer" | "open_delta_regulator"
-        );
+        let regulator = is_transformer_regulator(t);
         let nw = subtype == "n_winding" || subtype == "canonical";
         if !matches!(
             subtype,
@@ -585,12 +583,10 @@ fn leakage_descriptor(
     let m = t.windings.len();
     let ratios: Vec<_> = noms.iter().map(|n| n / noms[0]).collect();
     // The first winding's coil impedance base: its coil voltage squared over
-    // its per phase power base.
-    let ref_base = calc_coil_voltage(t, 0).powi(2) * winding_base_phases(&t.windings[0], phases)
-        / extra_number(t, "bmopf_power_base", t.windings[0].s_rating)?;
-    if ref_base <= 0.0 {
-        return Err(invalid(&t.name, "nonpositive transformer power base"));
-    }
+    // its per phase power base, the one winding impedance base.
+    let power_base = extra_number(t, "bmopf_power_base", t.windings[0].s_rating)?;
+    let ref_base = calc_winding_impedance_base(t, 0, power_base)
+        .ok_or_else(|| invalid(&t.name, "nonpositive transformer power base"))?;
     // The pairwise leakage is the one derivation in
     // `calc_transformer_leakage_impedances`, referred to the first winding on
     // the base the unit states it in: OpenDSS nameplate percentages, an
@@ -601,12 +597,11 @@ fn leakage_descriptor(
         TransformerLeakageBase::StatedOhms
     } else if nw {
         TransformerLeakageBase::WindingPhase {
-            power_base: extra_number(t, "bmopf_power_base", t.windings[0].s_rating)?,
+            power_base,
             phases: t
                 .windings
                 .iter()
-                .zip(maps)
-                .map(|(w, map)| winding_base_phases(w, map.len()))
+                .map(|w| calc_winding_phase_count(w.conn, &w.terminal_map) as f64)
                 .collect(),
         }
     } else {
@@ -973,10 +968,3 @@ fn validate_extras(t: &powerio_dist::DistTransformer) -> Result<()> {
 
 // Canonical two-terminal delta nameplates use a single-coil base even though
 // BMOPFTools n-winding incidence retains both directed delta currents.
-fn winding_base_phases(w: &powerio_dist::DistWinding, coils: usize) -> f64 {
-    if w.conn == DistWindingConn::Delta && w.terminal_map.len() == 2 {
-        1.0
-    } else {
-        coils as f64
-    }
-}

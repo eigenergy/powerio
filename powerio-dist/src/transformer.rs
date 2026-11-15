@@ -359,18 +359,68 @@ pub fn calc_transformer_winding_admittance(
     Ok(Some(admittance))
 }
 
+/// The ratio of a winding's rated voltage (`v_ref`) to its coil voltage:
+/// `√3` for a WYE winding of a two or three phase unit (a line to line
+/// rating over a line to neutral coil), one otherwise. The BMOPF reader
+/// forms `v_ref` from a coil voltage `v_nom` with it, and
+/// [`calc_coil_voltage`] divides by it.
+#[must_use]
+pub fn calc_coil_voltage_ratio(conn: DistWindingConn, phases: usize) -> f64 {
+    if conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
+        3f64.sqrt()
+    } else {
+        1.0
+    }
+}
+
 /// A winding's coil voltage, volts: line to neutral (`v_ref / √3`) for a
-/// polyphase WYE winding, the rated voltage otherwise. Times the winding's
+/// polyphase WYE winding, the rated voltage otherwise
+/// ([`calc_coil_voltage_ratio`] over the unit's phases). Times the winding's
 /// tap, it is the coil's turns in volts, the quantity every turns ratio of
-/// the unit is formed from.
+/// the unit is formed from, and the `v_nom` a BMOPF n-winding unit states.
 #[must_use]
 pub fn calc_coil_voltage(transformer: &DistTransformer, winding: usize) -> f64 {
     let w = &transformer.windings[winding];
-    if w.conn == DistWindingConn::Wye && matches!(transformer.phases, 2 | 3) {
-        w.v_ref / 3f64.sqrt()
-    } else {
-        w.v_ref
+    w.v_ref / calc_coil_voltage_ratio(w.conn, transformer.phases)
+}
+
+/// The number of phases a winding's per phase power base divides over: a
+/// WYE winding's terminals less its neutral (mapped last, as the BMOPF and
+/// OpenDSS readers state it), at least one; one for a two terminal DELTA
+/// winding (a single coil); one per terminal of a DELTA ring.
+#[must_use]
+pub fn calc_winding_phase_count(conn: DistWindingConn, terminal_map: &[String]) -> usize {
+    match conn {
+        DistWindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
+        DistWindingConn::Delta => {
+            if terminal_map.len() == 2 {
+                1
+            } else {
+                terminal_map.len().max(1)
+            }
+        }
     }
+}
+
+/// A winding's impedance base, ohms: its coil voltage
+/// ([`calc_coil_voltage`]) squared over its per phase power
+/// `power / phases` ([`calc_winding_phase_count`]),
+/// [`powerio_core::electrical::calc_impedance_base`]. The base a BMOPF
+/// n-winding unit states its winding resistances (on the winding's rating)
+/// and pair reactances (on the unit's power base) on, and the multiconductor
+/// OPF descriptor's reference base. `None` for an unusable voltage or power.
+#[must_use]
+pub fn calc_winding_impedance_base(
+    transformer: &DistTransformer,
+    winding: usize,
+    power: f64,
+) -> Option<f64> {
+    let w = &transformer.windings[winding];
+    let phases = calc_winding_phase_count(w.conn, &w.terminal_map);
+    powerio_core::electrical::calc_impedance_base(
+        calc_coil_voltage(transformer, winding),
+        power / phases as f64,
+    )
 }
 
 /// Whether the source states the European convention (`leadlag` `lead` or

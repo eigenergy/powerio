@@ -1135,7 +1135,7 @@ impl<'a> Reader<'a> {
                 }
                 self.restore_neutral(&bus);
             }
-            let hot = crate::model::n_winding_phase_count(conn, &map);
+            let hot = crate::transformer::calc_winding_phase_count(conn, &map);
             phases = phases.max(hot);
             // The direct unit's tap and polarity act once, on its from
             // winding. Applying them to both synthesized windings cancels them.

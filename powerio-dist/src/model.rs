@@ -1305,22 +1305,6 @@ fn matrix_extent(m: &ConductorMatrix) -> usize {
     m.iter().map(Vec::len).fold(m.len(), usize::max)
 }
 
-/// Windings per phase for an n-winding transformer terminal map: WYE counts
-/// the hot terminals (excluding the shared neutral), DELTA counts terminals
-/// directly except the phase to phase two terminal case.
-pub(crate) fn n_winding_phase_count(conn: DistWindingConn, terminal_map: &[String]) -> usize {
-    match conn {
-        DistWindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
-        DistWindingConn::Delta => {
-            if terminal_map.len() == 2 {
-                1
-            } else {
-                terminal_map.len().max(1)
-            }
-        }
-    }
-}
-
 /// `phases * v_nom^2 / s`, the impedance base for an n-winding transformer
 /// winding on its per phase power `s / phases`
 /// ([`powerio_core::electrical::calc_impedance_base`]), or `None` if any
