@@ -218,9 +218,29 @@ pub(crate) fn calc_dc_branch_flow_into(
     flows: &mut Vec<f64>,
 ) {
     flows.clear();
-    flows.extend(columns.map(|((from, to), weight, shift)| {
-        weight * (theta[from] - theta[to]) + calc_dc_flow_offset(weight, shift)
+    flows.extend(columns.map(|(endpoints, weight, shift)| {
+        weight * calc_dc_angle_difference(theta, endpoints) + calc_dc_flow_offset(weight, shift)
     }));
+}
+
+/// The angle difference `theta_from - theta_to` across one column, the
+/// column's entry of `Aᵀ theta`. The one angle difference the DC flows and
+/// their derivatives read.
+#[inline]
+pub(crate) fn calc_dc_angle_difference(theta: &[f64], (from, to): (usize, usize)) -> f64 {
+    theta[from] - theta[to]
+}
+
+/// The derivative of one column's DC flow ([`calc_dc_branch_flow`]) with
+/// respect to its factor weight `w`: `theta_from - theta_to - shift`, since
+/// the flow is `w (theta_from - theta_to) - w shift`.
+#[inline]
+pub(crate) fn calc_dc_flow_weight_derivative(
+    theta: &[f64],
+    endpoints: (usize, usize),
+    shift: f64,
+) -> f64 {
+    calc_dc_angle_difference(theta, endpoints) - shift
 }
 
 /// The incidence product `A x` over `n` buses, one per `((from, to), x)`

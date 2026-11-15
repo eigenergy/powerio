@@ -26,8 +26,8 @@ pub use bdoubleprime::calc_bdoubleprime_matrix;
 pub use bprime::calc_bprime_matrix;
 pub(crate) use incidence::{
     IncidenceParts, assemble_bus_branch_incidence, assemble_bus_indicator, build_incidence,
-    calc_bus_scatter, calc_dc_branch_flow, calc_dc_branch_flow_into, calc_dc_flow_offset,
-    calc_dc_phase_shift_withdrawal,
+    calc_bus_scatter, calc_dc_angle_difference, calc_dc_branch_flow, calc_dc_branch_flow_into,
+    calc_dc_flow_offset, calc_dc_flow_weight_derivative, calc_dc_phase_shift_withdrawal,
 };
 pub use incidence::{calc_diagonal, calc_solver_branch_flow_matrix, calc_susceptance_diagonal};
 pub use lacpf::calc_lacpf_matrix;

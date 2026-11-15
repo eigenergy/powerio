@@ -287,6 +287,38 @@ impl DcOpfPreparation {
                 .map(|((endpoints, weight), shift)| (endpoints, weight, shift)),
         )
     }
+
+    /// The angle difference `theta_from - theta_to` across active branch
+    /// column `branch`, its entry of `Aᵀ theta`, for any bus vector `theta`
+    /// (angles, or a bus dual).
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column or `theta` is shorter
+    /// than `n_buses`.
+    #[must_use]
+    pub fn calc_angle_difference(&self, theta: &[f64], branch: usize) -> f64 {
+        crate::matrix::calc_dc_angle_difference(
+            theta,
+            (self.branches.from_bus[branch], self.branches.to_bus[branch]),
+        )
+    }
+
+    /// The derivative of branch column `branch`'s flow
+    /// ([`calc_branch_flow`](Self::calc_branch_flow)) at the bus angles
+    /// `theta` with respect to its positive weight
+    /// [`DcBranchParameters::susceptance_magnitude`]:
+    /// `theta_from - theta_to - shift`, in radians.
+    ///
+    /// # Panics
+    /// As [`calc_angle_difference`](Self::calc_angle_difference).
+    #[must_use]
+    pub fn calc_branch_flow_weight_derivative(&self, theta: &[f64], branch: usize) -> f64 {
+        crate::matrix::calc_dc_flow_weight_derivative(
+            theta,
+            (self.branches.from_bus[branch], self.branches.to_bus[branch]),
+            self.branches.shift[branch],
+        )
+    }
 }
 
 pub(crate) fn matrices_from_preparation(instance: &DcOpfPreparation) -> DcOpfMatrices {

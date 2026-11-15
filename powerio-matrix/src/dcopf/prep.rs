@@ -291,12 +291,27 @@ impl DcOpfPreparation {
     /// With `A` oriented from bus to bus and
     /// `L = A diag(b) A^T`, the DC balance is
     /// `L theta = Cg pg - (p_d + g_s + p_shift - p_hvdc)`.
+    /// It is [`calc_device_withdrawal`](Self::calc_device_withdrawal) plus
+    /// the phase shift withdrawal `p_shift`.
     #[must_use]
     pub fn calc_fixed_nodal_withdrawal(&self) -> Vec<f64> {
+        let mut withdrawal = self.calc_device_withdrawal();
+        for (value, shift) in withdrawal.iter_mut().zip(&self.p_shift) {
+            *value += shift;
+        }
+        withdrawal
+    }
+
+    /// The withdrawal of the bus devices in dense bus order,
+    /// `p_d + g_s - p_hvdc`: the fixed nodal withdrawal without the phase
+    /// shift term, which the branch flows carry rather than the bus. Net
+    /// generation less this is the bus injection a solution reports.
+    #[must_use]
+    pub fn calc_device_withdrawal(&self) -> Vec<f64> {
         (0..self.n_buses)
             .map(|bus| {
                 let p_hvdc = self.p_hvdc.get(bus).copied().unwrap_or(0.0);
-                self.p_d[bus] + self.g_s[bus] + self.p_shift[bus] - p_hvdc
+                self.p_d[bus] + self.g_s[bus] - p_hvdc
             })
             .collect()
     }
