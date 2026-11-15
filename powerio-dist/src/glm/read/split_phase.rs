@@ -135,14 +135,9 @@ impl Reader<'_> {
                 let power = if zip_power.is_some() {
                     value
                 } else {
-                    match law {
-                        "power" => value,
-                        // Triplex load current uses local voltage angle, with a zero-angle
-                        // reference on every primary phase, unlike ordinary load current.
-                        "current" => voltage * value.conj(),
-                        _ if value == Complex64::default() => Complex64::default(),
-                        _ => voltage.powi(2) / value.conj(),
-                    }
+                    // Triplex load current uses local voltage angle, with a zero-angle
+                    // reference on every primary phase, unlike ordinary load current.
+                    crate::load_voltage::calc_zip_nominal_power(super::zip_law(law), value, voltage)
                 };
                 if !voltage.is_finite()
                     || !power.re.is_finite()

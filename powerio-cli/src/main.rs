@@ -2715,6 +2715,10 @@ fn convert_parsed_module(
     output: Option<&Path>,
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
+    // The reader's findings are reported before anything is emitted, so a
+    // refused conversion still shows why (an element the reader could not
+    // type) ahead of the error, in text and in the JSON array alike.
+    report_diagnostics(module.diagnostics());
     match &module.value() {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
@@ -2892,14 +2896,15 @@ fn convert_typed_module(
     finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
+/// Report the emission's findings, write the output, and fail when the
+/// reader or the writer reported an error. [`convert_parsed_module`] has
+/// already reported `parse_diagnostics`; they are counted here.
 fn finish_memory_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     emission: &module_io::MemoryEmission,
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let mut diagnostics = parse_diagnostics.to_vec();
-    diagnostics.extend(emission.diagnostics.iter().cloned());
-    report_diagnostics(&diagnostics);
+    report_diagnostics(&emission.diagnostics);
     write_conversion_output(&emission.text, &emission.sidecars, output)?;
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),
@@ -2907,14 +2912,13 @@ fn finish_memory_emission(
     )
 }
 
+/// [`finish_memory_emission`] for a writer that wrote `output` itself.
 fn finish_path_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     result: &powerio::EmitResult,
     output: &Path,
 ) -> anyhow::Result<()> {
-    let mut diagnostics = parse_diagnostics.to_vec();
-    diagnostics.extend(result.diagnostics().iter().cloned());
-    report_diagnostics(&diagnostics);
+    report_diagnostics(result.diagnostics());
     report_written(output);
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),

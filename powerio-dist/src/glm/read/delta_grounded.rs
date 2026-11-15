@@ -24,7 +24,7 @@ impl Reader<'_> {
         }
         let primary = self.positive_geometry(cfg, "primary_voltage")?;
         let secondary_ll = self.positive_geometry(cfg, "secondary_voltage")?;
-        let secondary = secondary_ll / 3.0_f64.sqrt();
+        let secondary = crate::electrical::calc_wye_phase_voltage(secondary_ll);
         let rating = self.transformer_rating(cfg, true)? / 3.0;
         let z = self.quantity(cfg, "impedance").ok_or_else(|| {
             self.error(

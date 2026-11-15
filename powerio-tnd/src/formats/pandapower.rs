@@ -446,7 +446,12 @@ impl Reader {
                     continue;
                 }
             };
-            let v = finite(&row, "ext_grid", "vm_pu", vm_pu * vn_kv * 1e3 / 3f64.sqrt())?;
+            let v = finite(
+                &row,
+                "ext_grid",
+                "vm_pu",
+                powerio_core::electrical::calc_wye_phase_voltage(vm_pu * vn_kv * 1e3),
+            )?;
             let va = row.f_or("va_degree", 0.0);
             let mut source = VoltageSource::new(
                 name.clone(),
@@ -505,7 +510,7 @@ impl Reader {
                 Some("wye") => (
                     Configuration::Wye,
                     terminals(&WYE),
-                    vn_kv * 1e3 / 3f64.sqrt(),
+                    powerio_core::electrical::calc_wye_phase_voltage(vn_kv * 1e3),
                 ),
                 Some("delta") => (Configuration::Delta, terminals(&PHASES), vn_kv * 1e3),
                 _ => {
@@ -656,12 +661,15 @@ impl Reader {
 /// The phase matrix of a symmetric element from its zero and positive
 /// sequence values, times `scale`: self `(z0 + 2 z1)/3`, mutual `(z0 - z1)/3`.
 fn fortescue(zero: f64, positive: f64, scale: f64) -> ConductorMatrix {
-    let mutual = (zero - positive) / 3.0 * scale;
-    let mut matrix = vec![vec![mutual; 3]; 3];
-    for (i, row) in matrix.iter_mut().enumerate() {
-        row[i] = (zero + 2.0 * positive) / 3.0 * scale;
-    }
-    matrix
+    powerio_dist::sequence::calc_phase_from_sequence(
+        3,
+        positive,
+        zero,
+        powerio_dist::sequence::SequenceThird::Divide,
+    )
+    .into_iter()
+    .map(|row| row.into_iter().map(|value| value * scale).collect())
+    .collect()
 }
 
 fn terminals(names: &[&str]) -> Vec<String> {

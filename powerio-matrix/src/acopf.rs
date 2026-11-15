@@ -3,12 +3,14 @@
 //! `powerio_prob::build_ac_opf_instance`; it lives here now beside the DC
 //! preparation so every solver formulates over the one shared assembly.
 
+use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use powerio_prob::{AcBusSpecification, AcOpfInstance, AcPfInstance, ReferenceBuses};
 use powerio_tx::{AngleDifferenceBounds, BalancedNetwork, BusId, IndexedNetwork};
 
-use crate::dcopf::{Units, limits, nodal};
+use crate::dcopf::{SynthesizedLimitWindow, Units, limits, nodal};
+use crate::matrix::{AdmittanceStamp, YbusParts};
 use crate::{AnalysisBranchSource, Error, PiecewiseLinearCost, PreparedObjective, Result};
 
 /// Assembly choices that select the numerical content derived from an AC
@@ -29,6 +31,10 @@ pub struct AcOpfAssemblyOptions {
     /// states. If false, positive infinity is preserved in `s_max`.
     /// A stated finite zero is always kept, regardless of this option.
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval a synthesized limit spans: the source's
+    /// stated one (the default) or the selected bounds the preparation
+    /// carries ([`SynthesizedLimitWindow`]).
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
@@ -45,6 +51,7 @@ impl Default for AcOpfAssemblyOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
+            synthesized_limit_window: SynthesizedLimitWindow::Stated,
             correct_angle_difference_bounds: true,
             angle_difference_bounds: None,
         }
@@ -67,6 +74,13 @@ impl AcOpfAssemblyOptions {
     #[must_use]
     pub const fn with_synthesize_unrated_limits(mut self, synthesize: bool) -> Self {
         self.synthesize_unrated_limits = synthesize;
+        self
+    }
+
+    /// Select the angle difference interval a synthesized limit spans.
+    #[must_use]
+    pub const fn with_synthesized_limit_window(mut self, window: SynthesizedLimitWindow) -> Self {
+        self.synthesized_limit_window = window;
         self
     }
 
@@ -261,6 +275,21 @@ impl AcPfPreparation {
         self.generators.qg.len()
     }
 
+    /// The bus admittance matrix `Y = G + jB` of this preparation, in dense
+    /// bus order and the preparation's admittance unit: every branch column's
+    /// pi model block ([`AcBranchData::calc_branch_admittance`]) plus the bus
+    /// shunts `buses.g_s + j buses.b_s`. Every diagonal position is stored,
+    /// as an explicit zero where nothing stamps it.
+    ///
+    /// It agrees with [`calc_admittance_matrix`](crate::calc_admittance_matrix)
+    /// over the analysis network, restricted to the prepared buses, but needs
+    /// no network view and no remapping from analysis rows.
+    #[must_use]
+    pub fn calc_admittance_matrix(&self) -> YbusParts {
+        self.branches
+            .calc_admittance_matrix(self.n_buses, &self.buses.g_s, &self.buses.b_s)
+    }
+
     #[must_use]
     pub fn n_branches(&self) -> usize {
         self.branches.g.len()
@@ -340,6 +369,204 @@ pub struct AcBranchData {
     pub thermal_limit_active: Vec<bool>,
     /// Whether the instance activates each angle difference bound.
     pub angle_bound_active: Vec<bool>,
+}
+
+/// Terminal branch flows in active branch column order, in the
+/// preparation's power unit: `S_f = pf + j qf` enters the branch at its from
+/// bus and `S_t = pt + j qt` at its to bus.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct AcBranchFlows {
+    pub pf: Vec<f64>,
+    pub qf: Vec<f64>,
+    pub pt: Vec<f64>,
+    pub qt: Vec<f64>,
+}
+
+impl AcBranchData {
+    /// Number of active branch columns.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.g.len()
+    }
+
+    /// Whether the preparation carries no active branch.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.g.is_empty()
+    }
+
+    /// The branch's 2×2 pi model admittance block `[Yff, Yft, Ytf, Ytt]` in
+    /// the preparation's admittance unit, from its series admittance, terminal
+    /// charging, tap and shift columns:
+    ///
+    /// ```text
+    /// Yff = (y + y_fr) / tap²    Yft = -y / conj(t)
+    /// Ytf = -y / t               Ytt = y + y_to
+    /// ```
+    ///
+    /// with `y = g + j b` and `t = tap e^{j shift}`. These are the entries
+    /// [`calc_admittance_matrix`](crate::calc_admittance_matrix) stamps for
+    /// the same branch.
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column.
+    #[must_use]
+    pub fn calc_branch_admittance(&self, branch: usize) -> [Complex64; 4] {
+        powerio_tx::PiModel::new(
+            Complex64::new(self.g[branch], self.b[branch]),
+            Complex64::new(self.g_fr[branch], self.b_fr[branch]),
+            Complex64::new(self.g_to[branch], self.b_to[branch]),
+            self.tap[branch],
+            self.shift[branch],
+        )
+        .calc_block()
+    }
+
+    /// The derivatives of [`Self::calc_branch_admittance`] for `branch`
+    /// with respect to its series conductance `g` and series susceptance
+    /// `b`, as `[d/dg, d/db]`, each a `[Yff, Yft, Ytf, Ytt]` block. The pi
+    /// model block is linear in the series admittance and does not depend on
+    /// it through the charging, so each derivative is the block of a unit
+    /// series admittance (`1` for `g`, `j` for `b`) with no charging, at the
+    /// branch's tap and shift: the same one block formula, evaluated there.
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column.
+    #[must_use]
+    pub fn calc_branch_admittance_series_derivative(&self, branch: usize) -> [[Complex64; 4]; 2] {
+        let zero = Complex64::new(0.0, 0.0);
+        let block = |y_series| {
+            powerio_tx::PiModel::new(y_series, zero, zero, self.tap[branch], self.shift[branch])
+                .calc_block()
+        };
+        [
+            block(Complex64::new(1.0, 0.0)),
+            block(Complex64::new(0.0, 1.0)),
+        ]
+    }
+
+    /// The terminal flows of every active branch at the bus voltages
+    /// `vm` (per unit) and `va` (radians), both in dense bus order:
+    ///
+    /// ```text
+    /// S_f = V_f conj(Yff V_f + Yft V_t)
+    /// S_t = V_t conj(Ytf V_f + Ytt V_t)
+    /// ```
+    ///
+    /// over [`Self::calc_branch_admittance`].
+    ///
+    /// # Panics
+    /// Panics if `vm` and `va` differ in length or do not cover every bus a
+    /// branch column names.
+    #[must_use]
+    pub fn calc_branch_flows(&self, vm: &[f64], va: &[f64]) -> AcBranchFlows {
+        assert_eq!(
+            vm.len(),
+            va.len(),
+            "calc_branch_flows: {} magnitudes for {} angles",
+            vm.len(),
+            va.len()
+        );
+        let m = self.len();
+        let mut flows = AcBranchFlows {
+            pf: Vec::with_capacity(m),
+            qf: Vec::with_capacity(m),
+            pt: Vec::with_capacity(m),
+            qt: Vec::with_capacity(m),
+        };
+        for branch in 0..m {
+            let (from, to) = (self.from_bus[branch], self.to_bus[branch]);
+            let vi = Complex64::from_polar(vm[from], va[from]);
+            let vj = Complex64::from_polar(vm[to], va[to]);
+            let (s_from, s_to) =
+                crate::matrix::branch_flows(&self.calc_branch_admittance(branch), vi, vj);
+            flows.pf.push(s_from.re);
+            flows.qf.push(s_from.im);
+            flows.pt.push(s_to.re);
+            flows.qt.push(s_to.im);
+        }
+        flows
+    }
+
+    /// The partials of branch column `branch`'s terminal powers
+    /// ([`Self::calc_branch_flows`]) with respect to the polar voltages of its
+    /// two buses, at `vm` (per unit) and `va` (radians) in dense bus order:
+    /// `(dS_from, dS_to)`, each ordered `[d/dva_from, d/dvm_from, d/dva_to,
+    /// d/dvm_to]`, with `S = p + j q`. The branch flow Jacobian `dSbr/dV` row
+    /// by row, over the same pi model block and terminal currents.
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column or `vm`/`va` do not
+    /// cover its buses.
+    #[must_use]
+    pub fn calc_branch_flow_partials(
+        &self,
+        branch: usize,
+        vm: &[f64],
+        va: &[f64],
+    ) -> ([Complex64; 4], [Complex64; 4]) {
+        let (from, to) = (self.from_bus[branch], self.to_bus[branch]);
+        crate::matrix::branch_flow_partials(
+            &self.calc_branch_admittance(branch),
+            (vm[from], va[from]),
+            (vm[to], va[to]),
+        )
+    }
+
+    /// Zero the terminal charging of every near ideal jumper: a branch whose
+    /// series impedance satisfies `|z|² = 1 / (g² + b²) <= max_impedance_squared`.
+    /// The series admittance is kept. Returns the affected branch columns in
+    /// ascending order.
+    ///
+    /// A jumper's charging is a modeling artifact next to its very large
+    /// series admittance, and stamping both can leave a badly conditioned
+    /// admittance matrix. Apply this to a preparation before
+    /// [`AcOpfPreparation::calc_admittance_matrix`] or
+    /// [`AcPfPreparation::calc_admittance_matrix`] so the matrix, the flows of
+    /// [`Self::calc_branch_flows`] and every formulation over these columns
+    /// agree on the edited branches.
+    pub fn clear_jumper_charging(&mut self, max_impedance_squared: f64) -> Vec<usize> {
+        let mut cleared = Vec::new();
+        for branch in 0..self.len() {
+            let admittance_squared =
+                self.g[branch] * self.g[branch] + self.b[branch] * self.b[branch];
+            if admittance_squared > 0.0 && admittance_squared.recip() <= max_impedance_squared {
+                self.g_fr[branch] = 0.0;
+                self.b_fr[branch] = 0.0;
+                self.g_to[branch] = 0.0;
+                self.b_to[branch] = 0.0;
+                cleared.push(branch);
+            }
+        }
+        cleared
+    }
+
+    /// Stamp the bus admittance matrix of these branches and the bus shunts
+    /// `g_s + j b_s` over `n` dense buses, keeping an explicit entry at every
+    /// diagonal position, through the same accumulator as
+    /// [`calc_admittance_matrix`](crate::calc_admittance_matrix). With zero
+    /// shunts it is the branch admittance alone, whose injection
+    /// `V conj(Y V)` is the power each bus sends into its branches.
+    ///
+    /// # Panics
+    /// Panics if a branch endpoint is `>= n` or `g_s`/`b_s` is shorter than
+    /// `n`.
+    #[must_use]
+    pub fn calc_admittance_matrix(&self, n: usize, g_s: &[f64], b_s: &[f64]) -> YbusParts {
+        let mut stamp = AdmittanceStamp::with_capacity(n, self.len());
+        for branch in 0..self.len() {
+            stamp.add_branch(
+                self.from_bus[branch],
+                self.to_bus[branch],
+                self.calc_branch_admittance(branch),
+            );
+        }
+        for bus in 0..n {
+            stamp.add_shunt(bus, Complex64::new(g_s[bus], b_s[bus]));
+        }
+        stamp.finish(true)
+    }
 }
 
 /// Generator data in generator column order.
@@ -455,6 +682,11 @@ pub struct AcOpfPreparation {
     pub skip_zero_impedance: bool,
     /// Whether absent source ratings were replaced with synthesized limits.
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval those limits span. Omitted from a
+    /// document when it is the stated one, so earlier documents read the
+    /// window they were built with.
+    #[serde(default, skip_serializing_if = "SynthesizedLimitWindow::is_stated")]
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
     /// Which angle difference bounds `angle_min` and `angle_max` carry.
@@ -480,6 +712,22 @@ impl AcOpfPreparation {
     #[must_use]
     pub fn n_generators(&self) -> usize {
         self.generators.q.len()
+    }
+
+    /// The bus admittance matrix `Y = G + jB` of this preparation, in dense
+    /// bus order and the preparation's admittance unit: every branch column's
+    /// pi model block ([`AcBranchData::calc_branch_admittance`]) plus the bus
+    /// shunts `buses.g_s + j buses.b_s`, which already hold any self-loop's
+    /// folded stamp. Every diagonal position is stored, as an explicit zero
+    /// where nothing stamps it.
+    ///
+    /// It agrees with [`calc_admittance_matrix`](crate::calc_admittance_matrix)
+    /// over the analysis network, restricted to the prepared buses, but needs
+    /// no network view and no remapping from analysis rows.
+    #[must_use]
+    pub fn calc_admittance_matrix(&self) -> YbusParts {
+        self.branches
+            .calc_admittance_matrix(self.n_buses, &self.buses.g_s, &self.buses.b_s)
     }
 
     #[must_use]
@@ -514,11 +762,11 @@ impl AcOpfPreparation {
             q: costs.q,
             c: costs.c,
             c0: costs.c0,
-            pmax: nodal::sum_by_bus(n, bus_of_gen, &generators.pmax),
-            pmin: nodal::sum_by_bus(n, bus_of_gen, &generators.pmin),
-            qmax: nodal::sum_by_bus(n, bus_of_gen, &generators.qmax),
-            qmin: nodal::sum_by_bus(n, bus_of_gen, &generators.qmin),
-            has_gen: nodal::buses_with_generators(n, bus_of_gen),
+            pmax: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmax),
+            pmin: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmin),
+            qmax: nodal::calc_bus_totals(n, bus_of_gen, &generators.qmax),
+            qmin: nodal::calc_bus_totals(n, bus_of_gen, &generators.qmin),
+            has_gen: nodal::calc_bus_hosts(n, bus_of_gen),
         })
     }
 
@@ -526,8 +774,9 @@ impl AcOpfPreparation {
     /// each generator's positive setpoint in generator column order (last
     /// wins), with a non-positive case voltage falling back to 1.0.
     ///
-    /// The result is not clamped to `[vm_min, vm_max]`; feasibility repair is
-    /// solver preparation and stays downstream.
+    /// The result is not clamped to `[vm_min, vm_max]`;
+    /// [`calc_banded_vm_setpoints`](Self::calc_banded_vm_setpoints) is the
+    /// clamped form a power flow holding these magnitudes reads.
     #[must_use]
     pub fn calc_vm_setpoints(&self) -> Vec<f64> {
         let mut vm: Vec<f64> = self
@@ -540,6 +789,34 @@ impl AcOpfPreparation {
             let vg = self.generators.vg[generator];
             if vg > 0.0 {
                 vm[self.generators.bus_of_gen[generator]] = vg;
+            }
+        }
+        vm
+    }
+
+    /// [`calc_vm_setpoints`](Self::calc_vm_setpoints) with each bus that a
+    /// generator setpoint regulates held inside its `[vm_min, vm_max]` band.
+    /// A power flow holds a regulated magnitude at its setpoint with no
+    /// magnitude variable to bound it, so an out of band setpoint would pin
+    /// the bus at an infeasible magnitude. A band that is not usable (a non
+    /// finite or inverted bound) applies no clamp, and a bus no generator
+    /// regulates keeps its case voltage.
+    #[must_use]
+    pub fn calc_banded_vm_setpoints(&self) -> Vec<f64> {
+        let mut vm = self.calc_vm_setpoints();
+        let regulating: Vec<usize> = self
+            .generators
+            .bus_of_gen
+            .iter()
+            .zip(&self.generators.vg)
+            .filter(|&(_, &vg)| vg > 0.0)
+            .map(|(&bus, _)| bus)
+            .collect();
+        let regulated = nodal::calc_bus_hosts(self.n_buses, &regulating);
+        for (bus, value) in vm.iter_mut().enumerate() {
+            let (lo, hi) = (self.buses.vm_min[bus], self.buses.vm_max[bus]);
+            if regulated[bus] && lo.is_finite() && hi.is_finite() && lo <= hi {
+                *value = value.clamp(lo, hi);
             }
         }
         vm
@@ -622,6 +899,7 @@ pub fn build_ac_pf_preparation(
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: false,
+            synthesized_limit_window: SynthesizedLimitWindow::Stated,
             correct_angle_difference_bounds: options.correct_angle_difference_bounds,
             angle_difference_bounds: options.angle_difference_bounds,
         },
@@ -629,19 +907,15 @@ pub fn build_ac_pf_preparation(
     )?;
     apply_source_mappings(&mut common, source);
 
-    let (power_scale, _) = options.units.power_scales(view.per_unit_base());
+    let by_source_row = calc_prepared_bus_specifications(instance, options.units)?;
     let specifications = common
         .bus_source_rows
         .iter()
         .map(|source_row| match source_row {
-            Some(row) => prepare_bus_specification(
-                instance.specifications()[*row],
-                power_scale,
-                source.is_normalized(),
-            ),
-            None => Ok(PreparedAcBusSpecification::Pq { p: 0.0, q: 0.0 }),
+            Some(row) => by_source_row[*row],
+            None => PreparedAcBusSpecification::Pq { p: 0.0, q: 0.0 },
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
 
     let mut initial_vm = common.buses.initial_vm.clone();
     let mut initial_va = common
@@ -698,6 +972,29 @@ pub fn build_ac_pf_preparation(
     })
 }
 
+/// The instance's bus specifications in preparation units, one per source
+/// bus row: power scaled by `units` over the network's per unit base (one for
+/// a normalized network), reference angles in radians. This is the conversion
+/// [`build_ac_pf_preparation`] applies; a caller that keeps its own bus index
+/// reads the same values here without building the preparation.
+///
+/// # Errors
+/// A specification case this build does not know.
+pub fn calc_prepared_bus_specifications(
+    instance: &AcPfInstance,
+    units: Units,
+) -> Result<Vec<PreparedAcBusSpecification>> {
+    let source = instance.network();
+    let (power_scale, _) = units.power_scales(source.per_unit_base());
+    instance
+        .specifications()
+        .iter()
+        .map(|&specification| {
+            prepare_bus_specification(specification, power_scale, source.is_normalized())
+        })
+        .collect()
+}
+
 fn prepare_bus_specification(
     specification: AcBusSpecification,
     power_scale: f64,
@@ -741,6 +1038,7 @@ fn preparation_from_view(
     let angle_bounds = options.selected_angle_difference_bounds();
     let thermal = limits::ThermalLimits {
         synthesize_unrated: options.synthesize_unrated_limits,
+        window: options.synthesized_limit_window,
         power_scale: p_scale,
         admittance_scale: y_scale,
     };
@@ -923,19 +1221,20 @@ fn preparation_from_view(
         };
         let charging = branch.calc_terminal_charging();
         if from == to {
-            // A self-loop is not a flow element; its whole pi model stamp
-            // lands on the bus diagonal, exactly as `calc_admittance_matrix` folds it.
-            // With t = tap·e^{jθ}: Yff + Yft + Ytf + Ytt
-            //   = (y + y_fr)/tap² + (y + y_to) − y·2cos(θ)/tap.
-            let tap = branch.calc_divisible_tap(source_row)?;
-            let tap_squared = tap * tap;
-            let cross = 2.0 * case.to_radians(branch.shift).cos() / tap;
-            g_s[from] += ((series_g + charging.g_fr) / tap_squared + (series_g + charging.g_to)
-                - series_g * cross)
+            // A self-loop is not a flow element; its whole pi model block
+            // lands on the bus diagonal, folded exactly as
+            // `calc_admittance_matrix` folds it.
+            let folded = powerio_tx::PiModel::new(
+                Complex64::new(series_g, series_b),
+                Complex64::new(charging.g_fr, charging.b_fr),
+                Complex64::new(charging.g_to, charging.b_to),
+                branch.calc_divisible_tap(source_row)?,
+                case.to_radians(branch.shift),
+            )
+            .calc_folded()
                 * y_scale;
-            b_s[from] += ((series_b + charging.b_fr) / tap_squared + (series_b + charging.b_to)
-                - series_b * cross)
-                * y_scale;
+            g_s[from] += folded.re;
+            b_s[from] += folded.im;
             continue;
         }
         from_bus.push(from);
@@ -959,8 +1258,8 @@ fn preparation_from_view(
         shift.push(branch_shift);
         s_max.push(thermal.of(
             branch,
-            source_amin,
-            source_amax,
+            (source_amin, source_amax),
+            (amin, amax),
             &network.buses()[from_analysis],
             &network.buses()[to_analysis],
         )?);
@@ -1005,6 +1304,7 @@ fn preparation_from_view(
         objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
+        synthesized_limit_window: options.synthesized_limit_window,
         correct_angle_difference_bounds: angle_bounds.is_padded(),
         angle_difference_bounds: Some(angle_bounds),
         bus_ids: active_buses.bus_ids,
@@ -1108,15 +1408,21 @@ fn apply_instance_semantics(
         .enumerate()
         .map(|(row, branch)| crate::opf::row_identity(branch.uid.as_deref(), "branches", row))
         .collect();
+    // The source buses, then each prepared bus the source does not state (a
+    // star bus from three winding lowering). A set keeps the membership
+    // test constant time: a linear scan here made this quadratic in the bus
+    // count (seconds at 78,484 buses).
     let mut analysis_bus_ids: Vec<String> = source
         .buses()
         .iter()
         .map(|bus| bus.id.to_string())
         .collect();
-    for bus in &preparation.bus_ids {
-        let identity = bus.to_string();
-        if !analysis_bus_ids.iter().any(|known| known == &identity) {
-            analysis_bus_ids.push(identity);
+    let source_bus_set: std::collections::HashSet<BusId> =
+        source.buses().iter().map(|bus| bus.id).collect();
+    let mut added = std::collections::HashSet::new();
+    for &bus in &preparation.bus_ids {
+        if !source_bus_set.contains(&bus) && added.insert(bus) {
+            analysis_bus_ids.push(bus.to_string());
         }
     }
 

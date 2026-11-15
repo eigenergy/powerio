@@ -324,7 +324,7 @@ pub fn calc_ptdf_rows(
     let (inc, g) = (&selected.inc, &selected.g);
     let (n, m) = (inc.n(), inc.m());
     check_selection("branch", branches, m)?;
-    let (from, to) = endpoints(&inc.a, m);
+    let (from, to) = (&inc.from, &inc.to);
     let full_of = g.full_of_reduced(n);
     let mut builder = CooBuilder::new_rect(branches.len(), n);
     for (chunk_index, chunk) in branches.chunks(SPARSE_SOLVE_BLOCK).enumerate() {
@@ -600,7 +600,7 @@ fn build_parts(
             let ptdf = (want != Want::Lodf)
                 .then(|| dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance));
             let lodf = (want != Want::Ptdf)
-                .then(|| lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance));
+                .then(|| lodf_from_dense_with_drop(&dense, &inc, options.drop_tolerance));
             Ok(BuiltParts {
                 ptdf,
                 lodf,
@@ -682,7 +682,7 @@ pub(crate) fn for_each_ptdf_lodf_entry(
                 let (ptdf, ptdf_dropped) =
                     dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
                 let (lodf, lodf_dropped) =
-                    lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
+                    lodf_from_dense_with_drop(&dense, &inc, options.drop_tolerance);
                 let ptdf_meta = matrix_metadata(&ptdf, ptdf_dropped);
                 let lodf_meta = matrix_metadata(&lodf, lodf_dropped);
                 for (&v, (row, col)) in &ptdf {
@@ -748,19 +748,17 @@ fn matrix_metadata(matrix: &CsMat<f64>, dropped_entries: usize) -> SensitivityMa
 
 fn lodf_from_dense_with_drop(
     ptdf: &[f64],
-    a: &CsMat<f64>,
-    m: usize,
-    n: usize,
+    inc: &IncidenceParts,
     drop_tolerance: f64,
 ) -> (CsMat<f64>, usize) {
-    // Branch endpoints (dense bus indices), recovered from the incidence.
-    let (from, to) = endpoints(a, m);
+    let (n, m) = (inc.n(), inc.m());
+    let (from, to) = (&inc.from, &inc.to);
 
     // Outaging a bridge redistributes nothing, so its column is structurally
     // zero. The magnitude test this replaces let a near bridge at
     // `delta(k,k) = 1 - 1.1e-9` through, amplifying its column to ~1e9 with
     // about seven digits gone.
-    let is_bridge = bridges(&from, &to, n);
+    let is_bridge = bridges(from, to, n);
 
     // Denominator `1 − (PTDF[k, from_k] − PTDF[k, to_k])` and the islanding
     // decision, once per outage column instead of once per entry.
@@ -858,7 +856,7 @@ fn ptdf_dense_with_path(
 
     // Nonsingular indefinite fallback: explicit inverse by Gaussian
     // elimination with partial pivoting.
-    let rinv = dense_inverse(dense_lr, nr).ok_or(Error::SingularNetwork)?;
+    let rinv = dense_inverse(&dense_lr, nr).ok_or(Error::SingularNetwork)?;
     for (rc, uses) in rows_used.iter().enumerate() {
         scatter_minv_row(&rinv[rc * nr..rc * nr + nr], uses, &full_of, n, &mut ptdf);
     }
@@ -896,6 +894,133 @@ const BACKWARD_ERROR_TRUST: f64 = 1e-10;
 /// that is singular but for rounding, where any factorization still reports
 /// a small backward error, lands near or above 1.
 const FORWARD_ERROR_TRUST: f64 = 1e-4;
+
+/// The grounded weighted Laplacian `L = A diag(w) Aᵀ` of an edge list,
+/// factored once for repeated DC solves: the grounds' rows and columns are
+/// removed ([`Grounding`]), and so is every bus no edge touches, and the
+/// reduced matrix is factored by the one sparse factorization of the PTDF
+/// builder (Cholesky, then `LDLᵀ`, then LU, each accepted only when it
+/// solves a probe right hand side accurately). Grounded and untouched buses
+/// keep angle zero. With `w` the branch susceptances and one ground per
+/// connected component, [`solve`](Self::solve) is a lossless DC power flow
+/// and [`calc_edge_flows`](Self::calc_edge_flows) its branch flows.
+pub struct GroundedLaplacianFactor {
+    n: usize,
+    edges: Vec<(usize, usize, f64)>,
+    grounding: Grounding,
+    factor: SparseFactor,
+}
+
+impl GroundedLaplacianFactor {
+    /// Factor the grounded Laplacian of `edges` (`(a, b, w)`, buses below `n`)
+    /// with `grounds` fixed at zero angle.
+    ///
+    /// # Errors
+    /// [`Error::ShapeMismatch`] for an edge or ground outside `0..n`, and
+    /// [`Error::SingularNetwork`] for a nonfinite weight or a reduced matrix
+    /// no factorization solves (a component without a ground).
+    pub fn from_edges(n: usize, edges: &[(usize, usize, f64)], grounds: &[usize]) -> Result<Self> {
+        let outside = |i: usize| Error::ShapeMismatch {
+            what: "grounded Laplacian bus index",
+            expected: n,
+            got: i,
+        };
+        let mut touched = vec![false; n];
+        for &(a, b, w) in edges {
+            for i in [a, b] {
+                if i >= n {
+                    return Err(outside(i));
+                }
+            }
+            if !w.is_finite() {
+                return Err(Error::SingularNetwork);
+            }
+            if a != b {
+                touched[a] = true;
+                touched[b] = true;
+            }
+        }
+        if let Some(&g) = grounds.iter().find(|&&g| g >= n) {
+            return Err(outside(g));
+        }
+        let mut refs = grounds.to_vec();
+        refs.extend((0..n).filter(|&i| !touched[i]));
+        let grounding = Grounding::new(&refs);
+        let a =
+            crate::matrix::assemble_bus_branch_incidence(n, edges.iter().map(|&(a, b, _)| (a, b)));
+        let w: Vec<f64> = edges.iter().map(|&(_, _, w)| w).collect();
+        let reduced = ground_with(&calc_weighted_laplacian(&a, &w), &grounding);
+        let factor = SparseFactor::factor(&reduced)?;
+        Ok(Self {
+            n,
+            edges: edges.to_vec(),
+            grounding,
+            factor,
+        })
+    }
+
+    /// The angles that balance `injection` (one per bus), grounded and
+    /// untouched buses at zero.
+    ///
+    /// # Panics
+    /// When `injection` is shorter than the bus count.
+    #[must_use]
+    pub fn solve(&self, injection: &[f64]) -> Vec<f64> {
+        let full = self.grounding.full_of_reduced(self.n);
+        let mut rhs = faer::Mat::<f64>::zeros(full.len(), 1);
+        for (r, &i) in full.iter().enumerate() {
+            rhs[(r, 0)] = injection[i];
+        }
+        self.factor.solve_block(rhs.as_mut());
+        let mut theta = vec![0.0; self.n];
+        for (r, &i) in full.iter().enumerate() {
+            theta[i] = rhs[(r, 0)];
+        }
+        theta
+    }
+
+    /// The flow `w (θ_a − θ_b)` of each edge at angles `theta`
+    /// ([`calc_edge_flows`] over this factor's edges).
+    #[must_use]
+    pub fn calc_edge_flows(&self, theta: &[f64]) -> Vec<f64> {
+        calc_edge_flows(&self.edges, theta)
+    }
+
+    /// The factorization that solved the reduced matrix.
+    #[must_use]
+    pub fn solver_path(&self) -> SensitivitySolverPath {
+        self.factor.path()
+    }
+}
+
+/// The flow `w (θ_a − θ_b)` of each edge `(a, b, w)` of an edge list at the
+/// angles `theta`, the one DC flow from angles, for angles from a
+/// [`GroundedLaplacianFactor`] or from an iterative solve over
+/// [`calc_edge_laplacian_product`].
+///
+/// # Panics
+/// When an edge names a bus outside `theta`.
+#[must_use]
+pub fn calc_edge_flows(edges: &[(usize, usize, f64)], theta: &[f64]) -> Vec<f64> {
+    crate::matrix::calc_dc_branch_flow(theta, edges.iter().map(|&(a, b, w)| ((a, b), w, 0.0)))
+}
+
+/// The weighted Laplacian product `L x` of an edge list, `L = A diag(w) Aᵀ`:
+/// each edge `(a, b, w)` adds `w (x_a − x_b)` to bus `a` and subtracts it
+/// from bus `b`. The matrix free operator an iterative DC solve applies.
+///
+/// # Panics
+/// When an edge names a bus outside `x`.
+#[must_use]
+pub fn calc_edge_laplacian_product(edges: &[(usize, usize, f64)], x: &[f64]) -> Vec<f64> {
+    let mut y = vec![0.0; x.len()];
+    for &(a, b, w) in edges {
+        let d = w * (x[a] - x[b]);
+        y[a] += d;
+        y[b] -= d;
+    }
+    y
+}
 
 /// One way to factor the grounded matrix, `None` when it breaks down.
 type FactorAttempt = fn(&faer::sparse::SparseColMat<usize, f64>) -> Option<SparseFactor>;
@@ -1056,7 +1181,7 @@ impl<'a> Probe<'a> {
         let x: Vec<f64> = (0..a.rows())
             .map(|i| ((i as f64 + 1.0) * 0.618_033_988_749_895).fract() * 2.0 - 1.0)
             .collect();
-        let b = mat_vec(a, &x);
+        let b = crate::matrix::calc_csr_product(a, &x);
         let a_norm = a
             .outer_iterator()
             .map(|row| row.data().iter().map(|v| v.abs()).sum::<f64>())
@@ -1076,7 +1201,7 @@ impl<'a> Probe<'a> {
         if x.iter().any(|v| !v.is_finite()) {
             return false;
         }
-        let ax = mat_vec(self.a, &x);
+        let ax = crate::matrix::calc_csr_product(self.a, &x);
         let residual = self
             .b
             .iter()
@@ -1096,12 +1221,6 @@ impl<'a> Probe<'a> {
             && residual <= BACKWARD_ERROR_TRUST * scale
             && forward <= FORWARD_ERROR_TRUST * exact_norm
     }
-}
-
-fn mat_vec(a: &CsMat<f64>, x: &[f64]) -> Vec<f64> {
-    a.outer_iterator()
-        .map(|row| row.iter().map(|(j, &v)| v * x[j]).sum())
-        .collect()
 }
 
 /// A factorization of the grounded DC bus susceptance matrix that solves
@@ -1127,7 +1246,7 @@ impl GroundedSolver {
                 if let Some(chol) = DenseCholesky::factor(&dense, nr) {
                     return Ok(Self::DenseCholesky(chol));
                 }
-                let inverse = dense_inverse(dense, nr).ok_or(Error::SingularNetwork)?;
+                let inverse = dense_inverse(&dense, nr).ok_or(Error::SingularNetwork)?;
                 Ok(Self::DenseInverse { inverse, n: nr })
             }
             SensitivitySolver::Sparse => {
@@ -1194,7 +1313,6 @@ fn ptdf_column_entries(
     let n = inc.n();
     let m = inc.m();
     let nr = n - g.len();
-    let (from, to) = endpoints(&inc.a, m);
 
     let mut nnz = 0usize;
     let mut dropped = 0usize;
@@ -1203,7 +1321,11 @@ fn ptdf_column_entries(
         .enumerate()
         .filter_map(|(position, &bus)| g.reduced(bus).map(|reduced| (position, reduced)))
         .collect();
-    let mut theta = vec![0.0; nr];
+    // Angles over every bus, zero at the grounded ones, and the flows they
+    // drive through the crate's one DC flow kernel (no phase shift).
+    let full_of = g.full_of_reduced(n);
+    let mut theta = vec![0.0; n];
+    let mut flows = Vec::with_capacity(m);
     for chunk in solved.chunks(SPARSE_SOLVE_BLOCK) {
         let mut block = faer::Mat::<f64>::zeros(nr, chunk.len());
         for (col, &(_, reduced)) in chunk.iter().enumerate() {
@@ -1211,11 +1333,11 @@ fn ptdf_column_entries(
         }
         solver.solve_block(block.as_mut());
         for (col, &(position, _)) in chunk.iter().enumerate() {
-            for (r, slot) in theta.iter_mut().enumerate() {
-                *slot = block[(r, col)];
+            for (r, &bus) in full_of.iter().enumerate() {
+                theta[bus] = block[(r, col)];
             }
-            for branch in 0..m {
-                let v = branch_flow(branch, &from, &to, &inc.b, g, &theta);
+            unshifted_flows(inc, &theta, &mut flows);
+            for (branch, &v) in flows.iter().enumerate() {
                 if v.abs() > options.drop_tolerance {
                     ptdf_entry(branch, position, v)?;
                     nnz += 1;
@@ -1247,15 +1369,17 @@ fn lodf_column_entries(
     let n = inc.n();
     let m = inc.m();
     let nr = n - g.len();
-    let (from, to) = endpoints(&inc.a, m);
+    let (from, to) = (&inc.from, &inc.to);
 
     // Same rule as the dense path: a bridge redistributes nothing, decided on
     // the topology rather than on how close the denominator came to zero.
-    let is_bridge = bridges(&from, &to, n);
+    let is_bridge = bridges(from, to, n);
 
     let mut nnz = 0usize;
     let mut dropped = 0usize;
-    let mut theta = vec![0.0; nr];
+    let full_of = g.full_of_reduced(n);
+    let mut theta = vec![0.0; n];
+    let mut flows = Vec::with_capacity(m);
     for (chunk_index, chunk) in outages.chunks(SPARSE_SOLVE_BLOCK).enumerate() {
         let start = chunk_index * SPARSE_SOLVE_BLOCK;
         // A bridge's column is its diagonal alone, so only the other outages
@@ -1286,19 +1410,20 @@ fn lodf_column_entries(
                 nnz += 1;
                 continue;
             }
-            for (r, slot) in theta.iter_mut().enumerate() {
-                *slot = block[(r, next)];
+            for (r, &bus) in full_of.iter().enumerate() {
+                theta[bus] = block[(r, next)];
             }
             next += 1;
-            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, g, &theta);
+            unshifted_flows(inc, &theta, &mut flows);
+            let denom = 1.0 - flows[outage];
             let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
-            for branch in 0..m {
+            for (branch, &flow) in flows.iter().enumerate() {
                 let v = if branch == outage {
                     -1.0
                 } else if islands {
                     0.0
                 } else {
-                    branch_flow(branch, &from, &to, &inc.b, g, &theta) / denom
+                    flow / denom
                 };
                 if branch == outage || v.abs() > options.drop_tolerance {
                     lodf_entry(branch, position, v)?;
@@ -1336,20 +1461,22 @@ fn ensure_finite_susceptances(inc: &IncidenceParts) -> Result<()> {
     Ok(())
 }
 
-fn branch_flow(
-    branch: usize,
-    from: &[usize],
-    to: &[usize],
-    b: &[f64],
-    g: &Grounding,
-    theta: &[f64],
-) -> f64 {
-    let theta_from = g.reduced(from[branch]).map_or(0.0, |i| theta[i]);
-    let theta_to = g.reduced(to[branch]).map_or(0.0, |i| theta[i]);
-    b[branch] * (theta_from - theta_to)
+/// The DC flows `b (theta_from - theta_to)` of every incidence column at the
+/// full bus angles `theta`, with no phase shift: the crate's one DC flow
+/// kernel over the factor's own endpoints and weights.
+fn unshifted_flows(inc: &IncidenceParts, theta: &[f64], flows: &mut Vec<f64>) {
+    crate::matrix::calc_dc_branch_flow_into(
+        theta,
+        inc.from
+            .iter()
+            .copied()
+            .zip(inc.to.iter().copied())
+            .zip(inc.b.iter().copied())
+            .map(|(endpoints, weight)| (endpoints, weight, 0.0)),
+        flows,
+    );
 }
 
-/// Branch endpoints from the signed incidence: `+1` row is from, `−1` is to.
 /// Which branches are bridges of the graph the columns describe: an edge whose
 /// removal disconnects its endpoints.
 ///
@@ -1427,19 +1554,6 @@ fn bridges(from: &[usize], to: &[usize], n: usize) -> Vec<bool> {
     is_bridge
 }
 
-fn endpoints(a: &CsMat<f64>, m: usize) -> (Vec<usize>, Vec<usize>) {
-    let mut from = vec![0usize; m];
-    let mut to = vec![0usize; m];
-    for (&v, (bus, branch)) in a.iter() {
-        if v > 0.0 {
-            from[branch] = bus;
-        } else {
-            to[branch] = bus;
-        }
-    }
-    (from, to)
-}
-
 fn densify(a: &CsMat<f64>, n: usize) -> Vec<f64> {
     let mut d = vec![0.0; n * n];
     for (&v, (i, j)) in a.iter() {
@@ -1486,74 +1600,21 @@ fn dense_to_csr_with_drop(
     (CsMat::new((rows, cols), indptr, indices, data), dropped)
 }
 
-/// The smallest pivot a dense factorization of `a` accepts.
-///
-/// It tracks the matrix's own scale. A fixed 1e-12 is at once too strict for a
-/// legitimately small scaled matrix and far too loose for one whose entries run
-/// to 1e12. Accepting 1e-300 instead lets a square root divide a column by
-/// 1e-150 twice and return entries near 1e300 with no error, which is the shape
-/// a near disconnected island joined by one very high impedance branch takes,
-/// and which `check_reference_coverage` passes.
+/// The explicit inverse of a dense row major `n × n` matrix, by the one
+/// dense inverse ([`powerio_dist::dense::invert_dense_matrix`]: partial
+/// pivoting, each pivot refused at `n ε` times its own column's original
+/// scale, so elimination that cancels a column to rounding noise is singular
+/// while a wide but valid spread of magnitudes stays invertible, #324).
 #[allow(clippy::cast_precision_loss)]
-fn dense_inverse(mut a: Vec<f64>, n: usize) -> Option<Vec<f64>> {
-    // Each elimination pivot is judged against its own column's original
-    // magnitude, so the floor measures cancellation within that column. A
-    // single floor scaled from the largest entry anywhere in the matrix
-    // refused wide but valid magnitude spreads as singular (#324).
-    let mut floors = vec![0.0; n];
-    for (c, floor) in floors.iter_mut().enumerate() {
-        let scale = (0..n).fold(0.0_f64, |mx, r| mx.max(a[r * n + c].abs()));
-        *floor = n as f64 * f64::EPSILON * scale;
-    }
-    let mut inv = vec![0.0; n * n];
-    for i in 0..n {
-        inv[i * n + i] = 1.0;
-    }
-
-    for col in 0..n {
-        let mut pivot_row = col;
-        let mut pivot_abs = a[col * n + col].abs();
-        for r in (col + 1)..n {
-            let v = a[r * n + col].abs();
-            if v > pivot_abs {
-                pivot_abs = v;
-                pivot_row = r;
-            }
-        }
-        if !pivot_abs.is_finite() || pivot_abs <= floors[col] {
-            return None;
-        }
-        if pivot_row != col {
-            swap_dense_rows(&mut a, n, pivot_row, col);
-            swap_dense_rows(&mut inv, n, pivot_row, col);
-        }
-
-        let pivot = a[col * n + col];
-        for c in 0..n {
-            a[col * n + c] /= pivot;
-            inv[col * n + c] /= pivot;
-        }
-        for r in 0..n {
-            if r == col {
-                continue;
-            }
-            let factor = a[r * n + col];
-            if factor == 0.0 {
-                continue;
-            }
-            for c in 0..n {
-                a[r * n + c] -= factor * a[col * n + c];
-                inv[r * n + c] -= factor * inv[col * n + c];
-            }
-        }
-    }
-    Some(inv)
-}
-
-fn swap_dense_rows(a: &mut [f64], n: usize, r1: usize, r2: usize) {
-    for c in 0..n {
-        a.swap(r1 * n + c, r2 * n + c);
-    }
+fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
+    let rows: Vec<Vec<f64>> = a.chunks(n.max(1)).take(n).map(<[f64]>::to_vec).collect();
+    powerio_dist::dense::invert_dense_matrix(
+        &rows,
+        powerio_dist::dense::DensePivot::Partial,
+        0.0,
+        n as f64 * f64::EPSILON,
+    )
+    .map(|inverse| inverse.concat())
 }
 
 /// Dense lower-triangular Cholesky `A = L Lᵀ` for a small SPD matrix, stored
@@ -1695,7 +1756,7 @@ mod pivot_tests {
         // original magnitude. The old floor scaled from the matrix-wide
         // maximum refused this as singular.
         let wide = [1e12, 0.0, 0.0, 1e-6];
-        let inv = dense_inverse(wide.to_vec(), 2).expect("a diagonal matrix inverts");
+        let inv = dense_inverse(&wide, 2).expect("a diagonal matrix inverts");
         assert!((inv[3] - 1e6).abs() < 1e-4, "{inv:?}");
         assert!(DenseCholesky::factor(&wide, 2).is_some());
     }
@@ -1705,17 +1766,17 @@ mod pivot_tests {
         // Elimination reduces the second pivot from order 1 to machine
         // epsilon: no significant digits survive.
         let close = [1.0, 1.0, 1.0, 1.0 + f64::EPSILON];
-        assert!(dense_inverse(close.to_vec(), 2).is_none());
+        assert!(dense_inverse(&close, 2).is_none());
         assert!(DenseCholesky::factor(&close, 2).is_none());
 
         // The same cancellation scaled down by 1e14 is caught by the same
         // relative floor.
         let small = [1e-14, 1e-14, 1e-14, 1e-14 * (1.0 + f64::EPSILON)];
-        assert!(dense_inverse(small.to_vec(), 2).is_none());
+        assert!(dense_inverse(&small, 2).is_none());
         assert!(DenseCholesky::factor(&small, 2).is_none());
 
         // A genuinely singular matrix is refused outright.
-        assert!(dense_inverse(vec![1.0, 1.0, 1.0, 1.0], 2).is_none());
+        assert!(dense_inverse(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
         assert!(DenseCholesky::factor(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
     }
 
@@ -1724,8 +1785,7 @@ mod pivot_tests {
         // Every entry is tiny but the matrix is perfectly conditioned; an
         // absolute floor refused it outright.
         let small = [1e-14, 0.0, 0.0, 1e-14];
-        let inv =
-            dense_inverse(small.to_vec(), 2).expect("a well conditioned small matrix inverts");
+        let inv = dense_inverse(&small, 2).expect("a well conditioned small matrix inverts");
         assert!((inv[0] - 1e14).abs() < 1.0, "{inv:?}");
         assert!(DenseCholesky::factor(&small, 2).is_some());
     }
@@ -1735,7 +1795,7 @@ mod pivot_tests {
     #[test]
     fn a_nan_pivot_does_not_factor() {
         assert!(DenseCholesky::factor(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
-        assert!(dense_inverse(vec![f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
+        assert!(dense_inverse(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
     }
 }
 
@@ -1896,5 +1956,29 @@ mod closed_switch_tests {
         assert_eq!(error.code().code, "BUILD.SWITCH.CLOSED");
         assert_eq!(ptdf_entries, 0);
         assert_eq!(lodf_entries, 0);
+    }
+}
+
+#[cfg(test)]
+mod grounded_laplacian_tests {
+    use super::{GroundedLaplacianFactor, calc_edge_laplacian_product};
+
+    #[test]
+    fn a_grounded_edge_laplacian_solves_a_dc_flow() {
+        // 0 -(2)- 1 -(4)- 2, bus 3 untouched; ground bus 0.
+        let edges = [(0, 1, 2.0), (1, 2, 4.0)];
+        let factor = GroundedLaplacianFactor::from_edges(4, &edges, &[0]).unwrap();
+        let injection = [-3.0, 1.0, 2.0, 0.0];
+        let theta = factor.solve(&injection);
+        assert_eq!(theta[0], 0.0);
+        assert_eq!(theta[3], 0.0);
+        let flows = factor.calc_edge_flows(&theta);
+        assert!((flows[0] + 3.0).abs() < 1e-12 && (flows[1] + 2.0).abs() < 1e-12);
+        let product = calc_edge_laplacian_product(&edges, &theta);
+        for i in 1..3 {
+            assert!((product[i] - injection[i]).abs() < 1e-12);
+        }
+        assert!(GroundedLaplacianFactor::from_edges(3, &[(1, 2, 1.0)], &[0]).is_err());
+        assert!(GroundedLaplacianFactor::from_edges(2, &[(0, 2, 1.0)], &[0]).is_err());
     }
 }

@@ -96,15 +96,18 @@ impl Reader<'_> {
         }
         let z = self.geometry_impedance(spacing, &labels, &conductors)?;
         let n = phases.len();
+        let keep: Vec<usize> = (0..n).collect();
+        let reduced = if neutral {
+            crate::kron::calc_kron_reduced_impedance(&z, &keep, &[n], 0.0)
+                .ok_or_else(|| self.error(config, "geometry impedance reduction is nonfinite"))?
+        } else {
+            z
+        };
         let mut resistance = vec![vec![0.0; n]; n];
         let mut reactance = resistance.clone();
         for i in 0..n {
             for j in 0..n {
-                let value = if neutral {
-                    z[i][j] - z[i][n] * z[n][j] / z[n][n]
-                } else {
-                    z[i][j]
-                } / METERS_PER_MILE;
+                let value = reduced[i][j] / METERS_PER_MILE;
                 if !value.re.is_finite() || !value.im.is_finite() {
                     return Err(self.error(config, "geometry impedance reduction is nonfinite"));
                 }
@@ -115,7 +118,16 @@ impl Reader<'_> {
         let mut code = DistLineCode::new(name, resistance, reactance);
         if self.line_capacitance {
             let potential = self.geometry_potential(spacing, &labels, &conductors)?;
-            let capacitance = inverse(&potential).ok_or_else(|| {
+            // Singular or nonfinite inputs fail instead of fabricating
+            // capacitance.
+            let capacitance = crate::dense::invert_dense_matrix(
+                &potential,
+                crate::dense::DensePivot::Partial,
+                0.0,
+                0.0,
+            )
+            .filter(|inverse| inverse.iter().flatten().all(|v| v.is_finite()))
+            .ok_or_else(|| {
                 self.error(config, "geometry potential matrix is singular or nonfinite")
             })?;
             let factor =
@@ -156,7 +168,7 @@ impl Reader<'_> {
         conductors: &[ObjectKey],
     ) -> Result<Vec<Vec<Complex64>>, Error> {
         let f = self.net.base_frequency();
-        let earth = (100.0 / f).ln() / 2.0 + 7.6786;
+        let earth = crate::glm::line_physics::carson_earth(f);
         let mut z = vec![vec![Complex64::default(); labels.len()]; labels.len()];
         for (i, &wire) in conductors.iter().enumerate() {
             let gmr = self.positive_geometry(wire, "geometric_mean_radius")?;
@@ -187,10 +199,8 @@ impl Reader<'_> {
                         "native geometry reciprocal overflows or underflows",
                     ));
                 }
-                let value = Complex64::new(
-                    if i == j { resistance } else { 0.0 } + 0.001_588_36 * f,
-                    0.002_022_37 * f * (earth - distance.ln()),
-                );
+                let value = crate::overhead::calc_carson_impedance(distance, earth)
+                    + if i == j { resistance } else { 0.0 };
                 if !value.re.is_finite() || !value.im.is_finite() {
                     return Err(self.error(spacing, "geometry primitive impedance overflows"));
                 }
@@ -217,56 +227,17 @@ impl Reader<'_> {
             if heights[i] <= radius {
                 return Err(self.error(wire, "conductor intersects its earth image"));
             }
-            potential[i][i] = (2.0 * heights[i] / radius).ln();
+            potential[i][i] = crate::overhead::calc_potential_coefficient(2.0 * heights[i], radius);
             for j in i + 1..labels.len() {
                 let distance = self
                     .positive_geometry(spacing, &format!("distance_{}{}", labels[i], labels[j]))?;
                 let image = distance.hypot(2.0 * (heights[i] * heights[j]).sqrt());
-                potential[i][j] = (image / distance).ln();
+                potential[i][j] = crate::overhead::calc_potential_coefficient(image, distance);
                 potential[j][i] = potential[i][j];
             }
         }
         Ok(potential)
     }
-}
-
-// At most four conductors. Partial pivoting avoids phase-order-dependent zero
-// pivots; singular/nonfinite inputs fail instead of fabricating capacitance.
-fn inverse(matrix: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
-    let n = matrix.len();
-    let mut a = matrix.to_vec();
-    let mut result = vec![vec![0.0; n]; n];
-    for (i, row) in result.iter_mut().enumerate() {
-        row[i] = 1.0;
-    }
-    for i in 0..n {
-        let pivot = (i..n).max_by(|&j, &k| a[j][i].abs().total_cmp(&a[k][i].abs()))?;
-        a.swap(i, pivot);
-        result.swap(i, pivot);
-        let divisor = a[i][i];
-        if divisor == 0.0 || !divisor.is_finite() {
-            return None;
-        }
-        for j in 0..n {
-            a[i][j] /= divisor;
-            result[i][j] /= divisor;
-        }
-        for j in 0..n {
-            if i == j {
-                continue;
-            }
-            let factor = a[j][i];
-            for k in 0..n {
-                a[j][k] -= factor * a[i][k];
-                result[j][k] -= factor * result[i][k];
-            }
-        }
-    }
-    result
-        .iter()
-        .flatten()
-        .all(|v| v.is_finite())
-        .then_some(result)
 }
 
 pub(super) fn rating_property(class: &str, name: &str) -> bool {

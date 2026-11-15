@@ -737,7 +737,7 @@ impl Reader<'_> {
                 extras,
                 ..DistBus::default()
             };
-            let indices = bus.phase_indices(self.net.extras().get("bmopf_terminal_conventions"));
+            let indices = bus.phase_indices(self.net.terminal_conventions());
             let bound = |key: &str| -> (Option<f64>, Option<Vec<f64>>) {
                 let Some(values) = floats(key, o.get(key)) else {
                     return (None, None);

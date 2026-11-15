@@ -138,3 +138,18 @@ fn a_closed_switch_cannot_short_a_nonzero_source_constraint() {
     let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
     assert!(error.to_string().contains("electrically identical"));
 }
+
+#[test]
+fn a_source_cannot_prescribe_a_nonzero_voltage_on_a_grounded_terminal() {
+    // Without a stated reference the source is referred to earth; a terminal
+    // its bus grounds is earth already, so only zero agrees with it.
+    let mut net = network();
+    net.sources_mut()[0].reference_terminal = None;
+    net.buses_mut()[0].grounded.push("1".into());
+    let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
+    assert!(error.to_string().contains("electrically identical"));
+
+    net.sources_mut()[0].v_magnitude[0] = 0.0;
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
+    assert_eq!(system.augmented().labels.len(), 2);
+}

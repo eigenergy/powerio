@@ -11,7 +11,7 @@ enum Owner {
 }
 
 fn has_neutral(map: &[String]) -> bool {
-    map.iter().any(|t| terminal_phase(t) == Some("N"))
+    map.iter().any(|t| crate::cim::is_wire_neutral(t))
 }
 
 fn return_requests(net: &MulticonductorNetwork) -> Vec<(Owner, String, bool, bool)> {
@@ -50,7 +50,7 @@ fn return_requests(net: &MulticonductorNetwork) -> Vec<(Owner, String, bool, boo
             let missing_ground = grounded
                 && net
                     .bus(&w.bus)
-                    .is_some_and(|b| !b.grounded.iter().any(|n| terminal_phase(n) == Some("N")));
+                    .is_some_and(|b| !b.grounded.iter().any(|n| crate::cim::is_wire_neutral(n)));
             if missing_return || missing_ground {
                 requests.push((
                     Owner::Winding(i, j),
@@ -85,7 +85,7 @@ pub(super) fn prepare(
         let existing = b
             .terminals
             .iter()
-            .find(|t| terminal_phase(t) == Some("N"))
+            .find(|t| crate::cim::is_wire_neutral(t))
             .cloned();
         if ground && !explicit && existing.as_ref().is_some_and(|n| !b.grounded.contains(n)) {
             // The bus's N is a different, floating conductor. Give the
@@ -144,7 +144,7 @@ fn isolated_ground_bus(network: &mut MulticonductorNetwork, bus: &str, neutral: 
         .expect("declared parent bus")
         .terminals
         .iter()
-        .filter(|t| terminal_phase(t).is_some_and(|p| p != "N"))
+        .filter(|t| terminal_phase(t).is_some() && !crate::cim::is_wire_neutral(t))
         .cloned()
         .collect();
     let stem = format!("_pio_ravens_ground_{bus}");

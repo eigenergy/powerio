@@ -699,7 +699,10 @@ pub(crate) fn emit_value_text_with_options(
             crate::pmd::math::write::validate_emission(net)?;
             crate::pmd::math::write::emit_pmd_math_json_text(net, &options.pmd_math)
         }
-        DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
+        DistTargetFormat::CimDist => {
+            crate::cim::require_phase_clocks(net)?;
+            crate::cim::emit_cim_dist_text(net)
+        }
         DistTargetFormat::RavensJson => crate::ravens::emit_ravens_json_text(net)?,
         DistTargetFormat::PandapowerJson => {
             return Err(powerio_core::Error::new(

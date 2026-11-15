@@ -270,7 +270,7 @@ fn estimate_bus_kv(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
                 }) {
                     v
                 } else {
-                    v / 3f64.sqrt()
+                    crate::electrical::calc_wye_phase_voltage(v)
                 }
             };
             let known: Option<(usize, f64)> = t
@@ -958,7 +958,7 @@ impl DssWriter {
         let mut bases: Vec<f64> = self
             .kv_estimate
             .values()
-            .map(|v| v * 3f64.sqrt() / 1e3)
+            .map(|v| crate::electrical::calc_wye_line_voltage(*v) / 1e3)
             .collect();
         bases.sort_by(f64::total_cmp);
         bases.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
@@ -1449,13 +1449,15 @@ impl DssWriter {
             if let Some(((rs, rm), (xs, xm))) =
                 self.take_seq_pair(&mut extras, "pmd_rs", "pmd_xs", &what)
             {
+                let (r1, r0) = crate::sequence::calc_sequence_from_phase(rs, rm);
+                let (x1, x0) = crate::sequence::calc_sequence_from_phase(xs, xm);
                 let _ = write!(
                     s,
                     " c0=0 c1=0 r0={} r1={} x0={} x1={}",
-                    num((rs + 2.0 * rm) / 0.001),
-                    num((rs - rm) / 0.001),
-                    num((xs + 2.0 * xm) / 0.001),
-                    num((xs - xm) / 0.001)
+                    num(r0 / 0.001),
+                    num(r1 / 0.001),
+                    num(x0 / 0.001),
+                    num(x1 / 0.001)
                 );
             }
             s.push_str(&self.extras_tail("line", &sw.name, &extras));
@@ -1683,13 +1685,8 @@ impl DssWriter {
             return Some(w.v_ref / 1e3);
         }
         let bus = w.bus.to_ascii_lowercase();
-        let scale =
-            if winding_is_line_to_neutral(t.phases, w, |b| self.grounded.get(b).map(Vec::as_slice))
-            {
-                1.0
-            } else {
-                3f64.sqrt()
-            };
+        let line_to_neutral =
+            winding_is_line_to_neutral(t.phases, w, |b| self.grounded.get(b).map(Vec::as_slice));
         let Some(v_pn) = self.kv_estimate.get(&bus).copied() else {
             self.warn(
                 &C::EMIT_DSS_VALUE_DEFAULTED,
@@ -1703,7 +1700,11 @@ impl DssWriter {
             );
             return None;
         };
-        let kv = v_pn * scale / 1e3;
+        let kv = if line_to_neutral {
+            v_pn
+        } else {
+            crate::electrical::calc_wye_line_voltage(v_pn)
+        } / 1e3;
         self.warn(
             &C::EMIT_DSS_FIELD_DROPPED,
             format!(
@@ -1981,7 +1982,7 @@ impl DssWriter {
             // OpenDSS convention: line to line for 2 and 3 phase, line to
             // neutral for single phase.
             let v = if ctx.phases >= 2 || ctx.configuration == Configuration::Delta {
-                vln * 3f64.sqrt()
+                crate::electrical::calc_wye_line_voltage(vln)
             } else {
                 vln
             };
@@ -2017,7 +2018,7 @@ impl DssWriter {
             ));
         }
         let v = if phases >= 2 && configuration == Configuration::Wye {
-            v_phase * 3f64.sqrt()
+            crate::electrical::calc_wye_line_voltage(v_phase)
         } else {
             v_phase
         };
@@ -2554,7 +2555,7 @@ impl DssWriter {
         let configuration = ibr_configuration(ibr);
         let kv = self.ibr_kv(ibr, phases, configuration, "pvsystem");
         let base_v = if phases >= 2 && configuration != Configuration::Delta {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };
@@ -3073,11 +3074,7 @@ fn shunt_kvar(
     b_phase: f64,
     kv: f64,
 ) -> f64 {
-    let v_ref = if conn_delta || !matches!(phases, 2 | 3) {
-        kv * 1e3
-    } else {
-        kv * 1e3 / 3f64.sqrt()
-    };
+    let v_ref = super::read::bank_coil_voltage(kv, phases, conn_delta);
     if let Some(saved) = extras_f64(&sh.extras, "kvar")
         && super::read::kvar_shunt_matrix(
             &sh.terminal_map,
@@ -3094,17 +3091,15 @@ fn shunt_kvar(
         // entry. An edit to typed B must not be overwritten by stale metadata.
         return saved;
     }
-    if conn_delta {
-        let b_branch = delta_branch_abs(&sh.b, edges).unwrap_or(b_phase.abs());
-        b_branch * (kv * 1e3) * (kv * 1e3) * edges.len() as f64 / 1e3
+    let (b_coil, coils) = if conn_delta {
+        (
+            delta_branch_abs(&sh.b, edges).unwrap_or(b_phase.abs()),
+            edges.len(),
+        )
     } else {
-        let v_phase = if matches!(phases, 2 | 3) {
-            kv * 1e3 / 3f64.sqrt()
-        } else {
-            kv * 1e3
-        };
-        b_phase.abs() * v_phase * v_phase * phases as f64 / 1e3
-    }
+        (b_phase.abs(), phases)
+    };
+    crate::electrical::calc_rated_power(b_coil, v_ref) * coils as f64 / 1e3
 }
 
 fn load_voltage_bounds(model: &DistLoadVoltageModel, extras: &mut Extras) -> Option<f64> {
@@ -4398,7 +4393,7 @@ mod tests {
         });
         let out = emit_dss_text(&net);
         let kv = 2400.0 * 3f64.sqrt() / 1e3;
-        let v_phase = kv * 1e3 / 3f64.sqrt();
+        let v_phase = crate::electrical::calc_wye_phase_voltage(kv * 1e3);
         let expected = b_phase * v_phase * v_phase * 2.0 / 1e3;
         let line = out
             .text
@@ -4442,7 +4437,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no reactor emitted in:\n{}", out.text));
         assert!(!out.text.contains("Capacitor.rx"), "{}", out.text);
         let kv = 2400.0 * 3f64.sqrt() / 1e3;
-        let v_phase = kv * 1e3 / 3f64.sqrt();
+        let v_phase = crate::electrical::calc_wye_phase_voltage(kv * 1e3);
         let expected = b_phase.abs() * v_phase * v_phase * 3.0 / 1e3;
         assert!(line.contains(&format!("kvar={}", num(expected))), "{line}");
     }

@@ -4093,6 +4093,9 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             "network validation failed before CGMES emission: {error}"
         ))
     })?;
+    // Every ohm and siemens value is a per unit value times a base over the
+    // system base; refuse a base none can be formed over.
+    net.check_base_mva()?;
     // A CGMES BaseVoltage states a positive nominal voltage, and a per-unit
     // only case states none. The substitution keeps the per-unit model exact,
     // and the diagnostic below names the buses it applied to.
@@ -6011,7 +6014,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         if linear {
             eq.text(
                 "LinearShuntCompensator.bPerSection",
-                sections[0].1 / (kv * kv),
+                powerio_core::electrical::calc_rated_admittance(sections[0].1, kv),
             );
             if !field_was_omitted(
                 detailed,
@@ -6021,7 +6024,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ) {
                 eq.text(
                     "LinearShuntCompensator.gPerSection",
-                    sections[0].0 / (kv * kv),
+                    powerio_core::electrical::calc_rated_admittance(sections[0].0, kv),
                 );
             }
         }
@@ -6052,14 +6055,20 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     &id,
                 );
                 eq.text("NonlinearShuntCompensatorPoint.sectionNumber", section + 1);
-                eq.text("NonlinearShuntCompensatorPoint.b", b / (kv * kv));
+                eq.text(
+                    "NonlinearShuntCompensatorPoint.b",
+                    powerio_core::electrical::calc_rated_admittance(b, kv),
+                );
                 if !field_was_omitted(
                     detailed,
                     "shunt",
                     local_id,
                     OmittedFieldName::ShuntConductancePerSection,
                 ) {
-                    eq.text("NonlinearShuntCompensatorPoint.g", g / (kv * kv));
+                    eq.text(
+                        "NonlinearShuntCompensatorPoint.g",
+                        powerio_core::electrical::calc_rated_admittance(g, kv),
+                    );
                 }
                 eq.close("NonlinearShuntCompensatorPoint");
             }
@@ -6482,8 +6491,10 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             &mut w.warnings,
         );
         let kv = w.kv(branch.from)?;
-        let z_base = kv * kv / net.base_mva();
-        let y_base = net.base_mva() / (kv * kv);
+        let z_base =
+            powerio_core::electrical::calc_impedance_base(kv, net.base_mva()).unwrap_or(f64::NAN);
+        let y_base =
+            powerio_core::electrical::calc_admittance_base(kv, net.base_mva()).unwrap_or(f64::NAN);
         let charging = branch.calc_terminal_charging();
         let emits_as_transformer =
             branch.is_transformer() || source_branch_is_power_transformer(detailed, local_id);
@@ -6639,7 +6650,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             );
             // A generated linear phase tap has constant reactance on its
             // owning winding's base, exactly as stated on end 1 below.
-            let primary_x = branch.x * (u1 * u1 / (net.base_mva() * secondary_scale));
+            let primary_x = branch.x
+                * powerio_core::electrical::calc_impedance_base(
+                    u1,
+                    net.base_mva() * secondary_scale,
+                )
+                .unwrap_or(f64::NAN);
             let source_phase_1 = source_tap_changer(detailed, local_id, 1, TapChangerKind::Phase);
             let source_phase_2 = source_tap_changer(detailed, local_id, 2, TapChangerKind::Phase);
             let source_shift = source_phase_1
@@ -6695,7 +6711,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 };
                 // The reader folds the secondary tap into the branch's
                 // impedance and terminal shunts; undo it in the winding data.
-                let end_z_base = u * u / (net.base_mva() * secondary_scale);
+                let end_z_base = powerio_core::electrical::calc_impedance_base(
+                    u,
+                    net.base_mva() * secondary_scale,
+                )
+                .unwrap_or(f64::NAN);
                 let (end_r, end_x) = if endno == 1 {
                     (branch.r * end_z_base, primary_x)
                 } else {
@@ -6839,7 +6859,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     "OperationalLimit.OperationalLimitType",
                     &det_mrid("limittype", kind),
                 );
-                let amps = mva * 1000.0 / (3f64.sqrt() * kv);
+                let amps = powerio_core::electrical::calc_line_current(
+                    mva * 1000.0,
+                    kv,
+                    powerio_core::electrical::SQRT_3,
+                );
                 if v3 {
                     limit_body.text("CurrentLimit.normalValue", amps);
                 } else {
@@ -6937,7 +6961,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             } else {
                 bus_kv
             };
-            let z_base = rated_kv * rated_kv / net.base_mva();
+            let z_base = powerio_core::electrical::calc_impedance_base(rated_kv, net.base_mva())
+                .unwrap_or(f64::NAN);
             let (star_r, star_x) = star_impedances[index];
             let base_ratio = rated_kv / bus_kv;
             let tap_factor = if base_ratio > 0.0 {
@@ -7120,7 +7145,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                         "OperationalLimit.OperationalLimitType",
                         &det_mrid("limittype", kind),
                     );
-                    let amps = mva * 1000.0 / (3f64.sqrt() * bus_kv);
+                    let amps = powerio_core::electrical::calc_line_current(
+                        mva * 1000.0,
+                        bus_kv,
+                        powerio_core::electrical::SQRT_3,
+                    );
                     if v3 {
                         limit_body.text("CurrentLimit.normalValue", amps);
                     } else {

@@ -81,7 +81,7 @@ impl Reader<'_> {
                     return Err(self.error(key, "negative capacitor ratings are not qualified"));
                 }
                 let b = if closed && connected.contains(&phase) {
-                    rating / voltage / voltage
+                    crate::electrical::calc_rated_admittance(rating, voltage)
                 } else {
                     0.0
                 };

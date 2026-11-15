@@ -21,8 +21,7 @@ use crate::model::{
     DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
     DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference,
-    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
-    n_winding_impedance_base, n_winding_phase_count, pair_keys,
+    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, pair_keys,
 };
 
 pub(crate) fn parse_bmopf_collecting(
@@ -2085,8 +2084,8 @@ impl Reader<'_> {
         let phases = if three_phase { 3 } else { 1 };
 
         let pct = |x_ohm: f64, v: f64| {
-            if s > 0.0 && v > 0.0 {
-                x_ohm / (v * v / s) * 100.0
+            if let Some(base) = crate::electrical::calc_impedance_base(v, s) {
+                x_ohm / base * 100.0
             } else {
                 0.0
             }
@@ -2156,7 +2155,12 @@ impl Reader<'_> {
                 x_neutral: first_float(o.get("x_neutral_to")),
             },
         ];
-        expand_center_tap_windings(subtype, &mut windings, self.net.buses());
+        expand_center_tap_windings(
+            subtype,
+            &mut windings,
+            self.net.buses(),
+            self.net.terminal_conventions(),
+        );
         if subtype == "center_tap"
             && let Some(w) = windings.get(1)
             && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses(), bus_index)
@@ -2396,8 +2400,8 @@ impl Reader<'_> {
             }
         };
         let pct = |x_ohm: f64, v: f64| {
-            if s > 0.0 && v > 0.0 {
-                x_ohm / (v * v / s) * 100.0
+            if let Some(base) = crate::electrical::calc_impedance_base(v, s) {
+                x_ohm / base * 100.0
             } else {
                 0.0
             }
@@ -2480,6 +2484,7 @@ impl Reader<'_> {
         ];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
+        let mut r_windings = Vec::new();
         let mut delta_rolls = Map::new();
         let mut winding_metadata = Map::new();
         if let Some(items) = o.get("windings").and_then(Value::as_array) {
@@ -2526,30 +2531,53 @@ impl Reader<'_> {
                 if let Some(delta_roll) = delta_roll_value(w.get("delta_roll")) {
                     delta_rolls.insert((idx + 1).to_string(), Value::from(delta_roll));
                 }
-                let r_pct = if let Some(base_z) =
-                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, rating)
-                {
-                    r_winding / base_z * 100.0
-                } else {
-                    0.0
-                };
+                r_windings.push(r_winding);
+                // `v_nom` is the coil voltage; the rated voltage follows once
+                // the unit's phase count is known, below.
                 windings.push(DistWinding {
                     bus: string(w.get("bus")),
                     terminal_map: terminal_map.clone(),
                     conn,
-                    v_ref: n_winding_internal_v_ref(conn, &terminal_map, bmopf_v_nom),
+                    v_ref: bmopf_v_nom,
                     s_rating: rating,
-                    r_pct,
+                    r_pct: 0.0,
                     tap: w.get("tap_ratio").map_or(1.0, f),
                     r_neutral: w.get("r_neutral").map(f),
                     x_neutral: w.get("x_neutral").map(f),
                 });
             }
         }
-        let base_z = windings
-            .first()
-            .and_then(|w| n_winding_base_from_internal(w, s))
+        let phases = windings
+            .iter()
+            .map(|w| crate::transformer::calc_winding_phase_count(w.conn, &w.terminal_map))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        for w in &mut windings {
+            w.v_ref *= crate::transformer::calc_coil_voltage_ratio(w.conn, phases);
+        }
+        // The one winding impedance base
+        // (`crate::transformer::calc_winding_impedance_base`) over the unit as
+        // read so far: each winding's resistance on its rating, the pair
+        // reactances on the unit's power base.
+        let mut unit = DistTransformer {
+            name: name.to_string(),
+            phases,
+            windings,
+            xsc_pct: Vec::new(),
+            extras: Extras::new(),
+        };
+        for (idx, r_winding) in r_windings.into_iter().enumerate() {
+            let rating = unit.windings[idx].s_rating;
+            unit.windings[idx].r_pct =
+                crate::transformer::calc_winding_impedance_base(&unit, idx, rating)
+                    .map_or(0.0, |base_z| r_winding / base_z * 100.0);
+        }
+        let base_z = (!unit.windings.is_empty())
+            .then(|| crate::transformer::calc_winding_impedance_base(&unit, 0, s))
+            .flatten()
             .unwrap_or(f64::NAN);
+        let windings = unit.windings;
         let mut xsc_pct = Vec::new();
         let x_sc = o.get("x_sc").and_then(Value::as_object);
         for (i, j) in pair_keys(windings.len()) {
@@ -2586,12 +2614,7 @@ impl Reader<'_> {
         }
         DistTransformer {
             name: name.to_string(),
-            phases: windings
-                .iter()
-                .map(|w| n_winding_phase_count(w.conn, &w.terminal_map))
-                .max()
-                .unwrap_or(1)
-                .max(1),
+            phases,
             windings,
             xsc_pct,
             extras,
@@ -2651,7 +2674,7 @@ fn regulator_voltage(
         .flat_map(|source| source.v_magnitude.iter().copied())
         .find(|v| v.is_finite() && *v > 0.0)?;
     Some(if line_to_line {
-        magnitude * 3.0_f64.sqrt()
+        crate::electrical::calc_wye_line_voltage(magnitude)
     } else {
         magnitude
     })
@@ -2668,12 +2691,17 @@ fn open_delta_pairs_of(connection: &str) -> Option<((u8, u8), (u8, u8))> {
     }
 }
 
-fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, buses: &[DistBus]) {
+fn expand_center_tap_windings(
+    subtype: &str,
+    windings: &mut Vec<DistWinding>,
+    buses: &[DistBus],
+    conventions: Option<&Value>,
+) {
     if subtype != "center_tap" || windings[1].terminal_map.len() < 3 {
         return;
     }
     let to = windings.pop().expect("secondary winding exists");
-    let neutral_idx = center_tap_neutral_index(&to, buses);
+    let neutral_idx = center_tap_neutral_index(&to, buses, conventions);
     let canonical = neutral_idx == 1;
     let common = to
         .terminal_map
@@ -2716,8 +2744,16 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, bu
     windings.push(other_half);
 }
 
-fn center_tap_neutral_index(to: &DistWinding, buses: &[DistBus]) -> usize {
-    if let Some(bus) = buses.iter().find(|bus| bus.id == to.bus)
+/// The secondary's common terminal: the first one its bus grounds, else the
+/// first whose role on the bus is neutral ([`crate::calc_terminal_role`]),
+/// else the last.
+fn center_tap_neutral_index(
+    to: &DistWinding,
+    buses: &[DistBus],
+    conventions: Option<&Value>,
+) -> usize {
+    let bus = buses.iter().find(|bus| bus.id == to.bus);
+    if let Some(bus) = bus
         && let Some((idx, _)) = to
             .terminal_map
             .iter()
@@ -2726,48 +2762,13 @@ fn center_tap_neutral_index(to: &DistWinding, buses: &[DistBus]) -> usize {
     {
         return idx;
     }
+    let terminals = bus.map_or(to.terminal_map.as_slice(), |bus| bus.terminals.as_slice());
     to.terminal_map
         .iter()
-        .position(|term| term.eq_ignore_ascii_case("n") || term == "4")
+        .position(|term| {
+            crate::calc_terminal_role(terminals, term, conventions) == crate::TerminalRole::Neutral
+        })
         .unwrap_or_else(|| to.terminal_map.len() - 1)
-}
-
-fn n_winding_internal_v_ref(
-    conn: DistWindingConn,
-    terminal_map: &[String],
-    bmopf_v_nom: f64,
-) -> f64 {
-    if conn == DistWindingConn::Wye && n_winding_phase_count(conn, terminal_map) >= 2 {
-        bmopf_v_nom * 3f64.sqrt()
-    } else {
-        bmopf_v_nom
-    }
-}
-
-fn n_winding_bmopf_v_nom_from_internal(w: &DistWinding) -> f64 {
-    if w.conn == DistWindingConn::Wye && n_winding_phase_count(w.conn, &w.terminal_map) >= 2 {
-        w.v_ref / 3f64.sqrt()
-    } else {
-        w.v_ref
-    }
-}
-
-fn n_winding_base_from_bmopf(
-    conn: DistWindingConn,
-    terminal_map: &[String],
-    bmopf_v_nom: f64,
-    s: f64,
-) -> Option<f64> {
-    n_winding_impedance_base(n_winding_phase_count(conn, terminal_map), bmopf_v_nom, s)
-}
-
-fn n_winding_base_from_internal(w: &DistWinding, s: f64) -> Option<f64> {
-    n_winding_base_from_bmopf(
-        w.conn,
-        &w.terminal_map,
-        n_winding_bmopf_v_nom_from_internal(w),
-        s,
-    )
 }
 
 #[cfg(test)]

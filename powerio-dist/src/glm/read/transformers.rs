@@ -191,7 +191,8 @@ impl Reader<'_> {
         // FBS includes the native finite default core at the secondary
         // terminals, after the series impedance. NR omits this branch.
         let secondary = &transformer.windings[1];
-        let g = secondary.s_rating / secondary.v_ref.powi(2) / 999_999_999.0;
+        let g = crate::electrical::calc_admittance_base(secondary.v_ref, secondary.s_rating)
+            .map_or(f64::NAN, |base| base / 999_999_999.0);
         if !g.is_finite() || g <= 0.0 {
             return Err(self.error(cfg, "FBS core admittance overflows or underflows"));
         }

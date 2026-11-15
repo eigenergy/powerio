@@ -1,8 +1,14 @@
-//! Exact ideal WYE constraints over explicit winding terminals.
+//! Transformers in the multiconductor nodal system: exact ideal WYE
+//! constraints over explicit winding terminals for a unit that states no
+//! leakage. Every other unit stamps the finite leakage primitive of
+//! [`powerio_dist::transformer`].
 
 use std::collections::BTreeMap;
 
-use powerio_dist::{DistTransformer, DistWinding, DistWindingConn, MulticonductorNetwork};
+use powerio_dist::transformer::{
+    WindingNeutralGrounding, calc_stated_neutral_grounding, calc_winding_connection,
+};
+use powerio_dist::{DistTransformer, DistWindingConn, MulticonductorNetwork};
 
 use super::{MulticonductorNodeIndex, NodeRef};
 use crate::{Error, Result, diagnostics::codes};
@@ -31,8 +37,10 @@ fn validate(transformer: &DistTransformer) -> Result<()> {
         && transformer.windings.iter().all(|w| {
             w.conn == DistWindingConn::Wye
                 && w.r_pct == 0.0
-                && w.r_neutral.is_none_or(|r| r == 0.0)
-                && w.x_neutral.is_none_or(|x| x == 0.0)
+                && matches!(
+                    calc_stated_neutral_grounding(w),
+                    WindingNeutralGrounding::Unstated | WindingNeutralGrounding::Solid
+                )
                 && ((transformer.phases == 1 && w.terminal_map.len() == 1)
                     || w.terminal_map.len() == transformer.phases + 1)
         })
@@ -62,46 +70,53 @@ fn validate(transformer: &DistTransformer) -> Result<()> {
     }
 }
 
+/// Each phase coil of one winding as node references, the phase terminal
+/// then its neutral, over the one winding connection
+/// ([`calc_winding_connection`]). A coil without a return (a one terminal
+/// single phase winding, the existing implicit ground spelling) returns
+/// through ground. A stated neutral is not grounded merely because it is a
+/// winding's last terminal.
 fn winding_nodes(
-    winding: &DistWinding,
+    network: &MulticonductorNetwork,
     transformer: &DistTransformer,
+    winding: usize,
     index: &MulticonductorNodeIndex,
-) -> Result<(Vec<NodeRef>, NodeRef)> {
-    let mut nodes = winding
-        .terminal_map
-        .iter()
-        .map(|terminal| {
-            index.resolve(&winding.bus, terminal).ok_or_else(|| {
-                Error::Mtx(format!(
-                    "transformer `{}` names terminal `{terminal}` bus `{}` does not declare",
-                    transformer.name, winding.bus
-                ))
-            })
+) -> Result<Vec<(NodeRef, NodeRef)>> {
+    let w = &transformer.windings[winding];
+    let node = |terminal: usize| -> Result<NodeRef> {
+        let terminal = &w.terminal_map[terminal];
+        index.resolve(&w.bus, terminal).ok_or_else(|| {
+            Error::Mtx(format!(
+                "transformer `{}` names terminal `{terminal}` bus `{}` does not declare",
+                transformer.name, w.bus
+            ))
         })
-        .collect::<Result<Vec<_>>>()?;
-    // A one-terminal single-phase winding is the existing implicit-ground
-    // spelling. Otherwise the last terminal is its stated neutral, which
-    // must not be grounded merely because it is a winding's last terminal.
-    let neutral = if nodes.len() == 1 {
-        NodeRef::Ground
-    } else {
-        nodes.pop().expect("validated nonempty winding")
     };
-    if neutral != NodeRef::Ground && (winding.r_neutral.is_some() || winding.x_neutral.is_some()) {
+    let coils = calc_winding_connection(network, transformer, winding)?
+        .iter()
+        .map(|coil| Ok((node(coil.from)?, coil.to.map_or(Ok(NodeRef::Ground), node)?)))
+        .collect::<Result<Vec<_>>>()?;
+    let explicit_neutral = coils.iter().any(|&(_, neutral)| neutral != NodeRef::Ground);
+    if explicit_neutral && (w.r_neutral.is_some() || w.x_neutral.is_some()) {
         return Err(unsupported(
             transformer,
             "an explicit winding-neutral grounding parameter needs its own circuit",
         ));
     }
-    Ok((nodes, neutral))
+    Ok(coils)
 }
 
+/// The exact constraint rows of the transformers that state no leakage
+/// (the ideal transformers of
+/// [`calc_passive_primitives`](super::calc_passive_primitives)); a unit
+/// stating leakage stamps its primitive instead.
 pub(super) fn ideal_wye_constraints(
     network: &MulticonductorNetwork,
+    ideal: &[&DistTransformer],
     index: &MulticonductorNodeIndex,
 ) -> Result<Vec<IdealConstraint>> {
     let mut result = Vec::new();
-    for transformer in network.transformers() {
+    for &transformer in ideal {
         validate(transformer)?;
         let primary = &transformer.windings[0];
         let secondary = &transformer.windings[1];
@@ -123,9 +138,11 @@ pub(super) fn ideal_wye_constraints(
                 "winding ratio overflows or underflows",
             ));
         }
-        let (primary_nodes, primary_neutral) = winding_nodes(primary, transformer, index)?;
-        let (secondary_nodes, secondary_neutral) = winding_nodes(secondary, transformer, index)?;
-        for (phase, (&p, &s)) in primary_nodes.iter().zip(&secondary_nodes).enumerate() {
+        let primary_coils = winding_nodes(network, transformer, 0, index)?;
+        let secondary_coils = winding_nodes(network, transformer, 1, index)?;
+        for (phase, (&(p, primary_neutral), &(s, secondary_neutral))) in
+            primary_coils.iter().zip(&secondary_coils).enumerate()
+        {
             let mut coefficients = BTreeMap::new();
             // (Vp - Vpn) - ratio * (Vs - Vsn) = 0. Aggregate after switch
             // merging; a shorted or redundant winding must not create an

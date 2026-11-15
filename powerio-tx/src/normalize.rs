@@ -703,10 +703,13 @@ impl AngleDifferenceBounds {
     }
 }
 
-/// The PowerModels rule with the pad centered on `center`, the branch's
-/// phase shift in radians: PowerModels itself centers it on zero.
+/// The PowerModels rule of [`correct_angle_difference_bounds`] with a
+/// caller's `pad` centered on `center`, the branch's phase shift in radians:
+/// PowerModels itself centers [`POWER_MODELS_ANGLE_BOUND_PAD`] on zero.
+/// Inputs and outputs are radians.
+#[must_use]
 #[allow(clippy::float_cmp)] // the `0`/`0` spelling is an exact sentinel
-fn correct_angle_difference_bounds_with_pad(
+pub fn correct_angle_difference_bounds_with_pad(
     angle_min: f64,
     angle_max: f64,
     pad: f64,

@@ -49,8 +49,11 @@ impl<'a> Regulators<'a> {
                     || w.tap <= 0.0
                     || !w.s_rating.is_finite()
                     || w.s_rating <= 0.0
-                    || w.r_neutral.is_some_and(|r| r != 0.0)
-                    || w.x_neutral.is_some_and(|x| x != 0.0)
+                    || !matches!(
+                        crate::transformer::calc_stated_neutral_grounding(w),
+                        crate::transformer::WindingNeutralGrounding::Unstated
+                            | crate::transformer::WindingNeutralGrounding::Solid
+                    )
             }) || t.windings[0].terminal_map != t.windings[1].terminal_map
                 || !ratio(t).is_finite()
                 || ratio(t) <= 0.0

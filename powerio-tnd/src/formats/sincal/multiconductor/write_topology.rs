@@ -11,19 +11,6 @@ pub(super) struct Topology {
     pub bus_ids: BTreeMap<String, i64>,
 }
 
-fn root(parent: &mut BTreeMap<String, String>, bus: &str) -> String {
-    let mut key = bus.to_owned();
-    let mut path = Vec::new();
-    while parent[&key] != key {
-        path.push(key.clone());
-        key = parent[&key].clone();
-    }
-    for item in path {
-        parent.insert(item, key.clone());
-    }
-    key
-}
-
 impl Topology {
     pub fn new(
         net: &MulticonductorNetwork,
@@ -32,7 +19,6 @@ impl Topology {
         if options.nominal_ll_volts.len() != net.buses().len() {
             return Err(error("nominal_ll_volts must name every bus exactly once"));
         }
-        let mut parent = BTreeMap::new();
         let mut phases = BTreeMap::<String, BTreeSet<String>>::new();
         for bus in net.buses() {
             let voltage = options.nominal_ll_volts.get(&bus.id).ok_or_else(|| {
@@ -43,10 +29,18 @@ impl Topology {
                     "nominal line-line voltage must be finite and positive",
                 ));
             }
-            parent.insert(bus.id.clone(), bus.id.clone());
             let selected = bus_phases(net, bus)?;
             phases.insert(bus.id.clone(), selected);
         }
+        // Buses by id order, so the smaller index is the smaller id and the
+        // workspace's one union-find keeps the smaller id as each root.
+        let ids: Vec<String> = phases.keys().cloned().collect();
+        let index: BTreeMap<String, usize> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), i))
+            .collect();
+        let mut sets = powerio_core::union_find::UnionFind::new(ids.len());
         for switch in net.switches() {
             if switch.terminal_map_from != switch.terminal_map_to {
                 return Err(error(format!(
@@ -72,18 +66,19 @@ impl Topology {
                 // equality constraint and must not merge native nodes.
                 continue;
             }
-            let a = root(&mut parent, &switch.bus_from);
-            let b = root(&mut parent, &switch.bus_to);
-            if a == b {
+            let ra = sets.find(index[&switch.bus_from]);
+            let rb = sets.find(index[&switch.bus_to]);
+            if ra == rb {
                 continue;
             }
-            if options.nominal_ll_volts[&a].to_bits() != options.nominal_ll_volts[&b].to_bits() {
+            let (a, b) = (&ids[ra], &ids[rb]);
+            if options.nominal_ll_volts[a].to_bits() != options.nominal_ll_volts[b].to_bits() {
                 return Err(error(
                     "closed switch joins different declared voltage levels",
                 ));
             }
-            if phases[&a]
-                .intersection(&phases[&b])
+            if phases[a]
+                .intersection(&phases[b])
                 .any(|p| !terminals.contains(p))
             {
                 return Err(error(format!(
@@ -91,10 +86,10 @@ impl Topology {
                     switch.name
                 )));
             }
-            let (keep, remove) = if a < b { (a, b) } else { (b, a) };
-            let additional = phases.remove(&remove).unwrap();
-            phases.get_mut(&keep).unwrap().extend(additional);
-            parent.insert(remove, keep);
+            let (keep, remove) = (ra.min(rb), ra.max(rb));
+            let additional = phases.remove(&ids[remove]).unwrap();
+            phases.get_mut(&ids[keep]).unwrap().extend(additional);
+            sets.union(keep, remove);
         }
         let roots = phases
             .keys()
@@ -108,7 +103,7 @@ impl Topology {
         let bus_ids = net
             .buses()
             .iter()
-            .map(|b| (b.id.clone(), roots[&root(&mut parent, &b.id)]))
+            .map(|b| (b.id.clone(), roots[&ids[sets.find(index[&b.id])]]))
             .collect();
         Ok(Self { nodes, bus_ids })
     }

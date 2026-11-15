@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use num_complex::Complex64;
@@ -160,6 +160,39 @@ fn unsupported(message: impl Into<String>) -> Error {
 }
 
 impl Writer<'_> {
+    /// Whether an element's WYE neutral at `bus`
+    /// ([`crate::calc_wye_neutral_position`] over the network's terminal
+    /// roles) is the last terminal of `terminal_map`, where GridLAB-D
+    /// states it, and is a neutral the bus carries (an earth return is
+    /// not GridLAB-D's `N`). An ambiguous neutral or an undeclared bus is
+    /// not.
+    fn neutral_last(&self, bus: &str, terminal_map: &[String]) -> bool {
+        let (Some(declared), Some(last)) = (self.net.bus(bus), terminal_map.last()) else {
+            return false;
+        };
+        declared.terminals.contains(last)
+            && declared.terminal_role(last, self.net.terminal_conventions())
+                == crate::TerminalRole::Neutral
+            && crate::calc_wye_neutral_position(self.net, bus, terminal_map)
+                .is_ok_and(|neutral| neutral == Some(terminal_map.len() - 1))
+    }
+
+    /// The terminals of `terminal_map` whose role on `bus`
+    /// ([`crate::calc_terminal_role`]) is a phase; every terminal when the
+    /// bus is undeclared.
+    fn phase_terminals(&self, bus: &str, terminal_map: &[String]) -> Vec<String> {
+        let conventions = self.net.terminal_conventions();
+        let declared = self.net.bus(bus);
+        terminal_map
+            .iter()
+            .filter(|t| {
+                declared
+                    .is_none_or(|b| b.terminal_role(t, conventions) == crate::TerminalRole::Phase)
+            })
+            .cloned()
+            .collect()
+    }
+
     // Native NR derives this limit from nominal_voltage times the module's
     // fractional criterion. A fixed nanovolt threshold can prevent convergence
     // on a large feeder. Keep the qualified FBS absolute setting unchanged.
@@ -364,19 +397,14 @@ impl Writer<'_> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)] // Connected propagation includes distinct native winding bases.
+    /// Bus nominal voltages: each source's phase magnitude seeds its voltage
+    /// zone ([`crate::voltage_zones::calc_voltage_zone_labels`]), and the one
+    /// zone base flood ([`crate::voltage_zones::calc_flooded_zone_bases`])
+    /// carries it across each transformer by its turns ratio (a coil bank's
+    /// secondary over primary rating, else `v_ref · tap` far over near).
     fn nominal_voltages(&mut self) -> Result<(), Error> {
-        let mut neighbors: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for line in self.net.lines() {
             if self.services.buses.contains_key(line.bus_from.as_str()) {
-                neighbors
-                    .entry(&line.bus_from)
-                    .or_default()
-                    .push(&line.bus_to);
-                neighbors
-                    .entry(&line.bus_to)
-                    .or_default()
-                    .push(&line.bus_from);
                 continue;
             }
             self.link_phases(
@@ -386,87 +414,69 @@ impl Writer<'_> {
                 &line.terminal_map_from,
                 &line.terminal_map_to,
             )?;
-            neighbors
-                .entry(&line.bus_from)
-                .or_default()
-                .push(&line.bus_to);
-            neighbors
-                .entry(&line.bus_to)
-                .or_default()
-                .push(&line.bus_from);
         }
-        if let Some(plan) = &self.ideal_plan {
-            for group in &plan.groups {
-                if plan.open_aliases.contains(&group.name) {
-                    continue;
-                }
-                neighbors.entry(group.from).or_default().push(group.to);
-                neighbors.entry(group.to).or_default().push(group.from);
-            }
-        }
-        let mut queue = VecDeque::new();
+        let zones = crate::voltage_zones::calc_voltage_zone_labels(
+            self.net,
+            crate::voltage_zones::ZoneSwitches::Closed,
+        )
+        .map_err(unsupported)?;
+        let row_of: BTreeMap<String, usize> = self
+            .net
+            .buses()
+            .iter()
+            .enumerate()
+            .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
+            .collect();
+        let zone_of = |bus: &str| row_of.get(&bus.to_ascii_lowercase()).map(|&row| zones[row]);
+        let mut seeds = Vec::new();
         for (&bus, voltages) in &self.source_voltages {
             let nominal = voltages
                 .values()
                 .next()
                 .expect("nonempty qualified source")
                 .norm();
-            self.nominal.insert(bus, nominal);
-            queue.push_back(bus);
+            if let Some(zone) = zone_of(bus) {
+                seeds.push((zone, nominal));
+            }
         }
-        let mut ratios: BTreeMap<&str, Vec<(&str, f64)>> = BTreeMap::new();
+        // Each transformer edge with its forward and reverse turns ratios.
+        let mut edges = Vec::new();
+        let mut ratios = Vec::new();
         for t in self.net.transformers() {
-            if let Some(leader) = self.coil_banks.leaders.get(t.name.as_str()) {
+            let a = &t.windings[0];
+            let b = &t.windings[1];
+            let ratio = if let Some(leader) = self.coil_banks.leaders.get(t.name.as_str()) {
                 if *leader != t.name {
                     continue;
                 }
                 let bank = &self.coil_banks.banks[leader];
-                let a = &t.windings[0];
-                let b = &t.windings[1];
-                ratios
-                    .entry(&a.bus)
-                    .or_default()
-                    .push((&b.bus, bank.secondary / bank.primary));
-                ratios
-                    .entry(&b.bus)
-                    .or_default()
-                    .push((&a.bus, bank.primary / bank.secondary));
+                (bank.secondary / bank.primary, bank.primary / bank.secondary)
+            } else {
+                (
+                    (b.v_ref * b.tap) / (a.v_ref * a.tap),
+                    (a.v_ref * a.tap) / (b.v_ref * b.tap),
+                )
+            };
+            if let (Some(from), Some(to)) = (zone_of(&a.bus), zone_of(&b.bus)) {
+                edges.push((from, to));
+                ratios.push(ratio);
+            }
+        }
+        let base =
+            crate::voltage_zones::calc_flooded_zone_bases(seeds, &edges, |k, forward, value| {
+                Some(value * if forward { ratios[k].0 } else { ratios[k].1 })
+            });
+        let net = self.net;
+        for (row, bus) in net.buses().iter().enumerate() {
+            if self.services.core_buses.contains(bus.id.as_str()) {
                 continue;
             }
-            let a = &t.windings[0];
-            let b = &t.windings[1];
-            ratios
-                .entry(&a.bus)
-                .or_default()
-                .push((&b.bus, (b.v_ref * b.tap) / (a.v_ref * a.tap)));
-            ratios
-                .entry(&b.bus)
-                .or_default()
-                .push((&a.bus, (a.v_ref * a.tap) / (b.v_ref * b.tap)));
-        }
-        while let Some(bus) = queue.pop_front() {
-            let nominal = self.nominal[bus];
-            for &(neighbor, ratio) in ratios.get(bus).into_iter().flatten() {
-                if let std::collections::btree_map::Entry::Vacant(entry) =
-                    self.nominal.entry(neighbor)
-                {
-                    entry.insert(nominal * ratio);
-                    queue.push_back(neighbor);
-                }
-            }
-            for &neighbor in neighbors.get(bus).into_iter().flatten() {
-                if let std::collections::btree_map::Entry::Vacant(entry) =
-                    self.nominal.entry(neighbor)
-                {
-                    entry.insert(nominal);
-                    queue.push_back(neighbor);
-                }
-            }
-        }
-        if self.nominal.len() + self.services.core_buses.len() != self.net.buses().len() {
-            return Err(unsupported(
-                "a GLM bus island has no fixed source from which to initialize voltage",
-            ));
+            let Some(&value) = base.get(&zones[row]) else {
+                return Err(unsupported(
+                    "a GLM bus island has no fixed source from which to initialize voltage",
+                ));
+            };
+            self.nominal.insert(bus.id.as_str(), value);
         }
         self.diagnostics.push(&codes::EMIT_GLM_VALUE_REBASED,
             "bus nominal voltages are initialized from connected source magnitudes; P/I/Z coefficients retain their original voltage law");
@@ -713,7 +723,7 @@ impl Writer<'_> {
                 continue;
             }
             if load.configuration != Configuration::Wye
-                || load.terminal_map.last().map(String::as_str) != Some("n")
+                || !self.neutral_last(&load.bus, &load.terminal_map)
             {
                 return Err(unsupported(format!(
                     "load {} requires an additional connection model",
@@ -770,12 +780,13 @@ impl Writer<'_> {
             self.coordinates(crate::DistLocationTarget::Load, &load.name);
             for (i, &phase) in phase_order.iter().enumerate() {
                 let power = Complex64::new(load.p_nom[i], load.q_nom[i]);
-                let value = match law {
-                    "power" => power,
-                    "current" => nominal_phasor(1.0, phase) * power.conj() / v_nom[i],
-                    _ if power == Complex64::default() => Complex64::default(),
-                    _ => v_nom[i] * v_nom[i] / power.conj(),
-                };
+                let value = crate::load_voltage::calc_zip_coefficient(
+                    super::read::zip_law(law),
+                    power,
+                    nominal_phasor(1.0, phase),
+                    // A constant power law states no nominal voltage.
+                    v_nom.get(i).copied().unwrap_or(f64::NAN),
+                );
                 if power != Complex64::default() && value == Complex64::default() {
                     return Err(unsupported(
                         "load coefficient conversion underflows to zero",

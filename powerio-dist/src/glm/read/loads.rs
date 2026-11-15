@@ -114,12 +114,11 @@ impl Reader<'_> {
                     ));
                 }
                 let voltage = reference(nominal, from, to);
-                let power = match law {
-                    "power" => value,
-                    "current" => voltage * value.conj(),
-                    _ if value == Complex64::default() => Complex64::default(),
-                    _ => voltage.norm_sqr() / value.conj(),
-                };
+                let power = crate::load_voltage::calc_zip_nominal_power(
+                    super::zip_law(law),
+                    value,
+                    voltage,
+                );
                 if !power.re.is_finite()
                     || !power.im.is_finite()
                     || (value != Complex64::default() && power == Complex64::default())
