@@ -96,11 +96,16 @@ fn sequence(diagonal: f64, mutual: f64, reactance: bool) -> Option<(f64, f64)> {
             if zero.is_finite()
                 && positive.is_finite()
                 && crate::sequence::calc_sequence_self(positive, zero, NATIVE_THIRD) == diagonal
-                && (if reactance {
-                    diagonal - positive
-                } else {
-                    crate::sequence::calc_sequence_mutual(positive, zero, NATIVE_THIRD)
-                }) == mutual
+                && crate::sequence::calc_sequence_mutual(
+                    positive,
+                    zero,
+                    if reactance {
+                        // VSource's sequence setters: Xm := Xs - X1.
+                        crate::sequence::SequenceThird::SelfLessPositive
+                    } else {
+                        NATIVE_THIRD
+                    },
+                ) == mutual
             {
                 return Some((zero, positive));
             }
