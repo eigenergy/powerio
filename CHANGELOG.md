@@ -322,7 +322,7 @@
   `calc_phase_from_sequence` (with `calc_sequence_self` and `calc_sequence_mutual`, each taking a
   `SequenceThird`), `calc_sequence_from_phase`, `calc_sequence_matrix` and
   `calc_sequence_components` with its inverse `calc_phase_components` (the GridLAB-D sequence
-  voltage substation reads it; its phase c voltage can move in the last place, `a²` being `a · a`
+  voltage substation reads it; its phase b and c voltages can move in the last place, `a²` being `a · a`
   where it was `conj(a)`), and for OpenDSS's unequal sequence (`Z1 ≠ Z2`) source its rounded
   rotation `OPENDSS_ALPHA` with `calc_circulant_phase_entry` and its inverse
   `calc_circulant_sequence_from_phase`. The OpenDSS line code, line, source reader, source writer
