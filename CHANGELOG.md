@@ -21,7 +21,9 @@
 - `BranchSusceptanceFormula::calc_susceptance_sensitivity_to_series_susceptance`,
   `IndexedNetwork::is_analysis_branch`, `calc_dense_island_labels`,
   `correct_angle_difference_bounds_with_pad`, `IslandReferencePolicy::DesignateMissing` (keep every
-  stated reference, designate only where an island has none) and
+  stated reference, designate only where an island has none),
+  `IslandReferencePolicy::DesignateMissingSupplied` (the same, counting only references that host an
+  in-service generator and demoting the others to PQ) and
   `IslandReferenceReport::de_energized_islands` (with each island's unserved load).
 
 **Distribution**

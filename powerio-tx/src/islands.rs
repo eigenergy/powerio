@@ -42,6 +42,14 @@ pub enum IslandReferencePolicy {
     /// [`PerIsland`](Self::PerIsland). Normalization keeps the stated
     /// references under this policy, as under [`Stated`](Self::Stated).
     DesignateMissing,
+    /// As [`DesignateMissing`](Self::DesignateMissing), but only a stated
+    /// reference that hosts an in-service generator counts: one that hosts
+    /// none cannot balance its island and is demoted to PQ first, as under
+    /// [`PerIsland`](Self::PerIsland). Every remaining reference is kept, any
+    /// number per island, and a supplied island left with none takes the bus
+    /// of its largest `pmax` in-service generator. Normalization keeps the
+    /// stated references under this policy, as under [`Stated`](Self::Stated).
+    DesignateMissingSupplied,
 }
 
 /// One AC island: energized buses joined by in-service branches, closed
@@ -400,16 +408,48 @@ impl BalancedNetwork {
                 });
                 continue;
             }
-            if policy == IslandReferencePolicy::DesignateMissing {
-                if island.references.is_empty()
+            if matches!(
+                policy,
+                IslandReferencePolicy::DesignateMissing
+                    | IslandReferencePolicy::DesignateMissingSupplied
+            ) {
+                let (kept, missing) = if policy == IslandReferencePolicy::DesignateMissing {
+                    (island.references.clone(), "states no reference bus")
+                } else {
+                    let supplied = island.supplied_references(self.generators());
+                    let unsupplied: Vec<BusId> = island
+                        .references
+                        .iter()
+                        .copied()
+                        .filter(|bus| !supplied.contains(bus))
+                        .collect();
+                    if !unsupplied.is_empty() {
+                        diagnostics.push(Diagnostic::of(
+                            &codes::CANONICALIZE_ISLAND_REFERENCE_DEMOTED,
+                            format!(
+                                "the island of {} bus(es) ({}) states reference bus(es) {} that \
+                                 host no in-service generator and cannot balance it; they were \
+                                 demoted to PQ",
+                                island.buses.len(),
+                                bus_list(&island.buses),
+                                bus_list(&unsupplied)
+                            ),
+                        ));
+                        demoted.extend(unsupplied.iter().map(|&bus| (bus, BusType::Pq)));
+                    }
+                    (
+                        supplied,
+                        "states no reference bus that hosts an in-service generator",
+                    )
+                };
+                if kept.is_empty()
                     && let Some(bus) = largest_generator_bus(self.generators(), &island.generators)
                 {
                     diagnostics.push(Diagnostic::of(
                         &codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED,
                         format!(
-                            "the island of {} bus(es) ({}) states no reference bus; bus {bus} \
-                             hosts its largest pmax in-service generator and was designated the \
-                             reference",
+                            "the island of {} bus(es) ({}) {missing}; bus {bus} hosts its largest \
+                             pmax in-service generator and was designated the reference",
                             island.buses.len(),
                             bus_list(&island.buses)
                         ),
@@ -778,6 +818,35 @@ mod tests {
             codes(&report.diagnostics)
                 .contains(&codes::CANONICALIZE_ISLAND_REFERENCE_DESIGNATED.code)
         );
+    }
+
+    #[test]
+    fn designate_missing_supplied_counts_only_generator_hosted_references() {
+        let mut net = three_islands();
+        // Island A: bus 1 hosts a generator, bus 2 hosts none; both stated.
+        net.buses_mut()[1].kind = BusType::Ref;
+        // Island B: its only stated reference, bus 3, hosts no generator.
+        net.buses_mut()[2].kind = BusType::Ref;
+        let report = net.assign_island_references(IslandReferencePolicy::DesignateMissingSupplied);
+        // The generator-less references are demoted to PQ; bus 1 stays.
+        assert_eq!(report.demoted, [BusId(2), BusId(3)]);
+        assert_eq!(kind(&net, 1), BusType::Ref);
+        assert_eq!(kind(&net, 2), BusType::Pq);
+        assert_eq!(kind(&net, 3), BusType::Pq);
+        // Island B is then left with none and takes its largest generator.
+        assert_eq!(report.designated, [BusId(5)]);
+        assert_eq!(kind(&net, 5), BusType::Ref);
+        assert_eq!(report.de_energized, [BusId(6), BusId(7)]);
+
+        // Two generator-hosted references in one island are both kept.
+        let mut net = three_islands();
+        net.buses_mut()[3].kind = BusType::Ref;
+        net.buses_mut()[4].kind = BusType::Ref;
+        let report = net.assign_island_references(IslandReferencePolicy::DesignateMissingSupplied);
+        assert_eq!(report.designated, [] as [BusId; 0]);
+        assert_eq!(report.demoted, [] as [BusId; 0]);
+        assert_eq!(kind(&net, 4), BusType::Ref);
+        assert_eq!(kind(&net, 5), BusType::Ref);
     }
 
     #[test]
