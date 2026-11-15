@@ -2012,8 +2012,10 @@ mod tests {
     /// descriptor counts, descriptor limits), so a measurement compares
     /// against a baseline taken under the same guard rather than a free
     /// running count other tests move.
+    #[cfg(unix)]
     static PROCESS_RESOURCE_TESTS: Mutex<()> = Mutex::new(());
 
+    #[cfg(unix)]
     fn process_resource_guard() -> MutexGuard<'static, ()> {
         PROCESS_RESOURCE_TESTS
             .lock()
