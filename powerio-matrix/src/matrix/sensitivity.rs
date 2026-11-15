@@ -1473,74 +1473,12 @@ fn dense_to_csr_with_drop(
     (CsMat::new((rows, cols), indptr, indices, data), dropped)
 }
 
-/// The smallest pivot a dense factorization of `a` accepts.
-///
-/// It tracks the matrix's own scale. A fixed 1e-12 is at once too strict for a
-/// legitimately small scaled matrix and far too loose for one whose entries run
-/// to 1e12. Accepting 1e-300 instead lets a square root divide a column by
-/// 1e-150 twice and return entries near 1e300 with no error, which is the shape
-/// a near disconnected island joined by one very high impedance branch takes,
-/// and which `check_reference_coverage` passes.
-#[allow(clippy::cast_precision_loss)]
-fn dense_inverse(mut a: Vec<f64>, n: usize) -> Option<Vec<f64>> {
-    // Each elimination pivot is judged against its own column's original
-    // magnitude, so the floor measures cancellation within that column. A
-    // single floor scaled from the largest entry anywhere in the matrix
-    // refused wide but valid magnitude spreads as singular (#324).
-    let mut floors = vec![0.0; n];
-    for (c, floor) in floors.iter_mut().enumerate() {
-        let scale = (0..n).fold(0.0_f64, |mx, r| mx.max(a[r * n + c].abs()));
-        *floor = n as f64 * f64::EPSILON * scale;
-    }
-    let mut inv = vec![0.0; n * n];
-    for i in 0..n {
-        inv[i * n + i] = 1.0;
-    }
-
-    for col in 0..n {
-        let mut pivot_row = col;
-        let mut pivot_abs = a[col * n + col].abs();
-        for r in (col + 1)..n {
-            let v = a[r * n + col].abs();
-            if v > pivot_abs {
-                pivot_abs = v;
-                pivot_row = r;
-            }
-        }
-        if !pivot_abs.is_finite() || pivot_abs <= floors[col] {
-            return None;
-        }
-        if pivot_row != col {
-            swap_dense_rows(&mut a, n, pivot_row, col);
-            swap_dense_rows(&mut inv, n, pivot_row, col);
-        }
-
-        let pivot = a[col * n + col];
-        for c in 0..n {
-            a[col * n + c] /= pivot;
-            inv[col * n + c] /= pivot;
-        }
-        for r in 0..n {
-            if r == col {
-                continue;
-            }
-            let factor = a[r * n + col];
-            if factor == 0.0 {
-                continue;
-            }
-            for c in 0..n {
-                a[r * n + c] -= factor * a[col * n + c];
-                inv[r * n + c] -= factor * inv[col * n + c];
-            }
-        }
-    }
-    Some(inv)
-}
-
-fn swap_dense_rows(a: &mut [f64], n: usize, r1: usize, r2: usize) {
-    for c in 0..n {
-        a.swap(r1 * n + c, r2 * n + c);
-    }
+/// The explicit inverse of a dense row major `n × n` matrix, by the one
+/// dense inverse ([`powerio_dist::dense::invert_dense_matrix`]: partial
+/// pivoting, each pivot judged against its own column's scale).
+fn dense_inverse(a: Vec<f64>, n: usize) -> Option<Vec<f64>> {
+    let rows: Vec<Vec<f64>> = a.chunks(n.max(1)).take(n).map(<[f64]>::to_vec).collect();
+    powerio_dist::dense::invert_dense_matrix(&rows, 0.0).map(|inverse| inverse.concat())
 }
 
 /// Dense lower-triangular Cholesky `A = L Lᵀ` for a small SPD matrix, stored

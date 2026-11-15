@@ -48,17 +48,22 @@ impl DenseScalar for Complex64 {
 /// The inverse of a small dense square matrix by Gauss-Jordan elimination
 /// with partial pivoting: each column's pivot is the first entry of largest
 /// magnitude at or below the diagonal. `None` when a pivot's magnitude is
-/// `singular_pivot` or smaller, or NaN, so zero refuses only exact
-/// singularity and each caller states the pivot its quantity is singular
-/// at (ohms for a series impedance, a dimensionless coefficient for a
-/// potential matrix). A one by one matrix inverts as its scaled reciprocal
-/// ([`DenseScalar::reciprocal`]). An empty matrix inverts to an empty matrix.
+/// NaN or infinite, `singular_pivot` or smaller, or at most `n ε` times the
+/// largest original magnitude in its column (elimination has cancelled the
+/// column to rounding noise; judging each column against its own scale
+/// keeps a wide but valid spread of magnitudes invertible). Each caller
+/// states the absolute pivot its quantity is singular at (ohms for a series
+/// impedance, a dimensionless coefficient for a potential matrix), zero
+/// when only the relative test applies. A one by one matrix inverts as its
+/// scaled reciprocal ([`DenseScalar::reciprocal`]). An empty matrix inverts
+/// to an empty matrix.
 ///
 /// The one dense inverse: line and switch series admittances, the open line
 /// Schur complement, overhead line potential coefficients (OpenDSS and
 /// GridLAB-D geometry), the PMD transformer leakage round trip, Kron
-/// reduction ([`crate::kron::calc_kron_reduced_impedance`]) and the
-/// transformer winding admittance read it.
+/// reduction ([`crate::kron::calc_kron_reduced_impedance`]), the
+/// transformer winding admittance, the OpenDSS primitive check and the
+/// dense PTDF fallback of `powerio-matrix` read it.
 #[must_use]
 pub fn invert_dense_matrix<T: DenseScalar>(
     matrix: &[Vec<T>],
@@ -77,6 +82,14 @@ pub fn invert_dense_matrix<T: DenseScalar>(
         }
         return Some(vec![vec![value.reciprocal()]]);
     }
+    let floors: Vec<f64> = (0..n)
+        .map(|column| {
+            let scale = matrix
+                .iter()
+                .fold(0.0_f64, |largest, row| largest.max(row[column].magnitude()));
+            n as f64 * f64::EPSILON * scale
+        })
+        .collect();
     let mut work: Vec<Vec<T>> = matrix.to_vec();
     let mut inverse: Vec<Vec<T>> = (0..n)
         .map(|row| {
@@ -93,7 +106,7 @@ pub fn invert_dense_matrix<T: DenseScalar>(
             }
         }
         let magnitude = work[best][pivot].magnitude();
-        if magnitude.is_nan() || magnitude <= singular_pivot {
+        if !magnitude.is_finite() || magnitude <= singular_pivot || magnitude <= floors[pivot] {
             return None;
         }
         work.swap(pivot, best);
