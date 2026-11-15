@@ -8,7 +8,7 @@
 pub mod defaults;
 mod emit_project;
 mod frequency;
-mod geometry;
+pub(crate) mod geometry;
 pub mod lex;
 mod line;
 mod line_history;

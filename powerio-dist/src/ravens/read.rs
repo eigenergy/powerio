@@ -830,6 +830,7 @@ impl Mapper<'_> {
     #[allow(clippy::too_many_lines)] // one segment maps in one pass: terminals, phases, ampacity
     fn map_lines(&mut self) {
         self.claim(&["ACLineSegment", "ACLineSegmentPhase"]);
+        let mut computed = 0_usize;
         for obj in self.doc.sorted_of_kind("ACLineSegment") {
             if self.inactive(obj) {
                 continue;
@@ -840,22 +841,9 @@ impl Mapper<'_> {
                 self.keep_untyped(obj, "fewer than two terminals");
                 continue;
             };
-            let Some(code_name) = obj
-                .props
-                .get("ACLineSegment.PerLengthImpedance")
-                .and_then(pointer_name)
-                .map(str::to_owned)
-            else {
-                // Wire/spacing catalog construction (WireSpacingInfo +
-                // OverheadWireInfo) needs Carson's equations, which belong to
-                // the tool that owns them; the object is preserved verbatim.
-                self.keep_untyped(obj, "no PerLengthImpedance (wire-table lines are roadmap)");
-                continue;
-            };
-
             // Conductor order: the ACLineSegmentPhase records in sequence
             // order, else the terminal's phase code.
-            let mut phase_rows: Vec<(u64, String)> = obj
+            let mut phase_rows: Vec<(u64, String, &Map<String, Value>)> = obj
                 .props
                 .get("ACLineSegment.ACLineSegmentPhase")
                 .and_then(Value::as_array)
@@ -872,16 +860,39 @@ impl Mapper<'_> {
                                 .get("ACLineSegmentPhase.phase")
                                 .and_then(Value::as_str)
                                 .map(kind_suffix)?;
-                            Some((seq, letter.to_owned()))
+                            Some((seq, letter.to_owned(), p))
                         })
                         .collect()
                 })
                 .unwrap_or_default();
-            phase_rows.sort_by_key(|(seq, _)| *seq);
+            phase_rows.sort_by_key(|(seq, ..)| *seq);
+            // A neutral the terminals connect stays a conductor of its own;
+            // a wire catalog line reduces any other.
+            let terminal_neutral = from.phases.iter().any(|p| p == "N");
+            let code_name = match obj
+                .props
+                .get("ACLineSegment.PerLengthImpedance")
+                .and_then(pointer_name)
+            {
+                Some(code) => code.to_owned(),
+                None => match self.wire_catalog_code(obj, &phase_rows, terminal_neutral) {
+                    Ok(code) => {
+                        computed += 1;
+                        if !terminal_neutral {
+                            phase_rows.retain(|(_, letter, _)| letter != "N");
+                        }
+                        code
+                    }
+                    Err(why) => {
+                        self.keep_untyped(obj, &why);
+                        continue;
+                    }
+                },
+            };
             let letters: Vec<String> = if phase_rows.is_empty() {
                 from.phases.clone()
             } else {
-                phase_rows.into_iter().map(|(_, l)| l).collect()
+                phase_rows.into_iter().map(|(_, l, _)| l).collect()
             };
             // Every conductor, the neutral included: a four wire segment
             // has four `ACLineSegmentPhase` records.
@@ -949,6 +960,113 @@ impl Mapper<'_> {
             line.extras = extras;
             self.net.lines_mut().push(line);
         }
+        if computed > 0 {
+            self.warn(
+                &C::READ_RAVENS_DIST_VALUE_DEFAULTED,
+                format!(
+                    "{computed} ACLineSegment(s) take their impedance from wire catalog entries; \
+                     MG-RAVENS states no earth model, so OpenDSS's default (Deri, 100 ohm-m) \
+                     applies"
+                ),
+            );
+        }
+    }
+
+    /// The line code of a segment with no `PerLengthImpedance`, computed from
+    /// its `WireSpacingInfo` and the wire catalog entries its phases name by
+    /// [`crate::cim::wire_info::segment_impedance`]. `phases` are the
+    /// segment's phase records in conductor order; a neutral is Kron reduced
+    /// unless `terminal_neutral`. The error says why the impedance is
+    /// unknown.
+    fn wire_catalog_code(
+        &mut self,
+        obj: &Obj,
+        phases: &[(u64, String, &Map<String, Value>)],
+        terminal_neutral: bool,
+    ) -> std::result::Result<String, String> {
+        use crate::cim::wire_info::{
+            CATALOG_CLASSES, Catalog, Conductor, Position, segment_impedance,
+        };
+        let number = |v: &Value| v.as_f64().or_else(|| v.as_str()?.trim().parse().ok());
+        let spacing = obj
+            .props
+            .get("ACLineSegment.WireSpacingInfo")
+            .or_else(|| obj.props.get("PowerSystemResource.AssetDatasheet"))
+            .and_then(|p| self.doc.resolve(p))
+            .filter(|s| s.kind == "WireSpacingInfo")
+            .ok_or("no PerLengthImpedance and no WireSpacingInfo; its impedance is unknown")?;
+        let records: Vec<Position> = spacing
+            .props
+            .get("WireSpacingInfo.WirePositions")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(Value::as_object)
+            .map(|p| Position {
+                sequence: p.get("WirePosition.sequenceNumber").and_then(number),
+                x: p.get("WirePosition.xCoord").and_then(number),
+                y: p.get("WirePosition.yCoord").and_then(number),
+            })
+            .collect();
+        if phases.is_empty() {
+            return Err(
+                "names a WireSpacingInfo but no ACLineSegmentPhase naming its wires".into(),
+            );
+        }
+        let conductors: Vec<Conductor> = phases
+            .iter()
+            .map(|(_, letter, phase)| {
+                let label = phase
+                    .get("IdentifiedObject.name")
+                    .and_then(Value::as_str)
+                    .map_or_else(|| format!("{} {letter}", obj.name), str::to_owned);
+                let catalog = phase
+                    .get("PowerSystemResource.AssetDatasheet")
+                    .and_then(|p| self.doc.resolve(p))
+                    .filter(|info| CATALOG_CLASSES.contains(&info.kind.as_str()))
+                    .map(|info| Catalog {
+                        label: info.name.clone(),
+                        class: info.kind.clone(),
+                        value: Box::new(move |key| info.props.get(key).and_then(number)),
+                    });
+                Conductor {
+                    label,
+                    sequence: phase
+                        .get("ACLineSegmentPhase.sequenceNumber")
+                        .and_then(number),
+                    catalog,
+                    reduced: letter == "N" && !terminal_neutral,
+                }
+            })
+            .collect();
+        let impedance = segment_impedance(
+            &spacing.name,
+            &records,
+            &conductors,
+            self.net.base_frequency(),
+        )?;
+        for note in impedance.notes {
+            self.warn(
+                &C::READ_RAVENS_DIST_VALUE_DEFAULTED,
+                format!("ACLineSegment {}: {note}", obj.name),
+            );
+        }
+        let mut name = format!("{}_lc", obj.name);
+        let mut n = 1;
+        while self.net.linecode(&name).is_some() {
+            n += 1;
+            name = format!("{}_lc_{n}", obj.name);
+        }
+        let half = |m: &ConductorMatrix| -> ConductorMatrix {
+            m.iter()
+                .map(|row| row.iter().map(|v| v / 2.0).collect())
+                .collect()
+        };
+        let mut code = DistLineCode::new(name.clone(), impedance.r, impedance.x);
+        code.b_from = half(&impedance.b);
+        code.b_to = half(&impedance.b);
+        self.net.line_codes_mut().push(code);
+        Ok(name)
     }
 
     // ----- switches -------------------------------------------------------

@@ -41,6 +41,7 @@
 //! [`MulticonductorNetwork`]: crate::MulticonductorNetwork
 
 mod read;
+pub(crate) mod wire_info;
 mod write;
 mod xml;
 

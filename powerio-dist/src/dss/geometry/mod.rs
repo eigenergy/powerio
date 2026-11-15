@@ -6,6 +6,7 @@
 //! explicit unresolved-geometry diagnostics.
 mod cable;
 pub(super) mod cache;
+pub(crate) use cable::{Data as CableData, Screen};
 pub(super) mod definition;
 pub(super) mod direct;
 mod spacing;
@@ -311,6 +312,33 @@ impl Geometry {
         }
         Ok(result)
     }
+}
+
+/// Line constants for a reader whose source states its conductors and their
+/// positions instead of a DSS geometry (a CIM wire catalog line), under
+/// OpenDSS's default earth: Deri's model at 100 ohm-m. The first `keep`
+/// conductors stay in the result; the rest are Kron reduced, as a DSS
+/// geometry with `reduce=y` reduces its neutrals, and cable screens always
+/// are. Cables lead and bare conductors trail, as the cable models require.
+pub(crate) fn catalog_matrices(
+    wires: Vec<Wire>,
+    keep: usize,
+    frequency: f64,
+) -> Result<LineMatrices, String> {
+    let n = wires.len();
+    let cables = wires.iter().take_while(|w| w.cable.is_some()).count();
+    if keep == 0 || keep > n {
+        return Err("a wire catalog line needs at least one unreduced conductor".into());
+    }
+    Geometry {
+        wires,
+        phases: if cables > 0 { cables } else { n },
+        reduce: false,
+        reduction_order: Some(keep),
+        earth_model: EarthModel::Deri,
+        rho: 100.0,
+    }
+    .calculate(frequency)
 }
 
 #[cfg(test)]
