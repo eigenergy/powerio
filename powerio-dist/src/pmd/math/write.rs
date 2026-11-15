@@ -2600,7 +2600,7 @@ fn sc2br_impedance(
 /// The dense inverse ([`crate::dense::invert_dense_matrix`]); `None` when a
 /// pivot is 1e-300 or smaller.
 fn invert(a: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    crate::dense::invert_dense_matrix(a, 1e-300)
+    crate::dense::invert_dense_matrix(a, 1e-300, 0.0)
 }
 
 /// A stashed PMD matrix (array of columns) or a plain row major array.

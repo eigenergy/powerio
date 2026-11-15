@@ -48,48 +48,52 @@ impl DenseScalar for Complex64 {
 /// The inverse of a small dense square matrix by Gauss-Jordan elimination
 /// with partial pivoting: each column's pivot is the first entry of largest
 /// magnitude at or below the diagonal. `None` when a pivot's magnitude is
-/// NaN or infinite, `singular_pivot` or smaller, or at most `n ε` times the
-/// largest original magnitude in its column (elimination has cancelled the
-/// column to rounding noise; judging each column against its own scale
-/// keeps a wide but valid spread of magnitudes invertible). Each caller
-/// states the absolute pivot its quantity is singular at (ohms for a series
-/// impedance, a dimensionless coefficient for a potential matrix), zero
-/// when only the relative test applies. A one by one matrix inverts as its
-/// scaled reciprocal ([`DenseScalar::reciprocal`]). An empty matrix inverts
-/// to an empty matrix.
+/// NaN or infinite, `singular_pivot` or smaller, or `relative_pivot` times
+/// the largest original magnitude in its column or smaller. Each caller
+/// states the pivot its quantity is singular at: an absolute
+/// `singular_pivot` (ohms for a series impedance, a dimensionless
+/// coefficient for a potential matrix) and a `relative_pivot` that measures
+/// cancellation within a column against that column's own scale (the dense
+/// PTDF fallback passes `n ε`, so a column eliminated to rounding noise is
+/// singular while a wide but valid spread of magnitudes stays invertible).
+/// Zero for both refuses only exact singularity. A one by one matrix
+/// inverts as its scaled reciprocal ([`DenseScalar::reciprocal`]). An empty
+/// matrix inverts to an empty matrix.
 ///
 /// The one dense inverse: line and switch series admittances, the open line
 /// Schur complement, overhead line potential coefficients (OpenDSS and
 /// GridLAB-D geometry), the PMD transformer leakage round trip, Kron
 /// reduction ([`crate::kron::calc_kron_reduced_impedance`]), the
-/// transformer winding admittance, the OpenDSS primitive check and the
-/// dense PTDF fallback of `powerio-matrix` read it.
+/// transformer winding admittance and the dense PTDF fallback of
+/// `powerio-matrix` read it.
 #[must_use]
 pub fn invert_dense_matrix<T: DenseScalar>(
     matrix: &[Vec<T>],
     singular_pivot: f64,
+    relative_pivot: f64,
 ) -> Option<Vec<Vec<T>>> {
     let n = matrix.len();
     if matrix.iter().any(|row| row.len() != n) {
         return None;
-    }
-    if let [row] = matrix
-        && let [value] = row.as_slice()
-    {
-        let magnitude = value.magnitude();
-        if magnitude.is_nan() || magnitude <= singular_pivot {
-            return None;
-        }
-        return Some(vec![vec![value.reciprocal()]]);
     }
     let floors: Vec<f64> = (0..n)
         .map(|column| {
             let scale = matrix
                 .iter()
                 .fold(0.0_f64, |largest, row| largest.max(row[column].magnitude()));
-            n as f64 * f64::EPSILON * scale
+            singular_pivot.max(relative_pivot * scale)
         })
         .collect();
+    let refused =
+        |magnitude: f64, column: usize| !magnitude.is_finite() || magnitude <= floors[column];
+    if let [row] = matrix
+        && let [value] = row.as_slice()
+    {
+        if refused(value.magnitude(), 0) {
+            return None;
+        }
+        return Some(vec![vec![value.reciprocal()]]);
+    }
     let mut work: Vec<Vec<T>> = matrix.to_vec();
     let mut inverse: Vec<Vec<T>> = (0..n)
         .map(|row| {
@@ -105,8 +109,7 @@ pub fn invert_dense_matrix<T: DenseScalar>(
                 best = row;
             }
         }
-        let magnitude = work[best][pivot].magnitude();
-        if !magnitude.is_finite() || magnitude <= singular_pivot || magnitude <= floors[pivot] {
+        if refused(work[best][pivot].magnitude(), pivot) {
             return None;
         }
         work.swap(pivot, best);
@@ -140,14 +143,22 @@ mod tests {
 
     #[test]
     fn inverts_real_and_complex_matrices_and_refuses_singular_pivots() {
-        let real = invert_dense_matrix(&[vec![0.0, 2.0], vec![4.0, 0.0]], 0.0).unwrap();
+        let real = invert_dense_matrix(&[vec![0.0, 2.0], vec![4.0, 0.0]], 0.0, 0.0).unwrap();
         assert_eq!(real, vec![vec![0.0, 0.25], vec![0.5, 0.0]]);
         let z = Complex64::new(1.0, 2.0);
-        let complex = invert_dense_matrix(&[vec![z]], 0.0).unwrap();
+        let complex = invert_dense_matrix(&[vec![z]], 0.0, 0.0).unwrap();
         assert_eq!(complex[0][0], z.finv());
-        assert!(invert_dense_matrix(&[vec![1.0, 2.0], vec![2.0, 4.0]], 0.0).is_none());
-        assert!(invert_dense_matrix(&[vec![1e-15]], 1e-14).is_none());
-        assert!(invert_dense_matrix(&[vec![1.0, 2.0]], 0.0).is_none());
-        assert_eq!(invert_dense_matrix::<f64>(&[], 0.0), Some(Vec::new()));
+        assert!(invert_dense_matrix(&[vec![1.0, 2.0], vec![2.0, 4.0]], 0.0, 0.0).is_none());
+        assert!(invert_dense_matrix(&[vec![1e-15]], 1e-14, 0.0).is_none());
+        assert!(invert_dense_matrix(&[vec![1.0, 2.0]], 0.0, 0.0).is_none());
+        assert_eq!(invert_dense_matrix::<f64>(&[], 0.0, 0.0), Some(Vec::new()));
+        // A non finite pivot is refused at every size, the scalar included.
+        assert!(invert_dense_matrix(&[vec![f64::INFINITY]], 0.0, 0.0).is_none());
+        assert!(invert_dense_matrix(&[vec![f64::NAN]], 0.0, 0.0).is_none());
+        // A column cancelled to rounding noise is refused only when the
+        // caller states a relative pivot.
+        let noisy = [vec![1.0, 1.0], vec![1.0, 1.0 + f64::EPSILON]];
+        assert!(invert_dense_matrix(&noisy, 0.0, 0.0).is_some());
+        assert!(invert_dense_matrix(&noisy, 0.0, 2.0 * f64::EPSILON).is_none());
     }
 }

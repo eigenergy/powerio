@@ -14,7 +14,7 @@ fn primitive(code: &DistLineCode, length: f64, closed: &[Vec<bool>; 2]) -> Resul
                 .collect()
         })
         .collect();
-    let series = crate::dense::invert_dense_matrix(&impedance, 0.0)
+    let series = crate::dense::invert_dense_matrix(&impedance, 0.0, 0.0)
         .ok_or("open Line series impedance is singular")?;
     let mut matrix = vec![vec![Complex::default(); 2 * n]; 2 * n];
     for i in 0..n {

@@ -280,7 +280,7 @@ const SINGULAR_PIVOT_OHMS: f64 = 1e-14;
 /// The dense inverse of a series impedance: `None` when a pivot is
 /// [`SINGULAR_PIVOT_OHMS`] or smaller (or NaN).
 fn invert(matrix: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    powerio_dist::dense::invert_dense_matrix(matrix, SINGULAR_PIVOT_OHMS)
+    powerio_dist::dense::invert_dense_matrix(matrix, SINGULAR_PIVOT_OHMS, 0.0)
 }
 
 struct Stamper {

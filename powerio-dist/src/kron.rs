@@ -319,7 +319,8 @@ pub fn calc_kron_reduced_impedance(
             .map(|&row| columns.iter().map(|&column| matrix[row][column]).collect())
             .collect()
     };
-    let inverse = crate::dense::invert_dense_matrix(&block(eliminate, eliminate), singular_pivot)?;
+    let inverse =
+        crate::dense::invert_dense_matrix(&block(eliminate, eliminate), singular_pivot, 0.0)?;
     let product = |a: &[Vec<Complex64>], b: &[Vec<Complex64>]| -> Vec<Vec<Complex64>> {
         a.iter()
             .map(|row| {

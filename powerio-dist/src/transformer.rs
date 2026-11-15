@@ -340,7 +340,7 @@ pub fn calc_transformer_winding_admittance(
     if reduced.iter().flatten().any(|value| !finite(value)) {
         return Ok(None);
     }
-    let Some(inverse) = crate::dense::invert_dense_matrix(&reduced, 0.0) else {
+    let Some(inverse) = crate::dense::invert_dense_matrix(&reduced, 0.0, 0.0) else {
         return Ok(None);
     };
     if inverse.iter().flatten().any(|value| !finite(value)) {

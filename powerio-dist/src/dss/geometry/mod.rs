@@ -261,7 +261,7 @@ impl Geometry {
                 potential[j][i] = potential[i][j];
             }
         }
-        let inverse = crate::dense::invert_dense_matrix(&potential, 0.0)
+        let inverse = crate::dense::invert_dense_matrix(&potential, 0.0, 0.0)
             .ok_or("geometry potential matrix is singular")?;
         let keep = self
             .reduction_order

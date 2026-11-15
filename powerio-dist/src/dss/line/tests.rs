@@ -65,6 +65,27 @@ fn singular_lines_are_not_replaced_by_epsilon_conductance() {
 }
 
 #[test]
+fn the_primitive_check_is_the_native_diagonal_pivot_refusal() {
+    // TcMatrix.Invert pivots on the diagonal: a zero self impedance meets an
+    // exact zero pivot (error 183) even though mutual coupling makes the
+    // matrix invertible by row pivoting.
+    let raw = read(
+        "New Circuit.c bus1=s\nNew Line.a phases=2 bus1=s.1.2 bus2=t.1.2 rmatrix=[0|1 0] xmatrix=[0|1 0]\nSolve",
+    );
+    assert!(
+        resolve(&raw, point(&raw, "a"))
+            .unwrap_err()
+            .contains("error 183")
+    );
+    // A pivot left at rounding noise is still nonzero, so the native engine
+    // accepts it; no relative floor applies.
+    let raw = read(
+        "New Circuit.c bus1=s\nNew Line.a phases=2 bus1=s.1.2 bus2=t.1.2 rmatrix=[1|1 1.0000000000000002] xmatrix=[1|1 1.0000000000000002]\nSolve",
+    );
+    assert!(resolve(&raw, point(&raw, "a")).is_ok());
+}
+
+#[test]
 fn buildy_does_not_invalidate_an_existing_line_primitive() {
     let raw = read("New Circuit.c\nNew Line.a\nSolve\nEdit Line.a basefreq=45\nBuildY\nSolve");
     let matrix = resolve(&raw, point(&raw, "a"))
