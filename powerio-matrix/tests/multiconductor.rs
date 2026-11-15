@@ -657,3 +657,26 @@ fn the_nodal_system_is_the_scatter_of_the_element_primitives() {
         }
     }
 }
+
+/// A near zero jumper's series impedance is singular, not an admittance of
+/// order 1e15: a pivot of 1e-14 ohm or less is refused.
+#[test]
+fn a_near_zero_series_impedance_is_singular() {
+    let code = DistLineCode::new(
+        "lc",
+        vec![vec![0.3, 0.1], vec![0.1, 0.3]],
+        vec![vec![0.8, 0.4], vec![0.4, 0.8]],
+    );
+    let mut line = DistLine::new(
+        "l1",
+        "a",
+        "b",
+        strings(&["1", "2"]),
+        strings(&["1", "2"]),
+        "lc",
+        2.5,
+    );
+    assert!(powerio_matrix::calc_line_primitive_admittance(&line, &code).is_ok());
+    line.length = 1e-16;
+    assert!(powerio_matrix::calc_line_primitive_admittance(&line, &code).is_err());
+}

@@ -240,8 +240,13 @@ impl MulticonductorAdmittance {
     }
 }
 
+/// The largest elimination pivot, in ohms, a series impedance inverse refuses
+/// as singular.
+const SINGULAR_PIVOT_OHMS: f64 = 1e-14;
+
 /// Small dense complex inverse by Gaussian elimination with partial
-/// pivoting, for conductor count sized matrices.
+/// pivoting, for conductor count sized matrices. `None` when a pivot is
+/// [`SINGULAR_PIVOT_OHMS`] or smaller (or NaN).
 fn invert(matrix: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
     let n = matrix.len();
     let mut work: Vec<Vec<Complex64>> = matrix.to_vec();
@@ -259,13 +264,16 @@ fn invert(matrix: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
         })
         .collect();
     for pivot in 0..n {
-        let best = (pivot..n).max_by(|&a, &b| {
-            work[a][pivot]
-                .norm()
-                .partial_cmp(&work[b][pivot].norm())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })?;
-        if work[best][pivot].norm() == 0.0 {
+        // The first of equal largest magnitudes, and a pivot no larger than
+        // `SINGULAR_PIVOT_OHMS` is singular: a near zero jumper's impedance
+        // would otherwise stamp an admittance of order 1e14 and beyond.
+        let mut best = pivot;
+        for row in pivot + 1..n {
+            if work[row][pivot].norm() > work[best][pivot].norm() {
+                best = row;
+            }
+        }
+        if work[best][pivot].norm().is_nan() || work[best][pivot].norm() <= SINGULAR_PIVOT_OHMS {
             return None;
         }
         work.swap(pivot, best);
