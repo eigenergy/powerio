@@ -1,10 +1,11 @@
-//! Pinned OpenDSS overhead and concentric-neutral geometry calculations in SI units.
+//! Pinned OpenDSS overhead, concentric-neutral and tape-shield geometry
+//! calculations in SI units.
 //!
 //! Ordered conductor definitions and shared native calculation caches feed
 //! conductor-resolved Line snapshots. Unqualified cable paths retain
 //! explicit unresolved-geometry diagnostics.
+mod cable;
 pub(super) mod cache;
-mod cn;
 pub(super) mod definition;
 pub(super) mod direct;
 mod spacing;
@@ -45,10 +46,12 @@ impl EarthModel {
     }
 }
 
+/// One conductor in SI units: position, radii, resistances per meter, and
+/// the cable screen around it when it is a shielded cable.
 #[derive(Clone, Copy, Debug, Deserialize)]
-pub(super) struct Wire {
+pub(crate) struct Wire {
     #[serde(default)]
-    pub cable: Option<cn::Data>,
+    pub cable: Option<cable::Data>,
     pub x: f64,
     pub height: f64,
     pub radius: f64,
@@ -217,7 +220,7 @@ impl Geometry {
 
     pub fn calculate(&self, frequency: f64) -> Result<LineMatrices, String> {
         if self.wires.iter().any(|w| w.cable.is_some()) {
-            return cn::calculate(self, frequency);
+            return cable::calculate(self, frequency);
         }
         self.validate(frequency)?;
         let n = self.wires.len();

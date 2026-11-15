@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug, serde::Serialize)]
 pub(in crate::dss) struct State {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cable: Option<super::cn::Data>,
+    pub cable: Option<super::cable::Data>,
     pub rdc: f64,
     pub rac: f64,
     pub runits: usize,
@@ -183,7 +183,7 @@ pub(super) fn resolve_with_budget(
             .objects
             .get(point.object)
             .ok_or("missing WireData object")?;
-        if !matches!(object.class.as_str(), "wiredata" | "cndata") {
+        if !matches!(object.class.as_str(), "wiredata" | "cndata" | "tsdata") {
             return Err("expected WireData history".into());
         }
         let history = raw
@@ -198,10 +198,14 @@ pub(super) fn resolve_with_budget(
             .checked_sub(1)
             .ok_or("WireData evaluation work limit exceeded")?;
         if ready {
-            let mut state = State::default();
-            if object.class == "cndata" {
-                state.cable = Some(super::cn::Data::default());
-            }
+            let mut state = State {
+                cable: match object.class.as_str() {
+                    "cndata" => Some(super::cable::Data::concentric_neutral()),
+                    "tsdata" => Some(super::cable::Data::tape_shield()),
+                    _ => None,
+                },
+                ..State::default()
+            };
             let props = object
                 .props
                 .get(..point.properties)
