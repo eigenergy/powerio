@@ -1365,7 +1365,10 @@ fn positive_sequence_voltage(
     source: &powerio_dist::VoltageSource,
     positions: &[usize],
 ) -> Option<Complex64> {
-    let base = source.calc_line_to_line_voltage(positions)?;
+    let base = source.calc_line_to_line_voltage(
+        positions,
+        powerio_dist::sequence::LineVoltageForm::PositiveSequence,
+    )?;
     let &[a, b, c] = positions else {
         return None;
     };

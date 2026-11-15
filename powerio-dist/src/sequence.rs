@@ -170,10 +170,15 @@ pub enum SequenceRotation {
     /// OpenDSS `mathutil.pas`'s `SetAMatrix` as upstream OpenDSS builds it
     /// (and DSS C-API under its `BadPrecision` compatibility flag):
     /// `a = −½ + j 0.866025403`, truncated, `a² = conj(a)`, and `A⁻¹` the
-    /// exact inverse of that `A` (`Ap2s.Invert`), whose sequence rows are
+    /// closed form of the inverse of that `A`, whose sequence rows are
     /// `[⅓, w, conj(w)]` and `[⅓, conj(w), w]` with
     /// `w = −1/6 + j / (4 · 0.866025403)`; `conj(A)ᵀ / 3` is not its inverse.
-    /// The IndMach012a user model's sequence admittance reads it.
+    /// `mathutil.pas` forms `Ap2s` numerically (`TcMatrix.Invert`), whose
+    /// sweep differs from this closed form in the last place (its `⅓`
+    /// entries and `w.re`, with residues of order `2⁻⁵⁴` in their imaginary
+    /// parts), so values through this operator agree with the engine's to
+    /// within that rounding, not bit for bit. The IndMach012a user model's
+    /// sequence admittance reads it.
     OpenDssMathutil,
 }
 
@@ -329,19 +334,80 @@ pub fn calc_polygon_chord(phases: usize) -> f64 {
     2.0 * (std::f64::consts::PI / phases as f64).sin()
 }
 
+/// The angle, radians, of phase `phase` (counted from zero) of a balanced
+/// positive sequence set of `phases` phasors whose first phase is at zero:
+/// each phase lags the one before by `2π / phases`, stated in `(−π, π]`
+/// (`0`, `−2π/3`, `+2π/3` for three phases), formed as `−(m · τ / n)` for
+/// `m = phase mod n` with `2m < n` and as `(n − m) · τ / n` otherwise. Zero
+/// for `phases` zero. The one balanced phase rotation: the GridLAB-D nominal
+/// phasors and sequence voltage substation, the multiconductor OPF start
+/// point, the SINCAL multiconductor source writer and the integrated
+/// transmission and distribution coupling read it.
+#[must_use]
+pub fn calc_balanced_phase_angle(phase: usize, phases: usize) -> f64 {
+    if phases == 0 {
+        return 0.0;
+    }
+    let m = phase % phases;
+    let (n, tau) = (phases as f64, std::f64::consts::TAU);
+    if 2 * m < phases {
+        -(m as f64 * tau / n)
+    } else {
+        (phases - m) as f64 * tau / n
+    }
+}
+
+/// Which phasors [`VoltageSource::calc_line_to_line_voltage`] reads a
+/// source's line to line base from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineVoltageForm {
+    /// The balanced equivalent of every phasor: `√3 |V₁|` for three phases
+    /// ([`calc_sequence_components`], Fortescue), the phasor difference
+    /// `|Va − Vb|` for two (a split phase pair). The multiconductor to
+    /// balanced lowering reads it.
+    PositiveSequence,
+    /// The first phase's magnitude times the chord of the `n` phase polygon
+    /// ([`calc_polygon_chord`]): the form an MG-RAVENS or CIM
+    /// `EnergySource`, which states one magnitude for a balanced set, takes
+    /// its `nominalVoltage` in. The MG-RAVENS writer reads it.
+    FirstPhase,
+}
+
 impl VoltageSource {
     /// The source's line to line voltage base over its phase positions
-    /// `phases` (indices into its voltage vectors), volts: `√3 |V₁|`, the
-    /// magnitude of the balanced equivalent's line voltage, for three phases
-    /// ([`calc_sequence_components`]); the phasor difference for two (a
-    /// split phase source); the phase magnitude for one. `None` for any
-    /// other count, a stated magnitude or angle that is missing or not
-    /// finite, or a base that is not positive.
+    /// `phases` (indices into its voltage vectors), volts, in `form`
+    /// ([`LineVoltageForm`]). One phase is the line to line equivalent
+    /// `√3 |V|` of its magnitude, which is line to neutral
+    /// ([`crate::electrical::calc_wye_line_voltage`]), in either form.
+    ///
+    /// Under [`LineVoltageForm::PositiveSequence`]: `√3 |V₁|` for three
+    /// phases, `|Va − Vb|` for two; `None` for any other count, a stated
+    /// magnitude or angle that is missing or not finite, or a base that is
+    /// not positive. Under [`LineVoltageForm::FirstPhase`]: the first
+    /// position's stated magnitude times `calc_polygon_chord(n)` for `n` of
+    /// two or more, formed as stated (a zero, negative or nonfinite
+    /// magnitude gives that base, for the caller's own check); `None` only
+    /// when no position is given or its magnitude is missing.
     ///
     /// The one source voltage base: the multiconductor to balanced lowering
-    /// bases a source's zone on it.
+    /// bases a source's zone on it, and the MG-RAVENS writer states it as a
+    /// source's `nominalVoltage` and seeds the source bus's `BaseVoltage`
+    /// with it when the source carries no `basekv`.
     #[must_use]
-    pub fn calc_line_to_line_voltage(&self, phases: &[usize]) -> Option<f64> {
+    pub fn calc_line_to_line_voltage(
+        &self,
+        phases: &[usize],
+        form: LineVoltageForm,
+    ) -> Option<f64> {
+        if form == LineVoltageForm::FirstPhase {
+            let magnitude = *self.v_magnitude.get(*phases.first()?)?;
+            return Some(if phases.len() == 1 {
+                crate::electrical::calc_wye_line_voltage(magnitude)
+            } else {
+                magnitude * calc_polygon_chord(phases.len())
+            });
+        }
         let phasor = |index: usize| {
             let magnitude = *self.v_magnitude.get(index)?;
             let angle = *self.v_angle.get(index)?;
@@ -357,7 +423,10 @@ impl VoltageSource {
                 crate::electrical::calc_wye_line_voltage(positive.norm())
             }
             [a, b] => (phasor(a)? - phasor(b)?).norm(),
-            [a] => phasor(a)?.norm(),
+            [a] => {
+                phasor(a)?;
+                crate::electrical::calc_wye_line_voltage(self.v_magnitude[a].abs())
+            }
             _ => return None,
         };
         (base.is_finite() && base > 0.0).then_some(base)
@@ -450,6 +519,18 @@ mod tests {
     }
 
     #[test]
+    fn the_balanced_phase_angles_are_the_positive_sequence_rotation() {
+        use std::f64::consts::{PI, TAU};
+        assert_eq!(
+            [0, 1, 2].map(|k| calc_balanced_phase_angle(k, 3)),
+            [0.0, -2.0 * PI / 3.0, 2.0 * PI / 3.0]
+        );
+        assert_eq!(calc_balanced_phase_angle(4, 3), -TAU / 3.0);
+        assert_eq!(calc_balanced_phase_angle(1, 2), PI);
+        assert_eq!(calc_balanced_phase_angle(0, 0), 0.0);
+    }
+
+    #[test]
     fn a_balanced_source_has_its_line_voltage_as_base() {
         let third = 2.0 * std::f64::consts::PI / 3.0;
         let terminals = vec!["1".to_owned(), "2".to_owned(), "3".to_owned()];
@@ -460,11 +541,39 @@ mod tests {
             vec![100.0; 3],
             vec![0.0, -third, third],
         );
-        let base = source.calc_line_to_line_voltage(&[0, 1, 2]).unwrap();
+        let base = source
+            .calc_line_to_line_voltage(&[0, 1, 2], LineVoltageForm::PositiveSequence)
+            .unwrap();
         assert!((base - 100.0 * 3f64.sqrt()).abs() < 1e-9);
         source.v_magnitude = vec![120.0, 120.0];
         source.v_angle = vec![0.0, std::f64::consts::PI];
-        assert!((source.calc_line_to_line_voltage(&[0, 1]).unwrap() - 240.0).abs() < 1e-9);
-        assert_eq!(source.calc_line_to_line_voltage(&[0, 1, 2, 3]), None);
+        assert!(
+            (source
+                .calc_line_to_line_voltage(&[0, 1], LineVoltageForm::PositiveSequence)
+                .unwrap()
+                - 240.0)
+                .abs()
+                < 1e-9
+        );
+        assert_eq!(
+            source.calc_line_to_line_voltage(&[0, 1, 2, 3], LineVoltageForm::PositiveSequence),
+            None
+        );
+        for form in [
+            LineVoltageForm::PositiveSequence,
+            LineVoltageForm::FirstPhase,
+        ] {
+            assert_eq!(
+                source.calc_line_to_line_voltage(&[0], form),
+                Some(crate::electrical::calc_wye_line_voltage(120.0))
+            );
+        }
+        // The first phase form reads one magnitude: a split phase pair's is
+        // twice it, whatever the second phasor states.
+        source.v_magnitude = vec![120.0, 100.0];
+        assert_eq!(
+            source.calc_line_to_line_voltage(&[0, 1], LineVoltageForm::FirstPhase),
+            Some(240.0)
+        );
     }
 }

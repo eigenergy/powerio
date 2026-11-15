@@ -1,8 +1,6 @@
 //! Ideal positive/negative-sequence boundary with an explicit zero-sequence
 //! circuit. Finite positive-sequence impedance still requires separate mapping.
 
-use std::f64::consts::TAU;
-
 use num_complex::Complex64;
 
 use super::{
@@ -187,7 +185,8 @@ impl InfeederInput {
             terminals: ["1", "2", "3"].map(str::to_owned),
             reference,
             magnitudes: [magnitude; 3],
-            angles: [angle_rad, angle_rad - TAU / 3.0, angle_rad + TAU / 3.0],
+            angles: [0, 1, 2]
+                .map(|k| angle_rad + powerio_dist::sequence::calc_balanced_phase_angle(k, 3)),
         };
         let switch = DistSwitch::new(
             format!("sincal:terminal:{}", self.terminal.id),

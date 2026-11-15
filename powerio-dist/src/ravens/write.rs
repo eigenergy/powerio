@@ -1886,11 +1886,7 @@ impl Writer {
                     // The whole source's line to line base, so every part
                     // states the same `nominalVoltage` and seeds the same
                     // BaseVoltage.
-                    let ll = line_to_line_chord(hot.len());
-                    let nominal = xf64(&source.extras, "basekv").map_or_else(
-                        || stable_fixed(v_ln * ll, |v| (v / ll) * ll),
-                        |kv| stable_fixed(kv * 1e3, |v| (v / 1e3) * 1e3),
-                    );
+                    let nominal = source_nominal_voltage(source);
                     let nominal_v = self.num(nominal, &part_what);
                     let magnitude_v = self.num(magnitude, &part_what);
                     let angle_v = self.num(angle, &part_what);
@@ -1935,12 +1931,8 @@ impl Writer {
 
             let magnitude = stable_fixed(v_ln * chord, |v| (v / chord) * chord);
             // `nominalVoltage` is line to line in CIM: the stated base, or
-            // the line to line equivalent of the first phasor.
-            let ll = line_to_line_chord(hot.len());
-            let nominal = xf64(&source.extras, "basekv").map_or_else(
-                || stable_fixed(v_ln * ll, |v| (v / ll) * ll),
-                |kv| stable_fixed(kv * 1e3, |v| (v / 1e3) * 1e3),
-            );
+            // the source's line to line voltage base.
+            let nominal = source_nominal_voltage(source);
             let nominal_v = self.num(nominal, &what);
             let magnitude_v = self.num(magnitude, &what);
             let angle_v = self.num(angle, &what);
@@ -2596,12 +2588,32 @@ fn versions() -> Value {
 /// three-phase element's line-to-line base is more authoritative than a
 /// single-phase regulator's `v_ref·√3` estimate), higher volts breaks ties.
 /// A total order, so seed selection is independent of element order.
-/// The factor from a line to neutral magnitude to its line to line
-/// equivalent for `hot` phase conductors: the chord of the positive sequence
-/// n-gon (`sqrt(3)` at three), and `sqrt(3)` again for a single conductor,
-/// whose magnitude is line to neutral.
-fn line_to_line_chord(hot: usize) -> f64 {
-    crate::sequence::calc_polygon_chord(if hot <= 1 { 3 } else { hot })
+/// A source's line to line `nominalVoltage`, volts: its `basekv` when it
+/// carries one, else the one source voltage base over its hot terminals in
+/// the `EnergySource` form, its first phase's magnitude times the polygon
+/// chord ([`crate::VoltageSource::calc_line_to_line_voltage`],
+/// [`crate::sequence::LineVoltageForm::FirstPhase`]; zero when it has no
+/// hot terminal), at the fixed point of the reader's `basekv` round trip so
+/// write → read → write is byte stable. The writer states it on every
+/// `EnergySource` of the source and seeds the source bus's `BaseVoltage`
+/// with it.
+fn source_nominal_voltage(source: &crate::VoltageSource) -> f64 {
+    let volts = xf64(&source.extras, "basekv").map_or_else(
+        || {
+            let hot: Vec<usize> = source
+                .terminal_map
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| is_hot(t))
+                .map(|(k, _)| k)
+                .collect();
+            source
+                .calc_line_to_line_voltage(&hot, crate::sequence::LineVoltageForm::FirstPhase)
+                .unwrap_or(0.0)
+        },
+        |kv| kv * 1e3,
+    );
+    stable_fixed(volts, |v| (v / 1e3) * 1e3)
 }
 
 fn seed_better(x: (usize, f64), y: (usize, f64)) -> bool {
@@ -2633,27 +2645,12 @@ fn bus_bases(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
         }
     };
     for source in net.sources() {
-        let hot = source.terminal_map.iter().filter(|t| is_hot(t)).count();
-        // A source states the system base at its bus: `basekv` when it
-        // carries one, else the line to line equivalent of its first
-        // phasor, which is what the writer states as `nominalVoltage` and
-        // the reader hands back as `basekv`, so both passes seed alike. The
-        // seed outranks a winding's (a single phase part of a split source
-        // still states the whole source's base).
-        let volts = xf64(&source.extras, "basekv").map_or_else(
-            || {
-                let first = source
-                    .terminal_map
-                    .iter()
-                    .position(|t| is_hot(t))
-                    .and_then(|k| source.v_magnitude.get(k))
-                    .copied()
-                    .unwrap_or(0.0);
-                first * line_to_line_chord(hot)
-            },
-            |kv| stable_fixed(kv * 1e3, |v| (v / 1e3) * 1e3),
-        );
-        seed(&source.bus, 3, volts);
+        // A source states the system base at its bus: what the writer states
+        // as `nominalVoltage` ([`source_nominal_voltage`]) and the reader
+        // hands back as `basekv`, so both passes seed alike. The seed
+        // outranks a winding's (a single phase part of a split source still
+        // states the whole source's base).
+        seed(&source.bus, 3, source_nominal_voltage(source));
     }
     for xf in net.transformers() {
         for w in &xf.windings {

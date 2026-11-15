@@ -126,11 +126,9 @@ impl IntegratedNetwork {
             * (powerio_core::electrical::calc_wye_phase_voltage(bus.base_kv * 1000.0)
                 * link.voltage_ratio)
             * Complex64::from_polar(1.0, link.angle_shift_radians);
-        let phases = [
-            a,
-            a * Complex64::from_polar(1.0, -TAU / 3.0),
-            a * Complex64::from_polar(1.0, TAU / 3.0),
-        ];
+        let rotation =
+            |k| Complex64::from_polar(1.0, powerio_dist::sequence::calc_balanced_phase_angle(k, 3));
+        let phases = [a, a * rotation(1), a * rotation(2)];
         if phases.iter().any(|v| !finite(*v)) {
             return Err(invalid("boundary voltage is nonfinite or overflows"));
         }
@@ -299,7 +297,8 @@ impl IntegratedNetwork {
                     "stated source voltages disagree with the interface voltage ratio",
                 ));
             }
-            if !near_angle(b.1 - a.1, -TAU / 3.0) || !near_angle(c.1 - a.1, TAU / 3.0) {
+            let balanced = |k| powerio_dist::sequence::calc_balanced_phase_angle(k, 3);
+            if !near_angle(b.1 - a.1, balanced(1)) || !near_angle(c.1 - a.1, balanced(2)) {
                 return Err(invalid(
                     "stated source rotation disagrees with the A, B, C phase map",
                 ));

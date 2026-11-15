@@ -863,17 +863,14 @@ fn prepare_terminals(net: &MulticonductorNetwork) -> Result<(Vec<McOpfTerminal>,
                 return Err(invalid(&bus.id, "unknown grounded terminal"));
             }
         }
-        let phases: Vec<_> = bus
-            .phase_indices(conventions)
-            .into_iter()
-            .filter(|&i| bus.terminals[i] != "0")
-            .collect();
+        let phases = bus.phase_indices(conventions);
         for (k, t) in bus.terminals.iter().enumerate() {
-            let grounded = t == "0" || bus.grounded.contains(t);
-            let angle = phases
-                .iter()
-                .position(|p| *p == k)
-                .map_or(0.0, |p| -(p as f64) * std::f64::consts::TAU / 3.0);
+            // Earth by the one terminal classification, or grounded at the bus.
+            let grounded = bus.terminal_role(t, conventions) == powerio_dist::TerminalRole::Earth
+                || bus.grounded.contains(t);
+            let angle = phases.iter().position(|p| *p == k).map_or(0.0, |p| {
+                powerio_dist::sequence::calc_balanced_phase_angle(p, 3)
+            });
             let start = if grounded || !phases.contains(&k) {
                 [0.0, 0.0]
             } else {
@@ -921,7 +918,6 @@ impl Context<'_> {
             .phase_indices(self.net.terminal_conventions())
             .into_iter()
             .map(|i| bus.terminals[i].as_str())
-            .filter(|t| *t != "0")
             .collect();
         if let Some(t) = tm.iter().find(|t| !phases.contains(&t.as_str())) {
             return Err(invalid(
@@ -1057,11 +1053,7 @@ fn prepare_voltage_limits(
     let selected = instance.constraints();
     let mut voltage_limits = Vec::new();
     for bus in net.buses() {
-        let phases: Vec<_> = bus
-            .phase_indices(conventions)
-            .into_iter()
-            .filter(|&i| bus.terminals[i] != "0")
-            .collect();
+        let phases = bus.phase_indices(conventions);
         let nonph: Vec<_> = (0..bus.terminals.len())
             .filter(|i| !phases.contains(i))
             .collect();
@@ -1778,9 +1770,19 @@ fn prepare_sequences(
                 "sequence bounds require exactly three phases",
             ));
         }
+        // Column `k` of the sequence transform: the zero, positive and
+        // negative components of a unit phasor on phase `k`.
+        let columns = [0, 1, 2].map(|k| {
+            let mut unit = [num_complex::Complex64::default(); 3];
+            unit[k] = num_complex::Complex64::new(1.0, 0.0);
+            powerio_dist::sequence::calc_sequence_components(
+                unit,
+                powerio_dist::sequence::SequenceRotation::Fortescue,
+            )
+        });
         for (name, sequence, lower, upper) in [
             ("positive", 1, bus.vpos_min, bus.vpos_max),
-            ("negative", -1, None, bus.vneg_max),
+            ("negative", 2, None, bus.vneg_max),
             ("zero", 0, None, bus.vzero_max),
         ] {
             if lower.is_none() && upper.is_none() {
@@ -1792,9 +1794,9 @@ fn prepare_sequences(
                 return Err(invalid(&bus.id, "invalid sequence interval"));
             }
             let mut combination = Vec::new();
-            for (k, &id) in pids.iter().enumerate() {
-                let angle = f64::from(sequence) * (k as f64) * std::f64::consts::TAU / 3.0;
-                combination.push((id, [angle.cos() / 3.0, angle.sin() / 3.0]));
+            for (column, &id) in columns.iter().zip(pids) {
+                let entry = column[sequence];
+                combination.push((id, [entry.re, entry.im]));
             }
             if sequence == 0
                 && let Some(n) = neutral

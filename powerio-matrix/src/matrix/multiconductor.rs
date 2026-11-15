@@ -76,8 +76,9 @@ pub struct MulticonductorNodeIndex {
 
 impl MulticonductorNodeIndex {
     /// Build the index: bus table order, each bus's stated terminal order,
-    /// with terminal `0` and explicitly grounded terminals excluded from the
-    /// unknowns. Closed switches merge their paired terminals into one
+    /// with earth terminals (terminal `0`, and any terminal the network's
+    /// terminal conventions name as earth: `powerio_dist::calc_terminal_role`)
+    /// and explicitly grounded terminals excluded from the unknowns. Closed switches merge their paired terminals into one
     /// node — the first spelling encountered names the merged node.
     ///
     /// # Errors
@@ -90,12 +91,17 @@ impl MulticonductorNodeIndex {
         let mut grounded = vec![false; terminals.len()];
         let mut slot: Vec<Option<usize>> = vec![None; terminals.len()];
         let mut provisional: Vec<usize> = Vec::new();
+        let conventions = network.terminal_conventions();
         for bus in network.buses() {
             for terminal in &bus.terminals {
                 let Some(position) = terminals.resolve(&bus.id, terminal) else {
                     continue;
                 };
-                if terminal == "0" || bus.grounded.contains(terminal) {
+                // Earth by the one terminal classification, or grounded at
+                // the bus.
+                if bus.terminal_role(terminal, conventions) == powerio_dist::TerminalRole::Earth
+                    || bus.grounded.contains(terminal)
+                {
                     grounded[position] = true;
                     continue;
                 }

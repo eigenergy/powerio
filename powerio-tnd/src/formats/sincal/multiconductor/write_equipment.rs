@@ -21,7 +21,8 @@ pub(super) fn sources(
             return Err(error("source magnitude must be positive and finite"));
         }
         let angle = source.v_angle[0];
-        for (i, offset) in [0.0, -TAU / 3.0, TAU / 3.0].into_iter().enumerate() {
+        for i in 0..3 {
+            let offset = powerio_dist::sequence::calc_balanced_phase_angle(i, 3);
             let actual = Complex64::from_polar(source.v_magnitude[i], source.v_angle[i]);
             let canonical = Complex64::from_polar(magnitude, angle + offset);
             if !actual.re.is_finite()

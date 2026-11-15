@@ -38,9 +38,10 @@ impl Reader<'_> {
             .as_deref()
             .unwrap_or("PHASE_A")
         {
+            // The reference phase's own balanced angle, undone.
             "PHASE_A" => 0.0,
-            "PHASE_B" => 2.0 * std::f64::consts::PI / 3.0,
-            "PHASE_C" => -2.0 * std::f64::consts::PI / 3.0,
+            "PHASE_B" => -crate::sequence::calc_balanced_phase_angle(1, 3),
+            "PHASE_C" => -crate::sequence::calc_balanced_phase_angle(2, 3),
             _ => {
                 return Err(self.error(
                     key,

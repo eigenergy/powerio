@@ -1194,11 +1194,7 @@ pub(super) fn zip_law(law: &str) -> crate::load_voltage::ZipLaw {
 pub(super) fn nominal_phasor(magnitude: f64, phase: usize) -> Complex64 {
     Complex64::from_polar(
         magnitude,
-        [
-            0.0,
-            -2.0 * std::f64::consts::PI / 3.0,
-            2.0 * std::f64::consts::PI / 3.0,
-        ][phase],
+        crate::sequence::calc_balanced_phase_angle(phase, 3),
     )
 }
 fn parse_bus_phases(text: &str) -> Result<Vec<usize>, &'static str> {
