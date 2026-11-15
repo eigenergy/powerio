@@ -133,7 +133,8 @@ pub(super) fn transformers(
             integer(&mut input, key, value);
         }
         let grounded = usize::from(p.conn != DistWindingConn::Wye);
-        let zbase = volts[grounded] * volts[grounded] / p.s_rating;
+        let zbase = powerio_core::electrical::calc_impedance_base(volts[grounded], p.s_rating)
+            .unwrap_or(f64::NAN);
         for (key, value) in [
             ("Un1", volts[0] / 1000.0),
             ("Un2", volts[1] / 1000.0),

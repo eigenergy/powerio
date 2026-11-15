@@ -492,7 +492,8 @@ pub(crate) fn parse_ucte_source(
                 let to = node_bus(&node_index, id.node1, &record)?;
                 let kv1 = id.node1.base_kv();
                 let kv2 = id.node2.base_kv();
-                let zbase = kv1 * kv1 / BASE_MVA;
+                let zbase = powerio_core::electrical::calc_impedance_base(kv1, BASE_MVA)
+                    .unwrap_or(f64::NAN);
                 let rated_u1 = rated_voltage(
                     &mut reader,
                     &record,

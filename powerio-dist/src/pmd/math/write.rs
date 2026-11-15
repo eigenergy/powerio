@@ -2064,7 +2064,8 @@ impl Writer {
             }
             bus.map_numbers("va", f64::to_radians, angle);
             // Grounding impedance rebases on the bus impedance base.
-            let z_new = base * base / sbase * vsf;
+            let z_new =
+                crate::electrical::calc_impedance_base(base, sbase).unwrap_or(f64::NAN) * vsf;
             for key in ["rg", "xg"] {
                 bus.scale(key, |z| z / z_new, impedance(z_new));
             }
@@ -2073,7 +2074,8 @@ impl Writer {
         for branch in &mut self.branches {
             let f_bus = branch.usize("f_bus").unwrap_or(1);
             let base = vbase[f_bus - 1];
-            let z_new = base * base / sbase * vsf;
+            let z_new =
+                crate::electrical::calc_impedance_base(base, sbase).unwrap_or(f64::NAN) * vsf;
             for key in ["br_r", "br_x"] {
                 branch.scale_on_base(key, z_new, |z| z / z_new, impedance(z_new));
             }
@@ -2093,7 +2095,8 @@ impl Writer {
         for shunt in &mut self.shunts {
             let bus = shunt.usize("shunt_bus").unwrap_or(1);
             let base = vbase[bus - 1];
-            let z_new = base * base / sbase * vsf;
+            let z_new =
+                crate::electrical::calc_impedance_base(base, sbase).unwrap_or(f64::NAN) * vsf;
             shunt.scale("gs", |y| y * z_new, admittance(z_new));
             shunt.scale("bs", |y| y * z_new, admittance(z_new));
             shunt.set("vbase", num(base));

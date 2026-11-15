@@ -199,7 +199,8 @@ impl Writer<'_> {
         let a = &t.windings[0];
         let b = &t.windings[1];
         let ratio = a.v_ref * a.tap / b.v_ref;
-        let resistance = b.r_pct / 100.0 * b.v_ref.powi(2) / b.s_rating;
+        let resistance = b.r_pct / 100.0
+            * crate::electrical::calc_impedance_base(b.v_ref, b.s_rating).unwrap_or(f64::NAN);
         if !ratio.is_finite() || ratio <= 0.0 || !resistance.is_finite() || resistance <= 0.0 {
             return Err(unsupported(format!(
                 "regulator equivalent {} has an invalid turns ratio or resistance",

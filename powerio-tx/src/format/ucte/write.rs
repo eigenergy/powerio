@@ -692,7 +692,8 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                     ),
                 });
             };
-            let zbase = to_kv * to_kv / BASE_MVA;
+            let zbase =
+                powerio_core::electrical::calc_impedance_base(to_kv, BASE_MVA).unwrap_or(f64::NAN);
             let mut field = Field::new();
             field.put(0, &from_code.text());
             field.put(9, &to_code.text());
@@ -750,7 +751,8 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                 ),
             });
         };
-        let zbase = to_kv * to_kv / BASE_MVA;
+        let zbase =
+            powerio_core::electrical::calc_impedance_base(to_kv, BASE_MVA).unwrap_or(f64::NAN);
         let tap = branch.calc_effective_tap();
         let rated_u1 = extra_f64(&branch.extras, "ucte_rated_voltage_1")
             .filter(|u| *u > 0.0)

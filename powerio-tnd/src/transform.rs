@@ -1146,7 +1146,8 @@ format!(
                 partial_phase_admittance(&shunt.g, &shunt.b, &active)
             };
             let base_volts = self.base_volts(&shunt.bus);
-            let scale = base_volts * base_volts / 1_000_000.0;
+            let scale = powerio_core::electrical::calc_impedance_base(base_volts, 1_000_000.0)
+                .unwrap_or(f64::NAN);
             let mut balanced = Shunt::new(bus, y.re * scale, y.im * scale);
             balanced.extras = source_extra("multiconductor_shunt", &shunt.name);
             shunts.push(balanced);

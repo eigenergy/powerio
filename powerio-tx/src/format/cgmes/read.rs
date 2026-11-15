@@ -5726,7 +5726,8 @@ fn two_winding_parameters(
             "PowerTransformer `{transformer}` has nonzero end 2 r/x/g/b, outside the CGMES two-winding end 1 L-model convention; {assumption} ({reference_kv} kV) and combining g/b into its single shunt"
         ));
     }
-    let z_base = reference_kv * reference_kv / SYSTEM_MVA;
+    let z_base =
+        powerio_core::electrical::calc_impedance_base(reference_kv, SYSTEM_MVA).unwrap_or(f64::NAN);
     if !z_base.is_finite() || z_base <= 0.0 {
         return Err(Error::FormatRead {
             format: FMT,
@@ -5763,7 +5764,8 @@ fn read_three_winding_transformer(
             let end = &end_ids[index];
             let bus = buses[index];
             let rated_kv = transformer_end_rated_kv(mapper, transformer_id, end, bus)?;
-            let z_base = rated_kv * rated_kv / SYSTEM_MVA;
+            let z_base = powerio_core::electrical::calc_impedance_base(rated_kv, SYSTEM_MVA)
+                .unwrap_or(f64::NAN);
             star_r[index] = mapper.store.f(end, "PowerTransformerEnd.r")?.unwrap_or(0.0) / z_base;
             star_x[index] = mapper.store.f(end, "PowerTransformerEnd.x")?.unwrap_or(0.0) / z_base;
             mag_g += mapper.store.f(end, "PowerTransformerEnd.g")?.unwrap_or(0.0) * z_base;

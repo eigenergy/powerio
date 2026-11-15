@@ -6640,7 +6640,12 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             );
             // A generated linear phase tap has constant reactance on its
             // owning winding's base, exactly as stated on end 1 below.
-            let primary_x = branch.x * (u1 * u1 / (net.base_mva() * secondary_scale));
+            let primary_x = branch.x
+                * powerio_core::electrical::calc_impedance_base(
+                    u1,
+                    net.base_mva() * secondary_scale,
+                )
+                .unwrap_or(f64::NAN);
             let source_phase_1 = source_tap_changer(detailed, local_id, 1, TapChangerKind::Phase);
             let source_phase_2 = source_tap_changer(detailed, local_id, 2, TapChangerKind::Phase);
             let source_shift = source_phase_1
@@ -6696,7 +6701,11 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 };
                 // The reader folds the secondary tap into the branch's
                 // impedance and terminal shunts; undo it in the winding data.
-                let end_z_base = u * u / (net.base_mva() * secondary_scale);
+                let end_z_base = powerio_core::electrical::calc_impedance_base(
+                    u,
+                    net.base_mva() * secondary_scale,
+                )
+                .unwrap_or(f64::NAN);
                 let (end_r, end_x) = if endno == 1 {
                     (branch.r * end_z_base, primary_x)
                 } else {
@@ -6938,7 +6947,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             } else {
                 bus_kv
             };
-            let z_base = rated_kv * rated_kv / net.base_mva();
+            let z_base = powerio_core::electrical::calc_impedance_base(rated_kv, net.base_mva())
+                .unwrap_or(f64::NAN);
             let (star_r, star_x) = star_impedances[index];
             let base_ratio = rated_kv / bus_kv;
             let tap_factor = if base_ratio > 0.0 {

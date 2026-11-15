@@ -440,9 +440,11 @@ pub(super) fn read(
                     base(circuit)? / BASE * ratio.powi(2)
                 }
                 "COMPONENT_MVAR" => 1.0 / BASE,
-                "NATURAL_UNITS" => {
-                    positive(by_bus[&b.from].base_kv, "base_voltage")?.powi(2) / BASE
-                }
+                "NATURAL_UNITS" => powerio_core::electrical::calc_impedance_base(
+                    positive(by_bus[&b.from].base_kv, "base_voltage")?,
+                    BASE,
+                )
+                .unwrap_or(f64::NAN),
                 other => return Err(error(format!("unsupported admittance_units {other}"))),
             };
             let g = number(y, "real")? * scale;

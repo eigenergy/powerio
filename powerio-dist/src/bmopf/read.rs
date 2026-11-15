@@ -2084,8 +2084,8 @@ impl Reader<'_> {
         let phases = if three_phase { 3 } else { 1 };
 
         let pct = |x_ohm: f64, v: f64| {
-            if s > 0.0 && v > 0.0 {
-                x_ohm / (v * v / s) * 100.0
+            if let Some(base) = crate::electrical::calc_impedance_base(v, s) {
+                x_ohm / base * 100.0
             } else {
                 0.0
             }
@@ -2400,8 +2400,8 @@ impl Reader<'_> {
             }
         };
         let pct = |x_ohm: f64, v: f64| {
-            if s > 0.0 && v > 0.0 {
-                x_ohm / (v * v / s) * 100.0
+            if let Some(base) = crate::electrical::calc_impedance_base(v, s) {
+                x_ohm / base * 100.0
             } else {
                 0.0
             }

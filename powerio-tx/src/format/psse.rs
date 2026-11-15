@@ -6828,7 +6828,7 @@ fn calc_vsc_reactive_power(converter: &VscConverter, p: f64) -> f64 {
     if pf == 0.0 {
         return 0.0;
     }
-    p.abs() * (1.0 - pf * pf).sqrt() / pf * converter.acset.signum()
+    p.abs() * crate::electrical::calc_reactive_ratio(pf) * converter.acset.signum()
 }
 
 /// Read one VSC DC line record into the neutral [`Hvdc`]: the control line

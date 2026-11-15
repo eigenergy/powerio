@@ -245,7 +245,7 @@ fn static_power(object: &RawObject, vars: &super::VarMap) -> Result<(f64, f64), 
     let demand_q = if kvar_mode {
         -kvar
     } else {
-        kw * (1.0 / (pf * pf) - 1.0).sqrt() * pf.signum()
+        kw * crate::electrical::calc_reactive_ratio(pf)
     };
     // Native non-idle PF limiting tests both Q limits before choosing a sign.
     let pf_limit =

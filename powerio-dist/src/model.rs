@@ -1455,12 +1455,7 @@ pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
 
 /// Actual coil voltage base, including the fixed winding tap.
 pub(crate) fn winding_coil_voltage(winding: &DistWinding, phases: usize) -> f64 {
-    let divisor = if winding.conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
-        3f64.sqrt()
-    } else {
-        1.0
-    };
-    winding.v_ref * winding.tap / divisor
+    winding.v_ref * winding.tap / crate::transformer::calc_coil_voltage_ratio(winding.conn, phases)
 }
 
 /// OpenDSS no-load percentages for an explicit winding-2 terminal-coil shunt.
@@ -1483,7 +1478,9 @@ pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f6
     {
         return None;
     }
-    let scale = 100.0 * t.phases.max(1) as f64 * voltage.powi(2) / rating;
+    let scale = 100.0
+        * t.phases.max(1) as f64
+        * powerio_core::electrical::calc_impedance_base(voltage, rating)?;
     Some((g * scale, -b * scale))
 }
 

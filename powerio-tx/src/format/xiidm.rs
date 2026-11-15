@@ -5763,7 +5763,8 @@ fn read_transformer(
             equipment.id
         )));
     }
-    let zbase = nominal_v2 * nominal_v2 / DEFAULT_BASE_MVA;
+    let zbase = powerio_core::electrical::calc_impedance_base(nominal_v2, DEFAULT_BASE_MVA)
+        .unwrap_or(f64::NAN);
     let mut branch = Branch::new(from, to, r / zbase, x / zbase);
     branch.tap = 1.0 / rho;
     branch.shift = -alpha;
@@ -6106,7 +6107,8 @@ fn read_three_winding_transformer(
             equipment.id
         )));
     }
-    let zbase = rated_u0 * rated_u0 / DEFAULT_BASE_MVA;
+    let zbase = powerio_core::electrical::calc_impedance_base(rated_u0, DEFAULT_BASE_MVA)
+        .unwrap_or(f64::NAN);
     let mut star_r = [0.0; 3];
     let mut star_x = [0.0; 3];
     let mut star_g = [0.0; 3];
@@ -12848,7 +12850,8 @@ fn write_three_winding_transformer(
         } else {
             buses[0].base_kv
         });
-    let zbase = rated_u0 * rated_u0 / index.base_mva;
+    let zbase =
+        powerio_core::electrical::calc_impedance_base(rated_u0, index.base_mva).unwrap_or(f64::NAN);
     let star = transformer.calc_star_impedances();
     let winding_buses = transformer.windings.each_ref().map(|winding| winding.bus);
     let synthesized: [Option<NetworkTapChanger>; 3] = std::array::from_fn(|side| {
@@ -13340,7 +13343,8 @@ fn write_transformer(
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
-    let zbase = to.base_kv * to.base_kv / index.base_mva;
+    let zbase = powerio_core::electrical::calc_impedance_base(to.base_kv, index.base_mva)
+        .unwrap_or(f64::NAN);
     let charging = branch.calc_terminal_charging();
     let mut taps = transformer_tap_changers(index, &component, 1);
     let synthesized = if taps.is_empty() {

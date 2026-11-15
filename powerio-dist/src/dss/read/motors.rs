@@ -69,7 +69,10 @@ impl Reader<'_> {
         if !kv.is_finite() || kv <= 0.0 || !kva.is_finite() || kva <= 0.0 {
             return Err("motor bases must be positive and finite".into());
         }
-        let matrix = motor.matrix(kv * kv / kva * 1000.0)?;
+        // kV² / kVA, times 1000 for ohms (the bases are positive above).
+        let base = crate::electrical::calc_impedance_base(kv, kva)
+            .ok_or("motor impedance base is not finite")?;
+        let matrix = motor.matrix(base * 1000.0)?;
         let bus = bus_spec(props.get("bus1"), "");
         if bus.name.is_empty()
             || bus.nodes.len() > 3

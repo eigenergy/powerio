@@ -1689,7 +1689,8 @@ pub(crate) fn parse_ravens_source(
             continue;
         };
         let kv = eff_kv(kv_of.get(&from).copied().unwrap_or(1.0));
-        let z_base = kv * kv / base_mva;
+        let z_base =
+            powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN);
         // Divide by the writer's own multiplier (not the reciprocal
         // constant): same-constant mul→div round trips bit exactly, mixed
         // constants double-round and break canonical idempotence.
@@ -2084,7 +2085,7 @@ fn read_transformer(
     };
 
     let kv = eff_kv(kv_of.get(&from).copied().unwrap_or(1.0));
-    let z_base = kv * kv / base_mva;
+    let z_base = powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN);
     let end_f = |end: &Map<String, Value>, key: &str| -> f64 {
         end.get(key).and_then(Value::as_f64).unwrap_or(0.0)
     };

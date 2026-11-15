@@ -249,7 +249,7 @@ fn setpoint(row: &Row<'_>) -> Result<InfeederSetpoint> {
             };
             Ok(InfeederSetpoint::Power {
                 watts: finite(s * pf)?,
-                vars: finite(s * (1.0 - pf * pf).sqrt())?,
+                vars: finite(s * powerio_core::electrical::calc_power_factor_sine(pf))?,
             })
         }
         3 | 6 | 8 | 9 => Ok(InfeederSetpoint::Voltage {

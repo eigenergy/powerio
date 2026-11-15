@@ -228,7 +228,7 @@ fn equivalent(y: &Primitive, volts: [f64; 2]) -> Result<DistTransformer> {
     // A shunt has no nameplate VA rating. This is a canonical parameter base,
     // not a recovered thermal limit. Its choice cancels from the circuit.
     let rating = 1e6;
-    let zbase = volts[1] * volts[1] / rating;
+    let zbase = powerio_core::electrical::calc_impedance_base(volts[1], rating).unwrap_or(f64::NAN);
     let r_pct = z.re / zbase * 100.0;
     let x_pct = z.im / zbase * 100.0;
     let tap = ratio * volts[1] / volts[0];
