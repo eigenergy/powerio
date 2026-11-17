@@ -151,6 +151,12 @@ pub mod codes {
             "a control is retained without running it; equipment keeps its written settings";
         READ_DSS_OBJECT_UNTYPED = "READ.DSS.OBJECT_UNTYPED", Warning,
             "an object shape the model does not type yet is kept untyped";
+        /// `New` named a general object (a linecode, a loadshape, wire data
+        /// and the like) that already exists. OpenDSS edits the existing
+        /// object without a message, and so does the reader. Severity
+        /// `Remark`: the script is valid and nothing was lost.
+        READ_DSS_OBJECT_REDEFINED = "READ.DSS.OBJECT_REDEFINED", Remark,
+            "a second `New` for an existing general object edited it, as OpenDSS does";
         READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
             "a disabled source is retained without electrical contributions";
         EMIT_DSS_PROJECT_UNREPRESENTABLE = "EMIT.DSS.PROJECT_UNREPRESENTABLE", Error,

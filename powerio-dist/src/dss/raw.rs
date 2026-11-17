@@ -562,7 +562,34 @@ struct Executor<'l, L: Loader> {
     var_count: usize,
     var_bytes: usize,
     var_budget_spent: bool,
+    /// `New` statements that named an existing general object, by class: how
+    /// many, and where the first one was. Reported once per class when the
+    /// script ends. Kept here rather than on `RawDss` so a `Clear` does not
+    /// erase what the script did.
+    redefined: BTreeMap<String, (usize, String)>,
 }
+
+/// The OpenDSS classes that are general objects rather than circuit elements.
+/// `New` on an existing one edits it without a message (ExecHelper
+/// `AddObject`, the `DSS_OBJECT` branch); on an existing circuit element the
+/// engine warns (message 266).
+const GENERAL_OBJECT_CLASSES: [&str; 15] = [
+    "linecode",
+    "loadshape",
+    "tshape",
+    "priceshape",
+    "xycurve",
+    "growthshape",
+    "tcc_curve",
+    "spectrum",
+    "wiredata",
+    "cndata",
+    "tsdata",
+    "linespacing",
+    "linegeometry",
+    "xfmrcode",
+    "dynamicexp",
+];
 
 /// Collapses `.` and `..` lexically, without touching the filesystem. A
 /// leading `..` is preserved so a path that climbs above its base fails the
@@ -876,17 +903,41 @@ impl<L: Loader> Executor<'_, L> {
         let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
         let idx = match self.raw.index.get(&key) {
             Some(&existing) => {
-                self.raw.warn(
-                    &C::PARSE_DSS_SOURCE_MALFORMED,
-                    ctx(format!(
-                        "duplicate `New {class}.{name}`; editing the existing object"
-                    )),
-                );
+                if GENERAL_OBJECT_CLASSES.contains(&key.0.as_str()) {
+                    // OpenDSS edits an existing general object without a
+                    // message. Tally it; one finding per class is recorded
+                    // when the script ends.
+                    self.redefined
+                        .entry(key.0.clone())
+                        .or_insert_with(|| (0, ctx(format!("`New {class}.{name}`"))))
+                        .0 += 1;
+                } else {
+                    self.raw.warn(
+                        &C::PARSE_DSS_SOURCE_MALFORMED,
+                        ctx(format!(
+                            "duplicate `New {class}.{name}`; editing the existing object"
+                        )),
+                    );
+                }
                 existing
             }
             None => self.make_object(&class, name),
         };
         self.consume_and_apply(idx, scan, ctx);
+    }
+
+    /// One finding per class for the `New` statements that named an existing
+    /// general object, in class name order.
+    fn report_redefinitions(&mut self) {
+        for (class, (count, first)) in std::mem::take(&mut self.redefined) {
+            self.raw.warn(
+                &C::READ_DSS_OBJECT_REDEFINED,
+                format!(
+                    "{count} `New {class}` statement(s) name an object that already exists; \
+                     each edits the existing object, as OpenDSS does (first: {first})"
+                ),
+            );
+        }
     }
 
     fn do_edit(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -2523,8 +2574,10 @@ fn run_executor(
         var_count: 0,
         var_bytes: 0,
         var_budget_spent: false,
+        redefined: BTreeMap::new(),
     };
     exec.run_script(text, path);
+    exec.report_redefinitions();
     exec.raw
 }
 
@@ -2587,6 +2640,7 @@ mod tests {
             boundary: IncludeBoundary::CaseDirectory,
             includes: 0,
             include_bytes: 0,
+            redefined: BTreeMap::new(),
             budget_spent: false,
             var_count: 0,
             var_bytes: 0,
@@ -2732,6 +2786,7 @@ mod tests {
             boundary: IncludeBoundary::CaseDirectory,
             includes: 0,
             include_bytes: 0,
+            redefined: BTreeMap::new(),
             budget_spent: false,
             var_count: 0,
             var_bytes: 0,
@@ -3471,6 +3526,76 @@ mod tests {
                 .count(),
             1,
             "one refusal, however many follow"
+        );
+    }
+
+    fn codes(raw: &RawDss) -> Vec<&str> {
+        raw.diagnostics
+            .iter()
+            .map(crate::diagnostics::Diagnostic::code)
+            .collect()
+    }
+
+    #[test]
+    fn a_second_new_for_a_general_object_edits_it_and_is_reported_once_per_class() {
+        // OpenDSS AddObject: `New` on an existing general object makes it
+        // active and edits it without a message. A circuit element draws
+        // warning 266.
+        let raw = parse(
+            "New Linecode.lc r1=1 x1=2\n\
+             New Linecode.lc r1=3\n\
+             New Linecode.LC r1=4\n\
+             New WireData.w rac=1\n\
+             New WireData.w rac=2\n\
+             New Line.l1 length=1\n\
+             New Line.l1 length=2",
+        );
+        let lc = raw.find("linecode", "lc").unwrap();
+        assert_eq!(lc.get("r1").unwrap().text, "4");
+        assert_eq!(lc.get("x1").unwrap().text, "2");
+        assert_eq!(raw.of_class("linecode").count(), 1);
+        assert_eq!(
+            raw.find("wiredata", "w").unwrap().get("rac").unwrap().text,
+            "2"
+        );
+        assert_eq!(
+            raw.warnings,
+            [
+                "PARSE.DSS.SOURCE_MALFORMED: test.dss:7: duplicate `New Line.l1`; editing the \
+                 existing object",
+                "READ.DSS.OBJECT_REDEFINED: 2 `New linecode` statement(s) name an object that \
+                 already exists; each edits the existing object, as OpenDSS does (first: \
+                 test.dss:2: `New Linecode.lc`)",
+                "READ.DSS.OBJECT_REDEFINED: 1 `New wiredata` statement(s) name an object that \
+                 already exists; each edits the existing object, as OpenDSS does (first: \
+                 test.dss:5: `New WireData.w`)",
+            ]
+        );
+        let severities: Vec<_> = raw
+            .diagnostics
+            .iter()
+            .map(crate::diagnostics::Diagnostic::severity)
+            .collect();
+        assert_eq!(
+            severities,
+            [
+                crate::diagnostics::DiagnosticSeverity::Warning,
+                crate::diagnostics::DiagnosticSeverity::Remark,
+                crate::diagnostics::DiagnosticSeverity::Remark,
+            ]
+        );
+    }
+
+    #[test]
+    fn clear_keeps_the_redefinitions_already_counted() {
+        // `Clear` resets the circuit, not the record of how the script was
+        // read; the linecode declared after it is new again.
+        let raw = parse("New Linecode.lc r1=1\nNew Linecode.lc r1=2\nClear\nNew Linecode.lc r1=3");
+        assert_eq!(codes(&raw), ["READ.DSS.OBJECT_REDEFINED"]);
+        assert!(raw.warnings[0].contains("1 `New linecode` statement(s)"));
+        assert_eq!(
+            raw.find("linecode", "lc").unwrap().get("r1").unwrap().text,
+            "3"
         );
     }
 
