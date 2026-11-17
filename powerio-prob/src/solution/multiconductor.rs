@@ -37,6 +37,33 @@ fn source_terminal_count(network: &MulticonductorNetwork) -> usize {
         .sum()
 }
 
+/// The number of generator coils of a network: per generator, the coils of
+/// its connection under `powerio_dist::calc_element_connection`, the rule
+/// that orders a generator's per coil bounds and costs.
+fn generator_coil_count(network: &MulticonductorNetwork) -> Result<usize, Error> {
+    let mut coils = 0;
+    for generator in network.generators() {
+        coils += powerio_dist::calc_element_connection(
+            network,
+            &generator.bus,
+            &generator.terminal_map,
+            generator.configuration,
+            None,
+        )
+        .map_err(|reason| {
+            Error::new(
+                &codes::BUILD_SOLUTION_SHAPE_MISMATCH,
+                format!(
+                    "generator `{}` does not resolve to coils: {reason}",
+                    generator.name
+                ),
+            )
+        })?
+        .len();
+    }
+    Ok(coils)
+}
+
 /// Bus-and-terminal to flat column position, built once per solution so
 /// repeated reads never rescan the bus table: powerio-dist's one flat
 /// terminal index.
@@ -257,7 +284,13 @@ impl McAcPfSolution {
 }
 
 /// The multiconductor AC optimal power flow solution: the power flow results
-/// plus per phase generator dispatch and the objective value.
+/// plus generator dispatch and the objective value.
+///
+/// Generator dispatch has two columns. The required one,
+/// [`Self::generator_active_powers`], is per terminal of each generator's
+/// terminal map, neutral included. The optional one,
+/// [`Self::generator_coil_active_powers`], is per coil, the layout of a
+/// generator's cost and bounds.
 #[derive(Clone, Debug)]
 pub struct McAcOpfSolution {
     instance: Arc<McAcOpfInstance>,
@@ -269,21 +302,29 @@ pub struct McAcOpfSolution {
     terminal_current_magnitude: Option<Vec<f64>>,
     terminal_active_power: Option<Vec<f64>>,
     source_active_injection: Vec<f64>,
-    /// Per generator, per phase active dispatch, generator table order with
-    /// each generator's terminal map order, watts.
+    /// Per generator, per terminal active power, generator table order with
+    /// each generator's terminal map order (neutral included), watts.
     generator_active_power: Vec<f64>,
+    /// Per generator, per coil active dispatch, generator table order with
+    /// each generator's coil order, watts, when the producer reported it.
+    generator_coil_active_power: Option<Vec<f64>>,
     objective: f64,
     index: TerminalIndex,
 }
 
 impl McAcOpfSolution {
-    /// Assemble the results: the power flow columns plus the optimized per
-    /// phase generator dispatch (watts, generator table order with each
-    /// generator's terminal map order) and the objective value.
+    /// Assemble the results: the power flow columns plus the optimized
+    /// generator active power per terminal (watts, generator table order
+    /// with each generator's terminal map order, one entry per mapped
+    /// terminal, neutral included) and the objective value.
+    ///
+    /// The per terminal column is not the layout of generator cost and
+    /// bounds; record the per coil dispatch with
+    /// [`Self::with_generator_coil_active_powers`].
     ///
     /// # Errors
     /// A column whose length disagrees with the instance's resolved
-    /// terminals or generator conductors.
+    /// terminals or generator terminal maps.
     pub fn new(
         instance: Arc<McAcOpfInstance>,
         termination: Termination,
@@ -316,7 +357,7 @@ impl McAcOpfSolution {
             .map(|generator| generator.terminal_map.len())
             .sum();
         check_length(
-            "per phase generator dispatch",
+            "per terminal generator active powers",
             generator_active_power.len(),
             generator_conductors,
         )?;
@@ -332,6 +373,7 @@ impl McAcOpfSolution {
             terminal_active_power: None,
             source_active_injection,
             generator_active_power,
+            generator_coil_active_power: None,
             objective,
             index,
         })
@@ -345,10 +387,63 @@ impl McAcOpfSolution {
         self.objective
     }
 
-    /// The optimized per phase generator dispatch, watts, generator table
-    /// order with each generator's terminal map order.
+    /// The optimized generator active power per terminal, watts, generator
+    /// table order with each generator's terminal map order: one entry per
+    /// mapped terminal, neutral included.
+    ///
+    /// A generator's cost and bounds are per coil, not per terminal. For a
+    /// DELTA generator, or a WYE generator whose neutral voltage is not
+    /// zero, this column differs from the per coil dispatch; read
+    /// [`Self::generator_coil_active_powers`] for that.
     #[must_use]
     pub fn generator_active_powers(&self) -> &[f64] {
         &self.generator_active_power
+    }
+
+    /// The optimized generator active dispatch per coil, watts, positive
+    /// for generation, when the producer reported it.
+    ///
+    /// Generators are in generator table order. Within a generator the
+    /// coils are in the order of [`powerio_dist::calc_element_connection`]
+    /// over its bus, terminal map and configuration with no stated channel
+    /// count, which is the order of its `p_min`, `p_max`, `q_min`, `q_max`,
+    /// `s_max` and `cost` entries:
+    ///
+    /// - WYE: one coil per phase terminal, in terminal map order, from that
+    ///   terminal to the neutral (to ground when the map states no
+    ///   neutral). The neutral has no entry.
+    /// - DELTA with three terminals: terminal 1 to 2, 2 to 3, 3 to 1 of the
+    ///   terminal map (ab, bc, ca for a map a, b, c).
+    /// - DELTA or SINGLE_PHASE with two terminals: one coil from the first
+    ///   terminal to the second.
+    ///
+    /// Each entry is the power that coil delivers to the network, so cost
+    /// times this column is the generator part of an active power dispatch
+    /// cost.
+    #[must_use]
+    pub fn generator_coil_active_powers(&self) -> Option<&[f64]> {
+        self.generator_coil_active_power.as_deref()
+    }
+
+    /// Record the per coil generator active dispatch, watts, positive for
+    /// generation, in the order [`Self::generator_coil_active_powers`]
+    /// states.
+    ///
+    /// # Errors
+    /// A generator whose connection does not resolve to coils, or a column
+    /// whose length disagrees with the generators' coils.
+    pub fn with_generator_coil_active_powers(mut self, values: Vec<f64>) -> Result<Self, Error> {
+        let coils = generator_coil_count(self.network())?;
+        if values.len() != coils {
+            return Err(Error::new(
+                &codes::BUILD_SOLUTION_SHAPE_MISMATCH,
+                format!(
+                    "per coil generator dispatch carries {} values; the instance's generators have {coils} coils",
+                    values.len()
+                ),
+            ));
+        }
+        self.generator_coil_active_power = Some(values);
+        Ok(self)
     }
 }

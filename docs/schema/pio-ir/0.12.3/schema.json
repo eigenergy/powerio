@@ -9985,6 +9985,16 @@
           },
           "type": "array"
         },
+        "generator_coil_active_power": {
+          "description": "Per coil generator active dispatch, watts, positive for generation:\ngenerator table order, each generator's coil order. Absent when the\nproducer did not report it, as in every document written before the\nfield existed.",
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "instance": {
           "$ref": "#/$defs/McAcOpfInstance"
         },

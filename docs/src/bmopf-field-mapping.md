@@ -343,7 +343,8 @@ one result of it.
 | `terminal_current_magnitude` | A, resolved terminal order, when the solver reports it |
 | `terminal_active_power` | W, resolved terminal order, when the solver reports it |
 | `source_active_injection` | W, per source terminal |
-| `generator_active_power` | W, generator table order with each generator's terminal map order |
+| `generator_active_power` | W, per generator terminal: generator table order with each generator's terminal map order, neutral included |
+| `generator_coil_active_power` | W, per generator coil, when the solver reports it: generator table order with each generator's coil order, the order of its `p_min`, `p_max` and `energy_cost_rate` entries |
 | `objective` | the optimised objective value |
 | `termination`, `residuals`, `producer` | how the solve ended, its residuals, and what produced it |
 
