@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- OpenDSS: `DssReadLimits` raises the include byte limit (64 MiB) and the retained property limit (4,194,304) for a case too large for the defaults, such as a SMART-DS region. Set it with `ParseOptions::dss_limits` or `powerio_dist::parse_with_dss_limits` in Rust, `dss_max_include_bytes` and `dss_max_properties` in Python's `powerio.parse`, or `--dss-max-include-bytes` and `--dss-max-properties` in the CLI. The defaults are unchanged.
+
 - OpenDSS: a second `New` for an existing general object (a linecode, a loadshape, wire data and the like) edits it without a message in OpenDSS. The reader now reports it as one `READ.DSS.OBJECT_REDEFINED` remark per class with a count, not one `PARSE.DSS.SOURCE_MALFORMED` warning per statement. A duplicate circuit element keeps its warning.
 
 - OpenDSS: lines that fetched the same state of a linecode share one evaluation of it. A region whose feeders each declare the same linecodes again read in 2 s where it took 16 s.

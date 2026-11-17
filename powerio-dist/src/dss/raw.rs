@@ -266,7 +266,7 @@ pub struct RawDss {
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
     /// Properties, source resets, line copy/edit/calculation history and wildcard work,
-    /// charged against `MAX_TOTAL_PROPS`.
+    /// charged against [`DssReadLimits::max_properties`].
     total_props: usize,
     // Source MakeLike copies resolved state, including flags/defaults that
     // an appended property history alone cannot restore. Reset markers refer
@@ -483,7 +483,8 @@ const MAX_TOTAL_DIAGNOSTICS: usize = 1 << 18;
 /// `buscoords` together, on the same rule as the diagnostic ceiling.
 const MAX_TOTAL_PRESERVED: usize = 1 << 20;
 
-/// Script text a single parse may pull in through includes. The include count
+/// Script text a single parse may pull in through includes, unless the caller
+/// raises it with [`DssReadLimits::max_include_bytes`]. The include count
 /// alone still admits amplification: one large file that redirects to itself is
 /// re-executed once per load, so a few megabytes of input buy thousands of
 /// times that in scanning. Together the two budgets keep an include tree
@@ -514,8 +515,77 @@ const MAX_OBJECT_PROPS: usize = 1 << 16;
 /// fill one object to its cap and then `like=` splice it into many new
 /// objects; the whole-parse budget bounds what all of them together may
 /// retain, refusing further splices and assignments through the clamp
-/// diagnostic. The largest legitimate feeders stay far under it.
+/// diagnostic. A single feeder stays far under it; a regional case with
+/// several hundred thousand lines and loads does not, so the caller can raise
+/// it with [`DssReadLimits::max_properties`].
 const MAX_TOTAL_PROPS: usize = 1 << 22;
+
+/// The two limits on one OpenDSS read that a large case can reach and a
+/// caller may raise.
+///
+/// Both bound the work and memory a script can demand, whatever its size on
+/// disk: an include that redirects to itself is executed again on every load,
+/// and one `like=` copies a whole property list. The defaults suit input the
+/// caller does not trust. A case with several hundred thousand lines and
+/// loads, such as a SMART-DS region, needs more than the defaults allow; a
+/// caller that trusts the case and has the memory for it raises them:
+///
+/// ```
+/// use powerio_dist::dss::DssReadLimits;
+///
+/// let limits = DssReadLimits::default()
+///     .max_include_bytes(1 << 30)
+///     .max_properties(1 << 26);
+/// assert!(limits.max_include_bytes > DssReadLimits::default().max_include_bytes);
+/// ```
+///
+/// The other limits are fixed: 4,096 included files, 64 levels of include
+/// nesting, and 65,536 retained records on any one object. A file source
+/// also keeps its own limit on the bytes it acquires
+/// ([`powerio_core::Source::acquisition_byte_limit`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DssReadLimits {
+    /// Bytes the read may pull in through `Redirect`, `Compile`, `Buscoords`
+    /// and loadshape files together. A file executed twice is charged twice.
+    /// The root file is not charged. Once the total reaches the limit the
+    /// include that crossed it completes and every later one is refused with
+    /// `READ.DSS.INCLUDE_BUDGET`. Default: 64 MiB.
+    pub max_include_bytes: usize,
+    /// Property assignments and edit records retained across every object,
+    /// together with the per-object work of commands that visit many objects
+    /// (`BatchEdit`, a `Solve` or `CalcVoltageBases` recorded against each
+    /// line). At the limit the read drops further assignments with
+    /// `READ.DSS.VALUE_CLAMPED` or stops with `READ.DSS.INCLUDE_BUDGET`.
+    /// Memory grows with the count: a region that retained 4.5 million read
+    /// with a peak of about 2.3 GB. Default: 4,194,304.
+    pub max_properties: usize,
+}
+
+impl Default for DssReadLimits {
+    fn default() -> Self {
+        Self {
+            max_include_bytes: MAX_TOTAL_INCLUDE_BYTES,
+            max_properties: MAX_TOTAL_PROPS,
+        }
+    }
+}
+
+impl DssReadLimits {
+    /// Set the bytes the read may pull in through includes.
+    #[must_use]
+    pub fn max_include_bytes(mut self, bytes: usize) -> Self {
+        self.max_include_bytes = bytes;
+        self
+    }
+
+    /// Set the property assignments and edit records the read may retain.
+    #[must_use]
+    pub fn max_properties(mut self, count: usize) -> Self {
+        self.max_properties = count;
+        self
+    }
+}
 
 /// Which directory the include containment confines to, for diagnostic
 /// wording: the refusal names the boundary actually in force.
@@ -549,9 +619,12 @@ struct Executor<'l, L: Loader> {
     /// Names the confinement boundary in refusal messages: the case directory
     /// by default, the caller's include root when one was widened onto `root`.
     boundary: IncludeBoundary,
+    /// The include byte and retained property limits in force.
+    limits: DssReadLimits,
     /// Includes followed and script bytes they pulled in, against
-    /// [`MAX_TOTAL_INCLUDES`] and [`MAX_TOTAL_INCLUDE_BYTES`]. `budget_spent`
-    /// keeps the refusal to one message however many includes follow it.
+    /// [`MAX_TOTAL_INCLUDES`] and [`DssReadLimits::max_include_bytes`].
+    /// `budget_spent` keeps the refusal to one message however many includes
+    /// follow it.
     includes: usize,
     include_bytes: usize,
     budget_spent: bool,
@@ -959,7 +1032,7 @@ impl<L: Loader> Executor<'_, L> {
         // Charge the selection scan, including objects in other classes, so
         // repeated empty matches cannot evade the whole-script work bound.
         let cost = self.raw.objects.len();
-        if self.raw.total_props.saturating_add(cost) > MAX_TOTAL_PROPS {
+        if self.raw.total_props.saturating_add(cost) > self.limits.max_properties {
             self.raw.halt(ctx(
                 "BatchEdit selection exceeds the whole-script work budget".into(),
             ));
@@ -1015,7 +1088,7 @@ impl<L: Loader> Executor<'_, L> {
             if self.raw.halted {
                 return;
             }
-            if self.raw.total_props >= MAX_TOTAL_PROPS {
+            if self.raw.total_props >= self.limits.max_properties {
                 self.raw.halt(ctx(
                     "BatchEdit iterator exceeds the whole-script work budget".into(),
                 ));
@@ -1039,7 +1112,7 @@ impl<L: Loader> Executor<'_, L> {
                     .total_props
                     .saturating_add(props.len())
                     .saturating_add(1)
-                    > MAX_TOTAL_PROPS
+                    > self.limits.max_properties
                     || self
                         .retained_property_count(idx)
                         .saturating_add(props.len())
@@ -1156,7 +1229,7 @@ impl<L: Loader> Executor<'_, L> {
             );
             return;
         }
-        if self.raw.total_props >= MAX_TOTAL_PROPS
+        if self.raw.total_props >= self.limits.max_properties
             || self.retained_property_count(idx) >= MAX_OBJECT_PROPS
         {
             self.raw.halt(ctx(
@@ -1266,7 +1339,7 @@ impl<L: Loader> Executor<'_, L> {
             // RecalcElementData. Charge each visited state to bound repeated
             // wildcard work even though no property history is appended.
             let count = self.raw.source_replay.len();
-            if self.raw.total_props.saturating_add(count) > MAX_TOTAL_PROPS {
+            if self.raw.total_props.saturating_add(count) > self.limits.max_properties {
                 self.raw
                     .halt("source state assignments exceeded the whole parse budget".into());
                 return;
@@ -1324,7 +1397,7 @@ impl<L: Loader> Executor<'_, L> {
             .raw
             .total_props
             .saturating_add(targets.len().saturating_mul(2))
-            > MAX_TOTAL_PROPS
+            > self.limits.max_properties
             || targets
                 .iter()
                 .any(|&idx| self.retained_property_count(idx).saturating_add(2) > MAX_OBJECT_PROPS)
@@ -1445,24 +1518,31 @@ impl<L: Loader> Executor<'_, L> {
     fn charge_include(&mut self, verb: &str, path: &Path, ctx: &dyn Fn(String) -> String) -> bool {
         let over_budget = self.budget_spent
             || self.includes >= MAX_TOTAL_INCLUDES
-            || self.include_bytes >= MAX_TOTAL_INCLUDE_BYTES;
+            || self.include_bytes >= self.limits.max_include_bytes;
         if !over_budget {
             self.includes += 1;
             return true;
         }
         if !self.budget_spent {
             self.budget_spent = true;
+            // The default and any whole number of MiB read as before; a
+            // caller's other value is stated exactly.
+            let bytes = self.limits.max_include_bytes;
+            let bytes = if bytes.is_multiple_of(1 << 20) {
+                format!("{} MiB", bytes >> 20)
+            } else {
+                format!("{bytes} bytes")
+            };
             let message = ctx(format!(
                 "{verb} {}: refused; the case exceeded the include budget of {MAX_TOTAL_INCLUDES} \
-                 files and {} MiB, so the rest of the includes were not followed",
+                 files and {bytes}, so the rest of the includes were not followed",
                 path.display(),
-                MAX_TOTAL_INCLUDE_BYTES >> 20,
             ));
             self.refuse(
                 message,
                 &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
                 "check the case for an include cycle; a file that redirects to itself expands \
-                 without bound",
+                 without bound. If the case is this large, raise the OpenDSS include byte limit",
             );
         }
         false
@@ -1769,10 +1849,19 @@ impl<L: Loader> Executor<'_, L> {
             .copied()
             .filter(|&idx| self.raw.objects[idx].class == "line")
             .collect();
-        if self.raw.total_props.saturating_add(indices.len()) > MAX_TOTAL_PROPS
-            || indices
-                .iter()
-                .any(|&idx| self.retained_property_count(idx) >= MAX_OBJECT_PROPS)
+        if self.raw.total_props.saturating_add(indices.len()) > self.limits.max_properties {
+            let limit = self.limits.max_properties;
+            self.raw.halt(ctx(format!(
+                "line calculation history exceeds the supported work budget: recording this \
+                 calculation on {} lines would pass the limit of {limit} retained properties \
+                 and edit records",
+                indices.len()
+            )));
+            return;
+        }
+        if indices
+            .iter()
+            .any(|&idx| self.retained_property_count(idx) >= MAX_OBJECT_PROPS)
         {
             self.raw.halt(ctx(
                 "line calculation history exceeds the supported work budget".into(),
@@ -1941,13 +2030,14 @@ impl<L: Loader> Executor<'_, L> {
                     .total_props
                     .saturating_add(src_len)
                     .saturating_add(replay_charge)
-                    > MAX_TOTAL_PROPS
+                    > self.limits.max_properties
                 {
+                    let limit = self.limits.max_properties;
                     self.raw.warn(
                         &C::READ_DSS_VALUE_CLAMPED,
                         ctx(format!(
                             "like={}: the script's retained property count would exceed \
-                         the supported maximum of {MAX_TOTAL_PROPS}; splice refused",
+                         the supported maximum of {limit}; splice refused",
                             value.text
                         )),
                     );
@@ -2020,7 +2110,7 @@ impl<L: Loader> Executor<'_, L> {
                     .retained_property_count(idx)
                     .saturating_add(names.len())
                     > MAX_OBJECT_PROPS
-                || self.raw.total_props.saturating_add(names.len()) > MAX_TOTAL_PROPS
+                || self.raw.total_props.saturating_add(names.len()) > self.limits.max_properties
             {
                 self.raw.halt(ctx(
                     "geometry conductor bindings exceed the supported count/work budget".into(),
@@ -2102,7 +2192,7 @@ impl<L: Loader> Executor<'_, L> {
         self.raw.active = Some(idx);
         if self.raw.line_history.contains_key(&idx) {
             if self.retained_property_count(idx) > MAX_OBJECT_PROPS
-                || self.raw.total_props >= MAX_TOTAL_PROPS
+                || self.raw.total_props >= self.limits.max_properties
             {
                 self.raw.warn(&C::READ_DSS_VALUE_CLAMPED, ctx("line history edit count exceeds the supported property/work budget; edit refused".into()));
                 return;
@@ -2142,12 +2232,13 @@ impl<L: Loader> Executor<'_, L> {
                 );
                 continue;
             }
-            if self.raw.total_props >= MAX_TOTAL_PROPS {
+            if self.raw.total_props >= self.limits.max_properties {
+                let limit = self.limits.max_properties;
                 self.raw.warn(
                     &C::READ_DSS_VALUE_CLAMPED,
                     ctx(format!(
                         "{}: the script's retained property count exceeds the supported maximum \
-                     of {MAX_TOTAL_PROPS}; further assignments dropped",
+                     of {limit}; further assignments dropped",
                         self.raw.objects[idx].class
                     )),
                 );
@@ -2305,7 +2396,14 @@ fn collect_props_for(
 /// loader.
 #[doc(hidden)]
 pub fn __parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
-    run_executor(text, path, None, IncludeBoundary::CaseDirectory, loader)
+    run_executor(
+        text,
+        path,
+        None,
+        IncludeBoundary::CaseDirectory,
+        DssReadLimits::default(),
+        loader,
+    )
 }
 
 /// Projects a source acquisition failure onto the loader's `io::Error`,
@@ -2438,8 +2536,11 @@ impl Loader for SourceLoader<'_> {
 /// acquisition walk refuses symbolic links at read time, so a component
 /// replaced during the parse cannot redirect a read outside the root. The
 /// include budget in files and bytes and the nesting limit are enforced by
-/// the executor unchanged.
-pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<RawDss> {
+/// the executor unchanged; `limits` sets the two a caller may raise.
+pub(crate) fn parse_raw_from_source(
+    source: &powerio_core::Source,
+    limits: DssReadLimits,
+) -> Result<RawDss> {
     let primary = source.primary_buffer().map_err(|error| Error::FormatRead {
         format: "dss",
         message: error.to_string(),
@@ -2459,13 +2560,14 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
             None => file.push(source.name()),
         }
         let mut loader = source_include_loader(source, root.to_path_buf());
-        let raw = parse_raw_confined_under(text, &file.display().to_string(), root, &mut loader);
+        let raw =
+            parse_raw_confined_under(text, &file.display().to_string(), root, limits, &mut loader);
         (raw, loader)
     } else if primary.directory_segments().next().is_some() {
         // A memory-tree primary is relative to the supplied tree root.
         let root = Path::new("");
         let mut loader = source_include_loader(source, root.to_path_buf());
-        let raw = parse_raw_confined_under(text, source.name(), root, &mut loader);
+        let raw = parse_raw_confined_under(text, source.name(), root, limits, &mut loader);
         (raw, loader)
     } else {
         // The default root of a file source is its containing directory, and
@@ -2479,7 +2581,7 @@ pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<Raw
                 .unwrap_or_else(|| Path::new("")),
         );
         let mut loader = source_include_loader(source, lexical_root);
-        let raw = parse_raw_with_confined(text, source.name(), &mut loader);
+        let raw = parse_raw_with_confined(text, source.name(), limits, &mut loader);
         (raw, loader)
     };
     raw.dependencies = loader.dependencies.into_iter().collect();
@@ -2521,7 +2623,12 @@ impl std::error::Error for Containment {}
 /// out of that directory with `..` is refused with a warning and read nothing.
 /// Used by the file entry point so an untrusted case file on disk cannot read
 /// arbitrary paths.
-pub(crate) fn parse_raw_with_confined(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
+pub(crate) fn parse_raw_with_confined(
+    text: &str,
+    path: &str,
+    limits: DssReadLimits,
+    loader: &mut impl Loader,
+) -> RawDss {
     let root = lexical_normalize(
         &Path::new(path)
             .parent()
@@ -2533,6 +2640,7 @@ pub(crate) fn parse_raw_with_confined(text: &str, path: &str, loader: &mut impl 
         path,
         Some(root),
         IncludeBoundary::CaseDirectory,
+        limits,
         loader,
     )
 }
@@ -2544,10 +2652,18 @@ pub(crate) fn parse_raw_confined_under(
     text: &str,
     path: &str,
     include_root: &Path,
+    limits: DssReadLimits,
     loader: &mut impl Loader,
 ) -> RawDss {
     let root = lexical_normalize(include_root);
-    run_executor(text, path, Some(root), IncludeBoundary::IncludeRoot, loader)
+    run_executor(
+        text,
+        path,
+        Some(root),
+        IncludeBoundary::IncludeRoot,
+        limits,
+        loader,
+    )
 }
 
 fn run_executor(
@@ -2555,6 +2671,7 @@ fn run_executor(
     path: &str,
     root: Option<PathBuf>,
     boundary: IncludeBoundary,
+    limits: DssReadLimits,
     loader: &mut impl Loader,
 ) -> RawDss {
     let mut exec = Executor {
@@ -2568,6 +2685,7 @@ fn run_executor(
         ],
         root,
         boundary,
+        limits,
         includes: 0,
         include_bytes: 0,
         budget_spent: false,
@@ -2594,7 +2712,7 @@ pub fn __parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
         path: path.display().to_string(),
         source: std::io::Error::other(error.to_string()),
     })?;
-    parse_raw_from_source(&source)
+    parse_raw_from_source(&source, DssReadLimits::default())
 }
 
 #[cfg(test)]
@@ -2640,6 +2758,7 @@ mod tests {
             boundary: IncludeBoundary::CaseDirectory,
             includes: 0,
             include_bytes: 0,
+            limits: DssReadLimits::default(),
             redefined: BTreeMap::new(),
             budget_spent: false,
             var_count: 0,
@@ -2786,6 +2905,7 @@ mod tests {
             boundary: IncludeBoundary::CaseDirectory,
             includes: 0,
             include_bytes: 0,
+            limits: DssReadLimits::default(),
             redefined: BTreeMap::new(),
             budget_spent: false,
             var_count: 0,
@@ -3180,6 +3300,7 @@ mod tests {
         let raw = parse_raw_with_confined(
             "Redirect ../../secret.dss\nClear\nRedirect ../../secret.dss\nRedirect /etc/passwd",
             "/case/dir/master.dss",
+            DssReadLimits::default(),
             &mut loader,
         );
         assert!(
@@ -3529,11 +3650,115 @@ mod tests {
         );
     }
 
+    /// The executor under `limits`, with `files` served by name.
+    fn parse_with_limits(script: &str, files: &[(&str, &str)], limits: DssReadLimits) -> RawDss {
+        let mut loader = |path: &Path| {
+            files
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| (*text).to_string())
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing"))
+        };
+        run_executor(
+            script,
+            "test.dss",
+            None,
+            IncludeBoundary::CaseDirectory,
+            limits,
+            &mut loader,
+        )
+    }
+
     fn codes(raw: &RawDss) -> Vec<&str> {
         raw.diagnostics
             .iter()
             .map(crate::diagnostics::Diagnostic::code)
             .collect()
+    }
+
+    #[test]
+    fn the_include_byte_limit_is_the_callers() {
+        // Three includes of 40 bytes each. The limit is checked before each
+        // load, so 60 bytes admit the first two and refuse the third.
+        let line = "New Load.a kw=1\n".repeat(2);
+        let body = format!("{line}{}", " ".repeat(40 - line.len()));
+        assert_eq!(body.len(), 40);
+        let files = [("a.dss", &*body), ("b.dss", &*body), ("c.dss", &*body)];
+        let script = "Redirect a.dss\nRedirect b.dss\nRedirect c.dss";
+
+        let raw = parse_with_limits(script, &files, DssReadLimits::default());
+        assert_eq!(budget_refusals(&raw), 0);
+
+        let limits = DssReadLimits::default().max_include_bytes(60);
+        let raw = parse_with_limits(script, &files, limits);
+        assert_eq!(budget_refusals(&raw), 1);
+        let refusal = &raw.warnings[raw.warnings.len() - 1];
+        assert!(
+            refusal.contains("test.dss:3: redirect c.dss: refused")
+                && refusal.contains("4096 files and 60 bytes"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_raised_include_byte_limit_reads_past_the_default() {
+        // One include a little over the default limit, then a second. The
+        // default follows the first and refuses the second.
+        let big = format!("! {}\n", "x".repeat(MAX_TOTAL_INCLUDE_BYTES));
+        let files = [("big.dss", &*big), ("codes.dss", "New Linecode.lc r1=1")];
+        let script = "Redirect big.dss\nRedirect codes.dss";
+
+        let raw = parse_with_limits(script, &files, DssReadLimits::default());
+        assert_eq!(budget_refusals(&raw), 1);
+        assert!(raw.warnings[0].contains("4096 files and 64 MiB"));
+        assert!(raw.find("linecode", "lc").is_none());
+
+        let limits = DssReadLimits::default().max_include_bytes(2 * MAX_TOTAL_INCLUDE_BYTES);
+        let raw = parse_with_limits(script, &files, limits);
+        assert_eq!(raw.warnings, [] as [String; 0]);
+        assert!(raw.find("linecode", "lc").is_some());
+    }
+
+    #[test]
+    fn the_property_limit_is_the_callers() {
+        // Four loads of three properties each: twelve retained properties.
+        let script = "New Load.a bus1=b kv=1 kw=1\nNew Load.b bus1=b kv=1 kw=1\n\
+                      New Load.c bus1=b kv=1 kw=1\nNew Load.d bus1=b kv=1 kw=1";
+        let raw = parse_with_limits(script, &[], DssReadLimits::default());
+        assert_eq!(raw.total_props, 12);
+        assert_eq!(raw.warnings, [] as [String; 0]);
+
+        let raw = parse_with_limits(script, &[], DssReadLimits::default().max_properties(10));
+        assert_eq!(raw.total_props, 10);
+        assert_eq!(
+            codes(&raw),
+            ["READ.DSS.VALUE_CLAMPED", "READ.DSS.VALUE_CLAMPED"]
+        );
+        assert!(raw.warnings[0].contains("supported maximum of 10"));
+        assert_eq!(raw.find("load", "d").unwrap().props.len(), 1);
+    }
+
+    #[test]
+    fn a_calculation_over_many_lines_stops_at_the_property_limit() {
+        // Each line holds two properties and the checkpoint that closes its
+        // `New`; `Solve` then records one event on every line.
+        let script = "New Line.a bus1=x bus2=y\nNew Line.b bus1=y bus2=z\nSolve";
+        let raw = parse_with_limits(script, &[], DssReadLimits::default().max_properties(8));
+        assert_eq!(raw.total_props, 8);
+        assert!(!raw.halted);
+
+        let raw = parse_with_limits(script, &[], DssReadLimits::default().max_properties(7));
+        assert!(raw.halted);
+        assert_eq!(codes(&raw), ["READ.DSS.INCLUDE_BUDGET"]);
+        assert!(
+            raw.warnings[0].contains(
+                "test.dss:3: line calculation history exceeds the supported work budget: \
+                 recording this calculation on 2 lines would pass the limit of 7 retained \
+                 properties and edit records"
+            ),
+            "{}",
+            raw.warnings[0]
+        );
     }
 
     #[test]
@@ -3629,6 +3854,7 @@ mod tests {
         let raw = parse_raw_with_confined(
             "Redirect ../../secret.dss\nRedirect /etc/passwd\nBuscoords ../up.csv",
             "/case/dir/master.dss",
+            DssReadLimits::default(),
             &mut loader,
         );
         assert!(
@@ -3673,6 +3899,7 @@ mod tests {
         let raw = parse_raw_with_confined(
             "Redirect /etc/passwd\nRedirect ../secret.dss\nRedirect sub/ok.dss",
             "master.dss",
+            DssReadLimits::default(),
             &mut loader,
         );
         assert_eq!(
@@ -3702,6 +3929,7 @@ mod tests {
         let raw = parse_raw_with_confined(
             "Redirect codes.dss\nRedirect ../../outside.dss",
             "../case/master.dss",
+            DssReadLimits::default(),
             &mut loader,
         );
         assert_eq!(*requested.borrow(), vec!["../case/codes.dss".to_string()]);
@@ -3779,6 +4007,7 @@ mod tests {
         parse_raw_with_confined(
             "Redirect sub/codes.dss\nRedirect /case/dir/abs.dss",
             "/case/dir/master.dss",
+            DssReadLimits::default(),
             &mut loader,
         );
         assert_eq!(
@@ -3804,6 +4033,7 @@ mod tests {
             "Redirect ../shared/codes.dss\nRedirect ../../outside.dss",
             "/root/feeder/master.dss",
             Path::new("/root"),
+            DssReadLimits::default(),
             &mut loader,
         );
         assert_eq!(

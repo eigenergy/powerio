@@ -165,10 +165,18 @@ entries, unsafe entry names, document type and entity declarations, and
 invalid UTF-8 are refused. These archive checks are fixed; only the byte limit
 is configurable.
 
-Some readers keep fixed limits below these defaults. An XIIDM or JIIDM
+Some readers keep limits below these defaults. An XIIDM or JIIDM
 document holds at most 64 MiB, from a path or from memory. An OpenDSS case
 follows at most 4,096 includes and stops following them once they have loaded
-64 MiB of script text, counting a file again each time the case runs it.
+64 MiB of script text, counting a file again each time the case runs it. It
+also retains at most 4,194,304 property assignments and edit records across
+all its objects. A region with several hundred thousand lines and loads
+passes both the 64 MiB and the property limit; a caller that trusts the case
+raises them with `DssReadLimits` in Rust (`ParseOptions::dss_limits`, or
+`powerio_dist::parse_with_dss_limits`), with `dss_max_include_bytes` and
+`dss_max_properties` in Python's `powerio.parse`, or with
+`--dss-max-include-bytes` and `--dss-max-properties` in the CLI. The 4,096
+include count is fixed.
 
 Apart from CGMES, XIIDM, and JIIDM, caller-owned memory has no whole-document limit; format and
 record limits still apply. Stored solutions embed their instance and network,

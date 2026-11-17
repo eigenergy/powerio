@@ -891,6 +891,7 @@ class _PioModule:
         sincal: Optional[Tuple[Optional[int], Optional[float], Optional[str], bool]] = ...,
         acquisition_root: Optional[str] = ...,
         sincal_balanced: Optional[Tuple[Optional[int], Optional[float], Optional[str]]] = ...,
+        dss_limits: Optional[Tuple[Optional[int], Optional[int]]] = ...,
     ) -> "_PioModule": ...
     @staticmethod
     def _parse_memory(
@@ -898,6 +899,7 @@ class _PioModule:
         sincal: Optional[Tuple[Optional[int], Optional[float], Optional[str], bool]] = ...,
         named_buffers: Optional[List[Tuple[str, bytes]]] = ...,
         sincal_balanced: Optional[Tuple[Optional[int], Optional[float], Optional[str]]] = ...,
+        dss_limits: Optional[Tuple[Optional[int], Optional[int]]] = ...,
     ) -> "_PioModule": ...
     @staticmethod
     def _deserialize_path(path: str) -> "_PioModule": ...

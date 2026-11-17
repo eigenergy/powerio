@@ -138,3 +138,44 @@ fn named_companion_buffers_resolve_unique_case_variants() {
     let names: Vec<_> = module.sources().iter().map(|s| s.id().as_str()).collect();
     assert!(names.contains(&"Loads.DSS"), "{names:?}");
 }
+
+#[test]
+fn the_callers_limits_reach_the_opendss_read() {
+    // Two includes. One byte of include budget admits the first and refuses
+    // the second, which leaves the network incomplete, so the read fails.
+    let source = || {
+        Source::from_memory(
+            "Master.dss",
+            b"new circuit.c\nredirect a.dss\nredirect b.dss\n".to_vec(),
+        )
+        .unwrap()
+        .with_named_buffer(
+            "a.dss",
+            b"new load.a bus1=sourcebus.1 phases=1 kv=1 kw=1\n".to_vec(),
+        )
+        .unwrap()
+        .with_named_buffer(
+            "b.dss",
+            b"new load.b bus1=sourcebus.1 phases=1 kv=1 kw=1\n".to_vec(),
+        )
+        .unwrap()
+    };
+    let defaults = powerio_dist::DssReadLimits::default();
+    let module = powerio_dist::parse_with_dss_limits(source(), defaults).unwrap();
+    assert_eq!(module.value().loads().len(), 2);
+
+    let error =
+        powerio_dist::parse_with_dss_limits(source(), defaults.max_include_bytes(1)).unwrap_err();
+    let refusals: Vec<_> = error
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
+        .map(powerio_core::Diagnostic::message)
+        .collect();
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(
+        refusals[0].contains("redirect b.dss: refused")
+            && refusals[0].contains("4096 files and 1 bytes"),
+        "{refusals:?}"
+    );
+}

@@ -443,6 +443,9 @@ pub struct ParseOptions {
     /// The directory beneath which a format may refer to further files,
     /// widening the default of the input file's own directory.
     pub acquisition_root: Option<std::path::PathBuf>,
+    /// The limits an OpenDSS read works under, for a case too large for the
+    /// defaults. `None` keeps the defaults. No effect on any other format.
+    pub dss_limits: Option<powerio_dist::DssReadLimits>,
 }
 
 impl ParseOptions {
@@ -466,6 +469,25 @@ impl ParseOptions {
     #[must_use]
     pub fn acquisition_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
         self.acquisition_root = Some(root.into());
+        self
+    }
+
+    /// Set the limits an OpenDSS read works under. A case with several
+    /// hundred thousand lines and loads needs more than the defaults allow.
+    ///
+    /// ```no_run
+    /// use powerio::dist::DssReadLimits;
+    ///
+    /// let limits = DssReadLimits::default()
+    ///     .max_include_bytes(1 << 30)
+    ///     .max_properties(1 << 26);
+    /// let options = powerio::ParseOptions::default().dss_limits(limits);
+    /// let module = powerio::parse_with_options("region/Master.dss", &options)?;
+    /// # Ok::<(), powerio::Error>(())
+    /// ```
+    #[must_use]
+    pub fn dss_limits(mut self, limits: powerio_dist::DssReadLimits) -> Self {
+        self.dss_limits = Some(limits);
         self
     }
 }
@@ -599,7 +621,7 @@ pub fn parse_with_options(
                 return powerio_dist::pmd::parse_multinetwork(source)
                     .map(|module| module.map_value(PioValue::from));
             }
-            dist::parse(source).map(|module| module.map_value(PioValue::from))
+            parse_distribution(source, options).map(|module| module.map_value(PioValue::from))
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
         #[cfg(feature = "gridfm")]
@@ -630,6 +652,22 @@ pub fn parse_with_options(
                 Ok(module.map_value(PioValue::from))
             }
         },
+    }
+}
+
+/// The distribution parse under the caller's OpenDSS limits, which apply to
+/// an OpenDSS source alone.
+fn parse_distribution(
+    source: powerio_core::Source,
+    options: &ParseOptions,
+) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    let dss = source.format().is_some_and(|f| {
+        format::routing::parse_distribution_format(f.as_str())
+            == Some(format::routing::DistributionFormat::Dss)
+    });
+    match options.dss_limits {
+        Some(limits) if dss => powerio_dist::parse_with_dss_limits(source, limits),
+        _ => dist::parse(source),
     }
 }
 
@@ -1273,6 +1311,45 @@ mod tests {
 
     fn assert_value_type(module: &powerio_core::PioModule<PioValue>, expected: &str) {
         assert_eq!(module.value().type_name(), expected);
+    }
+
+    #[test]
+    fn dss_limits_in_the_options_reach_the_opendss_read() {
+        // One byte of include budget admits the first include and refuses
+        // the second; the defaults follow both.
+        let source = || {
+            memory(
+                "Master.dss",
+                "new circuit.c\nredirect a.dss\nredirect b.dss\n",
+            )
+            .with_named_buffer("a.dss", b"new load.a bus1=sourcebus.1 kv=1 kw=1\n".to_vec())
+            .unwrap()
+            .with_named_buffer("b.dss", b"new load.b bus1=sourcebus.1 kv=1 kw=1\n".to_vec())
+            .unwrap()
+        };
+        let module = parse_with_options(source(), &ParseOptions::default()).expect("dss parses");
+        assert_value_type(&module, "powerio.MulticonductorNetwork");
+
+        let limits = powerio_dist::DssReadLimits::default().max_include_bytes(1);
+        let options = ParseOptions::default().dss_limits(limits);
+        let error = parse_with_options(source(), &options).expect_err("the second include");
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.DSS.INCLUDE_BUDGET"),
+            "{error}"
+        );
+
+        // The limits belong to the OpenDSS read alone.
+        let case = "function mpc = case\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;];\n\
+                    mpc.gen = [1 0 0 10 -10 1 100 1 10 0;];\n\
+                    mpc.branch = [];\n";
+        let module = parse_with_options(memory("case.m", case), &options).expect("matpower");
+        assert_value_type(&module, "powerio.BalancedNetwork");
     }
 
     #[test]

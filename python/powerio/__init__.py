@@ -2186,6 +2186,8 @@ def parse(
     sincal_balanced: Optional[SincalBalancedReadOptions] = None,
     acquisition_root: Optional[Any] = None,
     named_buffers: Optional[Mapping[str, bytes]] = None,
+    dss_max_include_bytes: Optional[int] = None,
+    dss_max_properties: Optional[int] = None,
 ) -> PioModule:
     """Parse a path, file object, or bytes-like source.
 
@@ -2195,7 +2197,21 @@ def parse(
     File companions stay beneath the file's parent,
     or an explicitly selected ``acquisition_root``. Memory sources use only
     ``named_buffers`` and never acquire companions from the filesystem.
+
+    ``dss_max_include_bytes`` and ``dss_max_properties`` raise two limits of
+    an OpenDSS read for a case too large for the defaults: the bytes it may
+    pull in through includes (64 MiB) and the property assignments and edit
+    records it may retain (4,194,304). They have no effect on other formats.
     """
+    dss_limits = None
+    for limit_name, limit in (("dss_max_include_bytes", dss_max_include_bytes), ("dss_max_properties", dss_max_properties)):
+        if limit is None:
+            continue
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError(f"{limit_name} must be an integer")
+        if limit < 0:
+            raise ValueError(f"{limit_name} must not be negative")
+        dss_limits = (dss_max_include_bytes, dss_max_properties)
     from . import _sienna_files
     if format is not None and format in _sienna_files.FORMATS:
         if sincal_balanced is not None or sincal_multiconductor is not None:
@@ -2219,7 +2235,7 @@ def parse(
         root = _path_from_source(acquisition_root) if acquisition_root is not None else None
         if acquisition_root is not None and root is None:
             raise TypeError("acquisition_root must be a path")
-        return PioModule(_powerio._PioModule._parse_path(path, format, selection, root, balanced_selection))
+        return PioModule(_powerio._PioModule._parse_path(path, format, selection, root, balanced_selection, dss_limits))
     if acquisition_root is not None:
         raise ValueError("acquisition_root applies only to path sources")
     buffers = None
@@ -2232,7 +2248,7 @@ def parse(
                 raise TypeError("named_buffers must map relative names to bytes-like data")
             buffers.append((buffer_name, bytes(buffer_data)))
     data, source_name = _memory_from_source(source, name)
-    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format, selection, buffers, balanced_selection))
+    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format, selection, buffers, balanced_selection, dss_limits))
 
 
 def _result_from_native(result: dict[str, Any]) -> EmitResult:

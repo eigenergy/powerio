@@ -95,8 +95,9 @@ pub(crate) fn parse_dss_collecting(
     source: &powerio_core::Source,
     diags: &mut crate::collect::Diagnostics,
     replay: &mut Option<ReplayContext>,
+    limits: super::raw::DssReadLimits,
 ) -> Result<MulticonductorNetwork> {
-    let raw = super::raw::parse_raw_from_source(source)?;
+    let raw = super::raw::parse_raw_from_source(source, limits)?;
     *replay = Some(ReplayContext {
         absolute_dependency: raw.absolute_dependency,
         dependencies: raw.dependencies.clone(),
@@ -2330,7 +2331,13 @@ mod tests {
             )
             .unwrap();
             let mut diagnostics = crate::collect::Diagnostics::new();
-            let net = parse_dss_collecting(&source, &mut diagnostics, &mut None).unwrap();
+            let net = parse_dss_collecting(
+                &source,
+                &mut diagnostics,
+                &mut None,
+                crate::dss::DssReadLimits::default(),
+            )
+            .unwrap();
             assert_eq!(net.shunts().len(), usize::from(command == "Open"));
             assert_eq!(
                 net.lines().iter().any(|l| l.name == "l"),
