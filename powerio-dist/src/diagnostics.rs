@@ -147,6 +147,8 @@ pub mod codes {
             "a value the model needs was absent or unusable and was defaulted";
         READ_DSS_VALUE_UNSUPPORTED = "READ.DSS.VALUE_UNSUPPORTED", Warning,
             "a property value outside the modeled set was read as the nearest one";
+        READ_DSS_CONTROL_NOT_EXECUTED = "READ.DSS.CONTROL_NOT_EXECUTED", Warning,
+            "a control is retained without running it; equipment keeps its written settings";
         READ_DSS_OBJECT_UNTYPED = "READ.DSS.OBJECT_UNTYPED", Warning,
             "an object shape the model does not type yet is kept untyped";
         READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,

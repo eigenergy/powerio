@@ -865,7 +865,7 @@ pub struct TransformerPrimitive<'a> {
     pub terminals: Vec<(&'a str, &'a str)>,
     /// Leakage and winding neutral impedance contributions.
     pub series: Vec<Vec<Complex64>>,
-    /// Magnetizing and core loss contributions.
+    /// Magnetizing, core loss and stated small grounding admittance contributions.
     pub shunt: Vec<Vec<Complex64>>,
     /// `series + shunt`, the element's primitive admittance.
     pub primitive: Vec<Vec<Complex64>>,
@@ -975,11 +975,11 @@ fn sum_matrices(a: &[Vec<Complex64>], b: &[Vec<Complex64>]) -> Vec<Vec<Complex64
 /// ([`calc_winding_connection`]) and `V_coil` its coil voltage
 /// ([`calc_coil_voltage`]). A finite WYE neutral impedance stamps once from
 /// the neutral terminal to ground, a solid one is returned in `grounded`,
-/// and a floating one stamps nothing ([`calc_winding_neutral_grounding`]).
+/// and a floating one has no physical grounding branch ([`calc_winding_neutral_grounding`]).
 /// The magnetizing branch ([`calc_transformer_magnetizing`]) stamps across
 /// each coil of its winding.
 ///
-/// Two winding units of one to three phases and the three winding BMOPF
+/// Two and three winding units of one to three phases and the BMOPF
 /// `center_tap` unit are supported. The BMOPF `single_phase_autotransformer`
 /// states its impedance in ohms
 /// ([`TransformerLeakageBase::StatedOhms`]); its primitive is
@@ -993,10 +993,9 @@ fn sum_matrices(a: &[Vec<Complex64>], b: &[Vec<Complex64>]) -> Vec<Vec<Complex64
 /// A transformer stating no leakage (an ideal coupling, which needs voltage
 /// constraints), another winding count or phase count, a raw OpenDSS
 /// property the typed model does not carry (`xrconst`, `core`, a
-/// nondefault `ppm_antifloat`), nameplate, tap, terminal map, connection,
+/// malformed `ppm_antifloat`), nameplate, tap, terminal map, connection,
 /// neutral impedance or magnetizing data that is not usable, or a singular
 /// leakage impedance.
-#[allow(clippy::float_cmp)] // 0 and 1 are OpenDSS's exact anti-float defaults
 #[allow(clippy::too_many_lines)] // the coil referral, then the neutral and magnetizing stamps
 pub fn calc_transformer_primitive_admittance<'a>(
     network: &MulticonductorNetwork,
@@ -1011,15 +1010,27 @@ pub fn calc_transformer_primitive_admittance<'a>(
             ));
         }
     }
-    if transformer_extra_number(&transformer.extras, "ppm_antifloat")
-        .is_some_and(|value| value != 0.0 && value != 1.0)
-    {
-        return Err(unsupported(
+    let anti_float = transformer_extra_number(&transformer.extras, "ppm_antifloat").unwrap_or(
+        if *network.source_format() == Some(crate::model::DistSourceFormat::Dss) {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    if !anti_float.is_finite() {
+        return Err(invalid(
             &transformer.name,
-            "nondefault OpenDSS anti-float admittance is not supported",
+            "ppm_antifloat",
+            "must be finite",
         ));
     }
     if is_autotransformer(transformer) {
+        if anti_float != 0.0 {
+            return Err(unsupported(
+                &transformer.name,
+                "ppm_antifloat is not supported for BMOPF autotransformers",
+            ));
+        }
         return autotransformer_primitive(transformer);
     }
     validate_primitive_shape(transformer)?;
@@ -1133,6 +1144,39 @@ pub fn calc_transformer_primitive_admittance<'a>(
     if let Some(core) = calc_transformer_magnetizing(transformer)? {
         for &coil in &coils[core.winding] {
             add_coil_shunt(&mut y_shunt, coil, core.admittance);
+        }
+    }
+    // OpenDSS places half the winding's small grounding admittance at each
+    // coil endpoint. It uses untapped coil voltage and the first winding rating.
+    for (index, winding_coils) in coils.iter().enumerate() {
+        let voltage = calc_coil_voltage(transformer, index);
+        let admittance = Complex64::new(
+            0.0,
+            -anti_float * 1e-6 * transformer.windings[0].s_rating
+                / phases as f64
+                / voltage.powi(2)
+                / 2.0,
+        );
+        if !admittance.im.is_finite() {
+            return Err(invalid(
+                name,
+                "ppm_antifloat",
+                "grounding admittance is not finite",
+            ));
+        }
+        for &(a, z) in winding_coils {
+            for terminal in [a, z].into_iter().flatten() {
+                y_shunt[terminal][terminal] += admittance;
+            }
+        }
+        if transformer.windings[index].conn == DistWindingConn::Wye
+            && matches!(
+                calc_winding_neutral_grounding(transformer, index)?,
+                WindingNeutralGrounding::Floating | WindingNeutralGrounding::Unstated
+            )
+            && let Some(neutral) = winding_coils.first().and_then(|coil| coil.1)
+        {
+            y_shunt[neutral][neutral] += admittance;
         }
     }
     let y_prim = sum_matrices(&y_series, &y_shunt);
@@ -1273,19 +1317,11 @@ fn autotransformer_primitive(transformer: &DistTransformer) -> Result<Transforme
 fn validate_primitive_shape(t: &DistTransformer) -> Result<()> {
     let name = t.name.as_str();
     let center_tap = subtype(t) == Some("center_tap");
-    let expected_windings = if center_tap { 3 } else { 2 };
-    if t.windings.len() != expected_windings {
+    let winding_count = t.windings.len();
+    if !(2..=3).contains(&winding_count) || (center_tap && winding_count != 3) {
         return Err(unsupported(
             name,
-            format!(
-                "{} windings are present; expected {expected_windings} for {}",
-                t.windings.len(),
-                if center_tap {
-                    "a BMOPF centre-tap primitive"
-                } else {
-                    "a finite two-winding primitive"
-                }
-            ),
+            "finite primitives require two or three windings",
         ));
     }
     if center_tap && t.phases != 1 {
@@ -1306,7 +1342,7 @@ fn validate_primitive_shape(t: &DistTransformer) -> Result<()> {
             ),
         ));
     }
-    let expected_xsc = if center_tap { 3 } else { 1 };
+    let expected_xsc = winding_count * (winding_count - 1) / 2;
     if t.xsc_pct.len() != expected_xsc {
         return Err(invalid(
             name,
@@ -1316,7 +1352,7 @@ fn validate_primitive_shape(t: &DistTransformer) -> Result<()> {
                 if center_tap {
                     "a centre-tap transformer"
                 } else {
-                    "a two-winding transformer"
+                    "a finite transformer"
                 }
             ),
         ));

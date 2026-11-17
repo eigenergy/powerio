@@ -538,10 +538,12 @@ fn center_tap_supports_fixed_tap_excitation_and_neutral_impedance() {
 }
 
 #[test]
-fn arbitrary_three_winding_transformer_remains_unsupported() {
+fn general_three_winding_transformer_does_not_require_center_tap_marker() {
     let mut transformer = center_tap_transformer();
     transformer.extras.clear();
-    assert_unsupported(calc_transformer_primitive_admittance(&transformer));
+    let primitive = calc_transformer_primitive_admittance(&transformer).unwrap();
+    assert_eq!(primitive.terminals.len(), 5);
+    assert_eq!(primitive.winding_admittance.len(), 3);
 }
 
 #[test]

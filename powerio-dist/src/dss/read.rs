@@ -1964,10 +1964,24 @@ impl Reader<'_> {
         let target = props
             .get("transformer")
             .map_or_else(String::new, |v| v.text.clone());
-        self.warn(&C::READ_DSS_VALUE_UNSUPPORTED, format!(
-            "regcontrol {}: voltage regulation is ignored; transformer `{target}` keeps its written taps",
-            obj.name
-        ));
+        let target_exists = self
+            .net
+            .transformers()
+            .iter()
+            .any(|transformer| transformer.name.eq_ignore_ascii_case(&target));
+        if target_exists {
+            self.warn(&C::READ_DSS_CONTROL_NOT_EXECUTED, format!(
+                "regcontrol {} is retained without running it; transformer `{target}` keeps its written taps", obj.name
+            ));
+        } else {
+            self.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                format!(
+                    "regcontrol {} names undeclared transformer `{target}`",
+                    obj.name
+                ),
+            );
+        }
         if !target.is_empty() {
             self.regulated.insert(target.to_ascii_lowercase());
         }
