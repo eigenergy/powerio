@@ -104,7 +104,7 @@ typedef struct PioVector PioVector;
 /**
  * Patch number of the PowerIO release this header was generated from.
  */
-#define PIO_VERSION_PATCH 1
+#define PIO_VERSION_PATCH 2
 
 /**
  * Borrowed UTF-8 bytes. The bytes need not end in NUL.
