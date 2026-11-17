@@ -43,14 +43,20 @@ fn transformer_stamps_match_opendss() {
         }
         for (i, &(bus, terminal)) in primitive.terminals.iter().enumerate() {
             let label = format!("{bus}.{terminal}");
-            let Some(a) = case.nodes.iter().position(|node| node == &label) else {
-                continue;
-            };
+            let a = case
+                .nodes
+                .iter()
+                .position(|node| node == &label)
+                .unwrap_or_else(|| panic!("{}: unexpected computed terminal {label}", case.name));
             for (j, &(other_bus, other_terminal)) in primitive.terminals.iter().enumerate() {
                 let other = format!("{other_bus}.{other_terminal}");
-                let Some(b) = case.nodes.iter().position(|node| node == &other) else {
-                    continue;
-                };
+                let b = case
+                    .nodes
+                    .iter()
+                    .position(|node| node == &other)
+                    .unwrap_or_else(|| {
+                        panic!("{}: unexpected computed terminal {other}", case.name)
+                    });
                 let expected = case.matrix[a][b];
                 let actual = primitive.primitive[i][j];
                 let tolerance = 1e-9 + 1e-9 * expected[0].hypot(expected[1]);
