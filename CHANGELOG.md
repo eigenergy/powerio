@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- OpenDSS: lines that fetched the same state of a linecode share one evaluation of it. A region whose feeders each declare the same linecodes again read in 2 s where it took 16 s.
+
 ## 0.12.2
 
 - Retained OpenDSS regulator controls have a distinct diagnostic from invalid property values. Missing transformer references still report a dropped reference. This lets snapshot consumers explicitly use written taps while keeping control records.
