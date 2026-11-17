@@ -325,11 +325,19 @@ fn unsupported_stamps_are_structured_diagnostics() {
         vec![1.0, 1.0, 1.0],
         1,
     ));
-    // Leakage stated, but a three winding unit that is no BMOPF centre tap
-    // has no primitive.
+    let system = calc_multiconductor_admittance_matrix(&net).unwrap();
+    assert_eq!(system.index().len(), 3);
+    assert_eq!(system.susceptance().nnz(), 9);
+    net.buses_mut().push(DistBus::new("d", strings(&["1"])));
+    net.transformers_mut()[0].windings.push(w("d"));
+    net.transformers_mut()[0].xsc_pct = vec![1.0; 6];
+    // Four windings remain outside this qualified primitive.
     let error = calc_multiconductor_admittance_matrix(&net).unwrap_err();
     assert_eq!(error.code().code, "BUILD.DIST.TRANSFORMER_UNSUPPORTED");
-    assert!(error.to_string().contains("3 windings"), "{error}");
+    assert!(
+        error.to_string().contains("two or three windings"),
+        "{error}"
+    );
 }
 
 #[test]
