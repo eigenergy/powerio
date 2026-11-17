@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.2
+
 - Retained OpenDSS regulator controls have a distinct diagnostic from invalid property values. Missing transformer references still report a dropped reference. This lets snapshot consumers explicitly use written taps while keeping control records.
 
 - Distribution transformer admittances support finite three-winding units and apply stated OpenDSS small grounding admittances, including nondefault coefficients. Synthetic OpenDSS comparisons cover winding connections, taps and floating neutrals. Single-phase DSS regulators keep their nameplate leakage calculation; BMOPF stated-ohm regulators retain their existing primitive.
