@@ -11,7 +11,7 @@ python evals/validation/generate_transformer_primitives.py
 cargo test -p powerio-dist --test transformer_primitives
 ```
 
-The cases cover two and three windings, WYE and DELTA connections, unequal taps,
+The 23 cases cover single-phase controlled regulators, two and three windings, WYE and DELTA connections, unequal taps,
 floating neutrals, and omitted, zero, positive and negative `ppm_antifloat`.
 The reference is OpenDSS's element terminal admittance, combined by physical
 bus/terminal name. Ground rows are omitted. The Rust comparison also checks that

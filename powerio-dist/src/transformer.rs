@@ -67,8 +67,20 @@ fn subtype(transformer: &DistTransformer) -> Option<&str> {
         .and_then(serde_json::Value::as_str)
 }
 
-fn is_autotransformer(transformer: &DistTransformer) -> bool {
+// DSS regulator classification keeps nameplate percentage leakage. The BMOPF
+// subtype alone does not convert that data to its separate stated-ohm model.
+// Present malformed ohm fields still choose that model and reach its checks.
+fn uses_autotransformer_impedance(transformer: &DistTransformer) -> bool {
     subtype(transformer) == Some("single_phase_autotransformer")
+        && (transformer.xsc_pct.is_empty()
+            || [
+                "r_series_from",
+                "x_series_from",
+                "r_series_to",
+                "x_series_to",
+            ]
+            .iter()
+            .any(|key| transformer.extras.contains_key(*key)))
 }
 
 /// Whether the unit is a BMOPF regulator (a single phase autotransformer or
@@ -889,7 +901,7 @@ pub struct TransformerPrimitive<'a> {
 /// voltage constraints rather than an admittance.
 #[must_use]
 pub fn transformer_states_no_leakage(transformer: &DistTransformer) -> bool {
-    if is_autotransformer(transformer) {
+    if uses_autotransformer_impedance(transformer) {
         return [
             "r_series_from",
             "x_series_from",
@@ -1024,7 +1036,7 @@ pub fn calc_transformer_primitive_admittance<'a>(
             "must be finite",
         ));
     }
-    if is_autotransformer(transformer) {
+    if uses_autotransformer_impedance(transformer) {
         if anti_float != 0.0 {
             return Err(unsupported(
                 &transformer.name,

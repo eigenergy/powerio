@@ -41,7 +41,16 @@ fn transformer_stamps_match_opendss() {
                 );
             }
         }
+        let grounded = |bus: &str, terminal: &str| {
+            network
+                .buses()
+                .iter()
+                .any(|entry| entry.id == bus && entry.grounded.iter().any(|node| node == terminal))
+        };
         for (i, &(bus, terminal)) in primitive.terminals.iter().enumerate() {
+            if grounded(bus, terminal) {
+                continue;
+            }
             let label = format!("{bus}.{terminal}");
             let a = case
                 .nodes
@@ -49,6 +58,9 @@ fn transformer_stamps_match_opendss() {
                 .position(|node| node == &label)
                 .unwrap_or_else(|| panic!("{}: unexpected computed terminal {label}", case.name));
             for (j, &(other_bus, other_terminal)) in primitive.terminals.iter().enumerate() {
+                if grounded(other_bus, other_terminal) {
+                    continue;
+                }
                 let other = format!("{other_bus}.{other_terminal}");
                 let b = case
                     .nodes
@@ -66,6 +78,16 @@ fn transformer_stamps_match_opendss() {
                     case.name
                 );
             }
+        }
+        if case.name.starts_with("single-phase-regulator") {
+            let mut network = network.clone();
+            network.transformers_mut()[0]
+                .extras
+                .insert("x_series_from".into(), "invalid".into());
+            assert!(
+                calc_transformer_primitive_admittance(&network, &network.transformers()[0])
+                    .is_err()
+            );
         }
     }
 }
