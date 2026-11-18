@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/0.12.2/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/0.12.3/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -2072,6 +2072,17 @@ Schema definition: `McAcPfSolution`.
 
 ### powerio.McAcOpfSolution
 
+`generator_active_power` is per terminal of each generator's `terminal_map`.
+A generator's cost and bounds are per coil, and `generator_coil_active_power`
+is the dispatch in that layout: a WYE generator has one coil per phase
+terminal in `terminal_map` order and none for the neutral; a DELTA generator
+on three terminals has the coils from terminal 1 to 2, 2 to 3, and 3 to 1 of
+its `terminal_map`; a DELTA or `SINGLE_PHASE` generator on two terminals has
+one coil. The two columns differ for a DELTA generator and for a WYE
+generator whose neutral voltage is not zero. `generator_coil_active_power` is
+written only when the producer reported it, from 0.12.3 on; a release before
+0.12.3 refuses a document that states it.
+
 Schema definition: `McAcOpfSolution`.
 
 | field | type | unit | sign | invariant | if absent |
@@ -2085,7 +2096,8 @@ Schema definition: `McAcOpfSolution`.
 | `terminal_current_magnitude` | array of float or null | amperes | | one per terminal | null |
 | `terminal_active_power` | array of float or null | watts | positive into the network | one per terminal | null |
 | `source_active_injection` | array of float | watts | positive into the network | one per source terminal | required |
-| `generator_active_power` | array of float | watts | positive is generation | generator table order, each generator's `terminal_map` order | required |
+| `generator_active_power` | array of float | watts | positive is generation | one per generator terminal: generator table order, each generator's `terminal_map` order, neutral included | required |
+| `generator_coil_active_power` | array of float or null | watts | positive is generation | one per generator coil: generator table order, each generator's coil order | null |
 | `objective` | float | objective units | | | required |
 
 ### powerio.LinDist3FlowOpfSolution

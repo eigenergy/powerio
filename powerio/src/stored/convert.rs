@@ -1861,6 +1861,10 @@ fn encode_mc_ac_opf_solution(
         })?,
         source_active_injection: stored_values(solution.source_active_injections())?,
         generator_active_power: stored_values(solution.generator_active_powers())?,
+        generator_coil_active_power: solution
+            .generator_coil_active_powers()
+            .map(stored_values)
+            .transpose()?,
         objective: StoredF64(solution.objective()),
     })
 }
@@ -2609,6 +2613,11 @@ fn decode_mc_ac_opf_solution(
     if let Some(powers) = solution.terminal_active_power {
         value = value
             .with_terminal_powers(plain_row(&powers))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
+    if let Some(coils) = solution.generator_coil_active_power {
+        value = value
+            .with_generator_coil_active_powers(plain_row(&coils))
             .map_err(|error| invalid(error.to_string()))?;
     }
     value = value.with_residuals(solution.residuals);
