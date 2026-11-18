@@ -62,6 +62,15 @@ struct SincalCliOptions {
     /// Experimental: assume schema-11.5 NULL source controls inactive; emits warnings.
     #[arg(long)]
     sincal_assume_inactive_source_controls: bool,
+    /// OpenDSS input: bytes the case may pull in through Redirect, Compile,
+    /// Buscoords and loadshape files [default: 67108864, 64 MiB]. A region
+    /// with several hundred thousand lines and loads needs more.
+    #[arg(long, value_name = "BYTES")]
+    dss_max_include_bytes: Option<usize>,
+    /// OpenDSS input: property assignments and edit records the case may
+    /// retain across all its objects [default: 4194304].
+    #[arg(long, value_name = "COUNT")]
+    dss_max_properties: Option<usize>,
 }
 
 impl SincalCliOptions {
@@ -71,11 +80,23 @@ impl SincalCliOptions {
             && self.sincal_acquired_tables.is_none()
             && self.acquisition_root.is_none()
             && !self.sincal_assume_inactive_source_controls
+            && self.dss_max_include_bytes.is_none()
+            && self.dss_max_properties.is_none()
     }
 
     fn options(&self, from: Option<FormatArg>) -> anyhow::Result<powerio::ParseOptions> {
         let mut options = parse_options(from.map(FormatArg::name))?;
         options.acquisition_root.clone_from(&self.acquisition_root);
+        if self.dss_max_include_bytes.is_some() || self.dss_max_properties.is_some() {
+            let mut limits = powerio::dist::DssReadLimits::default();
+            if let Some(bytes) = self.dss_max_include_bytes {
+                limits = limits.max_include_bytes(bytes);
+            }
+            if let Some(count) = self.dss_max_properties {
+                limits = limits.max_properties(count);
+            }
+            options = options.dss_limits(limits);
+        }
         if self.sincal_variant.is_some()
             || self.sincal_snapshot_hours.is_some()
             || self.sincal_acquired_tables.is_some()
@@ -3872,6 +3893,35 @@ mod tests {
         let source =
             powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec()).unwrap();
         powerio::deserialize(source).unwrap()
+    }
+
+    #[test]
+    fn dss_limit_flags_set_the_opendss_read_limits() {
+        let defaults = powerio::dist::DssReadLimits::default();
+        assert_eq!(
+            SincalCliOptions::default()
+                .options(None)
+                .unwrap()
+                .dss_limits,
+            None
+        );
+        let selection = SincalCliOptions {
+            dss_max_include_bytes: Some(1 << 30),
+            ..Default::default()
+        };
+        assert!(!selection.is_empty());
+        assert_eq!(
+            selection.options(None).unwrap().dss_limits,
+            Some(defaults.max_include_bytes(1 << 30))
+        );
+        let selection = SincalCliOptions {
+            dss_max_properties: Some(1 << 26),
+            ..Default::default()
+        };
+        assert_eq!(
+            selection.options(None).unwrap().dss_limits,
+            Some(defaults.max_properties(1 << 26))
+        );
     }
 
     #[test]

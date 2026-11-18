@@ -26,7 +26,7 @@ mod write;
 mod xfmrcode;
 
 pub use lex::{BusSpec, Param, Scanner, Value, VarMap};
-pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp};
+pub use raw::{BusCoord, DssReadLimits, RawCommand, RawDss, RawObject, RawProp};
 
 pub(crate) use emit_project::retained_project;
 #[doc(hidden)]

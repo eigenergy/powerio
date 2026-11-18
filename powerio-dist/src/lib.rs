@@ -97,10 +97,10 @@ pub use connection::{
 };
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
-    parse_dist_target_format,
+    parse_dist_target_format, parse_with_dss_limits,
 };
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
-pub use dss::{DssEmitOptions, DssLoadVoltageBounds};
+pub use dss::{DssEmitOptions, DssLoadVoltageBounds, DssReadLimits};
 pub use error::{Error, Result};
 pub use geo::{
     CoordinateSpace, DistCanvas, DistComponentLocation, DistCoordsKind, DistGeoMeta,

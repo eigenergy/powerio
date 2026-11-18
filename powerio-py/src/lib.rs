@@ -399,6 +399,22 @@ impl PyBalancedNetwork {
 /// Private transport for the Python SincalReadOptions fields.
 type SincalBalancedSelection = (Option<i64>, Option<f64>, Option<String>);
 type SincalSelection = (Option<i64>, Option<f64>, Option<String>, bool);
+/// Private transport for the OpenDSS limits: include bytes, properties.
+type DssLimits = (Option<usize>, Option<usize>);
+
+fn apply_dss_limits(options: &mut powerio::ParseOptions, limits: Option<DssLimits>) {
+    let Some((include_bytes, properties)) = limits else {
+        return;
+    };
+    let mut limits = powerio_dist::DssReadLimits::default();
+    if let Some(bytes) = include_bytes {
+        limits = limits.max_include_bytes(bytes);
+    }
+    if let Some(count) = properties {
+        limits = limits.max_properties(count);
+    }
+    options.dss_limits = Some(limits);
+}
 
 fn parse_options(
     format: Option<&str>,
@@ -4359,18 +4375,20 @@ impl PyPioModule {
 
     /// Private path acquisition used by the public `parse` function.
     #[staticmethod]
-    #[pyo3(signature = (path, format=None, sincal=None, acquisition_root=None, sincal_balanced=None))]
+    #[pyo3(signature = (path, format=None, sincal=None, acquisition_root=None, sincal_balanced=None, dss_limits=None))]
     fn _parse_path(
         path: &str,
         format: Option<&str>,
         sincal: Option<SincalSelection>,
         acquisition_root: Option<&str>,
         sincal_balanced: Option<SincalBalancedSelection>,
+        dss_limits: Option<DssLimits>,
     ) -> PyResult<Self> {
         let source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
         let mut options = parse_options(format, sincal, sincal_balanced)?;
         options.acquisition_root = acquisition_root.map(std::path::PathBuf::from);
+        apply_dss_limits(&mut options, dss_limits);
         powerio::parse_with_options(source, &options)
             .map(|module| Self {
                 module: Some(module),
@@ -4380,7 +4398,7 @@ impl PyPioModule {
 
     /// Private memory acquisition used for bytes-like and file-like sources.
     #[staticmethod]
-    #[pyo3(signature = (data, name, format=None, sincal=None, named_buffers=None, sincal_balanced=None))]
+    #[pyo3(signature = (data, name, format=None, sincal=None, named_buffers=None, sincal_balanced=None, dss_limits=None))]
     fn _parse_memory(
         data: &[u8],
         name: &str,
@@ -4388,6 +4406,7 @@ impl PyPioModule {
         sincal: Option<SincalSelection>,
         named_buffers: Option<Vec<(String, Vec<u8>)>>,
         sincal_balanced: Option<SincalBalancedSelection>,
+        dss_limits: Option<DssLimits>,
     ) -> PyResult<Self> {
         let mut source = powerio_core::Source::from_memory(name, data.to_vec())
             .map_err(|error| core_error_pyerr(&error))?;
@@ -4396,7 +4415,9 @@ impl PyPioModule {
                 .with_named_buffer(name, bytes)
                 .map_err(|error| core_error_pyerr(&error))?;
         }
-        powerio::parse_with_options(source, &parse_options(format, sincal, sincal_balanced)?)
+        let mut options = parse_options(format, sincal, sincal_balanced)?;
+        apply_dss_limits(&mut options, dss_limits);
+        powerio::parse_with_options(source, &options)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -5503,7 +5524,7 @@ mod tests {
     use super::module_with_records;
 
     fn balanced_handle(bytes: &[u8], name: &str, format: &str) -> super::PyBalancedNetwork {
-        super::PyPioModule::_parse_memory(bytes, name, Some(format), None, None, None)
+        super::PyPioModule::_parse_memory(bytes, name, Some(format), None, None, None, None)
             .unwrap()
             .as_balanced_network()
             .unwrap()
@@ -5633,6 +5654,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         let module = parsed.module().unwrap();
@@ -5653,6 +5675,7 @@ mod tests {
             NATIVE,
             "case.sinx",
             Some("sincal-balanced"),
+            None,
             None,
             None,
             None,
