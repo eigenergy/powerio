@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.3
+
 - OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
 
 - `McAcOpfSolution` can carry the generator active dispatch per coil, the layout of generator cost
