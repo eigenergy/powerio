@@ -4,6 +4,8 @@
 
 ## 0.12.3
 
+- OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
+
 - `McAcOpfSolution` can carry the generator active dispatch per coil, the layout of generator cost
   and bounds (`with_generator_coil_active_powers`, `generator_coil_active_powers`, IR field and C
   quantity `generator_coil_active_power`). `generator_active_power` stays per terminal. The IR schema is 0.12.3.
@@ -13,6 +15,8 @@
 - OpenDSS: a second `New` for an existing general object (a linecode, a loadshape, wire data and the like) edits it without a message in OpenDSS. The reader now reports it as one `READ.DSS.OBJECT_REDEFINED` remark per class with a count, not one `PARSE.DSS.SOURCE_MALFORMED` warning per statement. A duplicate circuit element keeps its warning.
 
 - OpenDSS: lines that fetched the same state of a linecode share one evaluation of it. A region whose feeders each declare the same linecodes again read in 2 s where it took 16 s.
+
+- `MulticonductorNetwork::bus` finds a bus through a name index it builds after repeated lookups, where every lookup searched the whole bus table. A pass over the transformers of a 224,389 bus OpenDSS region took 3.4 s in that search; one pass over 10,000 transformers on 50,000 buses now takes 24 ms where it took 335 ms. Results, case insensitive matching and the first match among equal names are unchanged.
 
 ## 0.12.2
 

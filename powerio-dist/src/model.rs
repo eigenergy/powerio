@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geo::{DistGeoMeta, DistLocation};
 
+mod bus_index;
 mod located_network;
 
 pub type Extras = BTreeMap<String, serde_json::Value>;
@@ -981,21 +982,43 @@ impl UntypedObject {
 /// original source text for the byte exact echo tier is not carried here; it
 /// lives on the [`PioModule`](powerio_core::PioModule) a parse returns,
 /// alongside this network.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MulticonductorNetwork {
     tables: std::sync::Arc<MulticonductorNetworkTables>,
+    /// Bus positions by name for [`MulticonductorNetwork::bus`], derived
+    /// from `tables` on demand and shared by the handles that share them.
+    bus_index: std::sync::Arc<bus_index::BusIndex>,
+}
+
+// The derived text of the tables alone: the index is derived data.
+#[allow(clippy::missing_fields_in_debug)]
+impl std::fmt::Debug for MulticonductorNetwork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MulticonductorNetwork")
+            .field("tables", &self.tables)
+            .finish()
+    }
 }
 
 impl MulticonductorNetwork {
     pub(crate) fn from_tables(tables: MulticonductorNetworkTables) -> Self {
         Self {
             tables: std::sync::Arc::new(tables),
+            bus_index: std::sync::Arc::default(),
         }
     }
 
     /// The one mutation door: copies the shared tables on first write to a
-    /// shared handle, so no other handle observes the change.
+    /// shared handle, so no other handle observes the change. This handle
+    /// leaves here with an empty bus index no other handle holds, before the
+    /// caller can change a bus; a handle that shared the old index keeps it
+    /// with the tables it was built from. Handles share an index only by
+    /// `Clone`, which shares the tables with it.
     pub(crate) fn tables_mut(&mut self) -> &mut MulticonductorNetworkTables {
+        match std::sync::Arc::get_mut(&mut self.bus_index) {
+            Some(index) => index.clear(),
+            None => self.bus_index = std::sync::Arc::default(),
+        }
         std::sync::Arc::make_mut(&mut self.tables)
     }
 }
@@ -1231,7 +1254,7 @@ impl MulticonductorNetwork {
 
     /// Case insensitive, matching the source formats' name semantics.
     pub fn bus(&self, id: &str) -> Option<&DistBus> {
-        self.buses().iter().find(|b| b.id.eq_ignore_ascii_case(id))
+        self.bus_index.find(self.buses(), id)
     }
 
     /// Case insensitive, matching the source formats' name semantics.
