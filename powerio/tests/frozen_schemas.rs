@@ -4,7 +4,7 @@
 use std::path::Path;
 
 const SCHEMA_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema");
-const CURRENT_SCHEMA: &str = "pio-ir/0.12.2/schema.json";
+const CURRENT_SCHEMA: &str = "pio-ir/0.12.3/schema.json";
 
 /// The schema files 0.11 releases published, all for documents stating the
 /// integer version 2. This build reads those documents.
@@ -721,6 +721,14 @@ fn assert_reads_documents_of(earlier: &str) {
                 "hvdc_treatment",
                 &format!("{earlier}: record {name}"),
             );
+        } else if name == "McAcOpfSolution" {
+            // 0.12.3 adds the optional per coil generator dispatch column.
+            assert_only_optional_property_added(
+                definition,
+                &current_defs[name],
+                "generator_coil_active_power",
+                &format!("{earlier}: record {name}"),
+            );
         } else if name == "MonitorScope" || name == "MonitorStatement" {
             assert_monitor_schema_preserved(
                 definition,
@@ -931,6 +939,10 @@ fn monitor_guard_allows_disjoint_tags_and_reordering() {
 /// earlier one, and the field is not required, so a document an earlier 0.11
 /// release wrote still reads; the reader gives a document without the field
 /// the treatment it denoted then.
+///
+/// `McAcOpfSolution` gains `generator_coil_active_power` in 0.12.3 the same
+/// way: a document without the field reads as it did, with no per coil
+/// dispatch recorded.
 fn assert_only_optional_property_added(
     published: &serde_json::Value,
     current: &serde_json::Value,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `McAcOpfSolution` can carry the generator active dispatch per coil, the layout of generator cost
+  and bounds (`with_generator_coil_active_powers`, `generator_coil_active_powers`, IR field and C
+  quantity `generator_coil_active_power`). `generator_active_power` stays per terminal. The IR schema is 0.12.3.
+
 ## 0.12.2
 
 - Retained OpenDSS regulator controls have a distinct diagnostic from invalid property values. Missing transformer references still report a dropped reference. This lets snapshot consumers explicitly use written taps while keeping control records.

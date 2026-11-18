@@ -18885,6 +18885,10 @@ fn collect_solution_values(solution: &PioValue, quantity: &str) -> Result<Vec<f6
                 .collect(),
             "source_active_injection" => solution.source_active_injections().to_vec(),
             "generator_active_power" => solution.generator_active_powers().to_vec(),
+            "generator_coil_active_power" => solution
+                .generator_coil_active_powers()
+                .map(<[f64]>::to_vec)
+                .ok_or_else(unknown)?,
             _ => return Err(unknown()),
         },
         _ => {
@@ -22619,6 +22623,44 @@ mod tests {
             terminals[1] = terminals[0].clone();
         }
         check_stored_solution_rejected(&duplicate);
+    }
+
+    #[test]
+    fn mc_ac_opf_coil_dispatch_is_a_quantity_only_when_recorded() {
+        // A DELTA generator on the three phases has three coils.
+        let mut network = multiconductor_network();
+        network
+            .generators_mut()
+            .push(powerio_dist::DistGenerator::new(
+                "g",
+                "source",
+                vec!["1".into(), "2".into(), "3".into()],
+                powerio_dist::Configuration::Delta,
+                Vec::new(),
+                Vec::new(),
+            ));
+        let solution = powerio_prob::McAcOpfSolution::new(
+            Arc::new(powerio_prob::McAcOpfInstance::from_network(network).unwrap()),
+            powerio_prob::Termination::Converged,
+            vec![240.0; 3],
+            vec![0.0; 3],
+            vec![0.0; 3],
+            vec![0.0; 3],
+            0.0,
+        )
+        .unwrap();
+        let quantity = "generator_coil_active_power";
+        let absent = PioValue::McAcOpfSolution(solution.clone());
+        assert!(collect_solution_values(&absent, quantity).is_err());
+        let recorded = PioValue::McAcOpfSolution(
+            solution
+                .with_generator_coil_active_powers(vec![1.0, 2.0, 3.0])
+                .unwrap(),
+        );
+        assert_eq!(
+            collect_solution_values(&recorded, quantity).unwrap(),
+            vec![1.0, 2.0, 3.0]
+        );
     }
 
     #[test]

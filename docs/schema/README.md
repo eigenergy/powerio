@@ -94,6 +94,11 @@ document without the field reads with HVDC lines left out, as earlier
 releases read it. 0.11.8 added `ravens-json` to both source-format lists and
 `pmd-math-json` to the distribution list.
 
+0.12.3 added the optional `generator_coil_active_power` field of
+`McAcOpfSolution`, written only when a producer reports the per coil
+dispatch. A document without the field is the document earlier 0.12 releases
+wrote and read; they refuse a document that states it.
+
 Three-winding transformers with any nondefault per-winding status use the
 nested `powerio.PartialTransformer3W` record. Its `value` holds the complete
 physical transformer, including all three windings, impedances, units, identity,
