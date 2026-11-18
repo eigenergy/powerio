@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
+
 - `McAcOpfSolution` can carry the generator active dispatch per coil, the layout of generator cost
   and bounds (`with_generator_coil_active_powers`, `generator_coil_active_powers`, IR field and C
   quantity `generator_coil_active_power`). `generator_active_power` stays per terminal. The IR schema is 0.12.3.

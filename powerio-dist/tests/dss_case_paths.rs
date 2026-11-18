@@ -178,4 +178,9 @@ fn the_callers_limits_reach_the_opendss_read() {
             && refusals[0].contains("4096 files and 1 bytes"),
         "{refusals:?}"
     );
+    let text = error.to_string();
+    assert!(
+        text.contains("stopped at a limit") && text.contains("DssReadLimits"),
+        "{text}"
+    );
 }

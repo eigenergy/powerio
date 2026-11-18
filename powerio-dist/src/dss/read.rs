@@ -107,11 +107,24 @@ pub(crate) fn parse_dss_collecting(
         d.severity() == powerio_core::DiagnosticSeverity::Error
             && d.code() != C::READ_DSS_GEOMETRY_UNRESOLVED.code
     });
+    // A read that stopped at a limit says so in the error itself: the first
+    // such diagnostic names the limit, and `DssReadLimits` raises two of them.
+    let limit = found
+        .iter()
+        .find(|d| d.code() == C::READ_DSS_INCLUDE_BUDGET.code)
+        .map(|d| d.message().to_owned());
     diags.absorb(found);
     if invalid {
+        let message = match limit {
+            Some(limit) => format!(
+                "the read stopped at a limit: {limit}. `DssReadLimits` raises the include byte \
+                 and property limits"
+            ),
+            None => "the static electrical snapshot could not be materialized; see the component diagnostics".into(),
+        };
         return Err(crate::error::Error::FormatRead {
             format: "OpenDSS",
-            message: "the static electrical snapshot could not be materialized; see the component diagnostics".into(),
+            message,
         });
     }
     Ok(net)
