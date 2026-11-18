@@ -14,6 +14,8 @@
 
 - OpenDSS: lines that fetched the same state of a linecode share one evaluation of it. A region whose feeders each declare the same linecodes again read in 2 s where it took 16 s.
 
+- `MulticonductorNetwork::bus` finds a bus through a name index it builds after repeated lookups, where every lookup searched the whole bus table. A pass over the transformers of a 224,389 bus OpenDSS region took 3.4 s in that search; one pass over 10,000 transformers on 50,000 buses now takes 24 ms where it took 335 ms. Results, case insensitive matching and the first match among equal names are unchanged.
+
 ## 0.12.2
 
 - Retained OpenDSS regulator controls have a distinct diagnostic from invalid property values. Missing transformer references still report a dropped reference. This lets snapshot consumers explicitly use written taps while keeping control records.
