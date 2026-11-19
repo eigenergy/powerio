@@ -44,6 +44,10 @@ pub mod codes {
         BUILD_INSTANCE_SHAPE_MISMATCH = "BUILD.INSTANCE.SHAPE_MISMATCH", Error,
             "a calculation input disagrees with the network's element tables",
             category = Data;
+        BUILD_INSTANCE_NOMINAL_VOLTAGE_UNRESOLVED =
+            "BUILD.INSTANCE.NOMINAL_VOLTAGE_UNRESOLVED", Error,
+            "a load states no nominal voltage and its zone has no single voltage anchor",
+            category = Data;
         BUILD_INSTANCE_SWITCHING_OPTIONS_INVALID =
             "BUILD.INSTANCE.SWITCHING_OPTIONS_INVALID", Error,
             "a switching option names an unknown or repeated branch, or states an invalid cost, current limit, or budget",

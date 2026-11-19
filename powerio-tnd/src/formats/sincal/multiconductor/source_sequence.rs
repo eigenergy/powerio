@@ -64,8 +64,12 @@ impl NativeDatabase {
                 let z0 = match sequence {
                     SourceZeroSequence::MagnitudeRatio {z0_over_z1,r0_over_x0} => {
                         let magnitude = z1.re.hypot(z1.im) * z0_over_z1;
-                        let denominator = r0_over_x0.hypot(1.0);
-                        Complex64::new(magnitude*(r0_over_x0/denominator),magnitude/denominator)
+                        let (r, x) = powerio_core::electrical::calc_impedance_from_ratio(
+                            magnitude,
+                            r0_over_x0,
+                            powerio_core::electrical::ImpedanceRatioForm::ResistanceOverReactance,
+                        );
+                        Complex64::new(r, x)
                     }
                     SourceZeroSequence::SameAsPositive => z1,
                     SourceZeroSequence::DirectOhms(_) => unreachable!(),

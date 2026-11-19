@@ -2430,11 +2430,7 @@ pub(crate) fn sanitize_quoted<'a>(
 /// Impedance base `v_kv² / base_mva`; 1.0 when either base is missing, so a
 /// per-unit ↔ ohm conversion on it is the identity.
 pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
-    if v_kv > 0.0 && base_mva > 0.0 {
-        v_kv * v_kv / base_mva
-    } else {
-        1.0
-    }
+    powerio_core::electrical::calc_impedance_base(v_kv, base_mva).unwrap_or(1.0)
 }
 
 /// Whether two case targets identify the same physical format. PSS/E revisions

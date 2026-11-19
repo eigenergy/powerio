@@ -95,8 +95,9 @@ pub(crate) fn parse_dss_collecting(
     source: &powerio_core::Source,
     diags: &mut crate::collect::Diagnostics,
     replay: &mut Option<ReplayContext>,
+    limits: super::raw::DssReadLimits,
 ) -> Result<MulticonductorNetwork> {
-    let raw = super::raw::parse_raw_from_source(source)?;
+    let raw = super::raw::parse_raw_from_source(source, limits)?;
     *replay = Some(ReplayContext {
         absolute_dependency: raw.absolute_dependency,
         dependencies: raw.dependencies.clone(),
@@ -106,11 +107,24 @@ pub(crate) fn parse_dss_collecting(
         d.severity() == powerio_core::DiagnosticSeverity::Error
             && d.code() != C::READ_DSS_GEOMETRY_UNRESOLVED.code
     });
+    // A read that stopped at a limit says so in the error itself: the first
+    // such diagnostic names the limit, and `DssReadLimits` raises two of them.
+    let limit = found
+        .iter()
+        .find(|d| d.code() == C::READ_DSS_INCLUDE_BUDGET.code)
+        .map(|d| d.message().to_owned());
     diags.absorb(found);
     if invalid {
+        let message = match limit {
+            Some(limit) => format!(
+                "the read stopped at a limit: {limit}. `DssReadLimits` raises the include byte \
+                 and property limits"
+            ),
+            None => "the static electrical snapshot could not be materialized; see the component diagnostics".into(),
+        };
         return Err(crate::error::Error::FormatRead {
             format: "OpenDSS",
-            message: "the static electrical snapshot could not be materialized; see the component diagnostics".into(),
+            message,
         });
     }
     Ok(net)
@@ -697,10 +711,11 @@ impl Reader<'_> {
                     }
                 }
             } else {
-                s.kvar = s.kw * (1.0 / (s.pf * s.pf) - 1.0).sqrt();
-                if s.pf < 0.0 {
-                    s.kvar = -s.kvar;
-                }
+                s.kvar = s.kw
+                    * crate::electrical::calc_reactive_ratio(
+                        s.pf,
+                        crate::electrical::ReactiveRatioForm::OpenDss,
+                    );
             }
         }
         s
@@ -846,7 +861,7 @@ impl Reader<'_> {
             extras.insert("model".into(), model.into());
         }
         let v_phase = if phases >= 2 && configuration == Configuration::Wye {
-            kv * 1e3 / 3f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(kv * 1e3)
         } else {
             kv * 1e3
         };
@@ -1397,15 +1412,7 @@ impl Reader<'_> {
                 spec.default_kvar
             });
         let kv = self.f64_or(props, "kv", spec.class, &obj.name, spec.default_kv);
-        // A wye bank's kv is line to line for 2 or 3 phases, line to neutral
-        // otherwise. A delta bank's kv is line to line across each branch.
-        let v_ref = if conn_delta {
-            kv * 1e3
-        } else if phases == 2 || phases == 3 {
-            kv * 1e3 / 3f64.sqrt()
-        } else {
-            kv * 1e3
-        };
+        let v_ref = bank_coil_voltage(kv, phases, conn_delta);
         // `kvar_shunt_matrix` divides by `v_ref * v_ref`; a positive but tiny
         // `v_ref` can square to zero (or a non-finite) and turn the admittance
         // into an infinity, so reject the squared value here too.
@@ -1525,7 +1532,11 @@ impl Reader<'_> {
                         q_written = true;
                     }
                     if pf != 0.0 {
-                        kvar = kw * (pf.acos().tan()).copysign(pf);
+                        kvar = kw
+                            * powerio_core::electrical::calc_reactive_ratio(
+                                pf,
+                                powerio_core::electrical::ReactiveRatioForm::OpenDss,
+                            );
                     }
                 }
                 _ => {
@@ -1923,7 +1934,7 @@ impl Reader<'_> {
             })
             .unwrap_or(dd::pvsystem::KV);
         Some(match ibr.topology {
-            IbrTopology::FourLeg => kv * 1e3 / 3f64.sqrt(),
+            IbrTopology::FourLeg => crate::electrical::calc_wye_phase_voltage(kv * 1e3),
             IbrTopology::SinglePhase | IbrTopology::ThreeLeg => kv * 1e3,
         })
     }
@@ -1967,10 +1978,24 @@ impl Reader<'_> {
         let target = props
             .get("transformer")
             .map_or_else(String::new, |v| v.text.clone());
-        self.warn(&C::READ_DSS_VALUE_UNSUPPORTED, format!(
-            "regcontrol {}: voltage regulation is ignored; transformer `{target}` keeps its written taps",
-            obj.name
-        ));
+        let target_exists = self
+            .net
+            .transformers()
+            .iter()
+            .any(|transformer| transformer.name.eq_ignore_ascii_case(&target));
+        if target_exists {
+            self.warn(&C::READ_DSS_CONTROL_NOT_EXECUTED, format!(
+                "regcontrol {} is retained without running it; transformer `{target}` keeps its written taps", obj.name
+            ));
+        } else {
+            self.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                format!(
+                    "regcontrol {} names undeclared transformer `{target}`",
+                    obj.name
+                ),
+            );
+        }
         if !target.is_empty() {
             self.regulated.insert(target.to_ascii_lowercase());
         }
@@ -2117,6 +2142,33 @@ pub(super) fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
     }
 }
 
+/// The coil voltage, volts, of an OpenDSS capacitor or reactor bank rated
+/// `kv`: [`bank_coil_rating`] of `kv · 1e3`. The shunt and common return
+/// bank readers and the matching writers read it.
+pub(super) fn bank_coil_voltage(kv: f64, phases: usize, conn_delta: bool) -> f64 {
+    bank_coil_rating(kv * 1e3, phases, conn_delta)
+}
+
+/// The coil voltage of an OpenDSS capacitor or reactor bank rated
+/// `voltage`, in the unit of `voltage`: a WYE bank's rating is line to line
+/// for 2 or 3 phases and its coil voltage is `voltage / √3`; otherwise (one
+/// phase, more than three, or any DELTA bank, whose rating is across each
+/// branch) the coil voltage is the rating. The one OpenDSS bank voltage
+/// rule: [`bank_coil_voltage`] states it in volts, and the rated `Reactor`
+/// reader in kilovolts, as `Reactor.pas` forms `PhasekV`.
+pub(super) fn bank_coil_rating(voltage: f64, phases: usize, conn_delta: bool) -> f64 {
+    if !conn_delta && matches!(phases, 2 | 3) {
+        crate::electrical::calc_wye_phase_voltage(voltage)
+    } else {
+        voltage
+    }
+}
+
+/// The susceptance matrix of an OpenDSS shunt bank of `kvar` at coil voltage
+/// `v_ref` over `map`: each coil (a DELTA branch of [`delta_edges`], or a
+/// WYE phase to ground) carries an equal share of the rated power,
+/// `calc_rated_admittance(b_sign · kvar · 1e3 / coils, v_ref)`, stamped by
+/// [`crate::connection::calc_coil_susceptance_matrix`].
 pub(super) fn kvar_shunt_matrix(
     map: &[String],
     phases: usize,
@@ -2126,26 +2178,27 @@ pub(super) fn kvar_shunt_matrix(
     b_sign: f64,
 ) -> Option<ConductorMatrix> {
     let dim = map.len();
-    let mut susceptance = vec![vec![0.0; dim]; dim];
-    if conn_delta {
+    let coils: Vec<crate::connection::ConnectionChannel> = if conn_delta {
         let edges = delta_edges(dim, phases);
         if edges.is_empty() || map.iter().any(|t| t == "0") {
             return None;
         }
-        let b_branch = b_sign * kvar * 1e3 / edges.len() as f64 / (v_ref * v_ref);
-        for (from, to) in edges {
-            susceptance[from][from] += b_branch;
-            susceptance[to][to] += b_branch;
-            susceptance[from][to] -= b_branch;
-            susceptance[to][from] -= b_branch;
-        }
+        edges
+            .into_iter()
+            .map(|(from, to)| crate::connection::ConnectionChannel { from, to: Some(to) })
+            .collect()
     } else {
-        let b_phase = b_sign * kvar * 1e3 / phases as f64 / (v_ref * v_ref);
-        for (idx, row) in susceptance.iter_mut().enumerate().take(phases) {
-            row[idx] = b_phase;
-        }
-    }
-    Some(susceptance)
+        (0..phases.min(dim))
+            .map(|from| crate::connection::ConnectionChannel { from, to: None })
+            .collect()
+    };
+    let b =
+        crate::electrical::calc_rated_admittance(b_sign * kvar * 1e3 / coils.len() as f64, v_ref);
+    Some(crate::connection::calc_coil_susceptance_matrix(
+        dim,
+        &coils,
+        &vec![b; coils.len()],
+    ))
 }
 
 fn bus_spec(v: Option<&Value>, fallback: &str) -> BusSpec {
@@ -2291,7 +2344,13 @@ mod tests {
             )
             .unwrap();
             let mut diagnostics = crate::collect::Diagnostics::new();
-            let net = parse_dss_collecting(&source, &mut diagnostics, &mut None).unwrap();
+            let net = parse_dss_collecting(
+                &source,
+                &mut diagnostics,
+                &mut None,
+                crate::dss::DssReadLimits::default(),
+            )
+            .unwrap();
             assert_eq!(net.shunts().len(), usize::from(command == "Open"));
             assert_eq!(
                 net.lines().iter().any(|l| l.name == "l"),

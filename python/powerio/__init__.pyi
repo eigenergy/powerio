@@ -1377,6 +1377,8 @@ def parse(
     sincal_balanced: Optional[SincalBalancedReadOptions] = ...,
     acquisition_root: Optional[Any] = ...,
     named_buffers: Optional[Mapping[str, bytes]] = ...,
+    dss_max_include_bytes: Optional[int] = ...,
+    dss_max_properties: Optional[int] = ...,
 ) -> PioModule[Any]: ...
 def emit(
     module: PioModule[Any], format: Format, destination: Optional[Any] = ...

@@ -21,7 +21,8 @@ pub(super) fn sources(
             return Err(error("source magnitude must be positive and finite"));
         }
         let angle = source.v_angle[0];
-        for (i, offset) in [0.0, -TAU / 3.0, TAU / 3.0].into_iter().enumerate() {
+        for i in 0..3 {
+            let offset = powerio_dist::sequence::calc_balanced_phase_angle(i, 3);
             let actual = Complex64::from_polar(source.v_magnitude[i], source.v_angle[i]);
             let canonical = Complex64::from_polar(magnitude, angle + offset);
             if !actual.re.is_finite()
@@ -44,7 +45,11 @@ pub(super) fn sources(
         integer(&mut input, "Flag_Lf", 6);
         integer(&mut input, "Flag_Z0", i64::from(!floating));
         integer(&mut input, "Flag_Z0_Input", 2);
-        real(&mut input, "Ug", magnitude * 3.0_f64.sqrt() / 1000.0);
+        real(
+            &mut input,
+            "Ug",
+            powerio_core::electrical::calc_wye_line_voltage(magnitude) / 1000.0,
+        );
         real(&mut input, "delta", angle.to_degrees());
         let id = tables.element(
             "Infeeder",
@@ -83,7 +88,7 @@ pub(super) fn loads(
             } else if volts.is_empty() && mode == 2 {
                 let ll = topology.nodes[&node].0;
                 if pair.len() == 1 {
-                    ll / 3.0_f64.sqrt()
+                    powerio_core::electrical::calc_wye_phase_voltage(ll)
                 } else {
                     ll
                 }
@@ -94,7 +99,7 @@ pub(super) fn loads(
                 return Err(error("load nominal voltage must be positive and finite"));
             }
             let input_ll = if pair.len() == 1 {
-                phase_voltage * 3.0_f64.sqrt()
+                powerio_core::electrical::calc_wye_line_voltage(phase_voltage)
             } else {
                 phase_voltage
             };
@@ -145,8 +150,7 @@ fn sequence(matrix: &ConductorMatrix, context: &str) -> Result<(f64, f64)> {
             near(*value, if i == j { d } else { m }, context)?;
         }
     }
-    let positive = d - m;
-    let zero = d + 2.0 * m;
+    let (positive, zero) = powerio_dist::sequence::calc_sequence_from_phase(d, m);
     if !positive.is_finite() || !zero.is_finite() || positive < 0.0 || zero < 0.0 {
         return Err(error(format!(
             "{context}: no supported nonnegative sequence representation"

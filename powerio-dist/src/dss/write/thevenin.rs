@@ -26,7 +26,7 @@ struct ShortCircuit {
 // Derive candidates from typed sequence values and accept only exact forward
 // reconstruction; no source property or feeder identity participates.
 fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortCircuit> {
-    use crate::dss::source::{short_circuit_positive, short_circuit_zero};
+    use crate::dss::source::{short_circuit_level, short_circuit_positive, short_circuit_zero};
     let valid = |v: f64| v.is_finite() && v > 0.0;
     if ![zero.re, zero.im, positive.re, positive.im]
         .into_iter()
@@ -39,9 +39,13 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
         .into_iter()
         .filter(|&v| valid(v))
     {
-        let mva3 = kv.powi(2) / positive.im / (1.0 + 1.0 / xr1.powi(2)).sqrt();
+        let mva3 = short_circuit_level(kv, 1.0, positive.im)
+            / crate::electrical::calc_impedance_ratio_divisor(
+                xr1,
+                crate::electrical::ImpedanceRatioForm::OpenDssReactanceOverResistance,
+            );
         for mva3 in neighbors(mva3).into_iter().filter(|&v| valid(v)) {
-            if short_circuit_positive(kv, mva3, xr1) == positive {
+            if short_circuit_positive(kv, mva3, xr1).is_ok_and(|z| z == positive) {
                 positive_spec = Some((mva3, xr1));
                 break 'positive;
             }
@@ -52,10 +56,10 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
         .into_iter()
         .filter(|&v| valid(v))
     {
-        let mva1 = 3.0 * kv.powi(2) / (2.0 * positive + zero).norm();
+        let mva1 = short_circuit_level(kv, 3.0, (2.0 * positive + zero).norm());
         for mva1 in neighbors(mva1).into_iter().filter(|&v| valid(v)) {
-            let factor = 3.0_f64.sqrt();
-            let isc1 = mva1 * 1000.0 / (factor * kv);
+            let factor = crate::electrical::SQRT_3;
+            let isc1 = crate::electrical::calc_line_current(mva1 * 1000.0, kv, factor);
             if short_circuit_zero(kv, isc1, factor, xr0, positive).ok() == Some(zero) {
                 zero_spec = Some((mva1, xr0));
                 break 'zero;
@@ -70,6 +74,9 @@ fn short_circuit(kv: f64, zero: Complex64, positive: Complex64) -> Option<ShortC
         xr0,
     })
 }
+
+/// The native `VSource` takes its sequence third by division.
+const NATIVE_THIRD: crate::sequence::SequenceThird = crate::sequence::SequenceThird::Divide;
 
 fn neighbors(value: f64) -> [f64; 17] {
     let mut result = [value; 17];
@@ -87,16 +94,22 @@ fn neighbors(value: f64) -> [f64; 17] {
     reason = "native matrix reconstruction must be exact"
 )]
 fn sequence(diagonal: f64, mutual: f64, reactance: bool) -> Option<(f64, f64)> {
-    for zero in neighbors(diagonal + 2.0 * mutual) {
-        for positive in neighbors(diagonal - mutual) {
+    let (positive_guess, zero_guess) = crate::sequence::calc_sequence_from_phase(diagonal, mutual);
+    for zero in neighbors(zero_guess) {
+        for positive in neighbors(positive_guess) {
             if zero.is_finite()
                 && positive.is_finite()
-                && (2.0 * positive + zero) / 3.0 == diagonal
-                && (if reactance {
-                    diagonal - positive
-                } else {
-                    (zero - positive) / 3.0
-                }) == mutual
+                && crate::sequence::calc_sequence_self(positive, zero, NATIVE_THIRD) == diagonal
+                && crate::sequence::calc_sequence_mutual(
+                    positive,
+                    zero,
+                    if reactance {
+                        // VSource's sequence setters: Xm := Xs - X1.
+                        crate::sequence::SequenceThird::SelfLessPositive
+                    } else {
+                        NATIVE_THIRD
+                    },
+                ) == mutual
             {
                 return Some((zero, positive));
             }
@@ -135,7 +148,7 @@ fn voltage(source: &VoltageSource) -> Option<(f64, f64, &'static str)> {
     if magnitude <= 0.0 || source.v_magnitude.len() != 3 || source.v_angle.len() != 3 {
         return None;
     }
-    let factor = 2.0 * (std::f64::consts::PI / 3.0).sin();
+    let factor = crate::sequence::calc_polygon_chord(3);
     let kv = neighbors(magnitude * factor / 1000.0)
         .into_iter()
         .find(|kv| (kv * 1000.0 / factor).to_bits() == magnitude.to_bits())?;

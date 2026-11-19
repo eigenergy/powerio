@@ -25,6 +25,23 @@ pub(super) struct ResolvedSource {
     pub base_mva: f64,
 }
 
+/// The native `VSource` takes its sequence third by division
+/// (`RecalcElementData`: `(2.0 * X1 + X0) / 3.0`).
+const NATIVE_THIRD: crate::sequence::SequenceThird = crate::sequence::SequenceThird::Divide;
+
+use crate::electrical::{SQRT_3, calc_line_current};
+
+/// A short circuit level in MVA from its current in amperes at `kv`
+/// ([`crate::electrical::calc_line_apparent_power`]), `factor · kV · I / 1000`.
+fn apparent_power(kv: f64, current: f64, factor: f64) -> f64 {
+    crate::electrical::calc_line_apparent_power(
+        kv,
+        current,
+        factor,
+        crate::electrical::ApparentPowerOrder::FactorFirst,
+    ) / 1000.0
+}
+
 #[derive(Clone, Copy)]
 enum ImpedanceSpec {
     Mva,
@@ -32,10 +49,43 @@ enum ImpedanceSpec {
     Sequence,
 }
 
+/// The impedance base `kV² / MVA` ([`crate::electrical::calc_impedance_base`]).
+/// The parser holds every base positive, so an unusable one only arises by
+/// overflow, and is refused.
+fn impedance_base(kv: f64, mva: f64) -> Result<f64> {
+    crate::electrical::calc_impedance_base(kv, mva)
+        .ok_or_else(|| "native source impedance base kV² / MVA is not positive and finite".into())
+}
+
+/// The native short circuit relation between a source's line to line
+/// voltage `kv`, an impedance magnitude and a short circuit current,
+/// `kV · 1000 / factor / x` (`factor` √3 for a three phase quantity, one or
+/// √3 for a single phase one as the source's phases state): the current of
+/// an impedance magnitude (`Isc3` over `|Z1|`, `Isc1` over `|Zs|`), and the
+/// impedance magnitude of a current, the same quotient (three times `kv`
+/// gives `3 |Zs|`, `VSource`'s zero sequence quadratic). The pinned engine's
+/// order: `kVBase * 1000.0 / factor / x`.
+pub(super) fn short_circuit_quotient(kv: f64, factor: f64, x: f64) -> f64 {
+    kv * 1000.0 / factor / x
+}
+
+/// The short circuit level, MVA, of an impedance magnitude `z` at `kv` with
+/// `scale` times the voltage squared: `scale · kV² / |Z|`
+/// ([`crate::electrical::calc_squared_voltage_impedance`], the `V² / S`
+/// quotient read as `S = V² / Z`), `scale` one for `MVAsc3` over `|Z1|` and
+/// three for `MVAsc1` over `|2 Z1 + Z0|`.
+pub(super) fn short_circuit_level(kv: f64, scale: f64, z: f64) -> f64 {
+    crate::electrical::calc_squared_voltage_impedance(scale * kv.powi(2), z)
+}
+
 // Shared with the canonical writer's exact inverse of the native MVA form.
-pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Complex64 {
-    let x = kv.powi(2) / mva3 / (1.0 + 1.0 / xr1.powi(2)).sqrt();
-    Complex64::new(x / xr1, x)
+pub(super) fn short_circuit_positive(kv: f64, mva3: f64, xr1: f64) -> Result<Complex64> {
+    let (r, x) = crate::electrical::calc_impedance_from_ratio(
+        impedance_base(kv, mva3)?,
+        xr1,
+        crate::electrical::ImpedanceRatioForm::OpenDssReactanceOverResistance,
+    );
+    Ok(Complex64::new(r, x))
 }
 
 pub(super) fn short_circuit_zero(
@@ -48,7 +98,7 @@ pub(super) fn short_circuit_zero(
     let (r, x) = (positive.re, positive.im);
     let quadratic = 1.0 + xr0.powi(2);
     let linear = 4.0 * (r + x * xr0);
-    let constant = 4.0 * (r * r + x * x) - (3.0 * kv * 1000.0 / factor / isc1).powi(2);
+    let constant = 4.0 * (r * r + x * x) - short_circuit_quotient(3.0 * kv, factor, isc1).powi(2);
     let discriminant = linear * linear - 4.0 * quadratic * constant;
     if discriminant < 0.0 {
         return Err("source short-circuit profile has no real zero-sequence resistance".into());
@@ -251,43 +301,39 @@ impl State {
     }
 
     fn recalculate(&mut self) -> Result<()> {
-        let factor = if self.phases == 1 {
-            1.0
-        } else {
-            3.0_f64.sqrt()
-        };
+        let factor = if self.phases == 1 { 1.0 } else { SQRT_3 };
         if matches!(self.spec, ImpedanceSpec::Current) {
-            self.mva3 = 3.0_f64.sqrt() * self.kv * self.isc3 / 1000.0;
-            self.mva1 = factor * self.kv * self.isc1 / 1000.0;
+            self.mva3 = apparent_power(self.kv, self.isc3, SQRT_3);
+            self.mva1 = apparent_power(self.kv, self.isc1, factor);
         }
         if matches!(self.spec, ImpedanceSpec::Mva | ImpedanceSpec::Current) {
-            self.z[1] = short_circuit_positive(self.kv, self.mva3, self.xr1);
+            self.z[1] = short_circuit_positive(self.kv, self.mva3, self.xr1)?;
             self.z[2] = self.z[1];
             if matches!(self.spec, ImpedanceSpec::Mva) {
-                self.isc3 = self.mva3 * 1000.0 / (3.0_f64.sqrt() * self.kv);
-                self.isc1 = self.mva1 * 1000.0 / (factor * self.kv);
+                self.isc3 = calc_line_current(self.mva3 * 1000.0, self.kv, SQRT_3);
+                self.isc1 = calc_line_current(self.mva1 * 1000.0, self.kv, factor);
             }
             self.z[0] = short_circuit_zero(self.kv, self.isc1, factor, self.xr0, self.z[1])?;
         } else {
             if self.pu_written[1] {
-                let base = self.kv.powi(2) / self.base_mva;
+                let base = impedance_base(self.kv, self.base_mva)?;
                 self.z = self.pu_z.map(|v| v * base);
             }
             if self.z[1] == Complex64::default() {
                 return Err("native source Z1 cannot be zero".into());
             }
-            self.isc3 = self.kv * 1000.0 / 3.0_f64.sqrt() / self.z[1].norm();
+            self.isc3 = short_circuit_quotient(self.kv, SQRT_3, self.z[1].norm());
             if self.phases == 1 {
                 self.z[0] = self.z[1];
                 self.z[2] = self.z[1];
             }
-            let zs = (2.0 * self.z[1] + self.z[0]) / 3.0;
-            self.isc1 = self.kv * 1000.0 / factor / zs.norm();
-            self.mva3 = 3.0_f64.sqrt() * self.kv * self.isc3 / 1000.0;
-            self.mva1 = factor * self.kv * self.isc1 / 1000.0;
+            let zs = crate::sequence::calc_sequence_self(self.z[1], self.z[0], NATIVE_THIRD);
+            self.isc1 = short_circuit_quotient(self.kv, factor, zs.norm());
+            self.mva3 = apparent_power(self.kv, self.isc3, SQRT_3);
+            self.mva1 = apparent_power(self.kv, self.isc1, factor);
         }
         if !self.pu_written.iter().any(|&v| v) {
-            let base = self.kv.powi(2) / self.base_mva;
+            let base = impedance_base(self.kv, self.base_mva)?;
             self.pu_z = self.z.map(|z| z / base);
         }
         if self
@@ -312,19 +358,16 @@ impl State {
         let quasi = self.quasi_ideal && ratio - 1.0 < 1e-12;
         let mut impedance = vec![vec![Complex64::default(); self.phases]; self.phases];
         let diagonal = if quasi {
-            self.ideal_z * self.kv.powi(2) / self.base_mva
+            self.ideal_z * impedance_base(self.kv, self.base_mva)?
         } else if self.z[1] == self.z[2] {
-            (2.0 * self.z[1] + self.z[0]) / 3.0
+            crate::sequence::calc_sequence_self(self.z[1], self.z[0], NATIVE_THIRD)
         } else {
-            (self.z[2] + self.z[1] + self.z[0]) / 3.0
+            crate::sequence::calc_circulant_phase_entry(self.z, 0, 0)
         };
         for (i, row) in impedance.iter_mut().enumerate() {
             row[i] = diagonal;
         }
         if !quasi {
-            // DSSGlobals.CALPHA uses this rounded coefficient. Replacing it
-            // with sin(120 degrees) changes unequal-sequence impedances.
-            let alpha = Complex64::new(-0.5, 0.866_025);
             for (i, row) in impedance.iter_mut().enumerate() {
                 for (j, value) in row.iter_mut().enumerate() {
                     if i != j {
@@ -332,19 +375,26 @@ impl State {
                             // Native sequence setters compute Xm as Xs-X1;
                             // short-circuit setters use (X0-X1)/3. Their
                             // rounding differs in ill-conditioned networks.
+                            let reactance_third = if matches!(self.spec, ImpedanceSpec::Sequence) {
+                                crate::sequence::SequenceThird::SelfLessPositive
+                            } else {
+                                NATIVE_THIRD
+                            };
                             Complex64::new(
-                                (self.z[0].re - self.z[1].re) / 3.0,
-                                if matches!(self.spec, ImpedanceSpec::Sequence) {
-                                    diagonal.im - self.z[1].im
-                                } else {
-                                    (self.z[0].im - self.z[1].im) / 3.0
-                                },
+                                crate::sequence::calc_sequence_mutual(
+                                    self.z[1].re,
+                                    self.z[0].re,
+                                    NATIVE_THIRD,
+                                ),
+                                crate::sequence::calc_sequence_mutual(
+                                    self.z[1].im,
+                                    self.z[0].im,
+                                    reactance_third,
+                                ),
                             )
                         } else if self.phases == 3 {
-                            (self.z[0]
-                                + self.z[1] * alpha.powu(((j + 3 - i) % 3) as u32)
-                                + self.z[2] * alpha.powu(((i + 3 - j) % 3) as u32))
-                                / 3.0
+                            // OpenDSS's rounded rotation (`OPENDSS_ALPHA`).
+                            crate::sequence::calc_circulant_phase_entry(self.z, i, j)
                         } else {
                             Complex64::default()
                         };
@@ -354,13 +404,13 @@ impl State {
             }
         }
         let nominal_phase_kv = if self.phases > 1 {
-            self.kv / (2.0 * (std::f64::consts::PI / self.phases as f64).sin())
+            self.kv / crate::sequence::calc_polygon_chord(self.phases)
         } else {
             self.kv
         };
         let mut magnitude = self.kv * self.pu * 1000.0;
         if self.phases > 1 {
-            magnitude /= 2.0 * (std::f64::consts::PI / self.phases as f64).sin();
+            magnitude /= crate::sequence::calc_polygon_chord(self.phases);
         }
         if (frequency - self.frequency).abs() > 1e-3 {
             magnitude = 0.0;

@@ -558,14 +558,20 @@ fn malformed_transformer_metadata_and_ambiguous_grounding_are_rejected() {
             "{key}"
         );
     }
+    // A negative neutral resistance is OpenDSS's floating neutral, the same
+    // reading as the transformer primitive: no grounding shunt.
     let mut net = with_transformer();
     net.transformers_mut()[0].windings[1].r_neutral = Some(-1.0);
+    let prepared = build_mc_ac_opf_preparation(
+        &McAcOpfInstance::from_network(net).unwrap(),
+        &McAcOpfAssemblyOptions::default(),
+    )
+    .unwrap();
     assert!(
-        build_mc_ac_opf_preparation(
-            &McAcOpfInstance::from_network(net).unwrap(),
-            &McAcOpfAssemblyOptions::default()
-        )
-        .is_err()
+        !prepared
+            .shunts
+            .iter()
+            .any(|shunt| shunt.identity.contains(":neutral:"))
     );
 }
 

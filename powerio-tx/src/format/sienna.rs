@@ -206,7 +206,10 @@ fn parameter_scale(row: &Value, kv: f64) -> Result<f64> {
         .unwrap_or("COMPONENT_BASE")
     {
         "COMPONENT_BASE" => Ok(BASE / base(row)?),
-        "NATURAL_UNITS" => Ok(BASE / positive(kv, "base_voltage")?.powi(2)),
+        "NATURAL_UNITS" => {
+            powerio_core::electrical::calc_admittance_base(positive(kv, "base_voltage")?, BASE)
+                .ok_or_else(|| error("base_voltage gives no finite admittance base"))
+        }
         other => Err(error(format!("unsupported parameter_units {other}"))),
     }
 }
@@ -440,9 +443,11 @@ pub(super) fn read(
                     base(circuit)? / BASE * ratio.powi(2)
                 }
                 "COMPONENT_MVAR" => 1.0 / BASE,
-                "NATURAL_UNITS" => {
-                    positive(by_bus[&b.from].base_kv, "base_voltage")?.powi(2) / BASE
-                }
+                "NATURAL_UNITS" => powerio_core::electrical::calc_impedance_base(
+                    positive(by_bus[&b.from].base_kv, "base_voltage")?,
+                    BASE,
+                )
+                .unwrap_or(f64::NAN),
                 other => return Err(error(format!("unsupported admittance_units {other}"))),
             };
             let g = number(y, "real")? * scale;
@@ -516,7 +521,7 @@ pub(super) fn read(
     let mut shunts = Vec::new();
     for row in rows(root, "FixedAdmittance")? {
         let bus = bus_ref(row, "bus", &ids)?;
-        let scale = shunts::scale(row, by_bus[&bus].base_kv)?;
+        let kv = shunts::natural_kv(row, by_bus[&bus].base_kv)?;
         // The writer states a transformer's secondary-terminal charging as a
         // FixedAdmittance on the to bus, since the schema carries one
         // magnetizing shunt per two-winding transformer. The ext marker folds
@@ -542,8 +547,8 @@ pub(super) fn read(
                 let mut charging = branch
                     .charging
                     .unwrap_or_else(|| BranchCharging::from_total_b(branch.b));
-                charging.g_to += number(&row["Y"], "real")? * scale / BASE;
-                charging.b_to += number(&row["Y"], "imag")? * scale / BASE;
+                charging.g_to += shunts::rated_power(number(&row["Y"], "real")?, kv) / BASE;
+                charging.b_to += shunts::rated_power(number(&row["Y"], "imag")?, kv) / BASE;
                 branch.charging = Some(charging);
                 branch.b = charging.calc_total_b();
                 continue;
@@ -557,8 +562,8 @@ pub(super) fn read(
         }
         let mut sh = Shunt::new(
             bus,
-            number(&row["Y"], "real")? * scale,
-            number(&row["Y"], "imag")? * scale,
+            shunts::rated_power(number(&row["Y"], "real")?, kv),
+            shunts::rated_power(number(&row["Y"], "imag")?, kv),
         );
         sh.uid = uid("FixedAdmittance", row)?;
         sh.in_service = available(row)?;

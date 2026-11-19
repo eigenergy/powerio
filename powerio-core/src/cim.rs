@@ -28,22 +28,36 @@ pub fn phase_terminal(letter: &str) -> Option<&'static str> {
         "A" | "s1" => Some("1"),
         "B" | "s2" => Some("2"),
         "C" => Some("3"),
-        "N" => Some("4"),
+        "N" => Some(NEUTRAL_TERMINAL),
         _ => None,
     }
 }
 
+/// The wire coordinate terminal name of the CIM neutral `N`: OpenDSS node
+/// `4`, which the distribution CIM and MG-RAVENS readers give every neutral
+/// they read ([`phase_terminal`]).
+pub const NEUTRAL_TERMINAL: &str = "4";
+
+/// The terminal names [`terminal_phase`] writes as the CIM neutral `N`:
+/// node `4` ([`NEUTRAL_TERMINAL`]) and the letter `n` in either case. The
+/// one list: the distribution CIM and MG-RAVENS wire conventions name these
+/// terminals the neutral.
+pub const NEUTRAL_TERMINAL_NAMES: [&str; 3] = [NEUTRAL_TERMINAL, "n", "N"];
+
 /// The CIM `SinglePhaseKind` letter of a terminal name: the node numbers 1
 /// to 4, and the letter names `a`, `b`, `c`, `n` in either case that BMOPF
-/// terminal conventions use. Split phase collapses onto `A` and `B`. Any
-/// other name has no phase kind, and a writer reports it.
+/// terminal conventions use ([`NEUTRAL_TERMINAL_NAMES`] are `N`). Split
+/// phase collapses onto `A` and `B`. Any other name has no phase kind, and a
+/// writer reports it.
 #[must_use]
 pub fn terminal_phase(terminal: &str) -> Option<&'static str> {
+    if NEUTRAL_TERMINAL_NAMES.contains(&terminal) {
+        return Some("N");
+    }
     match terminal {
         "1" | "a" | "A" => Some("A"),
         "2" | "b" | "B" => Some("B"),
         "3" | "c" | "C" => Some("C"),
-        "4" | "n" | "N" => Some("N"),
         _ => None,
     }
 }

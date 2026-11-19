@@ -144,7 +144,7 @@ impl LoadInput {
         let branch_voltage = if delta {
             voltage
         } else {
-            voltage / 3.0_f64.sqrt()
+            powerio_core::electrical::calc_wye_phase_voltage(voltage)
         };
         if branch_voltage <= 0.0 {
             return Err(format_error("load branch voltage underflow"));

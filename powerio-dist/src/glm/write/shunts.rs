@@ -120,7 +120,7 @@ impl Writer<'_> {
                 return Err(unsupported("capacitor shunt phase is absent at its bus"));
             }
             let voltage = self.nominal[shunt.bus.as_str()];
-            let rating = shunt.b[0][0] * voltage * voltage;
+            let rating = crate::electrical::calc_rated_power(shunt.b[0][0], voltage);
             if !rating.is_finite() || (shunt.b[0][0] > 0.0 && rating == 0.0) {
                 return Err(unsupported("capacitor rating overflows or underflows"));
             }

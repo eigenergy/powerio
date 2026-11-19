@@ -13,6 +13,7 @@
 //! profile set, and the routing reads a header-less document with per phase
 //! classes as distribution CIM.
 
+use crate::sequence::{SequenceThird, calc_phase_from_sequence};
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 
@@ -25,8 +26,8 @@ use crate::model::{
 
 use super::read::SWITCH_CLASSES;
 use super::{
-    LEAKAGE_READING, no_load_test_pct, sequence_to_phase, short_circuit_test_pct, tank_phase_clock,
-    wrap_angle, z_base,
+    LEAKAGE_READING, exact_preimage, no_load_test_values, short_circuit_test_pct, tank_phase_clock,
+    wrap_angle,
 };
 use crate::ravens::MRID_KEY as RAVENS_MRID_KEY;
 
@@ -57,22 +58,18 @@ fn esc_text(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// A terminal name to its `SinglePhaseKind`: the OpenDSS node numbers
-/// (`1` to `4`) or the phase letters BMOPF documents use (`a`, `b`, `c`,
-/// `n`, either case).
+/// A terminal name to its `SinglePhaseKind` letter: the one mapping
+/// ([`powerio_core::cim::terminal_phase`]).
 fn phase_letter(terminal: &str) -> Option<&'static str> {
-    match terminal {
-        "1" | "a" | "A" => Some("A"),
-        "2" | "b" | "B" => Some("B"),
-        "3" | "c" | "C" => Some("C"),
-        "4" | "n" | "N" => Some("N"),
-        _ => None,
-    }
+    powerio_core::cim::terminal_phase(terminal)
 }
 
-/// Whether a terminal name is the neutral.
+/// Whether a terminal is written as the neutral conductor `N`: its role
+/// under the CIM wire convention ([`crate::cim::is_wire_neutral`], the one
+/// terminal classification over the convention the CIM readers state), so
+/// a CIM read single phase bus `[1, 4]` keeps its neutral.
 fn is_neutral(terminal: &str) -> bool {
-    phase_letter(terminal) == Some("N")
+    crate::cim::is_wire_neutral(terminal)
 }
 
 /// The canonical position of a phase in a `PhaseCode`: A, B, C, then N.
@@ -799,15 +796,42 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
         .iter()
         .map(|xf| tank_phase_codes(&mut doc, xf))
         .collect();
+    // Each winding's phase clock, the vector group shift the physics
+    // stamps (`leadlag` included); a unit whose shift is unknown is refused.
+    let clocks: Vec<Option<Vec<f64>>> = net
+        .transformers()
+        .iter()
+        .zip(&tank_codes)
+        .map(|(xf, codes)| {
+            let three_phase = match codes {
+                Some(codes) => codes.first() == Some(&"ABC"),
+                None => xf.phases == 3,
+            };
+            let clocks = (0..xf.windings.len())
+                .map(|k| tank_phase_clock(xf, k, three_phase))
+                .collect::<Result<Vec<f64>, powerio_core::Error>>();
+            clocks
+                .map_err(|error| {
+                    doc.warn(
+                        &C::EMIT_CIM_DIST_RECORD_DROPPED,
+                        format!("transformer {}: no phase-angle clock: {error}", xf.name),
+                    );
+                })
+                .ok()
+        })
+        .collect();
     let mut groups: std::collections::HashMap<String, Vec<usize>> =
         std::collections::HashMap::new();
     for (k, xf) in net.transformers().iter().enumerate() {
-        if tank_codes[k].is_some() {
+        if tank_codes[k].is_some() && clocks[k].is_some() {
             groups.entry(tank_group(xf)).or_default().push(k);
         }
     }
     let mut catalogs = TankCatalogs::default();
     for (k, xf) in net.transformers().iter().enumerate() {
+        let Some(xf_clocks) = clocks[k].as_deref() else {
+            continue;
+        };
         if xf.windings.len() < 2 {
             doc.warn(
                 &C::EMIT_CIM_DIST_RECORD_DROPPED,
@@ -852,7 +876,10 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
                     &mut doc,
                     &mut catalogs,
                     tank,
-                    codes,
+                    TankLayout {
+                        codes,
+                        clocks: clocks[m].as_deref().unwrap_or_default(),
+                    },
                     &buses,
                     &pt,
                     &mut sequence,
@@ -861,7 +888,7 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
             continue;
         }
         let buses: Vec<String> = xf.windings.iter().map(|w| node(&mut doc, &w.bus)).collect();
-        write_end_form(&mut doc, xf, &buses);
+        write_end_form(&mut doc, xf, xf_clocks, &buses);
     }
     catalogs.write(&mut doc);
 
@@ -983,13 +1010,24 @@ fn write_changer(doc: &mut Doc, what: &str, name: &str, end: &str, number: usize
 /// the pair reactance on end 1 (two windings) or as mesh impedances (more),
 /// and the no-load extras as a `TransformerCoreAdmittance` on end 1.
 #[allow(clippy::too_many_lines)] // one object family per block, in output order
-fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
+fn write_end_form(doc: &mut Doc, xf: &DistTransformer, clocks: &[f64], buses: &[String]) {
     let id = doc.mrid_of(&xf.extras, "xf", &xf.name);
     let what = format!("transformer {}", xf.name);
     doc.named("PowerTransformer", &id, &xf.name);
     doc.close("PowerTransformer");
     let imported_ends = imported_end_ids(xf);
     let s_base = xf.windings[0].s_rating;
+    let stated: Vec<Option<f64>> = clocks.iter().copied().map(Some).collect();
+    // An absent clock reads as OpenDSS's default convention, so a unit the
+    // default represents states none. Every other unit states its clocks:
+    // one only the European convention represents reads back as such, and
+    // one neither represents (a Y-D-D unit whose deltas roll opposite ways)
+    // states the clocks the reader then refuses precisely, never a layout
+    // that silently reads back under the default.
+    let state_clocks = !matches!(
+        crate::cim::clocks_leadlag(&xf.windings, &stated, xf.phases == 3),
+        Ok(None)
+    );
     short_circuit_count(doc, xf);
     let mut end_ids = Vec::with_capacity(xf.windings.len());
     for (index, winding) in xf.windings.iter().enumerate() {
@@ -1025,10 +1063,17 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
             "PowerTransformerEnd.connectionKind",
             &format!("WindingConnection.{kind}"),
         );
+        if state_clocks {
+            doc.number(
+                &what,
+                "PowerTransformerEnd.phaseAngleClock",
+                clocks.get(index).copied().unwrap_or(0.0),
+            );
+        }
         doc.number(&what, "PowerTransformerEnd.r", winding_r_ohm(winding));
         // Two windings carry the pair reactance on end 1; more windings
         // state each pair as a TransformerMeshImpedance.
-        let x = match z_base(winding.v_ref, s_base) {
+        let x = match crate::electrical::calc_impedance_base(winding.v_ref, s_base) {
             Some(base) if index == 0 && xf.windings.len() == 2 => {
                 let xsc = xf.xsc_pct.first().copied().unwrap_or(0.0);
                 exact_preimage(xsc, xsc / 100.0 * base, |x| (x / base + 0.0) * 100.0)
@@ -1057,7 +1102,7 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
                 doc.reference("TransformerMeshImpedance.FromTransformerEnd", &end_ids[i].0);
                 doc.reference("TransformerMeshImpedance.ToTransformerEnd", &end_ids[j].0);
                 doc.number(&what, "TransformerMeshImpedance.r", 0.0);
-                let x = match z_base(end_ids[i].1, s_base) {
+                let x = match crate::electrical::calc_impedance_base(end_ids[i].1, s_base) {
                     Some(base) => exact_preimage(xsc, xsc / 100.0 * base, |x| x / base * 100.0),
                     None => 0.0,
                 };
@@ -1076,7 +1121,7 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
             &format!("{}_Yc", xf.name),
         );
         doc.reference("TransformerCoreAdmittance.TransformerEnd", &end_ids[0].0);
-        let (g, b) = match z_base(end_ids[0].1, s_base) {
+        let (g, b) = match crate::electrical::calc_impedance_base(end_ids[0].1, s_base) {
             Some(base) => (
                 exact_preimage(loss, loss / 100.0 / base, |g| 100.0 * g * base),
                 exact_preimage(imag, imag / 100.0 / base, |b| 100.0 * b * base),
@@ -1091,7 +1136,14 @@ fn write_end_form(doc: &mut Doc, xf: &DistTransformer, buses: &[String]) {
         "transformer",
         &xf.name,
         &xf.extras,
-        &["cim_mrid", "cim_end_mrids", "%noloadloss", "%imag"],
+        // `leadlag` rides in the phase clocks.
+        &[
+            "cim_mrid",
+            "cim_end_mrids",
+            "%noloadloss",
+            "%imag",
+            "leadlag",
+        ],
     );
 }
 
@@ -1128,7 +1180,7 @@ fn short_circuit_count(doc: &mut Doc, xf: &DistTransformer) {
 /// A winding's resistance in ohm on its own base, chosen so the reader's
 /// percentage comes back exactly.
 fn winding_r_ohm(winding: &DistWinding) -> f64 {
-    match z_base(winding.v_ref, winding.s_rating) {
+    match crate::electrical::calc_impedance_base(winding.v_ref, winding.s_rating) {
         Some(base) => exact_preimage(winding.r_pct, winding.r_pct / 100.0 * base, |r| {
             r / base * 100.0
         }),
@@ -1214,6 +1266,13 @@ fn tank_phase_codes(doc: &mut Doc, xf: &DistTransformer) -> Option<Vec<&'static 
     Some(codes)
 }
 
+/// A tank's phase code and phase clock per winding.
+#[derive(Clone, Copy)]
+struct TankLayout<'a> {
+    codes: &'a [&'static str],
+    clocks: &'a [f64],
+}
+
 /// One tank: the `TransformerTank`, a `TransformerTankEnd` per winding on
 /// a terminal of the group's `PowerTransformer`, tap changers on its ends,
 /// and its place in a shared catalog entry.
@@ -1221,7 +1280,7 @@ fn write_tank(
     doc: &mut Doc,
     catalogs: &mut TankCatalogs,
     xf: &DistTransformer,
-    codes: &[&'static str],
+    layout: TankLayout<'_>,
     buses: &[String],
     pt: &str,
     sequence: &mut usize,
@@ -1249,7 +1308,7 @@ fn write_tank(
         );
         doc.enumeration(
             "TransformerTankEnd.phases",
-            &format!("PhaseCode.{}", codes[index]),
+            &format!("PhaseCode.{}", layout.codes[index]),
         );
         doc.reference("TransformerTankEnd.TransformerTank", &id);
         doc.integer("TransformerEnd.endNumber", number);
@@ -1258,7 +1317,7 @@ fn write_tank(
         doc.close("TransformerTankEnd");
         write_tap(doc, &what, &xf.name, &end, number, winding.tap);
     }
-    catalogs.add(doc, xf, codes, id);
+    catalogs.add(doc, xf, layout, id);
     doc.extras_dropped(
         "transformer",
         &xf.name,
@@ -1273,6 +1332,8 @@ fn write_tank(
             "cim_phase_angle_clock",
             "%noloadloss",
             "%imag",
+            // Rides in the phase clocks.
+            "leadlag",
         ],
     );
 }
@@ -1312,16 +1373,17 @@ impl TankCatalogs {
     /// that entry states the same data, else the first entry with
     /// bit-identical data, else a new one.
     #[allow(clippy::float_cmp)] // phase clocks are discrete
-    fn add(&mut self, doc: &mut Doc, xf: &DistTransformer, codes: &[&'static str], tank: String) {
+    fn add(&mut self, doc: &mut Doc, xf: &DistTransformer, layout: TankLayout<'_>, tank: String) {
         let clocks = xf
             .extras
             .get("cim_phase_angle_clock")
             .and_then(serde_json::Value::as_array);
-        let three_phase = codes.first() == Some(&"ABC");
+        let three_phase = layout.codes.first() == Some(&"ABC");
         let windings: Vec<CatalogWinding> = xf
             .windings
             .iter()
-            .map(|w| CatalogWinding {
+            .enumerate()
+            .map(|(k, w)| CatalogWinding {
                 v_ref: w.v_ref,
                 s_rating: w.s_rating,
                 r_pct: w.r_pct,
@@ -1330,7 +1392,7 @@ impl TankCatalogs {
                     (true, _) => "Y",
                     (false, _) => "I",
                 },
-                clock: tank_phase_clock(&xf.windings[0], w, three_phase),
+                clock: layout.clocks.get(k).copied().unwrap_or(0.0),
             })
             .collect();
         if clocks.is_some_and(|old| {
@@ -1496,18 +1558,7 @@ impl TankCatalogs {
                 }
             }
             if let Some((loss_pct, imag)) = entry.no_load {
-                let loss = exact_preimage(loss_pct, loss_pct * s_1 / 100.0 / 1000.0, |l| {
-                    no_load_test_pct(l, 0.0, s_1, s_1).map_or(f64::NAN, |p| p.0)
-                });
-                let read_loss = no_load_test_pct(loss, 0.0, s_1, s_1).map_or(0.0, |p| p.0);
-                let forward = if read_loss > 0.0 {
-                    imag.hypot(read_loss)
-                } else {
-                    imag
-                };
-                let exciting = exact_preimage(imag, forward, |e| {
-                    no_load_test_pct(loss, e, s_1, s_1).map_or(f64::NAN, |p| p.1)
-                });
+                let (loss, exciting) = no_load_test_values(loss_pct, imag, s_1);
                 let test = det_mrid("xfnltest", &entry.id);
                 doc.named("NoLoadTest", &test, &format!("{}_1", entry.name));
                 doc.reference("NoLoadTest.EnergisedEnd", &end_ids[0]);
@@ -1536,7 +1587,7 @@ impl TankCatalogs {
 /// voltage `rated_u`, on a test base of `s_1`) whose reading with `loss`
 /// recovers the pair reactance `x` exactly.
 fn test_leakage(x: f64, loss: f64, rated_u: f64, s_1: f64) -> f64 {
-    let Some(base) = z_base(rated_u, s_1) else {
+    let Some(base) = crate::electrical::calc_impedance_base(rated_u, s_1) else {
         return 0.0;
     };
     let read = |leakage: f64| {
@@ -1678,7 +1729,7 @@ fn write_source(doc: &mut Doc, source: &VoltageSource, node: &str) {
     let v_ln = phases.first().map_or(0.0, |(i, _)| magnitude(*i));
     let base_angle = phases.first().map_or(0.0, |(i, _)| angle(*i));
     let v_ll = if n >= 2 {
-        let factor = 2.0 * (std::f64::consts::PI / n as f64).sin();
+        let factor = crate::sequence::calc_polygon_chord(n);
         exact_preimage(v_ln, v_ln * factor, |v| v / factor)
     } else {
         v_ln
@@ -1745,7 +1796,9 @@ fn sequence_impedance(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
     let (Some((rs, rm)), Some((xs, xm))) = (parts("rs"), parts("xs")) else {
         return None;
     };
-    Some((rs - rm, xs - xm, rs + 2.0 * rm, xs + 2.0 * xm))
+    let (r1, r0) = crate::sequence::calc_sequence_from_phase(rs, rm);
+    let (x1, x0) = crate::sequence::calc_sequence_from_phase(xs, xm);
+    Some((r1, x1, r0, x0))
 }
 
 /// The sequence values a CIM read stated, while the `rs`/`xs` matrices are
@@ -1770,8 +1823,9 @@ fn stated_sequence(source: &VoltageSource) -> Option<(f64, f64, f64, f64)> {
             })
             .collect()
     };
-    (matrix("rs")? == sequence_to_phase(r0, r1, n) && matrix("xs")? == sequence_to_phase(x0, x1, n))
-        .then_some((r1, x1, r0, x0))
+    (matrix("rs")? == calc_phase_from_sequence(n, r1, r0, SequenceThird::Divide)
+        && matrix("xs")? == calc_phase_from_sequence(n, x1, x0, SequenceThird::Divide))
+    .then_some((r1, x1, r0, x0))
 }
 
 /// The branch conductance and susceptance of a balanced three phase delta
@@ -1811,28 +1865,4 @@ fn has_off_diagonal(m: &ConductorMatrix) -> bool {
     m.iter()
         .enumerate()
         .any(|(i, row)| row.iter().enumerate().any(|(j, v)| i != j && *v != 0.0))
-}
-
-/// A value near `forward` that the reader's `inverse` maps back to `target`
-/// exactly, so a write, read, write cycle is byte stable. Unit conversions
-/// round, so the plain forward value can come back one bit away; the search
-/// steps outward a float at a time and keeps `forward` when no nearby value
-/// is exact.
-#[allow(clippy::float_cmp)] // exact equality is the property sought
-fn exact_preimage(target: f64, forward: f64, inverse: impl Fn(f64) -> f64) -> f64 {
-    if !forward.is_finite() || inverse(forward) == target {
-        return forward;
-    }
-    let (mut below, mut above) = (forward, forward);
-    for _ in 0..32 {
-        below = below.next_down();
-        above = above.next_up();
-        if inverse(below) == target {
-            return below;
-        }
-        if inverse(above) == target {
-            return above;
-        }
-    }
-    forward
 }

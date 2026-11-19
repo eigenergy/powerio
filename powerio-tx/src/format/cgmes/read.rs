@@ -5202,14 +5202,18 @@ fn read_linear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
             .round() as usize;
         // Siemens × kV² = MW/MVAr injected at nominal voltage, the model's
         // 1 p.u. convention.
-        let g_per_section = store
-            .f(id, "LinearShuntCompensator.gPerSection")?
-            .unwrap_or(0.0)
-            * (kv * kv);
-        let b_per_section = store
-            .f(id, "LinearShuntCompensator.bPerSection")?
-            .unwrap_or(0.0)
-            * (kv * kv);
+        let g_per_section = powerio_core::electrical::calc_rated_power(
+            store
+                .f(id, "LinearShuntCompensator.gPerSection")?
+                .unwrap_or(0.0),
+            kv,
+        );
+        let b_per_section = powerio_core::electrical::calc_rated_power(
+            store
+                .f(id, "LinearShuntCompensator.bPerSection")?
+                .unwrap_or(0.0),
+            kv,
+        );
         let blocks = vec![ShuntBlock::with_admittance(
             maximum_sections.min(u32::MAX as usize) as u32,
             g_per_section,
@@ -5236,7 +5240,7 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
             continue;
         };
         let store = mapper.store;
-        let kv2 = mapper.kv(bus).powi(2);
+        let kv = mapper.kv(bus);
         let sections = selected_sections(mapper, id, 0.0)?;
         let mut points: Vec<_> = store
             .referrers(
@@ -5251,14 +5255,18 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
                             .round() as usize;
                     (number > 0).then_some((
                         number,
-                        store
-                            .f(point, "NonlinearShuntCompensatorPoint.g")?
-                            .unwrap_or(0.0)
-                            * kv2,
-                        store
-                            .f(point, "NonlinearShuntCompensatorPoint.b")?
-                            .unwrap_or(0.0)
-                            * kv2,
+                        powerio_core::electrical::calc_rated_power(
+                            store
+                                .f(point, "NonlinearShuntCompensatorPoint.g")?
+                                .unwrap_or(0.0),
+                            kv,
+                        ),
+                        powerio_core::electrical::calc_rated_power(
+                            store
+                                .f(point, "NonlinearShuntCompensatorPoint.b")?
+                                .unwrap_or(0.0),
+                            kv,
+                        ),
                     ))
                 })
             })?
@@ -5494,8 +5502,10 @@ fn read_branches(
             };
             let store = mapper.store;
             let kv = mapper.kv(from);
-            let z_base = kv * kv / SYSTEM_MVA;
-            let y_base = SYSTEM_MVA / (kv * kv);
+            let z_base =
+                powerio_core::electrical::calc_impedance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
+            let y_base =
+                powerio_core::electrical::calc_admittance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
             let mut branch = Branch::new(
                 from,
                 to,
@@ -5525,7 +5535,8 @@ fn read_branches(
                 continue;
             };
             let kv = mapper.kv(from);
-            let z_base = kv * kv / SYSTEM_MVA;
+            let z_base =
+                powerio_core::electrical::calc_impedance_base(kv, SYSTEM_MVA).unwrap_or(f64::NAN);
             let mut branch = Branch::new(
                 from,
                 to,
@@ -5724,7 +5735,8 @@ fn two_winding_parameters(
             "PowerTransformer `{transformer}` has nonzero end 2 r/x/g/b, outside the CGMES two-winding end 1 L-model convention; {assumption} ({reference_kv} kV) and combining g/b into its single shunt"
         ));
     }
-    let z_base = reference_kv * reference_kv / SYSTEM_MVA;
+    let z_base =
+        powerio_core::electrical::calc_impedance_base(reference_kv, SYSTEM_MVA).unwrap_or(f64::NAN);
     if !z_base.is_finite() || z_base <= 0.0 {
         return Err(Error::FormatRead {
             format: FMT,
@@ -5761,7 +5773,8 @@ fn read_three_winding_transformer(
             let end = &end_ids[index];
             let bus = buses[index];
             let rated_kv = transformer_end_rated_kv(mapper, transformer_id, end, bus)?;
-            let z_base = rated_kv * rated_kv / SYSTEM_MVA;
+            let z_base = powerio_core::electrical::calc_impedance_base(rated_kv, SYSTEM_MVA)
+                .unwrap_or(f64::NAN);
             star_r[index] = mapper.store.f(end, "PowerTransformerEnd.r")?.unwrap_or(0.0) / z_base;
             star_x[index] = mapper.store.f(end, "PowerTransformerEnd.x")?.unwrap_or(0.0) / z_base;
             mag_g += mapper.store.f(end, "PowerTransformerEnd.g")?.unwrap_or(0.0) * z_base;
@@ -6154,7 +6167,12 @@ fn apply_limits_to_targets(
                 continue;
             }
             let mva = if class == "CurrentLimit" {
-                3f64.sqrt() * kv * value / 1000.0
+                powerio_core::electrical::calc_line_apparent_power(
+                    kv,
+                    value,
+                    powerio_core::electrical::SQRT_3,
+                    powerio_core::electrical::ApparentPowerOrder::FactorFirst,
+                ) / 1000.0
             } else {
                 value
             };

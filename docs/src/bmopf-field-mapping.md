@@ -74,7 +74,7 @@ parameter field is zero. A field with no typed slot lands in the element's
 | `meta.crs` | `MulticonductorNetwork::geo` coordinate space | The authority code of every `geo` field's system; absent means `OGC:CRS84`, WGS84 longitude then latitude, and coordinates are always x then y, so `EPSG:4326` reads the same way. Written for a projected or non-WGS84 system, omitted for WGS84. A space the schema cannot name (unknown, diagram, a code-less projection) or coordinates not from the source also travel as `extras.powerio_geo`, which the reader prefers. |
 | `meta.frequency` | `MulticonductorNetwork::base_frequency`, Hz | Absent defaults to 60 with `READ.BMOPF.VALUE_DEFAULTED`. |
 | `meta.*` (the rest) | `MulticonductorNetwork::extras["bmopf_meta"]` | Re-emitted, except the three the writer owns. |
-| `terminal_conventions` | `MulticonductorNetwork::extras["bmopf_terminal_conventions"]` | Re-emitted verbatim; authored from the terminal names when the source states none. |
+| `terminal_conventions` | `MulticonductorNetwork::extras["bmopf_terminal_conventions"]` | Re-emitted verbatim; authored from the terminal names when the source states none, each label classified by `calc_terminal_role` over the network's conventions (the CIM wire convention, `4` neutral on every bus, for a network read from distribution CIM or MG-RAVENS). |
 | `extras` | `MulticonductorNetwork::extras["bmopf_extras"]` | Re-emitted verbatim, minus the tables the reader types out of it. |
 
 ## bus
@@ -343,7 +343,8 @@ one result of it.
 | `terminal_current_magnitude` | A, resolved terminal order, when the solver reports it |
 | `terminal_active_power` | W, resolved terminal order, when the solver reports it |
 | `source_active_injection` | W, per source terminal |
-| `generator_active_power` | W, generator table order with each generator's terminal map order |
+| `generator_active_power` | W, per generator terminal: generator table order with each generator's terminal map order, neutral included |
+| `generator_coil_active_power` | W, per generator coil, when the solver reports it: generator table order with each generator's coil order, the order of its `p_min`, `p_max` and `energy_cost_rate` entries |
 | `objective` | the optimised objective value |
 | `termination`, `residuals`, `producer` | how the solve ended, its residuals, and what produced it |
 

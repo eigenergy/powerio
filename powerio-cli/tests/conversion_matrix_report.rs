@@ -189,7 +189,7 @@ fn warning_level(segment: &str, leg: Leg) -> Option<(Level, String)> {
         "RATING_SET_REMAPPED" => (Level::Restated, "rating set"),
         "ELEMENT_RELABELED" => (Level::Restated, "element"),
         "VALUE_DEFAULTED" | "VALUE_SUBSTITUTED" | "VALUE_APPROXIMATED" | "VALUE_TRUNCATED"
-        | "VALUE_COLLAPSED" | "VALUE_INFERRED" | "VALUE_UNSUPPORTED" => {
+        | "VALUE_COLLAPSED" | "VALUE_INFERRED" | "VALUE_UNSUPPORTED" | "VALUE_CONFLICT" => {
             (Level::Approximate, "value")
         }
         "NOT_A_NUMBER" => (Level::Approximate, "nonfinite"),

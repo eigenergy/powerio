@@ -62,6 +62,15 @@ struct SincalCliOptions {
     /// Experimental: assume schema-11.5 NULL source controls inactive; emits warnings.
     #[arg(long)]
     sincal_assume_inactive_source_controls: bool,
+    /// OpenDSS input: bytes the case may pull in through Redirect, Compile,
+    /// Buscoords and loadshape files [default: 67108864, 64 MiB]. A region
+    /// with several hundred thousand lines and loads needs more.
+    #[arg(long, value_name = "BYTES")]
+    dss_max_include_bytes: Option<usize>,
+    /// OpenDSS input: property assignments and edit records the case may
+    /// retain across all its objects [default: 4194304].
+    #[arg(long, value_name = "COUNT")]
+    dss_max_properties: Option<usize>,
 }
 
 impl SincalCliOptions {
@@ -71,11 +80,23 @@ impl SincalCliOptions {
             && self.sincal_acquired_tables.is_none()
             && self.acquisition_root.is_none()
             && !self.sincal_assume_inactive_source_controls
+            && self.dss_max_include_bytes.is_none()
+            && self.dss_max_properties.is_none()
     }
 
     fn options(&self, from: Option<FormatArg>) -> anyhow::Result<powerio::ParseOptions> {
         let mut options = parse_options(from.map(FormatArg::name))?;
         options.acquisition_root.clone_from(&self.acquisition_root);
+        if self.dss_max_include_bytes.is_some() || self.dss_max_properties.is_some() {
+            let mut limits = powerio::dist::DssReadLimits::default();
+            if let Some(bytes) = self.dss_max_include_bytes {
+                limits = limits.max_include_bytes(bytes);
+            }
+            if let Some(count) = self.dss_max_properties {
+                limits = limits.max_properties(count);
+            }
+            options = options.dss_limits(limits);
+        }
         if self.sincal_variant.is_some()
             || self.sincal_snapshot_hours.is_some()
             || self.sincal_acquired_tables.is_some()
@@ -2715,6 +2736,10 @@ fn convert_parsed_module(
     output: Option<&Path>,
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
+    // The reader's findings are reported before anything is emitted, so a
+    // refused conversion still shows why (an element the reader could not
+    // type) ahead of the error, in text and in the JSON array alike.
+    report_diagnostics(module.diagnostics());
     match &module.value() {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
@@ -2892,14 +2917,15 @@ fn convert_typed_module(
     finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
+/// Report the emission's findings, write the output, and fail when the
+/// reader or the writer reported an error. [`convert_parsed_module`] has
+/// already reported `parse_diagnostics`; they are counted here.
 fn finish_memory_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     emission: &module_io::MemoryEmission,
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let mut diagnostics = parse_diagnostics.to_vec();
-    diagnostics.extend(emission.diagnostics.iter().cloned());
-    report_diagnostics(&diagnostics);
+    report_diagnostics(&emission.diagnostics);
     write_conversion_output(&emission.text, &emission.sidecars, output)?;
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),
@@ -2907,14 +2933,13 @@ fn finish_memory_emission(
     )
 }
 
+/// [`finish_memory_emission`] for a writer that wrote `output` itself.
 fn finish_path_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     result: &powerio::EmitResult,
     output: &Path,
 ) -> anyhow::Result<()> {
-    let mut diagnostics = parse_diagnostics.to_vec();
-    diagnostics.extend(result.diagnostics().iter().cloned());
-    report_diagnostics(&diagnostics);
+    report_diagnostics(result.diagnostics());
     report_written(output);
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),
@@ -3868,6 +3893,35 @@ mod tests {
         let source =
             powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec()).unwrap();
         powerio::deserialize(source).unwrap()
+    }
+
+    #[test]
+    fn dss_limit_flags_set_the_opendss_read_limits() {
+        let defaults = powerio::dist::DssReadLimits::default();
+        assert_eq!(
+            SincalCliOptions::default()
+                .options(None)
+                .unwrap()
+                .dss_limits,
+            None
+        );
+        let selection = SincalCliOptions {
+            dss_max_include_bytes: Some(1 << 30),
+            ..Default::default()
+        };
+        assert!(!selection.is_empty());
+        assert_eq!(
+            selection.options(None).unwrap().dss_limits,
+            Some(defaults.max_include_bytes(1 << 30))
+        );
+        let selection = SincalCliOptions {
+            dss_max_properties: Some(1 << 26),
+            ..Default::default()
+        };
+        assert_eq!(
+            selection.options(None).unwrap().dss_limits,
+            Some(defaults.max_properties(1 << 26))
+        );
     }
 
     #[test]

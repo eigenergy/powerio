@@ -2877,27 +2877,45 @@ impl Branch {
         (fr_vmin, fr_vmax): (f64, f64),
         (to_vmin, to_vmax): (f64, f64),
     ) -> f64 {
-        // The same bound `calc_series_admittance_of` divides by, so the two agree on
-        // which branch has no impedance to bound a current with.
+        let bound = |vf: f64, vt: f64| self.calc_current_bound(angle_window_rad, vf, vt);
+        let Some(widest) = bound(fr_vmax, to_vmax) else {
+            return 0.0;
+        };
+        let widest = [
+            bound(fr_vmax, to_vmin),
+            bound(fr_vmin, to_vmax),
+            bound(fr_vmin, to_vmin),
+        ]
+        .into_iter()
+        .flatten()
+        .fold(widest, f64::max);
+        fr_vmax.max(to_vmax) * widest
+    }
+
+    /// The largest series current, per unit, the branch carries between
+    /// terminal voltage magnitudes `vf` and `vt` whose angle difference stays
+    /// within `angle_window_rad`: the widest phasor separation over the
+    /// impedance magnitude, `sqrt(vf² + vt² - 2 vf vt cos(window)) / |z|` by
+    /// the law of cosines. The window's magnitude is held at `π`, the widest
+    /// separation two terminals can have. `None` for a zero impedance branch,
+    /// one under [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE),
+    /// the bound [`calc_series_admittance`](Self::calc_series_admittance)
+    /// divides by. The one such bound: [`synthesize_rate_a`](Self::synthesize_rate_a)
+    /// and the OTS current limits read it.
+    #[must_use]
+    pub fn calc_current_bound(&self, angle_window_rad: f64, vf: f64, vt: f64) -> Option<f64> {
         let zmag = self.r.hypot(self.x);
         if zmag < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
-            return 0.0;
+            return None;
         }
         let window = angle_window_rad.abs().min(std::f64::consts::PI);
-        let cos_window = window.cos();
         // Clamped at zero before the root: the law of cosines is nonnegative in
         // exact arithmetic, and rounding on two nearly equal voltages can carry
         // it a few ulp under.
-        let separation = |vf: f64, vt: f64| {
-            (vf * vf + vt * vt - 2.0 * vf * vt * cos_window)
-                .max(0.0)
-                .sqrt()
-        };
-        let widest = separation(fr_vmax, to_vmax)
-            .max(separation(fr_vmax, to_vmin))
-            .max(separation(fr_vmin, to_vmax))
-            .max(separation(fr_vmin, to_vmin));
-        fr_vmax.max(to_vmax) * widest / zmag
+        let separation = (vf * vf + vt * vt - 2.0 * vf * vt * window.cos())
+            .max(0.0)
+            .sqrt();
+        Some(separation / zmag)
     }
 
     /// Total susceptance projection for MATPOWER shaped formats that only carry
@@ -4257,6 +4275,20 @@ impl BalancedNetwork {
     #[must_use]
     pub fn is_normalized(&self) -> bool {
         self.source_format() == SourceFormat::Normalized
+    }
+
+    /// The divisor that turns this network's power quantities into per unit:
+    /// `base_mva` for a raw network, `1.0` for a normalized one, whose powers
+    /// are already per unit. [`IndexedNetwork::per_unit_base`](crate::IndexedNetwork::per_unit_base)
+    /// reads this.
+    #[must_use]
+    #[inline]
+    pub fn per_unit_base(&self) -> f64 {
+        if self.is_normalized() {
+            1.0
+        } else {
+            self.base_mva()
+        }
     }
 
     /// Error unless `base_mva` is a positive, finite number. It is every

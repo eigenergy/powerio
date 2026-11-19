@@ -117,19 +117,12 @@ fn impedance(source: &VoltageSource) -> Result<Option<Impedance>, powerio_core::
             let (r1, x1) = (number("r1", 0.0)?, number("x1", 0.0)?);
             let (r0, x0) = (number("r0", r1)?, number("x0", x1)?);
             let matrix = |positive: f64, zero: f64| -> ConductorMatrix {
-                (0..hot.len())
-                    .map(|i| {
-                        (0..hot.len())
-                            .map(|j| {
-                                if i == j {
-                                    (zero + 2.0 * positive) / 3.0
-                                } else {
-                                    (zero - positive) / 3.0
-                                }
-                            })
-                            .collect()
-                    })
-                    .collect()
+                crate::sequence::calc_phase_from_sequence(
+                    hot.len(),
+                    positive,
+                    zero,
+                    crate::sequence::SequenceThird::Divide,
+                )
             };
             let (rs, xs) = (matrix(r1, r0), matrix(x1, x0));
             (hot, rs, xs)

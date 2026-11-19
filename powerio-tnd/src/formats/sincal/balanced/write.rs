@@ -189,6 +189,8 @@ fn bus_id(bus: BusId) -> Result<i64> {
 /// Rejects unsupported electrical components/controls and invalid values atomically.
 pub fn write_experimental_balanced(net: &BalancedNetwork) -> Result<ExperimentalBalancedOutput> {
     net.validate().map_err(error)?;
+    // Every ohm value is a per unit value times a base over the system base.
+    net.check_base_mva().map_err(error)?;
     net.validate().map_err(error)?;
     if net.is_normalized() {
         return Err(error(
@@ -638,7 +640,8 @@ fn line_row(net: &BalancedNetwork, branch: &Branch, from: &Bus) -> Row {
         0.0,
         branch.b / 2.0,
     ));
-    let zbase = from.base_kv.powi(2) / net.base_mva();
+    let zbase = powerio_core::electrical::calc_impedance_base(from.base_kv, net.base_mva())
+        .unwrap_or(f64::NAN);
     let mut input = row(
         "Flag_Typ_ID Typ_ID Flag_Ll CoupData_ID Flag_Macro Macro_ID LineTemp_ID va ElemLoading_ID",
     );
@@ -665,7 +668,11 @@ fn line_row(net: &BalancedNetwork, branch: &Branch, from: &Bus) -> Row {
         (
             "Ith",
             if branch.rate_a.is_finite() {
-                branch.rate_a / (3.0_f64.sqrt() * from.base_kv)
+                powerio_core::electrical::calc_line_current(
+                    branch.rate_a,
+                    from.base_kv,
+                    powerio_core::electrical::SQRT_3,
+                )
             } else {
                 0.0
             },

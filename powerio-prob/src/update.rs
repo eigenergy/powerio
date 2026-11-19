@@ -728,34 +728,15 @@ fn apply_atomically_with_connectivity<T: Clone, U>(
     Ok(report.report)
 }
 
+/// Canonical component labels: two partitions of one bus set compare equal
+/// exactly when they are the same partition. The labeling is the workspace's
+/// one, `powerio_tx::calc_dense_island_labels`.
 fn connectivity_partition(
     node_count: usize,
     edges: impl IntoIterator<Item = (usize, usize)>,
 ) -> Vec<usize> {
-    fn root(parent: &mut [usize], mut node: usize) -> usize {
-        while parent[node] != node {
-            parent[node] = parent[parent[node]];
-            node = parent[node];
-        }
-        node
-    }
-
-    let mut parent: Vec<usize> = (0..node_count).collect();
-    for (left, right) in edges {
-        let left = root(&mut parent, left);
-        let right = root(&mut parent, right);
-        if left != right {
-            let (keep, replace) = if left < right {
-                (left, right)
-            } else {
-                (right, left)
-            };
-            parent[replace] = keep;
-        }
-    }
-    (0..node_count)
-        .map(|node| root(&mut parent, node))
-        .collect()
+    let (from, to): (Vec<usize>, Vec<usize>) = edges.into_iter().unzip();
+    powerio_tx::calc_dense_island_labels(node_count, &from, &to)
 }
 
 fn balanced_connectivity(

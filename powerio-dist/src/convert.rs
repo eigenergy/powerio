@@ -414,6 +414,31 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    parse_with_dss_limits(source, crate::dss::DssReadLimits::default())
+}
+
+/// [`parse`] with the limits an OpenDSS read works under set by the caller.
+/// A case with several hundred thousand lines and loads needs more than the
+/// defaults allow; see [`crate::dss::DssReadLimits`]. The limits apply when
+/// the source reads as OpenDSS and have no effect on any other format.
+///
+/// ```no_run
+/// use powerio_dist::dss::DssReadLimits;
+///
+/// let source = powerio_core::Source::open("region/Master.dss")?;
+/// let limits = DssReadLimits::default()
+///     .max_include_bytes(1 << 30)
+///     .max_properties(1 << 26);
+/// let module = powerio_dist::parse_with_dss_limits(source, limits)?;
+/// # Ok::<(), powerio_core::Error>(())
+/// ```
+///
+/// # Errors
+/// As [`parse`].
+pub fn parse_with_dss_limits(
+    source: powerio_core::Source,
+    dss_limits: crate::dss::DssReadLimits,
+) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
     if source
         .format()
         .is_some_and(|f| is_sincal_multiconductor_token(f.as_str()))
@@ -446,7 +471,7 @@ pub fn parse(
     }
     let mut warnings = crate::collect::Diagnostics::new();
     let mut dss_replay = None;
-    match parse_to_network(&source, &mut warnings, &mut dss_replay) {
+    match parse_to_network(&source, &mut warnings, &mut dss_replay, dss_limits) {
         Ok((network, format)) => {
             // Record the detected format before the common constructor builds
             // descriptors and the coarse `/value` source map.
@@ -483,6 +508,7 @@ fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut crate::collect::Diagnostics,
     dss_replay: &mut Option<crate::dss::read::ReplayContext>,
+    dss_limits: crate::dss::DssReadLimits,
 ) -> crate::Result<(MulticonductorNetwork, DistTargetFormat)> {
     let declared = source
         .format()
@@ -532,7 +558,7 @@ fn parse_to_network(
             crate::Error::UnknownFormat("GLM project requires the project parser".into()),
         ),
         DistTargetFormat::Dss => {
-            crate::dss::read::parse_dss_collecting(source, warnings, dss_replay)
+            crate::dss::read::parse_dss_collecting(source, warnings, dss_replay, dss_limits)
         }
         DistTargetFormat::BmopfJson => {
             let buffer = primary(source)?;
@@ -699,7 +725,10 @@ pub(crate) fn emit_value_text_with_options(
             crate::pmd::math::write::validate_emission(net)?;
             crate::pmd::math::write::emit_pmd_math_json_text(net, &options.pmd_math)
         }
-        DistTargetFormat::CimDist => crate::cim::emit_cim_dist_text(net),
+        DistTargetFormat::CimDist => {
+            crate::cim::require_phase_clocks(net)?;
+            crate::cim::emit_cim_dist_text(net)
+        }
         DistTargetFormat::RavensJson => crate::ravens::emit_ravens_json_text(net)?,
         DistTargetFormat::PandapowerJson => {
             return Err(powerio_core::Error::new(

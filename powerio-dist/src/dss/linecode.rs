@@ -31,10 +31,83 @@ pub(super) struct State {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct LineMatrices {
+pub(crate) struct LineMatrices {
     pub r: Vec<Vec<f64>>,
     pub x: Vec<Vec<f64>>,
     pub b: Vec<Vec<f64>>,
+}
+
+/// OpenDSS's earth return reactance coefficient,
+/// `Kxg := Xg / ln(658.5 * sqrt(rho / BaseFrequency))` (`Line.pas`, at
+/// creation, on `FetchLineCode` and on an `xg` or `rho` edit).
+pub(crate) fn calc_earth_return_kxg(xg: f64, rho: f64, base_frequency: f64) -> f64 {
+    xg / crate::overhead::calc_earth_return_log_depth(
+        rho,
+        base_frequency,
+        crate::overhead::EarthDepthForm::OpenDss,
+    )
+}
+
+/// The length a frequency corrected matrix is scaled to.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LineScale {
+    /// The whole line: `(x − Xgmod) · length · f/f₀` and `b · length · f/f₀`,
+    /// each product taken left to right as `Line.CalcYPrim` orders it
+    /// (`YValues.im * LengthMultiplier * FreqMultiplier`).
+    Length(f64),
+    /// Per meter of a code shared by several lines:
+    /// `(x − Xgmod) · f/f₀ / meters`.
+    PerMeter(f64),
+}
+
+/// A line's earth return terms (`Rg`, `Xg` and the captured `Kxg`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EarthReturn {
+    pub rg: f64,
+    pub xg: f64,
+    pub kxg: f64,
+}
+
+impl EarthReturn {
+    /// OpenDSS's frequency correction of a line's matrices in place
+    /// (`Line.CalcYPrim` outside the long line model): every series entry
+    /// gains `Rg (f/f₀ − 1)` and loses `Xgmod = ½ Kxg ln(f/f₀)` (none when
+    /// `Xg = 0`), reactance and susceptance scale by `f/f₀`, and every
+    /// entry is scaled to `scale`. False when an entry becomes nonfinite.
+    /// The one correction of the line code and the line.
+    pub(crate) fn correct(
+        &self,
+        matrices: &mut LineMatrices,
+        ratio: f64,
+        scale: LineScale,
+    ) -> bool {
+        let xgmod = if self.xg == 0.0 {
+            0.0
+        } else {
+            0.5 * self.kxg * ratio.ln()
+        };
+        let LineMatrices { r, x, b } = matrices;
+        for ((r, x), b) in r.iter_mut().zip(x.iter_mut()).zip(b.iter_mut()) {
+            for ((r, x), b) in r.iter_mut().zip(x.iter_mut()).zip(b.iter_mut()) {
+                match scale {
+                    LineScale::Length(length) => {
+                        *r = (*r + self.rg * (ratio - 1.0)) * length;
+                        *x = (*x - xgmod) * length * ratio;
+                        *b = *b * length * ratio;
+                    }
+                    LineScale::PerMeter(meters) => {
+                        *r = (*r + self.rg * (ratio - 1.0)) / meters;
+                        *x = (*x - xgmod) * ratio / meters;
+                        *b = *b * ratio / meters;
+                    }
+                }
+                if !r.is_finite() || !x.is_finite() || !b.is_finite() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 
 impl State {
@@ -67,13 +140,12 @@ impl State {
             length * line_meters / code_meters
         };
         let ratio = operating / self.frequency;
-        let xgmod = if self.xg == 0.0 {
-            0.0
-        } else {
-            let kxg = self.xg / (658.5 * (self.rho / self.frequency).sqrt()).ln();
-            0.5 * kxg * ratio.ln()
+        let earth = EarthReturn {
+            rg: self.rg,
+            xg: self.xg,
+            kxg: calc_earth_return_kxg(self.xg, self.rho, self.frequency),
         };
-        let (mut r, mut x, mut b) = if self.sequence && self.n == 1 {
+        let (r, x, b) = if self.sequence && self.n == 1 {
             (
                 vec![vec![self.seq[0]]],
                 vec![vec![self.seq[1]]],
@@ -82,17 +154,11 @@ impl State {
         } else {
             (self.r.clone(), self.x.clone(), self.b.clone())
         };
-        for i in 0..self.n {
-            for j in 0..self.n {
-                r[i][j] = (r[i][j] + self.rg * (ratio - 1.0)) * length;
-                x[i][j] = (x[i][j] - xgmod) * length * ratio;
-                b[i][j] *= length * ratio;
-                if !r[i][j].is_finite() || !x[i][j].is_finite() || !b[i][j].is_finite() {
-                    return Err("line primitive became nonfinite".into());
-                }
-            }
+        let mut matrices = LineMatrices { r, x, b };
+        if !earth.correct(&mut matrices, ratio, LineScale::Length(length)) {
+            return Err("line primitive became nonfinite".into());
         }
-        Ok(LineMatrices { r, x, b })
+        Ok(matrices)
     }
 
     pub(super) fn new(frequency: f64) -> Self {
@@ -241,11 +307,13 @@ impl State {
 }
 
 fn sequence_matrix(n: usize, positive: f64, zero: f64) -> Vec<Vec<f64>> {
-    let mut matrix = vec![vec![(zero - positive) * (1.0 / 3.0); n]; n];
-    for (i, row) in matrix.iter_mut().enumerate() {
-        row[i] = (2.0 * positive + zero) * (1.0 / 3.0);
-    }
-    matrix
+    // OpenDSS LineCode.CalcMatricesFromZ1Z0 multiplies by OneThird.
+    crate::sequence::calc_phase_from_sequence(
+        n,
+        positive,
+        zero,
+        crate::sequence::SequenceThird::Reciprocal,
+    )
 }
 
 // DSS C-API 87d85c2 ParserDel.ParseAsSymMatrix starts with zeros, then
