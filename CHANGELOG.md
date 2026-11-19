@@ -2,11 +2,6 @@
 
 ## Unreleased
 
-- OpenDSS output writes one single phase generator per phase when a
-  generator's phase powers or reactive limits differ. OpenDSS splits a multi
-  phase generator equally over its phases. The writer used to sum the phase
-  powers into one balanced generator and report nothing (#861).
-
 ## 0.12.3
 
 - OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
