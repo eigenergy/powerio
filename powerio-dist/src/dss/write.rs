@@ -2370,6 +2370,20 @@ impl DssWriter {
                 }
             })
         };
+        // The stated `kv` is the generator's only stated voltage. On the
+        // whole generator it is line to line; a wye part is single phase, so
+        // it takes the line to neutral value, and a delta part keeps it.
+        let part_kv = g
+            .extras
+            .get("kv")
+            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()))
+            .map(|kv| {
+                if g.configuration == Configuration::Delta {
+                    kv
+                } else {
+                    crate::electrical::calc_wye_phase_voltage(kv)
+                }
+            });
         maps.into_iter()
             .enumerate()
             .map(|(i, map)| {
@@ -2390,6 +2404,9 @@ impl DssWriter {
                 for key in ["conn", "kv", "pf"] {
                     part.extras.remove(key);
                 }
+                if let Some(kv) = part_kv {
+                    part.extras.insert("kv".into(), kv.into());
+                }
                 part.extras.insert("phases".into(), 1.into());
                 Cow::Owned(part)
             })
@@ -2402,10 +2419,18 @@ impl DssWriter {
         &mut self,
         net: &'n MulticonductorNetwork,
     ) -> Vec<Cow<'n, DistGenerator>> {
+        // A fixed dispatch inverter is written as a `Generator` too, so a
+        // part must not take its name.
         let mut names: BTreeSet<_> = net
             .generators()
             .iter()
             .map(|g| g.name.to_ascii_lowercase())
+            .chain(
+                net.ibrs()
+                    .iter()
+                    .filter(|ibr| ibr_is_fixed_dispatch(ibr))
+                    .map(|ibr| ibr.name.to_ascii_lowercase()),
+            )
             .collect();
         let mut records = Vec::new();
         for g in net.generators() {
@@ -5228,6 +5253,14 @@ mod tests {
             assert!(line.contains(&format!("bus1={node} phases=1 ")), "{line}");
             assert!(line.contains(&format!("kw={kw} kvar={kvar} ")), "{line}");
             assert!(line.contains("maxkvar=5 minkvar=-5"), "{line}");
+            // The stated 4.16 kV is line to line; each single phase part
+            // states the line to neutral value, not a bus estimate.
+            let kv: f64 = line
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix("kv="))
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_else(|| panic!("no kv: {line}"));
+            assert!((kv - 4.16 / 3f64.sqrt()).abs() < 1e-6, "{line}");
             assert!(!line.contains("kv=4.16"), "{line}");
         }
         assert_eq!(
