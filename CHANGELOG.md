@@ -4,6 +4,8 @@
 
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
+- PyPSA: a `StorageUnit` `p_set` and `q_set` are injections, positive when the unit discharges. The reader now negates them into the storage `ps` and `qs`, which are positive when the unit charges. The writer negates them back. A discharging PyPSA unit read as a charging one in every other format. A charging unit wrote as a discharging one.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
