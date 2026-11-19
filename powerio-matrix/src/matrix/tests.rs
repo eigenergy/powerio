@@ -125,6 +125,19 @@ fn sddm_rejects_non_finite_sparse_entries() {
         );
     }
 
+    // A non-finite diagonal passed the symmetry and dominance checks before:
+    // an infinite margin compares as dominant and `f64::min` drops NaN.
+    for value in [f64::NAN, f64::INFINITY] {
+        let mut builder = CooBuilder::new(2);
+        builder.add(0, 0, value);
+        builder.add(1, 1, 2.0);
+        builder.add_sym(0, 1, -1.0);
+        assert!(
+            !check_sddm(&builder.finish_csr()),
+            "non-finite diagonal entry {value} must not pass SDDM validation"
+        );
+    }
+
     // Finite symmetric diagonally dominant matrices remain accepted.
     let mut builder = CooBuilder::new(2);
     builder.add(0, 0, 2.0);
