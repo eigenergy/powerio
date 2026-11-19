@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- XIIDM: a document in a declared single-byte encoding is converted to UTF-8 once before it is read. The byte offset in a read error for such a document now counts bytes of the converted text. UTF-8 documents are unchanged.
+
 ## 0.12.3
 
 - OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
