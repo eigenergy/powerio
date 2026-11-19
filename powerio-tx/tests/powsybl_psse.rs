@@ -513,6 +513,7 @@ fn powsybl_three_winding_tap_regulation_reaches_psse() {
     let back = parse_psse(&emit_psse(&network).text).unwrap();
     let windings = &back.transformers_3w()[0].windings;
     // `ratioTapChanger2` regulates LOAD_33 at bus 2 to 33 kV over three steps.
+    // Its rho 0.9 to 1.1 are WINDV 1 / 1.1 to 1 / 0.9.
     let control = windings[1].control.as_ref().unwrap();
     assert_eq!(
         control.mode,
@@ -521,12 +522,57 @@ fn powsybl_three_winding_tap_regulation_reaches_psse() {
     assert!(control.enabled);
     assert_eq!(control.controlled_bus.map(|bus| bus.0), Some(2));
     assert_eq!(control.ntp, 3);
-    assert!((control.tap_min - 0.9).abs() < 1e-9 && (control.tap_max - 1.1).abs() < 1e-9);
+    assert!(
+        (control.tap_min - 1.0 / 1.1).abs() < 1e-9 && (control.tap_max - 1.0 / 0.9).abs() < 1e-9
+    );
     assert!((control.band_min - 1.0).abs() < 1e-9 && (control.band_max - 1.0).abs() < 1e-9);
     // `ratioTapChanger3` states a target but does not regulate.
     let control = windings[2].control.as_ref().unwrap();
     assert!(!control.enabled);
     assert_eq!(control.controlled_bus.map(|bus| bus.0), Some(3));
+}
+
+#[test]
+fn a_three_winding_leg_ratio_step_divides_the_winding_tap() {
+    // IIDM states a leg ratio as ratedU0 / ratedU_leg * rho, and PowSybl's
+    // PSS/E importer writes rho = 1 / WINDV (psse-converter
+    // `TransformerConverter.tapChangerToRatioTapChanger`). A leg at 33 kV
+    // with rho 0.9 is the leg at 33 / 0.9 kV without a tap changer.
+    let leg = |rated_u2: &str, tap: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="t3w" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL1" nominalV="132" topologyKind="BUS_BREAKER"><iidm:busBreakerTopology><iidm:bus id="B1"/></iidm:busBreakerTopology></iidm:voltageLevel>
+    <iidm:voltageLevel id="VL2" nominalV="33" topologyKind="BUS_BREAKER"><iidm:busBreakerTopology><iidm:bus id="B2"/></iidm:busBreakerTopology></iidm:voltageLevel>
+    <iidm:voltageLevel id="VL3" nominalV="11" topologyKind="BUS_BREAKER"><iidm:busBreakerTopology><iidm:bus id="B3"/></iidm:busBreakerTopology></iidm:voltageLevel>
+    <iidm:threeWindingsTransformer id="T3" ratedU0="132" r1="1" x1="10" ratedU1="132" r2="1" x2="10" ratedU2="{rated_u2}" r3="1" x3="10" ratedU3="11" bus1="B1" connectableBus1="B1" voltageLevelId1="VL1" bus2="B2" connectableBus2="B2" voltageLevelId2="VL2" bus3="B3" connectableBus3="B3" voltageLevelId3="VL3">{tap}</iidm:threeWindingsTransformer>
+  </iidm:substation>
+</iidm:network>"#
+        )
+    };
+    let stepped = r#"<iidm:ratioTapChanger2 lowTapPosition="0" tapPosition="0" loadTapChangingCapabilities="false"><iidm:step rho="0.9"/></iidm:ratioTapChanger2>"#;
+    for text in [leg("33", stepped), leg(&(33.0 / 0.9).to_string(), "")] {
+        let tap = xiidm(&text).transformers_3w()[0].windings[1].tap;
+        assert!((tap - 1.0 / 0.9).abs() < 1e-9, "{tap}");
+    }
+
+    // WINDV2 = 1.025 and WINDV3 = 0.95 on windings rated at their bus kV.
+    let source = parse_file(data("psse/case3_3w_v33.raw"), None)
+        .unwrap()
+        .network;
+    let xml = emit_value(&source, TargetFormat::Xiidm).unwrap().text;
+    for (winding, windv) in [(2, 1.025), (3, 0.95)] {
+        let open = format!("<iidm:ratioTapChanger{winding} ");
+        let block = &xml[xml.find(&open).expect(&xml)..];
+        let rho = block[block.find("rho=\"").unwrap() + 5..]
+            .split('"')
+            .next()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        assert!((rho - 1.0 / windv).abs() < 1e-9, "winding {winding}: {rho}");
+    }
 }
 
 #[test]
