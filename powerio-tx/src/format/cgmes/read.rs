@@ -1199,11 +1199,14 @@ impl Mapper<'_> {
         })
     }
 
+    /// Service status: SV `SvStatus.inService`, else SSH `Equipment.inService`,
+    /// else in service, and out of service whenever a terminal is
+    /// disconnected. `inService` is availability, not the switching state.
     fn in_service(&mut self, equipment: &str) -> Result<bool> {
         Ok({
             let sv = self.sv_status.get(equipment).copied();
             let ssh = self.store.boolean(equipment, "Equipment.inService")?;
-            match (sv, ssh) {
+            let available = match (sv, ssh) {
                 (Some(sv), Some(ssh)) => {
                     if sv != ssh {
                         self.warnings.push_as(
@@ -1217,8 +1220,9 @@ impl Mapper<'_> {
                 }
                 (Some(sv), None) => sv,
                 (None, Some(ssh)) => ssh,
-                (None, None) => self.wiring.energized(equipment),
-            }
+                (None, None) => true,
+            };
+            available && self.wiring.energized(equipment)
         })
     }
 }
