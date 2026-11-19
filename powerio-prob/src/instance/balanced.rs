@@ -267,10 +267,12 @@ impl AcPfInstance {
     /// its net injections; a PV bus its net active injection and the
     /// regulating generator's voltage setpoint; a reference bus its setpoint
     /// magnitude and stated angle. A bus coded PV with no in service
-    /// generator has nothing to hold its voltage, so it gets the PQ
-    /// specification, as MATPOWER's `bustypes` gives it;
+    /// generator gets the PQ specification, as MATPOWER's `bustypes` gives a
+    /// bus with no generator;
     /// [`voltage_control_diagnostics`](Self::voltage_control_diagnostics)
-    /// names those buses. Net injections count in service
+    /// names those buses. Only generators count: an HVDC line terminal, a
+    /// static var compensator or a generator regulating the bus from
+    /// elsewhere does not keep it PV. Net injections count in service
     /// generators, loads, and HVDC lines; each in service HVDC line is a
     /// fixed injection at its stated terminal powers
     /// ([`HvdcTreatment::FixedInjection`]).
