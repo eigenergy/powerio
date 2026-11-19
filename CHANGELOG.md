@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
-
 ## 0.12.3
 
 - OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
