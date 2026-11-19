@@ -189,7 +189,7 @@ fn a_pv_bus_with_no_in_service_generator_is_specified_as_pq() {
         instance.specifications()[position],
         AcBusSpecification::Pv { .. }
     ));
-    assert!(instance.voltage_control_diagnostics().is_empty());
+    assert_eq!(instance.voltage_control_diagnostics().len(), 0);
 }
 
 #[test]
