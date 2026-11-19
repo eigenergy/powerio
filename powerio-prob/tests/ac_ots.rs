@@ -644,3 +644,53 @@ fn two_parallel_branches_count_open_and_switched_rows() {
     let error = instance.validate_topology(&[false, false]).unwrap_err();
     assert_eq!(code(&error), Some("BUILD.INSTANCE.TOPOLOGY_INVALID"));
 }
+
+#[test]
+fn zero_thermal_current_bound_requires_active_constraints_and_positive_voltage_floor() {
+    use powerio_prob::{ActiveConstraints, ConstraintSelection};
+    for normalized in [false, true] {
+        for voltage_floor in [0.0, 0.9] {
+            for thermal_active in [false, true] {
+                for voltage_active in [false, true] {
+                    let mut network = parse_case("case9.m");
+                    network.branches_mut()[0].rate_a = 0.0;
+                    for bus in network.buses_mut() {
+                        bus.vmin = voltage_floor;
+                    }
+                    let network = if normalized {
+                        network.to_normalized().unwrap()
+                    } else {
+                        network
+                    };
+                    let mut constraints = ActiveConstraints::default();
+                    if !thermal_active {
+                        constraints.thermal_limits = ConstraintSelection::None;
+                    }
+                    if !voltage_active {
+                        constraints.voltage_bounds = ConstraintSelection::None;
+                    }
+                    let base = AcOpfInstance::from_network(network)
+                        .unwrap()
+                        .with_constraints(constraints);
+                    let mut options = AcOtsOptions::default();
+                    options.current_limits = CurrentLimitPolicy::DeriveFromRateA;
+                    let instance = AcOtsInstance::new(base, options).unwrap();
+                    let branch = &instance.branches()[0];
+                    assert!(branch.initial_closed);
+                    assert_eq!(instance.network().branches()[0].rate_a, (0.0));
+                    for bound in [branch.current.from_pu, branch.current.to_pu] {
+                        if !voltage_active {
+                            assert_eq!(bound, None);
+                        } else if thermal_active && voltage_floor > 0.0 {
+                            assert_eq!(bound, Some(0.0));
+                        } else {
+                            // The impedance/voltage/angle bound remains, but S=0 at
+                            // V=0 cannot establish a zero current bound.
+                            assert!(bound.is_some_and(|value| value > 0.0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

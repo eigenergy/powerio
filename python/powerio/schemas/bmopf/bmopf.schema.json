@@ -1,0 +1,2741 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/schema-v0.2.0/schema/bmopf/0.2.0/bmopf.schema.json",
+  "title": "BMOPF network case schema 0.2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Test case name"
+    },
+    "meta": {
+      "type": "object",
+      "description": "Case metadata block",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "pattern": "^0\\.2\\.(0|[1-9][0-9]*)$",
+          "description": "The BMOPF release this document was written against, as MAJOR.MINOR.PATCH. It is the document's only version identifier. This schema accepts any 0.2.x value: within the 0.2 line a later release only adds optional content, so a 0.2.0 document is a valid 0.2.x document with the same meaning. A reader dispatches on the line (0.2) and validates against the newest 0.2.x schema it holds."
+        },
+        "version": {
+          "type": "string",
+          "description": "The version of this dataset, chosen by whoever publishes the case. Independent of `meta.schema_version`."
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "modified": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string",
+          "description": "The licence the case data is published under, as an SPDX identifier where one exists, e.g. `CC-BY-4.0`. Network cases inherit the licence of the data they derive from; this schema's licence does not apply to them."
+        },
+        "frequency": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Nominal system frequency [Hz]. A line geometry's `frequency` and a linecode's `derivation.frequency` are checked against it. It defaults nothing and rescales nothing."
+        },
+        "crs": {
+          "type": "string",
+          "description": "Coordinate reference system of every `geo` member, as an authority code such as `OGC:CRS84` or `EPSG:32617`. Absent means `OGC:CRS84` (WGS84 longitude, latitude), under which every `geo` member is conformant GeoJSON (RFC 7946). Whatever the authority's own axis order, coordinates are always written x then y: longitude then latitude, or easting then northing. One system per document.",
+          "default": "OGC:CRS84"
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "orcid": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "data_sources": {
+          "type": "array",
+          "description": "Upstream data sources from which this case was derived",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string"
+              },
+              "doi": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "case_study_generator": {
+          "type": "object",
+          "description": "Tool that generated this case file",
+          "properties": {
+            "tool": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "provenance": {
+          "type": "object",
+          "description": "Free-form conversion/audit provenance written by tooling (e.g. a fidelity-loss inventory, migration notes, or earth-terminal routing)."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version"
+      ]
+    },
+    "extras": {
+      "type": "object",
+      "description": "The one free-form object of the document: case-level data this schema does not define. Every other object rejects unknown fields. Data here carries no defined meaning, so a reader that ignores it reads a different network than the writer wrote."
+    },
+    "bus": {
+      "type": "object",
+      "description": "Collection of buses",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "terminal_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered array of terminal names for this bus"
+          },
+          "perfectly_grounded_terminals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of terminal names which are perfectly grounded"
+          },
+          "vpg_min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Minimum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vng_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51): `v_*` was ambiguous between phase-to-ground and phase-to-neutral."
+          },
+          "vpg_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Maximum phase-to-ground voltage magnitude [V] of each phase terminal of the bus, one entry per name in `terminal_names` that `terminal_conventions` classifies as a phase, in `terminal_names` order. The neutral bounds through `vng_max`, so this array carries no entry for it. Named `vpg_*` since schema 0.1.1 (specification issue #51)."
+          },
+          "vng_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Maximum neutral-to-ground voltage magnitude [V]; only valid when the bus has a neutral terminal. Named `vn_max` before schema 0.2.0; `vng` names the neutral-to-ground pair the way `vpg` names phase-to-ground."
+          },
+          "vpn_min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Minimum phase-to-neutral voltage magnitude [V], one entry per phase terminal in `terminal_names` order. Valid only when the bus carries a neutral terminal."
+          },
+          "vpn_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Maximum phase-to-neutral voltage magnitude [V], one entry per phase terminal in `terminal_names` order. Valid only when the bus carries a neutral terminal."
+          },
+          "vpp_min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Minimum phase-to-phase voltage magnitude [V], one entry per ordered phase pair (1,2), (2,3), (3,1) of the bus's phase terminals, in that order. Valid only on a bus with at least two phase terminals."
+          },
+          "vpp_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Maximum phase-to-phase voltage magnitude [V], one entry per ordered phase pair (1,2), (2,3), (3,1) of the bus's phase terminals, in that order. Valid only on a bus with at least two phase terminals."
+          },
+          "vpos_min": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Minimum positive-sequence voltage magnitude [V] (three-phase buses)"
+          },
+          "vpos_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Maximum positive-sequence voltage magnitude [V] (three-phase buses)"
+          },
+          "vneg_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Maximum negative-sequence voltage magnitude [V] (three-phase buses); the lower bound is always 0"
+          },
+          "vzero_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Maximum zero-sequence voltage magnitude [V] (three-phase buses); the lower bound is always 0"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the bus is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Descriptive only: no calculation reads it; electrical length comes from `line.length` and impedance from the linecode."
+          }
+        },
+        "required": [
+          "terminal_names"
+        ]
+      },
+      "minProperties": 1
+    },
+    "line": {
+      "type": "object",
+      "description": "Line objects",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "length": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Line length [m]. Required with `linecode` (impedance = per-metre matrices x length); optional and purely descriptive when the line carries inline absolute matrices"
+          },
+          "linecode": {
+            "type": "string",
+            "description": "Linecode of line (per-metre matrices). A line carries EXACTLY ONE impedance source: either this reference (+ length), or inline absolute R_series_/X_series_ matrices in Ohm"
+          },
+          "terminal_map_to": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "terminal_map_from": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "bus_from": {
+            "type": "string",
+            "description": "'from' bus for the element"
+          },
+          "bus_to": {
+            "type": "string",
+            "description": "'to' bus for the element"
+          },
+          "i_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] on each conductor of the line, one entry per name in `terminal_map_from`, in that order, applied at both ends. Overrides the referencing linecode's `i_max`."
+          },
+          "s_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Apparent-power limit [VA] of each conductor of the line, one entry per entry of `terminal_map_from`, applied at both ends. Overrides the referencing linecode's `s_max`."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_line_string",
+            "description": "The line's route as a GeoJSON LineString from `bus_from` through any bends to `bus_to`, in the coordinate reference system `meta.crs` names (WGS84 when absent). Descriptive only; `length` remains the electrical length, so a route's geodesic length need not equal it (an underground cable's trench, a rear-lot span)."
+          }
+        },
+        "patternProperties": {
+          "^R_series_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the TOTAL series resistance matrix of this line section [Ohm]. Units by location: linecode matrices are per metre, line matrices are absolute - never scaled by length"
+          },
+          "^X_series_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the TOTAL series reactance matrix of this line section [Ohm]"
+          },
+          "^G_from_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the TOTAL from-side shunt conductance matrix [S]"
+          },
+          "^G_to_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the TOTAL to-side shunt conductance matrix [S]"
+          },
+          "^B_from_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the TOTAL from-side shunt susceptance matrix [S]"
+          },
+          "^B_to_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the TOTAL to-side shunt susceptance matrix [S]"
+          }
+        },
+        "required": [
+          "bus_from",
+          "bus_to",
+          "terminal_map_from",
+          "terminal_map_to"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "linecode",
+              "length"
+            ],
+            "propertyNames": {
+              "not": {
+                "pattern": "^(R_series|X_series|G_from|G_to|B_from|B_to)_\\d+_\\d+$"
+              }
+            }
+          },
+          {
+            "required": [
+              "R_series_1_1",
+              "X_series_1_1"
+            ],
+            "not": {
+              "required": [
+                "linecode"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "voltage_source": {
+      "type": "object",
+      "description": "Voltage source element",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "v_magnitude": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Voltage magnitude [V] the source holds at each of its terminals, phase to ground, one entry per name in `terminal_map`, in that order. A grounded terminal states 0."
+          },
+          "v_angle": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Voltage angle [rad] the source holds at each of its terminals, one entry per name in `terminal_map`, in that order."
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "bus": {
+            "$ref": "#/$defs/bus_type"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "p_min": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Minimum active power [W] delivered by each phase conductor of the source, one entry per phase conductor in `terminal_map` order."
+          },
+          "p_max": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Maximum active power [W] delivered by each phase conductor of the source, one entry per phase conductor in `terminal_map` order."
+          },
+          "energy_cost_rate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Energy cost rate [$/kWh] of each phase conductor of the source, one entry per phase conductor in `terminal_map` order; a neutral has no entry. The source is not special in the objective: a positive injection is an import, so a positive entry is the import price and an export is credited at the same price. Absent, the source carries no objective term."
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the source is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the source is drawn at its bus."
+          }
+        },
+        "required": [
+          "v_angle",
+          "v_magnitude",
+          "bus",
+          "terminal_map"
+        ]
+      },
+      "minProperties": 1
+    },
+    "shunt": {
+      "type": "object",
+      "description": "Passive shunt admittance elements, including grounding impedances",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bus": {
+            "$ref": "#/$defs/bus_type"
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the shunt is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the shunt is drawn at its bus."
+          }
+        },
+        "patternProperties": {
+          "^G_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Array elements of the conductance [S]"
+          },
+          "^B_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Array elements of the susceptance [S]"
+          }
+        },
+        "required": [
+          "bus",
+          "terminal_map",
+          "G_1_1",
+          "B_1_1"
+        ]
+      }
+    },
+    "capacitor": {
+      "type": "object",
+      "description": "Fixed (nameplate-rated) shunt capacitor banks. See the math and data model for the element definitions and the q_rated/v_nom conventions per configuration.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bus": {
+            "$ref": "#/$defs/bus_type"
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "configuration": {
+            "$ref": "#/$defs/configuration_type"
+          },
+          "q_rated": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Nameplate rated reactive power of the whole bank [var], delivered when the voltage across the capacitor element terminals equals v_nom. For WYE and DELTA this is the total across all three elements, not a per-element rating."
+          },
+          "v_nom": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Nameplate nominal voltage [V]: line-to-line for the three-phase configurations (both WYE and DELTA); for SINGLE_PHASE, the nominal voltage across the terminals of the individual capacitor element."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the capacitor is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the capacitor is drawn at its bus."
+          }
+        },
+        "required": [
+          "bus",
+          "terminal_map",
+          "configuration",
+          "q_rated",
+          "v_nom"
+        ]
+      }
+    },
+    "load": {
+      "type": "object",
+      "description": "Load elements. p_nom/q_nom are the nominal active/reactive powers; the ZIP and exponential voltage-dependence models and their coefficients are defined in the math and data model.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "p_nom": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Nominal active power [W] of each sub-load. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "q_nom": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Nominal reactive power [var] of each sub-load. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "bus": {
+            "$ref": "#/$defs/bus_type"
+          },
+          "configuration": {
+            "$ref": "#/$defs/configuration_type"
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "model": {
+            "type": "string",
+            "description": "Voltage dependence of the load (default CONSTANT_POWER); see the math and data model for the definitions.",
+            "enum": [
+              "CONSTANT_POWER",
+              "CONSTANT_CURRENT",
+              "CONSTANT_IMPEDANCE",
+              "ZIP",
+              "EXPONENTIAL"
+            ],
+            "default": "CONSTANT_POWER"
+          },
+          "v_nom": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Nominal voltage [V] each sub-load's `p_nom` and `q_nom` is stated at: line to line for the three-phase configurations, and the voltage across the load terminals for SINGLE_PHASE. Required unless `model` is CONSTANT_POWER. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "alpha_z": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Active-power constant-impedance fraction of the ZIP model. The three active fractions sum to one, and so do the three reactive fractions. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "alpha_i": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Active-power constant-current fraction of the ZIP model. The three active fractions sum to one, and so do the three reactive fractions. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "alpha_p": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Active-power constant-power fraction of the ZIP model. The three active fractions sum to one, and so do the three reactive fractions. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "beta_z": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Reactive-power constant-impedance fraction of the ZIP model. The three active fractions sum to one, and so do the three reactive fractions. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "beta_i": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Reactive-power constant-current fraction of the ZIP model. The three active fractions sum to one, and so do the three reactive fractions. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "beta_p": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Reactive-power constant-power fraction of the ZIP model. The three active fractions sum to one, and so do the three reactive fractions. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "gamma_p": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Active-power voltage exponent of the exponential model. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "gamma_q": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Reactive-power voltage exponent of the exponential model. One entry per sub-load, in `terminal_map` order. A sub-load is one two-terminal power element of the load: a phase-to-neutral branch for WYE, the single terminal pair for SINGLE_PHASE, or one line-to-line branch for DELTA. The sub-load count is the phase conductor count for WYE, one for SINGLE_PHASE, and the phase pair count for DELTA."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the load is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the load is drawn at its bus."
+          }
+        },
+        "required": [
+          "p_nom",
+          "q_nom",
+          "bus",
+          "configuration",
+          "terminal_map"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "model"
+              ],
+              "properties": {
+                "model": {
+                  "not": {
+                    "const": "CONSTANT_POWER"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "v_nom"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "model"
+              ],
+              "properties": {
+                "model": {
+                  "const": "ZIP"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "alpha_p",
+                "alpha_i",
+                "alpha_z",
+                "beta_p",
+                "beta_i",
+                "beta_z"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "model"
+              ],
+              "properties": {
+                "model": {
+                  "const": "EXPONENTIAL"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "gamma_p",
+                "gamma_q"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "generator": {
+      "type": "object",
+      "description": "Generator elements",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "p_min": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Minimum active power [W] of each phase conductor, one entry per phase conductor in `terminal_map` order."
+          },
+          "p_max": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Maximum active power [W] of each phase conductor, one entry per phase conductor in `terminal_map` order."
+          },
+          "q_min": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Minimum reactive power [var] of each phase conductor, one entry per phase conductor in `terminal_map` order."
+          },
+          "q_max": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Maximum reactive power [var] of each phase conductor, one entry per phase conductor in `terminal_map` order."
+          },
+          "s_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Apparent-power rating [VA] of each phase conductor, one entry per phase conductor in `terminal_map` order, bounding the sum of squares of that phase's active and reactive power."
+          },
+          "i_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] of each conductor of the generator: one entry per phase conductor in `terminal_map` order, and optionally one further trailing entry that bounds the neutral return current, which is the negated sum of the phase currents. So the array is one entry per phase, or one per phase plus one."
+          },
+          "cost": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Deprecated 0.1.x spelling of `energy_cost_rate`, with the same meaning and dimensions. When both are present they must agree. New documents use `energy_cost_rate`.",
+            "deprecated": true
+          },
+          "bus": {
+            "$ref": "#/$defs/bus_type"
+          },
+          "configuration": {
+            "$ref": "#/$defs/configuration_type"
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "energy_cost_rate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Energy cost rate [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order; a neutral has no entry. The objective sums this rate against the active power the phase injects into the network, so a positive entry penalises generation."
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the generator is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the generator is drawn at its bus."
+          }
+        },
+        "required": [
+          "bus",
+          "configuration",
+          "terminal_map"
+        ],
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "energy_cost_rate"
+                ]
+              },
+              {
+                "required": [
+                  "cost"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "linecode": {
+      "type": "object",
+      "description": "Linecodes",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "i_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] of each conductor of the cross-section, one entry per matrix row, in matrix row order, applied at both ends of every line that references the linecode."
+          },
+          "s_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Apparent-power limit [VA] of each conductor of the cross-section, one entry per conductor, in matrix row order."
+          },
+          "source": {
+            "type": "string",
+            "description": "Origin of the impedance matrices, e.g. \"geometry\" (compiled from a line_geometry), \"fem\" (finite-element derived), \"datasheet\", \"import\""
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "line_geometry": {
+            "type": "string",
+            "description": "Back-reference to the line_geometry this linecode was compiled from"
+          },
+          "derivation": {
+            "type": "object",
+            "description": "Provenance of the impedance computation: method, earth parameters, defaults applied, tool version. How the linecode's matrices were derived for external tools (e.g. FEM)",
+            "properties": {
+              "method": {
+                "type": "string",
+                "description": "Impedance-calculation method, e.g. \"modified_carson\", \"full_carson\", \"deri\", \"fem_2d\""
+              },
+              "earth_resistivity": {
+                "type": "number",
+                "description": "Earth resistivity used [Ohm-m]"
+              },
+              "frequency": {
+                "type": "number",
+                "description": "Frequency the matrices were computed at [Hz]",
+                "exclusiveMinimum": 0
+              },
+              "temperature": {
+                "type": "number",
+                "description": "Conductor temperature the resistances were corrected to [degC]"
+              },
+              "shields_reduced": {
+                "type": "array",
+                "description": "Cable shield/concentric-neutral subconductors internally reduced into equivalent conductors, e.g. [\"cn:1\"]",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "defaults_applied": {
+                "type": "array",
+                "description": "Cross-defaults applied during compilation, e.g. [\"gmr:acsr_40\"] when GMR was derived from radius",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tool": {
+                "type": "string",
+                "description": "Tool that produced the matrices"
+              },
+              "tool_version": {
+                "type": "string",
+                "description": "Version of the tool that produced the matrices"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "patternProperties": {
+          "^R_series_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the series resistance matrix [Ohm/m]"
+          },
+          "^X_series_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the series reactance matrix [Ohm/m]"
+          },
+          "^G_from_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the shunt conductance matrix [S/m]"
+          },
+          "^G_to_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the shunt conductance matrix [S/m]"
+          },
+          "^B_from_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the shunt susceptance matrix [S/m]"
+          },
+          "^B_to_\\d+_\\d+$": {
+            "type": "number",
+            "description": "Element of the shunt susceptance matrix [S/m]"
+          }
+        },
+        "required": [
+          "R_series_1_1",
+          "X_series_1_1"
+        ]
+      }
+    },
+    "switch": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bus_from": {
+            "type": "string",
+            "description": "'from' bus for the element"
+          },
+          "bus_to": {
+            "type": "string",
+            "description": "'to' bus for the element"
+          },
+          "terminal_map_to": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "terminal_map_from": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "open_switch": {
+            "type": "boolean",
+            "description": "Indicator of switch state, true if switch is open (nonconducting)"
+          },
+          "i_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] on each conductor of the switch, one entry per name in `terminal_map_from`, in that order. A closed switch is ideal: the two terminal voltages are equal conductor by conductor and the currents sum to zero; an open switch carries no current."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the switch is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "bus_from",
+          "bus_to",
+          "open_switch",
+          "terminal_map_from",
+          "terminal_map_to"
+        ]
+      }
+    },
+    "transformer": {
+      "type": "object",
+      "properties": {
+        "single_phase": {
+          "$ref": "#/$defs/single_phase_or_center_tap_transformer",
+          "description": "Single phase transformer object"
+        },
+        "center_tap": {
+          "$ref": "#/$defs/single_phase_or_center_tap_transformer",
+          "description": "Center tap transformer object, with a single-phase winding on the 'from' side and split winding on the 'to' side."
+        },
+        "wye_delta": {
+          "$ref": "#/$defs/three_phase_transformer",
+          "description": "Wye-to-Delta transformer object, with series impedance defined on the wye-side"
+        },
+        "delta_wye": {
+          "$ref": "#/$defs/three_phase_transformer",
+          "description": "Delta-to-Wye transformer object, with series impedance defined on the wye-side"
+        },
+        "single_phase_autotransformer": {
+          "$ref": "#/$defs/single_phase_autotransformer",
+          "description": "Single-phase step voltage regulator modelled as an autotransformer (series and shunt winding sharing a node). `voltage_ratio` is the regulated over source voltage ratio; `regulator_type` records the ANSI arrangement."
+        },
+        "open_delta_regulator": {
+          "$ref": "#/$defs/open_delta_regulator",
+          "description": "Monolithic three-phase open-delta regulator: two single-phase autotransformer windings connected line-to-line across the phase pairs implied by connection (ABBC/BCAC/CABA)."
+        },
+        "n_winding": {
+          "$ref": "#/$defs/n_winding_transformer",
+          "description": "General transformer with two or more windings (the form for three or more windings, and for two-winding arrangements no dedicated subtype names, such as wye-wye), as a winding-indexed list with pairwise short-circuit reactances. Winding 1 is the reference; the OPF/Ybus build a star/T-equivalent. WYE and DELTA windings are supported (a DELTA winding's v_nom is its line-to-line coil voltage; delta_roll selects the vector-group rotation)."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Transformers and step-voltage regulators, grouped by subtype. A subtype fixes the winding count, the winding connections, and which impedance fields apply; the object key inside a subtype is the element id."
+    },
+    "terminal_conventions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Case-wide classification of the terminal-name labels used across the AC buses into phase, neutral and earth-wire roles. When present it is the authority on which label is which, labels are matched exactly including case, the role lists are disjoint, and every per-phase array dimension in the document resolves against it. When absent a reader infers the roles: `n` or `N` is the neutral, `\"4\"` is the neutral when the bus terminal set is exactly `1`, `2`, `3`, `4`, and every other label is a phase. The label `\"g\"` is reserved for the common ground and is never a bus terminal. This block does not apply to `dc_bus`, which states its own pole roles.",
+      "properties": {
+        "phase": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Terminal-name labels that denote a phase conductor (e.g. [\"a\",\"b\",\"c\"], or split-phase legs). A bus terminal in none of the lists is a phase."
+        },
+        "neutral": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Terminal-name labels that denote a neutral conductor (typically [\"n\"]). A bus is expected to carry at most one neutral terminal."
+        },
+        "earth": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Terminal-name labels that denote a dedicated earth/PE *wire* conductor. The ground reference itself stays implicit (grounding is modelled via grounding impedances / perfectly_grounded_terminals); this list captures only genuine earth-wire terminals and is empty for standard OpenDSS-derived cases."
+        }
+      }
+    },
+    "ibr": {
+      "type": "object",
+      "description": "Inverter-based resources: photovoltaic arrays, battery storage, static compensators, and generic sources interfaced to the AC network through a converter. Per-phase arrays have one entry per phase conductor, which is the number of `terminal_map` names classified as a phase, in `terminal_map` order.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bus": {
+            "$ref": "#/$defs/bus_type"
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "topology": {
+            "$ref": "#/$defs/inverter_topology_type"
+          },
+          "prime_mover": {
+            "$ref": "#/$defs/prime_mover_type"
+          },
+          "s_max": {
+            "type": "array",
+            "description": "Per-phase apparent-power nameplate ratings [VA]; one entry per phase conductor in `terminal_map` order (a neutral has no entry)",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            }
+          },
+          "i_max": {
+            "type": "array",
+            "description": "Optional per-conductor converter current-magnitude limit [A], in `terminal_map` order. FOUR_LEG: one entry per phase, optionally followed by one for the neutral conductor (which can carry more than a phase under unbalance compensation; without it the neutral is unrated). SINGLE_PHASE: one or two entries; the phase and the return carry the same current. THREE_LEG: one entry per conductor.",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            }
+          },
+          "p_avail": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Available active power [W]; upper bound on dispatch for PV prime movers"
+          },
+          "p_min": {
+            "type": "array",
+            "description": "Per-phase minimum active power [W]; one entry per phase conductor in `terminal_map` order (a neutral has no entry). Negative indicates absorption (battery charging)",
+            "items": {
+              "type": "number"
+            }
+          },
+          "p_max": {
+            "type": "array",
+            "description": "Per-phase maximum active power [W]; one entry per phase conductor in `terminal_map` order (a neutral has no entry)",
+            "items": {
+              "type": "number"
+            }
+          },
+          "dc_link_coupled": {
+            "type": "boolean",
+            "description": "True if the converter's phases share a single DC link, so the per-phase active powers are coupled by a net DC-side balance (sum of phase P bounded by [p_dc_min, p_dc_max]). Lets the converter circulate active power BETWEEN phases (e.g. a four-wire STATCOM balancing an unbalanced feeder) while net active power stays inside the DC bound. False (default) treats each phase independently"
+          },
+          "p_dc_min": {
+            "type": "number",
+            "description": "Minimum net DC-side active power [W] when dc_link_coupled; sum over phases of P >= p_dc_min. 0 for a STATCOM (no active source); negative permits absorption (battery)"
+          },
+          "p_dc_max": {
+            "type": "number",
+            "description": "Maximum net DC-side active power [W] when dc_link_coupled; sum over phases of P <= p_dc_max. 0 for a STATCOM; p_avail for curtailable PV"
+          },
+          "dc_bus": {
+            "type": "string",
+            "description": "Optional reference to a dc_bus id. When present, the converter's DC port injects into that shared DC node (participating in its DC KCL) instead of an isolated private DC link - this is how converter stations / back-to-back SOPs / MVDC ties are formed (several IBRs sharing one dc_bus). When absent, dc_link_coupled retains its isolated-link meaning (p_dc_min/p_dc_max bound)."
+          },
+          "dc_terminal_map": {
+            "$ref": "#/$defs/terminal_map_type",
+            "description": "DC terminals of the referenced dc_bus the converter's DC port spans (e.g. [pole, return], or [pole] with earth return). Required when dc_bus is set."
+          },
+          "dc_control": {
+            "$ref": "#/$defs/dc_control_type",
+            "description": "DC-side control mode for a dc_bus-coupled converter: P (constant power, default), V (DC-voltage master holding dc_v_set), or DROOP (saturated V-P droop). Each connected DC island needs at least one V or droop converter, else the DC voltage is underdetermined."
+          },
+          "dc_v_set": {
+            "type": "number",
+            "description": "DC-voltage setpoint [V], pole-to-return, for dc_control=V (held exactly) or DROOP (reference voltage). Defaults to the dc_bus pole-to-return v_dc_nom when absent."
+          },
+          "dc_p_ref": {
+            "type": "number",
+            "description": "Droop reference active power [W] at dc_v_set (the converter's AC active power when v_dc_port = dc_v_set). Used only for dc_control=DROOP."
+          },
+          "dc_droop": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Droop coefficient k [V/W] for dc_control=DROOP: P = dc_p_ref + (v_dc_port - dc_v_set)/k, so the converter exports more as the DC-port voltage rises, saturated at the converter power limits. Larger k = softer droop."
+          },
+          "dc_deadband": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Optional half-width [V] of a dead-band around dc_v_set within which the droop holds P = dc_p_ref (no response to small DC-voltage deviations). Used only for dc_control=DROOP."
+          },
+          "q_min": {
+            "type": "array",
+            "description": "Per-phase minimum reactive power [var]; one entry per phase conductor in `terminal_map` order (a neutral has no entry). Negative indicates absorption (default -s_max)",
+            "items": {
+              "type": "number"
+            }
+          },
+          "q_max": {
+            "type": "array",
+            "description": "Per-phase maximum reactive power [var]; one entry per phase conductor in `terminal_map` order (a neutral has no entry) (default s_max)",
+            "items": {
+              "type": "number"
+            }
+          },
+          "r_filter": {
+            "type": "array",
+            "description": "Per-phase filter resistance Re(Z_filter) [Ohm]; one entry per phase conductor in `terminal_map` order",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            }
+          },
+          "x_filter": {
+            "type": "array",
+            "description": "Per-phase filter reactance Im(Z_filter) [Ohm]; one entry per phase conductor in `terminal_map` order",
+            "items": {
+              "type": "number"
+            }
+          },
+          "b_filter_shunt": {
+            "type": "number",
+            "description": "Filter shunt susceptance Im(Y_shunt) [S]"
+          },
+          "grid_forming": {
+            "type": "boolean",
+            "description": "True for grid-forming (GFM) operation; false (default) for grid-following (GFL)"
+          },
+          "v_ref_internal": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Internal voltage magnitude setpoint [V]; grid-forming only"
+          },
+          "control_profile": {
+            "type": "string",
+            "description": "Reference to a control_profile id encoding smart-IBR control laws"
+          },
+          "voltage_aggregation": {
+            "type": "string",
+            "enum": [
+              "PER_PHASE",
+              "AVERAGE"
+            ],
+            "description": "Cross-phase aggregation of the droop monitored voltage for a multi-phase IBR: PER_PHASE (default, each phase reacts to its own magnitude) or AVERAGE (every phase reacts to the mean phase magnitude). When present it overrides the per-phase/averaged aggregation implied by a control law's voltage_reference.",
+            "default": "PER_PHASE"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "energy_cost_rate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Energy cost rate [$/kWh] of each phase conductor, one entry per phase conductor in `terminal_map` order; a neutral has no entry. The objective sums this rate against the active power the phase injects into the network, so a positive entry penalises injection and a negative entry rewards it."
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the inverter is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the inverter is drawn at its bus."
+          }
+        },
+        "required": [
+          "bus",
+          "terminal_map",
+          "topology",
+          "prime_mover",
+          "s_max"
+        ],
+        "dependentRequired": {
+          "dc_bus": [
+            "dc_terminal_map"
+          ]
+        }
+      }
+    },
+    "control_profile": {
+      "type": "object",
+      "description": "Optional IBR extension: reusable control-law profiles referenced by IBRs (linecode-style sharing). Each sub-object is optional; its presence activates the corresponding control law.",
+      "additionalProperties": {
+        "type": "object",
+        "description": "A named control profile. Each control-law object is optional and its presence activates that law. Unknown control-law names are rejected.",
+        "additionalProperties": false,
+        "properties": {
+          "volt_var": {
+            "type": "object",
+            "description": "Volt-VAr droop: reactive power as a piecewise-linear function of a monitored voltage magnitude",
+            "additionalProperties": false,
+            "properties": {
+              "voltage_reference": {
+                "$ref": "#/$defs/voltage_reference_type"
+              },
+              "breakpoints": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/nonnegative_number"
+                },
+                "description": "The four voltage breakpoints [U1, U2, U3, U4] [V] of the droop, non-decreasing. Below U1 the converter injects `q_limits[1]`, between U2 and U3 it exchanges no reactive power, above U4 it absorbs `q_limits[0]`, and it interpolates linearly on [U1, U2] and [U3, U4].",
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "q_limits": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "description": "The two reactive-power limits [q_absorb, q_inject], q_absorb not positive and q_inject not negative, in vars or per unit of `s_max`, as `q_unit` states.",
+                "minItems": 2,
+                "maxItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "maximum": 0
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "q_unit": {
+                "$ref": "#/$defs/q_unit_type"
+              },
+              "q_ref": {
+                "$ref": "#/$defs/q_ref_type"
+              },
+              "p_min_for_q": {
+                "type": "number",
+                "description": "Active power below which reactive output is zero (OpenDSS %PminNoVars)"
+              },
+              "p_min_for_q_max": {
+                "type": "number",
+                "description": "Active power below which reactive capability is derated (OpenDSS %PminkvarMax)"
+              }
+            },
+            "required": [
+              "voltage_reference",
+              "breakpoints",
+              "q_limits"
+            ]
+          },
+          "volt_watt": {
+            "type": "object",
+            "description": "Volt-Watt droop: active power limit as a piecewise-linear function of a monitored voltage magnitude",
+            "additionalProperties": false,
+            "properties": {
+              "voltage_reference": {
+                "$ref": "#/$defs/voltage_reference_type"
+              },
+              "breakpoints": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/nonnegative_number"
+                },
+                "description": "The two voltage breakpoints [U5, U6] [V] of the active-power limit, non-decreasing. At or below U5 the limit is the higher value `p_limits[1]`, at or above U6 it is the lower value `p_limits[0]`, and it interpolates linearly between them.",
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "p_limits": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/nonnegative_number"
+                },
+                "description": "The two active-power limits [p_low, p_high], p_low not above p_high: p_high applies at or below U5 and p_low at or above U6. Like `q_limits`, the array is ordered by value. In watts, or per unit of the base `p_ref` names, as `p_unit` states.",
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "p_unit": {
+                "$ref": "#/$defs/p_unit_type"
+              },
+              "p_ref": {
+                "$ref": "#/$defs/p_ref_type"
+              }
+            },
+            "required": [
+              "voltage_reference",
+              "breakpoints",
+              "p_limits"
+            ]
+          },
+          "power_factor": {
+            "type": "object",
+            "description": "Constant power factor operation",
+            "additionalProperties": false,
+            "properties": {
+              "pf": {
+                "type": "number",
+                "description": "Signed power factor, 0 < |pf| <= 1, with |pf| = |P| / sqrt(P^2 + Q^2) and P, Q positive when injected into the network. pf > 0: Q has the same sign as P (an inverter exporting active power also exports reactive power, as a generator at lagging power factor does). pf < 0: Q has the opposite sign to P. This is the OpenDSS PVSystem and Storage `pf` convention (\"negative when kW and kvar have opposite signs\"), so an OpenDSS value carries over unchanged.",
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "minimum": -1,
+                    "exclusiveMaximum": 0
+                  }
+                ]
+              }
+            },
+            "required": [
+              "pf"
+            ]
+          }
+        }
+      }
+    },
+    "wire_data": {
+      "type": "object",
+      "description": "Conductor and cable type library: construction data with no geometry, referenced by a `line_geometry` conductor. Resistance in Ohm/m, lengths in m, current in A, temperature in degC.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Conductor construction: bare overhead round wire, concentric-neutral cable, or tape-shield cable",
+            "enum": [
+              "OVERHEAD",
+              "CN_CABLE",
+              "TS_CABLE"
+            ]
+          },
+          "r_dc": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "DC resistance per unit length at temperature_ref [Ohm/m]. At least one of r_dc/r_ac is required; the other defaults via r_ac = 1.02 r_dc"
+          },
+          "r_ac": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "AC resistance per unit length at power frequency and temperature_ref [Ohm/m]"
+          },
+          "temperature_ref": {
+            "type": "number",
+            "description": "Reference temperature of r_dc/r_ac [degC]; default 20"
+          },
+          "alpha_20": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Temperature coefficient of resistance at 20 degC [1/K] for temperature correction, e.g. 0.00393 (Cu), 0.00403 (Al)"
+          },
+          "gmr": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Geometric mean radius of the (phase) conductor [m]. At least one of gmr/radius required; the other defaults via gmr = 0.7788 radius (solid round)"
+          },
+          "radius": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Physical outside radius of the (phase) conductor [m]"
+          },
+          "cap_radius": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Electrostatic (capacitance) radius [m]; defaults to radius. Distinct field so bundled conductors can use an equivalent radius"
+          },
+          "i_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Continuous current rating of the conductor [A]"
+          },
+          "i_max_emergency": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Emergency current rating [A]"
+          },
+          "eps_r": {
+            "type": "number",
+            "exclusiveMinimum": 1,
+            "description": "Relative permittivity of the cable insulation (cables only); OpenDSS default 2.3"
+          },
+          "t_insulation": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Insulation layer thickness [m] (cables only)"
+          },
+          "d_insulation": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Diameter over the insulation [m] (cables only)"
+          },
+          "d_cable": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Overall cable diameter [m] (cables only)"
+          },
+          "n_strands": {
+            "type": "integer",
+            "minimum": 2,
+            "description": "Number of concentric-neutral strands (cn_cable only)"
+          },
+          "d_strand": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Diameter of one concentric-neutral strand [m] (cn_cable only)"
+          },
+          "gmr_strand": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "GMR of one concentric-neutral strand [m] (cn_cable only); defaults to 0.7788 d_strand/2"
+          },
+          "r_strand": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Resistance per unit length of one concentric-neutral strand [Ohm/m] (cn_cable only)"
+          },
+          "d_shield": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Diameter over the tape shield [m] (ts_cable only)"
+          },
+          "t_tape": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Tape shield thickness [m] (ts_cable only)"
+          },
+          "tape_lap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Tape shield overlap [percent] (ts_cable only); OpenDSS default 20"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "r_dc"
+                ]
+              },
+              {
+                "required": [
+                  "r_ac"
+                ]
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "gmr"
+                ]
+              },
+              {
+                "required": [
+                  "radius"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "line_geometry": {
+      "type": "object",
+      "description": "Line and cable cross-section assemblies: conductor types from `wire_data` placed at coordinates, each carrying one circuit terminal. A geometry compiles to a linecode. Every conductor carries a terminal, so the compiled matrix is the full primitive matrix at the stated conductor count and no conductor is eliminated; grounding stays on the bus, in `perfectly_grounded_terminals` and in shunts.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "conductors": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Ordered conductor placements. Position i fixes row and column i of the compiled linecode's matrices, and `terminal` names the circuit terminal conductor i carries.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "wire_data": {
+                  "type": "string",
+                  "description": "Reference to a wire_data id"
+                },
+                "x": {
+                  "type": "number",
+                  "description": "Horizontal coordinate of the conductor centre [m]"
+                },
+                "y": {
+                  "type": "number",
+                  "description": "Vertical coordinate of the conductor centre [m]; positive above ground, negative = burial depth"
+                },
+                "terminal": {
+                  "type": "string",
+                  "description": "Circuit terminal this conductor carries, e.g. \"a\", \"b\", \"c\", \"n\""
+                }
+              },
+              "required": [
+                "wire_data",
+                "x",
+                "y",
+                "terminal"
+              ]
+            }
+          },
+          "earth_model": {
+            "type": "string",
+            "description": "Earth-return formulation: MODIFIED_CARSON (default, Kersting's two-term approximation), FULL_CARSON, or DERI. OpenDSS defaults to DERI, so a case derived from OpenDSS states it.",
+            "enum": [
+              "MODIFIED_CARSON",
+              "FULL_CARSON",
+              "DERI"
+            ],
+            "default": "MODIFIED_CARSON"
+          },
+          "earth_resistivity": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Homogeneous earth resistivity [Ohm-m]; default 100"
+          },
+          "frequency": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Frequency the linecode is compiled at [Hz]. Required - there is no ambient default and no rescaling; the value is recorded in the compiled linecode's derivation block"
+          },
+          "temperature": {
+            "type": "number",
+            "description": "Conductor operating temperature [degC]; resistances are corrected from wire_data temperature_ref using alpha_20 when present"
+          }
+        },
+        "required": [
+          "conductors",
+          "frequency"
+        ]
+      }
+    },
+    "dc_bus": {
+      "type": "object",
+      "description": "Collection of DC buses (nodes of an MVDC/LVDC network). DC voltage is a signed magnitude relative to earth - no angle. A 1- or 2-terminal dc_bus is a monopole, a 3-terminal dc_bus is a bipole (positive pole, negative pole, metallic return).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "terminal_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered DC terminal names. Length 1 (single pole, earth return), 2 (pole + return), or 3 (bipole: positive pole, negative pole, metallic return).",
+            "minItems": 1,
+            "maxItems": 3
+          },
+          "perfectly_grounded_terminals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "DC terminal names held perfectly at earth potential (v_dc = 0). Same idiom as the AC bus."
+          },
+          "pole": {
+            "type": "object",
+            "description": "Optional map from terminal name to its pole role (POSITIVE, NEGATIVE, or METALLIC_RETURN), used for sign checks and line-to-line/line-to-neutral bound interpretation.",
+            "additionalProperties": {
+              "$ref": "#/$defs/dc_pole_type"
+            }
+          },
+          "v_dc_nom": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Per-terminal SIGNED nominal line-to-ground voltage [V] (positive pole > 0, negative pole < 0, return ~ 0). One entry per name in `terminal_names`, in that order."
+          },
+          "v_dc_min": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Per-terminal SIGNED line-to-ground voltage lower bound [V]; one entry per terminal. Negative for a negative pole. One entry per name in `terminal_names`, in that order. Absent: no bound."
+          },
+          "v_dc_max": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Per-terminal SIGNED line-to-ground voltage upper bound [V]; one entry per terminal. One entry per name in `terminal_names`, in that order. Absent: no bound."
+          },
+          "vdc_ln_min": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Minimum line-to-neutral DC voltage magnitude [V] (pole minus return / metallic-return conductor). Requires a return/neutral terminal."
+          },
+          "vdc_ln_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Maximum line-to-neutral DC voltage magnitude [V]."
+          },
+          "vdc_ll_min": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Minimum line-to-line DC voltage magnitude [V] (positive pole minus negative pole). Bipole only."
+          },
+          "vdc_ll_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Maximum line-to-line DC voltage magnitude [V]. Bipole only."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC bus is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "terminal_names"
+        ]
+      }
+    },
+    "dc_branch": {
+      "type": "object",
+      "description": "Collection of DC lines/cables. Each branch is a multi-conductor (1/2/3-wire) link between two dc_bus nodes with per-conductor scalar resistance (no inter-conductor mutual coupling).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dc_bus_from": {
+            "type": "string",
+            "description": "Originating dc_bus id"
+          },
+          "dc_bus_to": {
+            "type": "string",
+            "description": "Terminating dc_bus id"
+          },
+          "terminal_map_from": {
+            "$ref": "#/$defs/terminal_map_type",
+            "description": "DC terminals of dc_bus_from this branch connects to; length = wire count (1/2/3).",
+            "minItems": 1,
+            "maxItems": 3
+          },
+          "terminal_map_to": {
+            "$ref": "#/$defs/terminal_map_type",
+            "description": "DC terminals of dc_bus_to this branch connects to; same length as terminal_map_from.",
+            "minItems": 1,
+            "maxItems": 3
+          },
+          "r": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Per-conductor resistance [Ohm]; one entry per wire. One entry per name in `terminal_map_from`, in that order.",
+            "minItems": 1,
+            "maxItems": 3
+          },
+          "i_max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Optional per-conductor current-magnitude limit [A]. One entry per name in `terminal_map_from`, in that order."
+          },
+          "p_max": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Optional branch active-power limit [W]."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the DC branch is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "dc_bus_from",
+          "dc_bus_to",
+          "terminal_map_from",
+          "terminal_map_to",
+          "r"
+        ]
+      }
+    },
+    "dc_grounding": {
+      "type": "object",
+      "description": "Collection of DC earthing/return points. r = 0 (or omitted) is perfect grounding (v_dc fixed to 0 at the terminal, with free earth-return current); r > 0 is grounding through impedance (earth current = v_dc / r). At least one grounding per connected DC island sets the signed-voltage reference.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dc_bus": {
+            "type": "string",
+            "description": "dc_bus being earthed"
+          },
+          "terminal": {
+            "type": "string",
+            "description": "Which dc_bus terminal is earthed (typically the metallic return / midpoint)"
+          },
+          "r": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding resistance [Ohm]; 0 or omitted = perfect grounding, > 0 = grounding through impedance."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC grounding is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the DC grounding is drawn at its bus."
+          }
+        },
+        "required": [
+          "dc_bus",
+          "terminal"
+        ]
+      }
+    },
+    "dc_load": {
+      "type": "object",
+      "description": "Constant-power DC loads connected to a dc_bus terminal pair.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dc_bus": {
+            "type": "string",
+            "description": "dc_bus the load connects to"
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type",
+            "description": "DC terminals the load draws across (e.g. [pole, return])."
+          },
+          "p": {
+            "type": "number",
+            "description": "Active power drawn [W]"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC load is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the DC load is drawn at its bus."
+          }
+        },
+        "required": [
+          "dc_bus",
+          "terminal_map",
+          "p"
+        ]
+      }
+    },
+    "dc_source": {
+      "type": "object",
+      "description": "DC-side sources (DC-coupled PV/storage feeding the DC network) connected to a dc_bus terminal pair.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dc_bus": {
+            "type": "string",
+            "description": "dc_bus the source injects into"
+          },
+          "terminal_map": {
+            "$ref": "#/$defs/terminal_map_type",
+            "description": "DC terminals the source injects across (e.g. [pole, return])."
+          },
+          "p": {
+            "type": "number",
+            "description": "Active power injected [W]; fixed setpoint when p_min/p_max absent"
+          },
+          "p_min": {
+            "type": "number",
+            "description": "Minimum active power [W]"
+          },
+          "p_max": {
+            "type": "number",
+            "description": "Maximum active power [W]"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point",
+            "description": "Where the DC source is, as a GeoJSON Point in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it, and without it the DC source is drawn at its bus."
+          }
+        },
+        "required": [
+          "dc_bus",
+          "terminal_map"
+        ]
+      }
+    },
+    "time_series": {
+      "type": "object",
+      "description": "Named multiplicative profiles. An element references a profile by id in its own `time_series` map, and the profile's value at step t multiplies the static value of the referenced field at step t. A profile carries no units and no absolute quantity.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One profile. `values` is an ordered sequence of finite multiplicative factors, one per step, and the steps of every profile a case references are the same steps in the same order. There is no interpolation and no resampling: a reader evaluates the profile only at its stated steps, and a value between two steps is undefined. There are no nulls and no gaps; a step whose factor is unknown is not a profile a case may publish.",
+        "properties": {
+          "values": {
+            "type": "array",
+            "minItems": 1,
+            "description": "The multiplicative factors, one per step, in step order. Every entry is a number, so a null, a string, and an omitted step are all rejected, and JSON has no literal for infinity or not-a-number, so every accepted entry is finite.",
+            "items": {
+              "type": "number",
+              "description": "Finite multiplicative factor for one step"
+            }
+          },
+          "time": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "description": "Optional time axis, one entry per entry of `values` and in the same order: the offset in seconds of each step from the start of the case's horizon. Strictly increasing, so every step is distinct and ordered; the schema checks distinctness and a reader checks the ordering, which JSON Schema cannot state. Absent, the steps are an ordered sequence with no stated spacing. 0.2.0 couples no steps: each step is an independent operating state, costed by the objective as one hour of operation.",
+            "items": {
+              "type": "number",
+              "description": "Offset of the step from the start of the horizon [s]"
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "What the profile represents"
+          }
+        },
+        "required": [
+          "values"
+        ]
+      }
+    }
+  },
+  "required": [
+    "meta",
+    "bus",
+    "voltage_source"
+  ],
+  "$defs": {
+    "configuration_type": {
+      "type": "string",
+      "description": "Element configuration, as WYE, DELTA, or SINGLE_PHASE",
+      "enum": [
+        "WYE",
+        "DELTA",
+        "SINGLE_PHASE"
+      ]
+    },
+    "terminal_map_type": {
+      "type": "array",
+      "description": "Ordered map from the terminals of an element to the terminals of the bus it connects to. Entry i names the bus terminal the element's conductor i connects to, and fixes the conductor ordering of every per-terminal array and every matrix index of the element.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bus_type": {
+      "type": "string",
+      "description": "bus the element is connected to"
+    },
+    "nonnegative_number": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Non-negative number"
+    },
+    "single_phase_or_center_tap_transformer": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "s_rating": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Transformer power base [VA]"
+          },
+          "r_series_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Transformer series resistance on the 'from' side [Ohm]"
+          },
+          "x_series_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Transformer series reactance on the 'from' side [Ohm]"
+          },
+          "r_series_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Transformer series resistance on the 'to' side [Ohm]"
+          },
+          "x_series_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Transformer series reactance on the 'to' side [Ohm]"
+          },
+          "bus_from": {
+            "type": "string",
+            "description": "'from' bus for the element"
+          },
+          "bus_to": {
+            "type": "string",
+            "description": "'to' bus for the element"
+          },
+          "terminal_map_to": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "terminal_map_from": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "v_nom_to": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Nominal voltage of the 'to'-side winding [V]"
+          },
+          "v_nom_from": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Nominal voltage of the 'from'-side winding [V]"
+          },
+          "i_max_from": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] of the 'from'-side winding current, one entry per name in `terminal_map_from` and in that order. The bounded quantity is the winding current of that side, in that side's own amperes: it is never referred through the turns ratio, and each side states its own array. Position k bounds the current of winding conductor k, which for a WYE winding is the current in the conductor between bus terminal k and the winding, and for a DELTA winding is the current in coil k, which is not the terminal conductor current. An entry against a neutral terminal bounds the conductor carrying the winding's return current, and for `center_tap` the entry against the centre terminal bounds the centre-tap current, the negated sum of the two leg currents. The constraint is a magnitude circle on the complex winding current, so one entry bounds both of its components."
+          },
+          "i_max_to": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] of the 'to'-side winding current, one entry per name in `terminal_map_to` and in that order. The bounded quantity is the winding current of that side, in that side's own amperes: it is never referred through the turns ratio, and each side states its own array. Position k bounds the current of winding conductor k, which for a WYE winding is the current in the conductor between bus terminal k and the winding, and for a DELTA winding is the current in coil k, which is not the terminal conductor current. An entry against a neutral terminal bounds the conductor carrying the winding's return current, and for `center_tap` the entry against the centre terminal bounds the centre-tap current, the negated sum of the two leg currents. The constraint is a magnitude circle on the complex winding current, so one entry bounds both of its components."
+          },
+          "tap_ratio": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 1.0,
+            "description": "Off-nominal ratio multiplier on the nameplate turns ratio N = v_nom_from / v_nom_to, so the effective ratio is tap_ratio * N and the ideal winding pair relates the coil voltages by that product. Default 1.0, and the start value when the ratio is a free variable. The regulator subtypes state a `voltage_ratio` instead, which runs the other way."
+          },
+          "tap_ratio_min": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Lower bound on `tap_ratio`. With `tap_ratio_min` strictly below `tap_ratio_max` the ratio is a free variable of the optimisation; otherwise it is fixed at `tap_ratio`."
+          },
+          "tap_ratio_max": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Upper bound on `tap_ratio`; see `tap_ratio_min`."
+          },
+          "r_neutral_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding resistance [Ohm] of the 'from' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
+          },
+          "x_neutral_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding reactance [Ohm] of the 'from'-side winding's own neutral; see `r_neutral_from`."
+          },
+          "r_neutral_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding resistance [Ohm] of the 'to' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
+          },
+          "x_neutral_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding reactance [Ohm] of the 'to'-side winding's own neutral; see `r_neutral_to`."
+          },
+          "g_no_load": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "No-load core-loss shunt conductance [S], stamped across the 'from'-side winding."
+          },
+          "b_no_load": {
+            "type": "number",
+            "description": "No-load magnetising shunt susceptance [S], stamped across the 'from'-side winding. Negative for a lagging magnetising current."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "bus_from",
+          "bus_to",
+          "terminal_map_from",
+          "terminal_map_to",
+          "s_rating",
+          "v_nom_from",
+          "v_nom_to"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "three_phase_transformer": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "s_rating": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Transformer power base [VA]"
+          },
+          "r_series": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Transformer series resistance, defined on the wye-side winding [Ohm]"
+          },
+          "x_series": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Transformer series reactance, defined on the wye-side winding [Ohm]"
+          },
+          "i_max_from": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] of the 'from'-side winding current, one entry per name in `terminal_map_from` and in that order. The bounded quantity is the winding current of that side, in that side's own amperes: it is never referred through the turns ratio, and each side states its own array. Position k bounds the current of winding conductor k, which for a WYE winding is the current in the conductor between bus terminal k and the winding, and for a DELTA winding is the current in coil k, which is not the terminal conductor current. An entry against a neutral terminal bounds the conductor carrying the winding's return current, and for `center_tap` the entry against the centre terminal bounds the centre-tap current, the negated sum of the two leg currents. The constraint is a magnitude circle on the complex winding current, so one entry bounds both of its components."
+          },
+          "i_max_to": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] of the 'to'-side winding current, one entry per name in `terminal_map_to` and in that order. The bounded quantity is the winding current of that side, in that side's own amperes: it is never referred through the turns ratio, and each side states its own array. Position k bounds the current of winding conductor k, which for a WYE winding is the current in the conductor between bus terminal k and the winding, and for a DELTA winding is the current in coil k, which is not the terminal conductor current. An entry against a neutral terminal bounds the conductor carrying the winding's return current, and for `center_tap` the entry against the centre terminal bounds the centre-tap current, the negated sum of the two leg currents. The constraint is a magnitude circle on the complex winding current, so one entry bounds both of its components."
+          },
+          "bus_from": {
+            "type": "string",
+            "description": "'from' bus for the element"
+          },
+          "bus_to": {
+            "type": "string",
+            "description": "'to' bus for the element"
+          },
+          "terminal_map_to": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "terminal_map_from": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "v_nom_to": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Nominal phase-to-phase voltage of the 'to'-side winding [V]"
+          },
+          "v_nom_from": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Nominal phase-to-phase voltage of the 'from'-side winding [V]"
+          },
+          "tap_ratio": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 1.0,
+            "description": "Off-nominal ratio multiplier on the nameplate turns ratio N = v_nom_from / v_nom_to, so the effective ratio is tap_ratio * N and the ideal winding pair relates the coil voltages by that product. Default 1.0, and the start value when the ratio is a free variable. The regulator subtypes state a `voltage_ratio` instead, which runs the other way."
+          },
+          "tap_ratio_min": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Lower bound on `tap_ratio`. With `tap_ratio_min` strictly below `tap_ratio_max` the ratio is a free variable of the optimisation; otherwise it is fixed at `tap_ratio`."
+          },
+          "tap_ratio_max": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Upper bound on `tap_ratio`; see `tap_ratio_min`."
+          },
+          "r_neutral_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding resistance [Ohm] of the 'from' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
+          },
+          "x_neutral_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding reactance [Ohm] of the 'from'-side winding's own neutral; see `r_neutral_from`."
+          },
+          "r_neutral_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding resistance [Ohm] of the 'to' winding's own neutral. Absence of both neutral impedance fields adds no internal grounding branch. Explicitly zero impedance grounds that winding neutral solidly. External bus grounding remains separate."
+          },
+          "x_neutral_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Grounding reactance [Ohm] of the 'to'-side winding's own neutral; see `r_neutral_to`."
+          },
+          "g_no_load": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "No-load core-loss shunt conductance [S], stamped across the 'from'-side winding."
+          },
+          "b_no_load": {
+            "type": "number",
+            "description": "No-load magnetising shunt susceptance [S], stamped across the 'from'-side winding. Negative for a lagging magnetising current."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "bus_from",
+          "bus_to",
+          "terminal_map_from",
+          "terminal_map_to",
+          "s_rating",
+          "v_nom_from",
+          "v_nom_to"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "inverter_topology_type": {
+      "type": "string",
+      "description": "Inverter topology: SINGLE_PHASE (2 terminals), THREE_LEG (3 terminals, no neutral current), FOUR_LEG (4 terminals, neutral current available)",
+      "enum": [
+        "SINGLE_PHASE",
+        "THREE_LEG",
+        "FOUR_LEG"
+      ]
+    },
+    "prime_mover_type": {
+      "type": "string",
+      "description": "Energy source behind the inverter: PV (non-negative, resource-limited active power), BATTERY (bidirectional), GENERIC, or STATCOM (no active source - pure reactive shunt compensator)",
+      "enum": [
+        "PV",
+        "BATTERY",
+        "GENERIC",
+        "STATCOM"
+      ]
+    },
+    "dc_pole_type": {
+      "type": "string",
+      "description": "DC terminal pole role: POSITIVE pole (v_dc > 0), NEGATIVE pole (v_dc < 0), or METALLIC_RETURN / midpoint (v_dc ~ 0)",
+      "enum": [
+        "POSITIVE",
+        "NEGATIVE",
+        "METALLIC_RETURN"
+      ]
+    },
+    "dc_control_type": {
+      "type": "string",
+      "description": "Converter DC-side control mode: P (constant power), V (DC-voltage master / slack), or DROOP (saturated V-P droop)",
+      "enum": [
+        "P",
+        "V",
+        "DROOP"
+      ]
+    },
+    "voltage_reference_type": {
+      "type": "string",
+      "description": "Voltage quantity monitored by a control law",
+      "enum": [
+        "PN_PER_PHASE",
+        "PP_PER_PHASE",
+        "PP_AVERAGED",
+        "PG_AVERAGED",
+        "PN_AVERAGED",
+        "PG_PER_PHASE"
+      ]
+    },
+    "q_ref_type": {
+      "type": "string",
+      "description": "Reactive-power limit reference: VAR_MAX (fixed Q limits) or VAR_AVAILABLE (limits scale with sqrt(s_max^2 - P^2))",
+      "enum": [
+        "VAR_MAX",
+        "VAR_AVAILABLE"
+      ]
+    },
+    "p_ref_type": {
+      "type": "string",
+      "description": "Base of a PU active-power limit: S_MAX (the inverter's per-phase `s_max`, the default), P_MAX (its per-phase `p_max`), or P_AVAILABLE (its `p_avail` shared equally across its phases).",
+      "enum": [
+        "P_AVAILABLE",
+        "P_MAX",
+        "S_MAX"
+      ],
+      "default": "S_MAX"
+    },
+    "q_unit_type": {
+      "type": "string",
+      "enum": [
+        "VAR",
+        "PU"
+      ],
+      "description": "Unit of reactive-power limits: VAR (vars per phase) or PU (per unit of the inverter's per-phase `s_max`)."
+    },
+    "p_unit_type": {
+      "type": "string",
+      "enum": [
+        "W",
+        "PU"
+      ],
+      "description": "Unit of active-power limits: W (watts per phase) or PU (per unit of the base `p_ref` names)."
+    },
+    "regulator_type": {
+      "type": "string",
+      "description": "ANSI C57.15 step-voltage-regulator arrangement. A: the shunt winding is across the source side, so core excitation follows the source voltage and the series winding sits on the regulated side. B (the usual arrangement): the shunt winding is across the regulated side, so excitation is constant and the series winding sits on the source side. It records the hardware, which affects how a physical tap position maps to a ratio. It does not change what `voltage_ratio` means.",
+      "enum": [
+        "A",
+        "B"
+      ]
+    },
+    "open_delta_connection_type": {
+      "type": "string",
+      "description": "Open-delta phase-pair wiring (GridLAB-D convention): which two line-to-line pairs carry a regulating winding",
+      "enum": [
+        "ABBC",
+        "BCAC",
+        "CABA"
+      ]
+    },
+    "transformer_winding": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One winding of an n-winding transformer.",
+      "properties": {
+        "bus": {
+          "$ref": "#/$defs/bus_type",
+          "description": "Bus this winding connects to"
+        },
+        "terminal_map": {
+          "$ref": "#/$defs/terminal_map_type",
+          "description": "Mapping of this winding's terminals to the bus terminals"
+        },
+        "v_nom": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Winding reference (nominal) coil voltage [V]: line-to-neutral for a WYE winding, line-to-line for a DELTA winding"
+        },
+        "configuration": {
+          "$ref": "#/$defs/configuration_type",
+          "enum": [
+            "WYE",
+            "DELTA"
+          ],
+          "description": "Winding configuration, WYE or DELTA"
+        },
+        "r_winding": {
+          "$ref": "#/$defs/nonnegative_number",
+          "description": "Winding series resistance [Ohm] on this winding's own coil base (n_ph*v_nom^2/s_rating)"
+        },
+        "delta_roll": {
+          "type": "integer",
+          "enum": [
+            1,
+            -1
+          ],
+          "description": "DELTA only: coil rotation / vector-group sense. +1 connects coil k across phases k->k+1, -1 across k->k-1 (OpenDSS's standard delta). Ignored for WYE."
+        },
+        "i_max": {
+          "$ref": "#/$defs/nonnegative_number",
+          "description": "Current-magnitude limit [A] applied to each phase coil current of this winding, referred to this winding's own voltage. A per-coil limit, not a per-terminal one: a DELTA winding's coil current is not its terminal current."
+        },
+        "s_rating": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Winding rating [VA]. Defaults to the transformer s_rating when absent; the transformer s_rating remains the common short-circuit base."
+        },
+        "tap_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1,
+          "description": "Dimensionless multiplier on this winding nominal coil voltage. Referred ideal coil voltages divide by v_nom * tap_ratio."
+        },
+        "tap_ratio_min": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Lower bound on this winding tap multiplier; a nonfixed interval requires a supported tap decision."
+        },
+        "tap_ratio_max": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Upper bound on this winding tap multiplier."
+        },
+        "r_neutral": {
+          "$ref": "#/$defs/nonnegative_number",
+          "description": "Winding-neutral-to-earth resistance [Ohm]. Absence of both neutral impedance fields adds no internal grounding branch; explicitly zero impedance gives solid grounding."
+        },
+        "x_neutral": {
+          "$ref": "#/$defs/nonnegative_number",
+          "description": "Winding-neutral-to-earth reactance [Ohm], non-negative; see r_neutral."
+        }
+      },
+      "required": [
+        "bus",
+        "terminal_map",
+        "v_nom",
+        "configuration"
+      ]
+    },
+    "time_series_ref": {
+      "type": "object",
+      "description": "Map from the name of a field of this element to the id of a `time_series` profile. The profile's values multiply the static value of that field, entry by entry over the profile's steps. Only a field this schema defines on this element may be named, and only a numeric one.",
+      "additionalProperties": {
+        "type": "string",
+        "description": "Id of an entry of the top-level `time_series` table"
+      }
+    },
+    "single_phase_autotransformer": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "s_rating": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Regulator power base [VA]"
+          },
+          "r_series_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Series-winding resistance referred to the 'from' side [Ohm]"
+          },
+          "x_series_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Series-winding reactance referred to the 'from' side [Ohm]"
+          },
+          "r_series_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Series resistance referred to the 'to' side [Ohm]"
+          },
+          "x_series_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Series reactance referred to the 'to' side [Ohm]"
+          },
+          "g_no_load": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "No-load (core-loss) conductance at the 'from' terminals [S]"
+          },
+          "b_no_load": {
+            "type": "number",
+            "description": "No-load (magnetising) susceptance at the 'from' terminals [S]"
+          },
+          "bus_from": {
+            "type": "string",
+            "description": "'from' (source-side) bus"
+          },
+          "bus_to": {
+            "type": "string",
+            "description": "'to' (regulated-side) bus"
+          },
+          "terminal_map_to": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "terminal_map_from": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "voltage_ratio": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 1.0,
+            "description": "Regulated-side voltage over source-side voltage (`bus_to` over `bus_from`) of the ideal regulator, e.g. in [0.9, 1.1]; above 1 raises the voltage. Named apart from the transformers' `tap_ratio`, which multiplies the from-side ratio and so moves the to-side voltage the other way. Its meaning does not depend on `regulator_type`. The start value when free."
+          },
+          "voltage_ratio_min": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Lower bound on `voltage_ratio`. With `voltage_ratio_min` strictly below `voltage_ratio_max` the ratio is a free variable of the optimisation; otherwise it is fixed at `voltage_ratio`."
+          },
+          "voltage_ratio_max": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Upper bound on `voltage_ratio`; see `voltage_ratio_min`."
+          },
+          "regulator_type": {
+            "$ref": "#/$defs/regulator_type"
+          },
+          "i_max_from": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] on each conductor of the 'from' side, one entry per name in `terminal_map_from` and in that order, on the conductor between the bus terminal and the regulator and referred to that side."
+          },
+          "i_max_to": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] on each conductor of the 'to' side, one entry per name in `terminal_map_to` and in that order, on the conductor between the bus terminal and the regulator and referred to that side."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "bus_from",
+          "bus_to",
+          "terminal_map_from",
+          "terminal_map_to"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "open_delta_regulator": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "s_rating": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Regulator bank power base [VA]"
+          },
+          "r_series_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Per-regulator series-winding resistance referred to the 'from' side [Ohm]"
+          },
+          "x_series_from": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Per-regulator series-winding reactance referred to the 'from' side [Ohm]"
+          },
+          "r_series_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Per-regulator series resistance referred to the 'to' side [Ohm]"
+          },
+          "x_series_to": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Per-regulator series reactance referred to the 'to' side [Ohm]"
+          },
+          "g_no_load": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "Per-regulator no-load conductance [S]"
+          },
+          "b_no_load": {
+            "type": "number",
+            "description": "Per-regulator no-load susceptance [S]"
+          },
+          "bus_from": {
+            "type": "string",
+            "description": "'from' (source-side) bus"
+          },
+          "bus_to": {
+            "type": "string",
+            "description": "'to' (regulated-side) bus"
+          },
+          "terminal_map_to": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "terminal_map_from": {
+            "$ref": "#/$defs/terminal_map_type"
+          },
+          "connection": {
+            "$ref": "#/$defs/open_delta_connection_type"
+          },
+          "voltage_ratio": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Voltage ratios [a1, a2] of the two regulators, each the regulated-side over source-side voltage of its leg, as `single_phase_autotransformer.voltage_ratio`. Start values when free.",
+            "default": [
+              1.0,
+              1.0
+            ]
+          },
+          "voltage_ratio_min": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Per-regulator lower bounds on `voltage_ratio`; see `single_phase_autotransformer.voltage_ratio_min`."
+          },
+          "voltage_ratio_max": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Per-regulator upper bounds on `voltage_ratio`."
+          },
+          "regulator_type": {
+            "$ref": "#/$defs/regulator_type"
+          },
+          "i_max_from": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] on each conductor of the 'from' side, one entry per name in `terminal_map_from` and in that order, on the conductor between the bus terminal and the regulator and referred to that side."
+          },
+          "i_max_to": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/nonnegative_number"
+            },
+            "description": "Current-magnitude limit [A] on each conductor of the 'to' side, one entry per name in `terminal_map_to` and in that order, on the conductor between the bus terminal and the regulator and referred to that side."
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "bus_from",
+          "bus_to",
+          "terminal_map_from",
+          "terminal_map_to",
+          "connection"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "n_winding_transformer": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "windings": {
+            "type": "array",
+            "description": "Ordered list of two or more windings; winding 1 is the reference.",
+            "minItems": 2,
+            "items": {
+              "$ref": "#/$defs/transformer_winding"
+            }
+          },
+          "x_sc": {
+            "type": "object",
+            "description": "Pairwise short-circuit reactances [Ohm], keyed \"i_j\" with i<j (1-based winding indices), all referred to winding 1's voltage base.",
+            "patternProperties": {
+              "^[0-9]+_[0-9]+$": {
+                "$ref": "#/$defs/nonnegative_number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "s_rating": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Transformer power base [VA]"
+          },
+          "g_no_load": {
+            "$ref": "#/$defs/nonnegative_number",
+            "description": "No-load (core-loss) shunt conductance [S], referenced at winding 1"
+          },
+          "b_no_load": {
+            "type": "number",
+            "description": "No-load (magnetising) shunt susceptance [S], referenced at winding 1"
+          },
+          "time_series": {
+            "$ref": "#/$defs/time_series_ref"
+          },
+          "no_load_shunt": {
+            "$ref": "#/$defs/transformer_no_load_shunt"
+          },
+          "geo": {
+            "$ref": "#/$defs/geojson_point_or_line_string",
+            "description": "Where the transformer is, as a GeoJSON Point for its site or a LineString from its first bus to its last, in the coordinate reference system `meta.crs` names (WGS84 longitude/latitude when absent). Optional and descriptive only: no calculation reads it."
+          }
+        },
+        "required": [
+          "windings",
+          "x_sc",
+          "s_rating"
+        ],
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "no_load_shunt"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "g_no_load"
+                  ]
+                },
+                {
+                  "required": [
+                    "b_no_load"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "transformer_no_load_shunt": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Explicit terminal-coil no-load admittance. Each coil of the selected physical winding receives this admittance, in siemens, at the stated operating tap. The object is mutually exclusive with g_no_load and b_no_load.",
+      "properties": {
+        "winding": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "One-based physical winding index. Two-winding subtypes use 1=from, 2=to. A center tap uses 1=from, 2=first to terminal to centre, 3=centre to last to terminal. An n_winding transformer uses its windings array order."
+        },
+        "g": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Conductance per coil [S], giving real loss g*abs(u)^2 for coil voltage u."
+        },
+        "b": {
+          "type": "number",
+          "description": "Susceptance per coil [S]; negative for lagging magnetizing current. Consumed reactive power is -b*abs(u)^2."
+        }
+      },
+      "required": [
+        "winding",
+        "g",
+        "b"
+      ]
+    },
+    "geojson_position": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": {
+        "type": "number"
+      },
+      "description": "A GeoJSON position (RFC 7946 section 3.1.1): `[x, y]` or `[x, y, z]`. In the WGS84 default `x` is longitude and `y` is latitude, in decimal degrees; a projected `meta.crs` makes them easting and northing in that system's units."
+    },
+    "geojson_point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "coordinates"
+      ],
+      "properties": {
+        "type": {
+          "const": "Point"
+        },
+        "coordinates": {
+          "$ref": "#/$defs/geojson_position"
+        },
+        "bbox": {
+          "$ref": "#/$defs/geojson_bbox"
+        }
+      },
+      "description": "A GeoJSON Point geometry object (RFC 7946 section 3.1.2)."
+    },
+    "geojson_line_string": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "coordinates"
+      ],
+      "properties": {
+        "type": {
+          "const": "LineString"
+        },
+        "coordinates": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/geojson_position"
+          }
+        },
+        "bbox": {
+          "$ref": "#/$defs/geojson_bbox"
+        }
+      },
+      "description": "A GeoJSON LineString geometry object (RFC 7946 section 3.1.4) with at least two positions. On a branch element it runs from the element's first bus through any bends to its last."
+    },
+    "geojson_bbox": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "anyOf": [
+        {
+          "minItems": 4,
+          "maxItems": 4
+        },
+        {
+          "minItems": 6,
+          "maxItems": 6
+        }
+      ],
+      "description": "Optional GeoJSON bounding box (RFC 7946 section 5): [west, south, east, north], or with a third dimension [west, south, low, east, north, high], in the document's coordinate order. A box crossing the antimeridian has west greater than east."
+    },
+    "geojson_point_or_line_string": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/geojson_point"
+        },
+        {
+          "$ref": "#/$defs/geojson_line_string"
+        }
+      ],
+      "description": "A GeoJSON Point (the element's site) or LineString (its route between its buses)."
+    }
+  },
+  "description": "BMOPF 0.2.0 network data contract. A document states the release it was written against in `meta.schema_version`; this schema accepts every 0.2.x release number. The `$id` names these exact bytes."
+}

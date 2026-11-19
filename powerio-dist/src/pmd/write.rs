@@ -372,58 +372,19 @@ fn all_terminal_names(net: &MulticonductorNetwork) -> impl Iterator<Item = &str>
 /// Rows shorter than the row count read as 0, so a degenerate model matrix
 /// emits a square block instead of panicking.
 /// The susceptance matrix of one rated capacitor bank over its own
-/// conductors, siemens: the nameplate reactive power at the nameplate
-/// voltage, the same equivalence the multiconductor admittance builder
-/// stamps. Wye nameplate voltage is line to line with the neutral mapped
-/// last; delta couples successive phase pairs; single phase spans its two
-/// terminals.
+/// conductors, siemens: the one capacitor stamp
+/// ([`crate::calc_capacitor_susceptance`]), the same the multiconductor
+/// admittance builder stamps.
 pub(super) fn capacitor_susceptance(
+    net: &MulticonductorNetwork,
     c: &crate::model::DistCapacitor,
 ) -> std::result::Result<ConductorMatrix, String> {
-    let finite_positive = |v: f64| v.is_finite() && v > 0.0;
-    if !finite_positive(c.v_nom) || !c.q_rated.is_finite() {
-        return Err("nameplate q_rated or v_nom is missing or nonpositive".into());
-    }
-    let n = c.terminal_map.len();
-    let mut bs = vec![vec![0.0; n]; n];
-    let mut couple = |a: usize, b: usize, y: f64| {
-        bs[a][a] += y;
-        bs[b][b] += y;
-        bs[a][b] -= y;
-        bs[b][a] -= y;
-    };
-    match c.configuration {
-        crate::model::Configuration::SinglePhase => {
-            if n != 2 {
-                return Err(format!("single phase bank maps {n} terminals"));
-            }
-            couple(0, 1, c.q_rated / (c.v_nom * c.v_nom));
-        }
-        crate::model::Configuration::Wye => {
-            let phases = n.saturating_sub(1);
-            if phases == 0 {
-                return Err("wye bank maps no phase terminal".into());
-            }
-            let v_ln = c.v_nom / 3f64.sqrt();
-            let b = c.q_rated / (phases as f64) / (v_ln * v_ln);
-            for phase in 0..phases {
-                couple(phase, phases, b);
-            }
-        }
-        crate::model::Configuration::Delta => {
-            if n < 2 {
-                return Err(format!("delta bank maps {n} terminals"));
-            }
-            // Two terminals form one phase-to-phase leg, not two; divide the
-            // rated power by the legs actually stamped.
-            let loops = if n == 2 { 1 } else { n };
-            let b = c.q_rated / (loops as f64) / (c.v_nom * c.v_nom);
-            for pair in 0..loops {
-                couple(pair, (pair + 1) % n, b);
-            }
-        }
-    }
-    Ok(bs)
+    crate::calc_capacitor_susceptance(net, c)?.ok_or_else(|| {
+        format!(
+            "{:?} capacitor bank has no capacitor connection",
+            c.configuration
+        )
+    })
 }
 
 pub(super) fn matrix(m: &ConductorMatrix) -> Value {
@@ -663,7 +624,7 @@ impl Writer {
             o.insert("grounded".into(), json!(grounded));
             o.insert("status".into(), Self::status(&b.extras));
             self.bus_coordinates(&mut o, b, net);
-            let phase_indices = b.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+            let phase_indices = b.phase_indices(net.terminal_conventions());
             for (key, scalar, phases, default) in [
                 ("vm_lb", b.v_min, &b.v_min_phase, 0.0),
                 ("vm_ub", b.v_max, &b.v_max_phase, f64::INFINITY),
@@ -1198,7 +1159,7 @@ impl Writer {
         let mut capacitor_shunts = Map::new();
         for c in net.capacitors() {
             let what = format!("capacitor {}", c.name);
-            match capacitor_susceptance(c) {
+            match capacitor_susceptance(net, c) {
                 Ok(bs) => {
                     let n = bs.len();
                     let mut o = Map::new();

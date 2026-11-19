@@ -52,6 +52,7 @@ pub mod contingency;
 pub mod dc;
 pub mod diagnostics;
 pub mod dynamic;
+pub mod dynamic_models;
 pub mod error;
 pub mod format;
 pub mod gen_cost;
@@ -60,10 +61,21 @@ pub mod hvdc;
 pub mod indexed;
 pub mod islands;
 pub mod lcc;
+pub mod load_voltage;
 pub mod merge;
 pub mod network;
 mod normalize;
 mod operations;
+pub mod pi_model;
+mod thermal_limit;
+/// The scalar electrical formulas both network families share, which live
+/// in powerio-core ([`electrical::calc_impedance_base`], the power factor
+/// relations and the voltage power law term).
+pub use powerio_core::electrical;
+/// The workspace's one union-find and component labeling, which lives in
+/// powerio-core: [`union_find::UnionFind`] and
+/// [`union_find::calc_component_labels`].
+pub use powerio_core::union_find;
 #[doc(hidden)]
 pub mod version;
 
@@ -77,6 +89,10 @@ pub mod __internal {
 
     #[doc(hidden)]
     pub use crate::format::goc3::{Goc3Document, Goc3Record, parse_goc3_instance_network};
+    #[doc(hidden)]
+    pub use crate::format::pandapower::{
+        DataFrame, MAX_I_KA, Row, has_three_phase_tables, network_object, read_bus_geo, read_frame,
+    };
 
     use crate::{BalancedNetwork, Generator, Load, OmittedFieldName};
 
@@ -114,7 +130,7 @@ pub use contingency::{
     SubsystemSelector, SubsystemSet, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason,
     UnresolvedReason,
 };
-pub use dc::BranchSusceptanceFormula;
+pub use dc::{BranchSusceptanceFormula, DcBranchColumn};
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};
 pub use format::routing::{
@@ -127,6 +143,7 @@ pub use format::{
     EmitOptions, PwdDisplay, PwdSubstation, SOURCE_FORMAT_NAMES, TargetFormat, emit,
     emit_with_options, parse, parse_format_id, parse_target_format,
 };
+pub use pi_model::PiModel;
 
 #[doc(hidden)]
 pub use format::{
@@ -140,9 +157,15 @@ pub use geo::{
     to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 pub use hvdc::{HvdcInjections, HvdcTerminalInjection, HvdcTerminalPowers, HvdcTreatment};
-pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
-pub use islands::{Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport};
+pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork, calc_dense_island_labels};
+pub use islands::{
+    DeEnergizedIsland, Island, IslandPartition, IslandReferencePolicy, IslandReferenceReport,
+};
 pub use lcc::{LccConverterState, LccOperatingPoint};
+pub use load_voltage::{
+    LOAD_VOLTAGE_RATIO_FLOOR, LoadPowerAtVoltage, LoadVoltageError, LoadVoltageTerm,
+    calc_load_nominal_voltage,
+};
 pub use merge::{
     BusGroup, BusMerge, BusMergeRule, MergeSurvivor, MergedCharging, MergedFlows,
     PSSE_DEFAULT_ZERO_IMPEDANCE_THRESHOLD, RemovalReason, RemovedBranch, RemovedFlow,
@@ -160,18 +183,19 @@ pub use network::{
     ImpedanceCorrection, ImpedanceCorrectionPoint, ImpedanceCorrectionVariable, InternalConnection,
     Junction, LineCommutatedConverter, LineCommutatedConverterOperatingMode,
     LineCommutatedConverterReactiveModel, Load, LoadVoltageModel, LoadingLimits,
-    MinMaxReactiveLimits, OmittedField, OmittedFieldName, OperationalLimitGroup,
-    ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits, Shunt, ShuntBlock,
-    SolverParams, SourceFormat, StaticVarCompensator, StaticVarCompensatorRegulationMode, Storage,
-    Subnetwork, Substation, Switch, SwitchKind, SwitchedShuntControl, SwitchedShuntMode,
-    TapChanger, TapChangerKind, TapChangerRegulationMode, TapChangerStep, TemporaryLimit, Terminal,
-    TerminalReference, TieLine, TopologyEndpoint, TopologyKind, TopologySwitch, Transformer3W,
-    TransformerControl, TransformerControlMode, VoltageLevel, VoltageSourceConverter, Winding,
-    calc_series_admittance_of, repair_values,
+    MagnetizingConnection, MinMaxReactiveLimits, OmittedField, OmittedFieldName,
+    OperationalLimitGroup, ReactiveCapabilityCurve, ReactiveCapabilityCurvePoint, ReactiveLimits,
+    Shunt, ShuntBlock, SolverParams, SourceFormat, StaticVarCompensator,
+    StaticVarCompensatorRegulationMode, Storage, Subnetwork, Substation, Switch, SwitchKind,
+    SwitchedShuntControl, SwitchedShuntMode, TapChanger, TapChangerKind, TapChangerRegulationMode,
+    TapChangerStep, TemporaryLimit, Terminal, TerminalReference, TieLine, TopologyEndpoint,
+    TopologyKind, TopologySwitch, Transformer3W, TransformerControl, TransformerControlMode,
+    VoltageLevel, VoltageSourceConverter, Winding, calc_series_admittance_of, repair_values,
 };
 pub use normalize::{
     AngleDifferenceBounds, ClosedSwitchPolicy, NormalizeOptions, NormalizeReport,
     NormalizeSettings, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
-    correct_angle_difference_bounds, stated_angle_difference_bounds,
+    correct_angle_difference_bounds, correct_angle_difference_bounds_with_pad,
+    stated_angle_difference_bounds,
 };
 pub use operations::{BusSubset, Selector, ZeroImpedanceReduction};

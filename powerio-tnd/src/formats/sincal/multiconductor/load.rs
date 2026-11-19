@@ -214,7 +214,10 @@ fn power_input(row: &Row<'_>, mode: i64) -> Result<PowerInput> {
                 factored(row, "P", "fP")? / pf
             };
             let p = finite(apparent * pf, "load active power")?;
-            let q = finite(apparent * (1.0 - pf * pf).sqrt(), "load reactive power")?;
+            let q = finite(
+                apparent * powerio_core::electrical::calc_power_factor_sine(pf),
+                "load reactive power",
+            )?;
             Ok(PowerInput::Total { p, q })
         }
         13 => Ok(PowerInput::Wye {

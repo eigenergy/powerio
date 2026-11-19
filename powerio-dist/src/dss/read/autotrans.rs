@@ -203,8 +203,8 @@ fn parameters(
     if winding[0].kv <= winding[1].kv || x.iter().any(|x| !x.is_finite()) {
         return Err("requires finite leakage and HV greater than LV".into());
     }
-    let vs = (winding[0].kv - winding[1].kv) / 3.0_f64.sqrt();
-    let vc = winding[1].kv / 3.0_f64.sqrt();
+    let vs = crate::electrical::calc_wye_phase_voltage(winding[0].kv - winding[1].kv);
+    let vc = crate::electrical::calc_wye_phase_voltage(winding[1].kv);
     let f = (1.0 + vc / vs).powi(2);
     if winding.len() == 3 {
         let extra = (f - 1.0) * (winding[0].r + winding[1].r) / 2.0;

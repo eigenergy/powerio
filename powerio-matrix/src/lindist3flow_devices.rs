@@ -1,7 +1,5 @@
 //! Device, objective, and nodal-balance preparation for LinDist3Flow.
 
-use std::collections::BTreeMap;
-
 use num_complex::Complex64;
 use powerio_dist::{Configuration, DistLoad, DistLoadVoltageModel};
 use powerio_prob::{LinDist3FlowOpfInstance, ObjectiveTerm};
@@ -159,10 +157,6 @@ fn invalid(reason: impl Into<String>) -> Error {
     }
 }
 
-fn node_key(bus: &str, terminal: &str) -> (String, String) {
-    (bus.to_ascii_lowercase(), terminal.to_owned())
-}
-
 /// Build the physical-channel incidence matrix for a typed connection.
 ///
 /// # Errors
@@ -173,34 +167,34 @@ pub fn lindist3flow_connection_incidence(
     terminal_count: usize,
     channel_count: usize,
 ) -> Result<Vec<Vec<f64>>> {
-    match configuration {
-        Configuration::SinglePhase | Configuration::Delta
-            if terminal_count == 2 && channel_count == 1 =>
-        {
-            Ok(vec![vec![1.0, -1.0]])
-        }
-        Configuration::Wye | Configuration::SinglePhase if terminal_count == channel_count => {
-            Ok((0..terminal_count)
-                .map(|row| {
-                    (0..terminal_count)
-                        .map(|column| f64::from(row == column))
-                        .collect()
-                })
-                .collect())
-        }
-        Configuration::Delta if terminal_count == 3 && channel_count == 3 => Ok(vec![
-            vec![1.0, -1.0, 0.0],
-            vec![0.0, 1.0, -1.0],
-            vec![-1.0, 0.0, 1.0],
-        ]),
-        _ => Err(invalid(format!(
+    let carried =
+        powerio_dist::lindist3flow_carries_connection(configuration, terminal_count, channel_count);
+    let unsupported = || {
+        invalid(format!(
             "{configuration:?} connection with {terminal_count} terminals and {channel_count} channels is unsupported"
-        ))),
+        ))
+    };
+    if !carried {
+        return Err(unsupported());
     }
+    let channels =
+        powerio_dist::calc_connection_channels(configuration, terminal_count, channel_count, None)
+            .map_err(|_| unsupported())?;
+    Ok(channels
+        .iter()
+        .map(|channel| {
+            let mut row = vec![0.0; terminal_count];
+            row[channel.from] = 1.0;
+            if let Some(to) = channel.to {
+                row[to] = -1.0;
+            }
+            row
+        })
+        .collect())
 }
 
 fn resolve_nodes(
-    positions: &BTreeMap<(String, String), usize>,
+    positions: &powerio_dist::MulticonductorTerminalIndex,
     bus: &str,
     terminals: &[String],
     family: &str,
@@ -209,14 +203,11 @@ fn resolve_nodes(
     terminals
         .iter()
         .map(|terminal| {
-            positions
-                .get(&node_key(bus, terminal))
-                .copied()
-                .ok_or_else(|| {
-                    invalid(format!(
-                        "{family} `{name}` names unknown terminal `{bus}/{terminal}`"
-                    ))
-                })
+            positions.resolve(bus, terminal).ok_or_else(|| {
+                invalid(format!(
+                    "{family} `{name}` names unknown terminal `{bus}/{terminal}`"
+                ))
+            })
         })
         .collect()
 }
@@ -351,13 +342,13 @@ fn load_channel_power(
     Ok(LinDist3FlowComplexAffinePower {
         active: global_affine(
             p_nom * alpha_p,
-            p_nom * alpha_z / v_nom.powi(2),
+            powerio_core::electrical::calc_rated_admittance(p_nom * alpha_z, v_nom),
             &winding,
             terminal_nodes,
         ),
         reactive: global_affine(
             q_nom * beta_p,
-            q_nom * beta_z / v_nom.powi(2),
+            powerio_core::electrical::calc_rated_admittance(q_nom * beta_z, v_nom),
             &winding,
             terminal_nodes,
         ),
@@ -555,12 +546,14 @@ pub fn build_lindist3flow_device_data(
     network_data: &LinDist3FlowNetworkData,
 ) -> Result<LinDist3FlowDeviceData> {
     let network = instance.network();
-    let positions = network_data
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(position, node)| (node_key(&node.node.bus, &node.node.terminal), position))
-        .collect::<BTreeMap<_, _>>();
+    // The network data's nodes are powerio-dist's flat terminal index.
+    let positions = powerio_dist::MulticonductorTerminalIndex::build(network)
+        .map_err(|error| invalid(error.to_string()))?;
+    if positions.len() != network_data.nodes.len() {
+        return Err(invalid(
+            "the network data does not index this instance's terminals".to_owned(),
+        ));
+    }
     let dispatch_cost = uses_dispatch_cost(instance)?;
 
     let mut loads = Vec::with_capacity(network.loads().len());

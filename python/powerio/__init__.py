@@ -17,8 +17,8 @@ and whose ``diagnostics`` record what the parser found::
 
 A PyPSA CSV directory parses to a network or a time series, depending on its
 declared snapshots and supported series files. A time series keeps its
-snapshot axis even when the values are identical. NetCDF and HDF5 are tracked
-in https://github.com/eigenergy/powerio/issues/107.
+snapshot axis even when the values are identical. Optional ``powerio[pypsa-files]``
+transports carry this electrical profile through PyPSA NetCDF and HDF5 files.
 
 A source that defines a calculation parses to that calculation's typed value.
 Use ``isinstance(module.value, ...)`` to branch on the result type.
@@ -83,7 +83,8 @@ from ._powerio import (
     UpdateReport,
     __version__,
 )
-from ._sincal import SincalBalancedReadOptions
+from ._sincal import SincalBalancedReadOptions, _native_selections
+from .collection import Collection, CollectionResult
 
 __all__ = [
     "AcOpfInstance",
@@ -100,6 +101,8 @@ __all__ = [
     "BalancedNetwork",
     "BusMerge",
     "CalculationUpdate",
+    "Collection",
+    "CollectionResult",
     "ComponentId",
     "ContingencySet",
     "DcOpfInstance",
@@ -107,7 +110,6 @@ __all__ = [
     "DcPfInstance",
     "DcPfSolution",
     "Diagnostic",
-    "DisplayData",
     "EmitResult",
     "FormatInfo",
     "GeoLayer",
@@ -128,8 +130,6 @@ __all__ = [
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
-    "PwdDisplay",
-    "PwdSubstation",
     "ReactivePower",
     "Residuals",
     "Scenario",
@@ -174,7 +174,6 @@ __all__ = [
     "features",
     "from_ppc",
     "parse",
-    "parse_display",
     "parse_geo",
     "resolve_format",
     "serialize",
@@ -229,22 +228,6 @@ format. It is not a promise for every concrete module value or a feature probe. 
 false value neither promises nor forbids a same format retained source echo.
 """
 
-DisplayData = namedtuple("DisplayData", ["kind", "data"])
-DisplayData.__doc__ = """Output of :func:`parse_display`.
-
-``kind`` names the display format. For PowerWorld PWD data,
-``kind == "powerworld"`` and
-``data`` is a :class:`PwdDisplay`.
-"""
-
-PwdDisplay = namedtuple(
-    "PwdDisplay", ["canvas_width", "canvas_height", "stamp", "substations"]
-)
-PwdDisplay.__doc__ = """Decoded PowerWorld ``.pwd`` display metadata."""
-
-PwdSubstation = namedtuple("PwdSubstation", ["number", "name", "x", "y"])
-PwdSubstation.__doc__ = """One decoded PowerWorld display substation."""
-
 def _require(module: str, extra: str):
     """Import ``module`` or raise a clear ImportError naming the extra to install."""
     try:
@@ -276,27 +259,6 @@ def _dc_angles(n_buses: int, voltage_angles):
             f"voltage_angles must be a one dimensional array of length {n_buses}"
         )
     return np, angles
-
-
-def _wrap_display(raw) -> DisplayData:
-    kind, payload = raw
-    if kind == "powerworld":
-        substations = [
-            PwdSubstation(
-                row["number"],
-                row["name"],
-                row["x"],
-                row["y"],
-            )
-            for row in payload["substations"]
-        ]
-        payload = PwdDisplay(
-            payload["canvas_width"],
-            payload["canvas_height"],
-            payload["stamp"],
-            substations,
-        )
-    return DisplayData(kind, payload)
 
 
 _BALANCED_DELEGATED_NAMES = frozenset(
@@ -808,7 +770,9 @@ class BalancedNetwork:
 
     def calc_ptdf(self, formula: str = "series_susceptance", solver: str = "auto"):
         """DC PTDF (m×n). ``formula`` is ``"series_susceptance"``,
-        ``"tap_adjusted_reactance"``, or ``"reactance_only"``.
+        ``"tap_adjusted_reactance"``, ``"reactance_only"``,
+        ``"tap_adjusted_series_susceptance"``, or
+        ``"series_susceptance_no_phase_shift"``.
 
         ``solver`` is ``"auto"``, ``"dense"``, or ``"sparse"``. ``"auto"``
         uses the dense factorization on small cases and the sparse Cholesky
@@ -942,6 +906,10 @@ class BalancedNetwork:
         ``gencost`` is present only when every generator carries cost data,
         because MATPOWER requires cost rows for all generators or none.
         :func:`from_ppc` reads the tables back.
+
+        Infinite branch ratings become PYPOWER's zero (no bound). A real
+        zero rating raises ``ValueError`` because those tables cannot state
+        a zero flow bound.
         """
         np = _require("numpy", "matrix")
         buses = self._inner.buses
@@ -999,6 +967,12 @@ class BalancedNetwork:
         ).reshape(len(gens), width)
 
         branches = self._inner.branches
+
+        def ppc_rating(rating):
+            if rating == 0.0:
+                raise ValueError("PYPOWER's zero means no bound; it cannot represent a zero branch rating")
+            return 0.0 if rating == float("inf") else rating
+
         branch = np.array(
             [
                 (
@@ -1007,9 +981,9 @@ class BalancedNetwork:
                     br["r"],
                     br["x"],
                     br["b"],
-                    br["rate_a"],
-                    br["rate_b"],
-                    br["rate_c"],
+                    ppc_rating(br["rate_a"]),
+                    ppc_rating(br["rate_b"]),
+                    ppc_rating(br["rate_c"]),
                     br["tap"],
                     br["shift"],
                     float(br["in_service"]),
@@ -1065,12 +1039,6 @@ class BalancedNetwork:
                     b=br["b"],
                 )
         return g
-
-
-@_guard
-def parse_display(path: Any, format: Optional[str] = None) -> DisplayData:
-    """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
-    return _wrap_display(_powerio.parse_display(str(path), format))
 
 
 @_guard
@@ -1210,7 +1178,12 @@ MulticonductorNetwork = dist.MulticonductorNetwork
 
 @_guard
 def versions() -> Any:
-    """Return the PowerIO release, sole IR identity, and BMOPF schema."""
+    """Return the PowerIO release, the PowerIO IR identity, and BMOPF schema.
+
+    ``powerio_ir`` is ``{"schema": "pio-ir", "version": <release>}``: the
+    release whose schema the documents this build writes follow.
+    ``bmopf_schema`` is the ``$id`` of the one BMOPF schema PowerIO writes.
+    """
     return _json.loads(_powerio.versions_json())
 
 
@@ -1905,6 +1878,29 @@ class PioModule:
         """The diagnostics stored on this module, in encounter order."""
         return list(self._inner.diagnostics)
 
+    @property
+    def extension_keys(self) -> list[str]:
+        """The namespaces of the extensions this module carries, sorted."""
+        return list(self._inner._extension_keys)
+
+    def extension(self, namespace: str) -> Any:
+        """The JSON value stored under ``namespace``, or ``None``.
+
+        Only that value is decoded; the module is not serialized.
+        """
+        text = self._inner._extension_json(namespace)
+        return None if text is None else _json.loads(text)
+
+    def with_extension(self, namespace: str, value: Any) -> "PioModule":
+        """A copy of this module carrying ``value`` under ``namespace``.
+
+        ``value`` must be JSON serializable. The copy keeps the typed value,
+        diagnostics, sources, and history without serializing them; an
+        extension already stored under ``namespace`` is replaced. The original
+        module is unchanged.
+        """
+        return PioModule(self._inner._with_extension_json(namespace, _json.dumps(value)))
+
     def to_balanced_report(self, base_mva: float = 100.0) -> Any:
         """Report whether a multiconductor network can become balanced."""
         return _json.loads(self._inner.lowering_readiness_json(base_mva))
@@ -2190,6 +2186,8 @@ def parse(
     sincal_balanced: Optional[SincalBalancedReadOptions] = None,
     acquisition_root: Optional[Any] = None,
     named_buffers: Optional[Mapping[str, bytes]] = None,
+    dss_max_include_bytes: Optional[int] = None,
+    dss_max_properties: Optional[int] = None,
 ) -> PioModule:
     """Parse a path, file object, or bytes-like source.
 
@@ -2199,22 +2197,35 @@ def parse(
     File companions stay beneath the file's parent,
     or an explicitly selected ``acquisition_root``. Memory sources use only
     ``named_buffers`` and never acquire companions from the filesystem.
+
+    ``dss_max_include_bytes`` and ``dss_max_properties`` raise two limits of
+    an OpenDSS read for a case too large for the defaults: the bytes it may
+    pull in through includes (64 MiB) and the property assignments and edit
+    records it may retain (4,194,304). They have no effect on other formats.
     """
-    balanced_selection = None
-    if sincal_balanced is not None:
-        if not isinstance(sincal_balanced, SincalBalancedReadOptions):
-            raise TypeError("sincal_balanced must be SincalBalancedReadOptions")
-        balanced_selection = (sincal_balanced.variant, sincal_balanced.snapshot_hours, sincal_balanced.acquired_tables)
-    selection = None
-    if sincal_multiconductor is not None:
-        if not isinstance(sincal_multiconductor, dist.SincalReadOptions):
-            raise TypeError("sincal_multiconductor must be dist.SincalReadOptions")
-        selection = (
-            sincal_multiconductor.variant,
-            sincal_multiconductor.snapshot_hours,
-            sincal_multiconductor.acquired_tables,
-            sincal_multiconductor.assume_inactive_source_controls,
-        )
+    dss_limits = None
+    for limit_name, limit in (("dss_max_include_bytes", dss_max_include_bytes), ("dss_max_properties", dss_max_properties)):
+        if limit is None:
+            continue
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError(f"{limit_name} must be an integer")
+        if limit < 0:
+            raise ValueError(f"{limit_name} must not be negative")
+        dss_limits = (dss_max_include_bytes, dss_max_properties)
+    from . import _sienna_files
+    if format is not None and format in _sienna_files.FORMATS:
+        if sincal_balanced is not None or sincal_multiconductor is not None:
+            raise ValueError("SINCAL options do not apply to Sienna bundles")
+        return _sienna_files.parse(source, format, name=name, acquisition_root=acquisition_root, named_buffers=named_buffers)
+    from . import _pypsa_files
+    binary_format = _pypsa_files.detect(source, format)
+    if binary_format is not None:
+        if named_buffers is not None or acquisition_root is not None or sincal_balanced is not None or sincal_multiconductor is not None:
+            raise ValueError("PyPSA binary containers are standalone sources")
+        if name is not None and _path_from_source(source) is not None:
+            raise ValueError("name is only valid for memory and file object sources")
+        return _pypsa_files.parse(source, binary_format, name=name)
+    balanced_selection, selection = _native_selections(sincal_balanced, sincal_multiconductor)
     path = _path_from_source(source)
     if path is not None:
         if name is not None:
@@ -2224,7 +2235,7 @@ def parse(
         root = _path_from_source(acquisition_root) if acquisition_root is not None else None
         if acquisition_root is not None and root is None:
             raise TypeError("acquisition_root must be a path")
-        return PioModule(_powerio._PioModule._parse_path(path, format, selection, root, balanced_selection))
+        return PioModule(_powerio._PioModule._parse_path(path, format, selection, root, balanced_selection, dss_limits))
     if acquisition_root is not None:
         raise ValueError("acquisition_root applies only to path sources")
     buffers = None
@@ -2237,7 +2248,7 @@ def parse(
                 raise TypeError("named_buffers must map relative names to bytes-like data")
             buffers.append((buffer_name, bytes(buffer_data)))
     data, source_name = _memory_from_source(source, name)
-    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format, selection, buffers, balanced_selection))
+    return PioModule(_powerio._PioModule._parse_memory(data, source_name, format, selection, buffers, balanced_selection, dss_limits))
 
 
 def _result_from_native(result: dict[str, Any]) -> EmitResult:
@@ -2293,6 +2304,14 @@ def _emit_to_destination(
 @_guard
 def emit(module: PioModule, format: str, destination: Optional[Any] = None) -> EmitResult:
     """Emit a module as one grid exchange format."""
+    from . import _sienna_files
+    if format is not None and format in _sienna_files.FORMATS:
+        return _sienna_files.emit(module, format, destination)
+    from . import _pypsa_files
+    if format in _pypsa_files.FORMATS:
+        if not isinstance(module, PioModule):
+            raise TypeError("module must be a PioModule")
+        return _pypsa_files.emit(module, format, destination)
     return _emit_to_destination(
         module,
         destination,

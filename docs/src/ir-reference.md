@@ -3,7 +3,7 @@
 This page lists every structural value type in the PowerIO IR, field by
 field: each field's type, unit, and sign convention, the invariant the
 deserializer or the constructors enforce, and what a reader uses when the
-field is absent. The generated schema at `docs/schema/pio-ir/2/0.11.8/schema.json`
+field is absent. The generated schema at `docs/schema/pio-ir/0.12.3/schema.json`
 is the machine form of the same definitions. To keep the two from drifting
 apart, `powerio/tests/ir_reference.rs` reads this page and checks in both
 directions that each table lists the same fields the schema defines for its
@@ -201,6 +201,12 @@ Schema definition: `ShuntBlock`.
 
 ### Branch
 
+Ratings use zero for a zero bound and `"Infinity"` for no bound in 0.12 JSON,
+using the same nonfinite spelling as other numeric fields. The reader converts
+zero ratings in 0.11 documents (integer version `2`) to infinity; it does not
+reinterpret zero in a 0.12 document. This also applies to winding and named
+ratings. The record shapes stay unchanged.
+
 Schema definition: `Branch`.
 
 | field | type | unit | sign | invariant | if absent |
@@ -211,9 +217,9 @@ Schema definition: `Branch`.
 | `x` | float | p.u. | | `r` and `x` not both zero when a matrix is built | required |
 | `b` | float | p.u. | positive is capacitive | total line charging; half at each end unless `charging` is present | required |
 | `charging` | `BranchCharging` or null | | | canonical per terminal admittance when present | null (derive from `b`) |
-| `rate_a` | float | MVA | | 0 is unrated | required |
-| `rate_b` | float | MVA | | 0 is unrated | required |
-| `rate_c` | float | MVA | | 0 is unrated | required |
+| `rate_a` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_b` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_c` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
 | `rating_sets` | array of `BranchRatingSet` | | | | `[]` |
 | `current_ratings` | `BranchCurrentRatings` or null | | | | null |
 | `tap` | float | ratio at the from side | | 0 means 1 (a line); otherwise positive | required |
@@ -258,7 +264,7 @@ Schema definition: `BranchRatingSet`.
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `name` | string | | | | required |
-| `rate_mva` | float | MVA | | | required |
+| `rate_mva` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
 
 Schema definition: `BranchCurrentRatings`.
 
@@ -461,13 +467,23 @@ Schema definitions: `Transformer3W/anyOf/0`, `PartialTransformer3WFields`.
 | `name` | string or null | | | | null |
 | `windings` | array of `Winding` | | | exactly three, in the order primary, secondary, tertiary | required |
 | `z` | array of `Impedance` | | | exactly three: `z12`, `z23`, `z31` | required |
-| `mag_g` | float | p.u. on the system base, at the star point | | | required |
-| `mag_b` | float | p.u. on the system base, at the star point | positive is capacitive | | required |
+| `mag_g` | float | p.u. on the system base | | connected where `magnetizing_connection` says | required |
+| `mag_b` | float | p.u. on the system base | positive is capacitive | connected where `magnetizing_connection` says | required |
+| `magnetizing_connection` | `"star_point"` or `"winding1_terminal"` | | | `winding1_terminal` connects the admittance from winding 1's bus to ground, outside its ratio | `"star_point"` |
 | `star_vm` | float | p.u. | | solved star point voltage | required |
 | `star_va` | float | degrees | | | required |
 | `in_service` | boolean | | | | required |
 | `uid` | string or null | | | unique within `transformers_3w` | assigned at serialization |
 | `extras` | object | | | | required |
+
+PSS/E connects `MAG1 + jMAG2` from winding 1's bus to ground, outside that
+winding's ratio, and its readers state `winding1_terminal`; IIDM and CGMES
+state each leg's admittance at the star point. The star lowering puts a
+`winding1_terminal` admittance on winding 1's branch as from side charging
+`Ym * tap1²`, which bus 1 sees as `Ym`, and a `star_point` one at the star
+bus. Every 0.11 document omits the field and states the star point. A writer
+whose format has only the other placement writes the value there and reports
+it with its `VALUE_SUBSTITUTED` code.
 
 Two `extras` entries carry per winding data, in winding order. Each is present
 only when it differs from its default. `winding_in_service` holds three
@@ -503,9 +519,9 @@ Schema definition: `Winding`.
 | `nominal_kv` | float | kV | | 0 defers to the terminal bus `base_kv` | required |
 | `tap` | float | ratio | | 1 is nominal (PSS/E `WINDV` with `CW = 1`) | required |
 | `shift` | float | degrees | as `Branch.shift` | | required |
-| `rate_a` | float | MVA | | 0 is unrated | required |
-| `rate_b` | float | MVA | | | required |
-| `rate_c` | float | MVA | | | required |
+| `rate_a` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_b` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
+| `rate_c` | float | MVA | | 0 is a zero bound; +Inf is unbounded | required |
 | `control` | `TransformerControl` or null | | | | null |
 
 Schema definition: `Impedance`.
@@ -671,7 +687,7 @@ Schema definitions: `MulticonductorNetwork/anyOf/0`, `MulticonductorNetworkBody`
 |---|---|---|---|---|---|
 | `name` | string or null | | | | null |
 | `base_frequency` | float | Hz | | positive | required |
-| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, `sincal`, or null | | | | null |
+| `source_format` | token `dss`, `bmopf-json`, `pmd-json`, `cim-dist`, `sincal`, `ravens-json`, `pmd-math-json`, `pandapower-json`, or null | | | | null |
 | `buses` | array of `DistBus` | | | `id` unique | required |
 | `linecodes` | array of `DistLineCode` | | | `name` unique | required |
 | `lines` | array of `DistLine` | | | `bus_from`, `bus_to` name buses; `linecode` names a line code | required |
@@ -940,8 +956,8 @@ Schema definition: `VoltVarControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `breakpoints` | array of float | p.u. voltage | | ascending | required |
-| `q_limits` | array of float | `q_unit` | positive is injection | same length as `breakpoints` | required |
+| `breakpoints` | array of float | p.u. voltage | | four, `[U1, U2, U3, U4]`, ascending | required |
+| `q_limits` | array of float | `q_unit` | positive is injection | two, `[q_absorb, q_inject]`: injects `q_inject` below U1 and absorbs `q_absorb` above U4 | required |
 | `voltage_reference` | token `PN_PER_PHASE`, `PP_PER_PHASE`, `PP_AVERAGED`, `PG_AVERAGED`, `PN_AVERAGED`, `PG_PER_PHASE`, or null | | | | null |
 | `q_ref` | token `VAR_MAX`, `VAR_AVAILABLE`, or null | | | | null |
 | `q_unit` | token `VA_FRACTION`, `VAR`, or null | | | | null |
@@ -952,8 +968,8 @@ Schema definition: `VoltWattControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `breakpoints` | array of float | p.u. voltage | | ascending | required |
-| `p_limits` | array of float | `p_unit` | | same length as `breakpoints` | required |
+| `breakpoints` | array of float | p.u. voltage | | two, `[U5, U6]`, ascending | required |
+| `p_limits` | array of float | `p_unit` | | two, `[p_low, p_high]` ordered by value: `p_high` at or below U5, `p_low` at or above U6; a `VA_FRACTION` limit is a fraction of the `p_ref` base, `S_MAX` when absent | required |
 | `voltage_reference` | token as `VoltVarControl.voltage_reference`, or null | | | | null |
 | `p_ref` | token `P_AVAILABLE`, `P_MAX`, `S_MAX`, or null | | | | null |
 | `p_unit` | token `VA_FRACTION`, `W`, or null | | | | null |
@@ -962,7 +978,7 @@ Schema definition: `PowerFactorControl`.
 
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
-| `pf` | float | | | in `[-1, 1]` | required |
+| `pf` | float | | positive when Q has the same sign as P, negative when opposite (the OpenDSS PVSystem and Storage convention) | `0 < abs(pf) <= 1` | required |
 
 ### VoltageSource
 
@@ -1432,7 +1448,7 @@ Schema definition: `DcPfInstance`.
 | field | type | unit | sign | invariant | if absent |
 |---|---|---|---|---|---|
 | `network` | `BalancedNetwork` | | | at least one `REF` bus | required |
-| `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only` | | | the DC branch susceptance formula | required |
+| `approximation` | token `series_susceptance`, `tap_adjusted_reactance`, `reactance_only`, `tap_adjusted_series_susceptance`, `series_susceptance_no_phase_shift` | | | the DC branch susceptance formula | required |
 | `initial_point` | `StoredOperatingPointAssignment` or null | | | | null |
 | `hvdc_treatment` | token `fixed_injection`, `ignore` | | | how the specifications treat HVDC lines; written only when not `ignore` | `ignore` |
 
@@ -2014,11 +2030,16 @@ Schema definition: `SocwrOpfValues`.
 | `branch_voltage_product_imaginary` | array of float | p.u. squared | | `Im(V_from conj(V_to))`; one per branch | required |
 | `generator_active_power` | array of float | MW | positive is generation | one per generator | required |
 | `generator_reactive_power` | array of float | MVAr | positive is generation | one per generator | required |
-| `branch_from_active_power` | array of float | MW | positive into the branch at the from terminal | one per branch | required |
-| `branch_from_reactive_power` | array of float | MVAr | positive into the branch at the from terminal | one per branch | required |
-| `branch_to_active_power` | array of float | MW | positive into the branch at the to terminal | one per branch | required |
-| `branch_to_reactive_power` | array of float | MVAr | positive into the branch at the to terminal | one per branch | required |
+| `branch_from_active_flow` | array of float | MW | positive into the branch at the from terminal | one per branch | required |
+| `branch_from_reactive_flow` | array of float | MVAr | positive into the branch at the from terminal | one per branch | required |
+| `branch_to_active_flow` | array of float | MW | positive into the branch at the to terminal | one per branch | required |
+| `branch_to_reactive_flow` | array of float | MVAr | positive into the branch at the to terminal | one per branch | required |
 | `three_winding_transformer_terminal_powers` | array of `ThreeWindingTransformerTerminalPower` | | | one per three winding transformer | required |
+
+The four branch flow keys were `branch_from_active_power`,
+`branch_from_reactive_power`, `branch_to_active_power`, and
+`branch_to_reactive_power` in 0.11; the reader accepts those spellings in a
+0.11 document.
 
 Schema definition: `SocwrOpfDuals`.
 
@@ -2051,6 +2072,17 @@ Schema definition: `McAcPfSolution`.
 
 ### powerio.McAcOpfSolution
 
+`generator_active_power` is per terminal of each generator's `terminal_map`.
+A generator's cost and bounds are per coil, and `generator_coil_active_power`
+is the dispatch in that layout: a WYE generator has one coil per phase
+terminal in `terminal_map` order and none for the neutral; a DELTA generator
+on three terminals has the coils from terminal 1 to 2, 2 to 3, and 3 to 1 of
+its `terminal_map`; a DELTA or `SINGLE_PHASE` generator on two terminals has
+one coil. The two columns differ for a DELTA generator and for a WYE
+generator whose neutral voltage is not zero. `generator_coil_active_power` is
+written only when the producer reported it, from 0.12.3 on; a release before
+0.12.3 refuses a document that states it.
+
 Schema definition: `McAcOpfSolution`.
 
 | field | type | unit | sign | invariant | if absent |
@@ -2064,7 +2096,8 @@ Schema definition: `McAcOpfSolution`.
 | `terminal_current_magnitude` | array of float or null | amperes | | one per terminal | null |
 | `terminal_active_power` | array of float or null | watts | positive into the network | one per terminal | null |
 | `source_active_injection` | array of float | watts | positive into the network | one per source terminal | required |
-| `generator_active_power` | array of float | watts | positive is generation | generator table order, each generator's `terminal_map` order | required |
+| `generator_active_power` | array of float | watts | positive is generation | one per generator terminal: generator table order, each generator's `terminal_map` order, neutral included | required |
+| `generator_coil_active_power` | array of float or null | watts | positive is generation | one per generator coil: generator table order, each generator's coil order | null |
 | `objective` | float | objective units | | | required |
 
 ### powerio.LinDist3FlowOpfSolution

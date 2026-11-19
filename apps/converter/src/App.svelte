@@ -32,6 +32,7 @@
   let privacyDetails: HTMLDetailsElement;
   let report = $state("");
   let dragging = $state(false);
+  let openSettings = $state<Record<string, boolean>>({});
   let notice = $state("");
   let uiError = $state("");
   let formatSearch = $state("");
@@ -54,7 +55,7 @@
     ),
   );
   let ready = $derived(
-    view.jobs.filter((job) => job.status === "ready" || job.status === "done"),
+    view.jobs.filter((job) => job.status === "ready" || job.status === "done" || (job.status === "queued" && !!job.family)),
   );
   let plannedCount = $derived(
     ready.reduce(
@@ -176,7 +177,7 @@
       return { text: "Converted", tone: "success" };
     }
     const labels = {
-      queued: "Queued",
+      queued: "Not inspected",
       inspecting: "Detecting format",
       ready: "Ready to convert",
       converting: "Converting",
@@ -611,6 +612,7 @@
                   >{#if job.family}<span class="family-label">{job.family}</span
                     >{/if}
                 </div>
+                {#if job.status === "queued"}<button class="text-button" disabled={busy} onclick={() => controller?.retry(job.id)}>Inspect case</button>{/if}
                 {#if job.status === "needs-primary"}<label class="entry-select"
                     >Which file starts this project?<select
                       disabled={busy}
@@ -694,9 +696,9 @@
                   </ul>
                 {/if}
                 <div class="job-bottom">
-                  <details class="case-settings">
+                  <details class="case-settings" ontoggle={(event) => { openSettings[job.id] = event.currentTarget.open; }}>
                     <summary>Case settings</summary>
-                    <div class="case-setting-fields">
+                    {#if openSettings[job.id]}<div class="case-setting-fields">
                       {#if !job.acquisitionFailed}
                       <label
                         >Input format<select
@@ -781,7 +783,7 @@
                           {#each job.files as path (path)}<li>{path}</li>{/each}
                         </ul>
                       </details>
-                    </div>
+                    </div>{/if}
                   </details>
                   <div class="job-tools">
                     {#if !job.acquisitionFailed && (job.status === "error" || job.status === "cancelled" || job.status === "needs-files")}<button
@@ -864,7 +866,8 @@
               BMOPF is developed by the <a
                 href="https://github.com/distribution-system-opt"
                 >BMOPF task force</a
-              >. The 0.2.0 profile is a proposal.
+              >. PowerIO writes the task force's proposed schema and reads older
+              BMOPF files as it.
             </p>{/if}
           <button
             class="text-button share-settings"

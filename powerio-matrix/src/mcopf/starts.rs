@@ -13,9 +13,7 @@
 //! rows times terminals as in the dense Gauss-Jordan elimination this
 //! replaces. The column order, pivot rule and forward arithmetic are the dense
 //! ones, so the same columns are free and the starts agree to rounding.
-use super::{
-    BTreeSet, McOpfBranch, McOpfTerminal, McOpfTransformer, Result, join, root, unsupported,
-};
+use super::{BTreeSet, McOpfBranch, McOpfTerminal, McOpfTransformer, Result, unsupported};
 
 /// Pivot magnitude below which a column is treated as dependent.
 const PIVOT_TOL: f64 = 1e-12;
@@ -75,7 +73,7 @@ fn start_rows(
 ) -> Result<Vec<StartRow>> {
     let n = terminals.len();
     let mut rows = Vec::new();
-    let mut connected: Vec<_> = (0..n).collect();
+    let mut connected = powerio_core::union_find::UnionFind::new(n);
     for (k, t) in terminals.iter().enumerate() {
         if let Some(v) = t.fixed {
             rows.push(StartRow::from_terms([(k, 1.0)], v));
@@ -84,15 +82,15 @@ fn start_rows(
     for br in branches.iter().filter(|b| !b.open) {
         for (&a, &b) in br.from.iter().zip(&br.to) {
             rows.push(StartRow::from_terms([(a, 1.0), (b, -1.0)], [0.0; 2]));
-            join(&mut connected, a, b);
+            connected.union(b, a);
         }
     }
     for tx in transformers {
         for coil in &tx.coils {
             if let Some(q) = coil.negative {
-                join(&mut connected, coil.positive, q);
+                connected.union(q, coil.positive);
             }
-            join(&mut connected, tx.coils[0].positive, coil.positive);
+            connected.union(coil.positive, tx.coils[0].positive);
         }
         for (index, eq) in tx.equations.iter().enumerate() {
             if eq.voltage.is_empty() {
@@ -115,10 +113,10 @@ fn start_rows(
         .iter()
         .enumerate()
         .filter(|(_, t)| t.fixed.is_some())
-        .map(|(k, _)| root(&mut connected, k))
+        .map(|(k, _)| connected.find(k))
         .collect();
     for (k, t) in terminals.iter().enumerate() {
-        if !anchors.contains(&root(&mut connected, k)) {
+        if !anchors.contains(&connected.find(k)) {
             return Err(unsupported(&t.bus, "unreferenced transformer island"));
         }
     }

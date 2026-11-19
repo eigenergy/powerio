@@ -167,7 +167,8 @@ fn delta_projection_supported(net: &MulticonductorNetwork) -> bool {
                             .is_some_and(|bus| {
                                 load.terminal_map.iter().all(|t| {
                                     !bus.grounded.contains(t)
-                                        && !matches!(t.as_str(), "4" | "n" | "N")
+                                        && bus.terminal_role(t, net.terminal_conventions())
+                                            == crate::model::TerminalRole::Phase
                                 })
                             }))
         })
@@ -260,11 +261,10 @@ pub(crate) fn emit_pmd_math_json_text(
                 .and_then(|v| v.get("is_kron_reduced"))
                 .and_then(Value::as_bool)
                 == Some(true)
-            && net.buses().iter().all(|b| {
-                b.terminals
-                    .iter()
-                    .all(|t| !matches!(t.as_str(), "4" | "n" | "N"))
-            })
+            && net
+                .buses()
+                .iter()
+                .all(|b| b.neutral_indices(net.terminal_conventions()).is_empty())
             && delta_projection_supported(net);
         (net, retained)
     };
@@ -722,7 +722,7 @@ impl Writer {
     /// PMD's `_get_tight_absolute_voltage_magnitude_bounds` reads them.
     fn bus_bounds(&self, bus: &DistBus, net: &MulticonductorNetwork) -> (Vec<f64>, Vec<f64>) {
         let n = bus.terminals.len();
-        let phases = bus.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+        let phases = bus.phase_indices(net.terminal_conventions());
         let mut vmin = vec![0.0; n];
         let mut vmax = vec![INF; n];
         for (k, &i) in phases.iter().enumerate() {
@@ -872,7 +872,13 @@ impl Writer {
                 );
                 continue;
             }
-            let zbase: Vec<f64> = vnom.iter().zip(&snom).map(|(v, s)| v * v / s).collect();
+            let zbase: Vec<f64> = vnom
+                .iter()
+                .zip(&snom)
+                .map(|(v, s)| {
+                    powerio_core::electrical::calc_impedance_base(*v, *s).unwrap_or(f64::NAN)
+                })
+                .collect();
             let pairs = crate::model::pair_keys(nrw);
             let x_sc: Vec<f64> = pairs
                 .iter()
@@ -894,8 +900,10 @@ impl Writer {
                 },
                 |(loss, imag)| (loss / 100.0, imag / 100.0),
             );
-            let g_sh = noloadloss * snom[0] / (vnom[0] * vnom[0]);
-            let b_sh = -(cmag * snom[0]) / (vnom[0] * vnom[0]);
+            // PMD's `_build_loss_model!`: `noloadloss * snom / vnom²` and
+            // `-(imag * snom) / vnom²`.
+            let g_sh = crate::electrical::calc_rated_admittance(noloadloss * snom[0], vnom[0]);
+            let b_sh = -crate::electrical::calc_rated_admittance(cmag * snom[0], vnom[0]);
             // Refer everything to the internal side: PMD divides by the
             // nominal voltages in kV, so the internal side is the 1 kV base.
             let ratios: Vec<f64> = vnom
@@ -965,7 +973,7 @@ impl Writer {
                 let winding = &xf.windings[w];
                 let index = self.transformers.len() + 1;
                 let tm_nom = if winding.conn == DistWindingConn::Delta {
-                    kv(vnom[w], &self.settings) * 3f64.sqrt()
+                    crate::electrical::calc_wye_line_voltage(kv(vnom[w], &self.settings))
                 } else {
                     kv(vnom[w], &self.settings)
                 };
@@ -1412,7 +1420,7 @@ impl Writer {
     fn shunts(&mut self, net: &MulticonductorNetwork) {
         for c in net.capacitors() {
             let what = format!("capacitor {}", c.name);
-            match capacitor_susceptance(c) {
+            match capacitor_susceptance(net, c) {
                 Ok(bs) => {
                     let n = bs.len();
                     let connections = self.conns(&c.terminal_map, &what);
@@ -2058,7 +2066,8 @@ impl Writer {
             }
             bus.map_numbers("va", f64::to_radians, angle);
             // Grounding impedance rebases on the bus impedance base.
-            let z_new = base * base / sbase * vsf;
+            let z_new =
+                crate::electrical::calc_impedance_base(base, sbase).unwrap_or(f64::NAN) * vsf;
             for key in ["rg", "xg"] {
                 bus.scale(key, |z| z / z_new, impedance(z_new));
             }
@@ -2067,7 +2076,8 @@ impl Writer {
         for branch in &mut self.branches {
             let f_bus = branch.usize("f_bus").unwrap_or(1);
             let base = vbase[f_bus - 1];
-            let z_new = base * base / sbase * vsf;
+            let z_new =
+                crate::electrical::calc_impedance_base(base, sbase).unwrap_or(f64::NAN) * vsf;
             for key in ["br_r", "br_x"] {
                 branch.scale_on_base(key, z_new, |z| z / z_new, impedance(z_new));
             }
@@ -2087,7 +2097,8 @@ impl Writer {
         for shunt in &mut self.shunts {
             let bus = shunt.usize("shunt_bus").unwrap_or(1);
             let base = vbase[bus - 1];
-            let z_new = base * base / sbase * vsf;
+            let z_new =
+                crate::electrical::calc_impedance_base(base, sbase).unwrap_or(f64::NAN) * vsf;
             shunt.scale("gs", |y| y * z_new, admittance(z_new));
             shunt.scale("bs", |y| y * z_new, admittance(z_new));
             shunt.set("vbase", num(base));
@@ -2102,7 +2113,11 @@ impl Writer {
                     load.fields.get("configuration").and_then(Value::as_str) == Some("DELTA");
                 load.set(
                     "vnom_kv",
-                    num(if delta { base * 3f64.sqrt() } else { base }),
+                    num(if delta {
+                        crate::electrical::calc_wye_line_voltage(base)
+                    } else {
+                        base
+                    }),
                 );
             }
             load.scale("vnom_kv", |kv| kv / base, voltage(base));
@@ -2211,10 +2226,18 @@ impl Writer {
             if let Some(unit) = self.units.iter().find(|u| u.index == k) {
                 let recovered = |v: f64| {
                     let kv = v / vsf;
-                    let kv_ll = if delta { kv * 3f64.sqrt() } else { kv };
+                    let kv_ll = if delta {
+                        crate::electrical::calc_wye_line_voltage(kv)
+                    } else {
+                        kv
+                    };
                     let pu = kv_ll * ((1.0 / f_vbase) / (1.0 / t_vbase));
                     let kv_ll2 = pu * f_vbase / t_vbase;
-                    let kv2 = if delta { kv_ll2 / 3f64.sqrt() } else { kv_ll2 };
+                    let kv2 = if delta {
+                        crate::electrical::calc_wye_phase_voltage(kv_ll2)
+                    } else {
+                        kv_ll2
+                    };
                     kv2 * vsf
                 };
                 let v = stabilize(unit.v_ref, &recovered);
@@ -2230,10 +2253,18 @@ impl Writer {
                 move |kv_ll| kv_ll * ((1.0 / f_vbase) / (1.0 / t_vbase)),
                 move |pu| {
                     let kv_ll = pu * f_vbase / t_vbase;
-                    let kv = if delta { kv_ll / 3f64.sqrt() } else { kv_ll };
+                    let kv = if delta {
+                        crate::electrical::calc_wye_phase_voltage(kv_ll)
+                    } else {
+                        kv_ll
+                    };
                     let v_ref = kv * vsf;
                     let kv2 = v_ref / vsf;
-                    let kv_ll2 = if delta { kv2 * 3f64.sqrt() } else { kv2 };
+                    let kv_ll2 = if delta {
+                        crate::electrical::calc_wye_line_voltage(kv2)
+                    } else {
+                        kv2
+                    };
                     kv_ll2 * ((1.0 / f_vbase) / (1.0 / t_vbase))
                 },
             );
@@ -2321,33 +2352,42 @@ impl Writer {
     /// base, an ideal transformer scales it by its nominal ratio, and the
     /// stated bases seed the flood.
     ///
+    /// The flood is the one zone base flood
+    /// (`crate::voltage_zones::calc_flooded_zone_bases`, which the
+    /// multiconductor to balanced lowering also reads); this writer states
+    /// only PMD's crossing rule, the `tm_nom` ratio. It is not
+    /// `McAcPfInstance::calc_inferred_load_nominal_voltages` (powerio-prob),
+    /// which shares its zone labeling
+    /// (`powerio_core::union_find::calc_component_labels`). Here the zones
+    /// are over the lowered MATHEMATICAL buses (internal buses included),
+    /// joined by every MATHEMATICAL branch and by every switch, open or
+    /// closed, as PMD joins them; a zone's base is a stated base
+    /// (`settings.vbases_default`, a read document's `pmd_vbase`) carried
+    /// across transformer edges by `tm_nom` (divided by √3 for a DELTA
+    /// lowering), in kV per bus, with a warned load or 1 kV fallback for an
+    /// island no seed reaches. The inference never crosses a transformer:
+    /// its zones join network buses by lines and closed switches only, and
+    /// each zone is anchored by the nameplates in it (winding, capacitor and
+    /// load ratings, else a source's prescribed magnitude), which must agree
+    /// within one percent, and it answers in volts per load branch. Sharing
+    /// the flood would change either result, and this one must reproduce
+    /// PMD's.
+    ///
     /// # Errors
     /// A bus no stated base reaches: the network has an island the settings
     /// do not cover.
     #[allow(clippy::too_many_lines)] // zones, seeds, the flood through the ratios, then the fallbacks
     fn voltage_bases(&mut self, net: &MulticonductorNetwork) -> Vec<f64> {
-        fn find(parent: &mut [usize], i: usize) -> usize {
-            let mut i = i;
-            while parent[i] != i {
-                parent[i] = parent[parent[i]];
-                i = parent[i];
-            }
-            i
-        }
         let n = self.buses.len();
-        let mut parent: Vec<usize> = (0..n).collect();
-        let mut union = |a: usize, b: usize| {
-            let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-            if ra != rb {
-                parent[ra] = rb;
-            }
-        };
-        for obj in self.branches.iter().chain(&self.switches) {
-            if let (Some(f), Some(t)) = (obj.usize("f_bus"), obj.usize("t_bus")) {
-                union(f - 1, t - 1);
-            }
-        }
-        let zone: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
+        // The to bus's zone keeps its representative, as it always has; the
+        // representatives order the flood below.
+        let zone = powerio_core::union_find::calc_component_labels(
+            n,
+            self.branches
+                .iter()
+                .chain(&self.switches)
+                .filter_map(|obj| Some((obj.usize("t_bus")? - 1, obj.usize("f_bus")? - 1))),
+        );
         let mut zone_base: BTreeMap<usize, f64> = BTreeMap::new();
         for (bus, kv) in &self.settings.vbases_default {
             if let Some(&index) = self.bus_index.get(bus) {
@@ -2367,8 +2407,10 @@ impl Writer {
             }
         }
         // Transformer edges between zones, with the ratio from the from side
-        // to the to side.
-        let mut edges: BTreeMap<usize, Vec<(usize, f64)>> = BTreeMap::new();
+        // to the to side, flooded from the stated bases
+        // (`crate::voltage_zones::calc_flooded_zone_bases`).
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        let mut ratios: Vec<f64> = Vec::new();
         for xf in &self.transformers {
             let (Some(f), Some(t), Some(tm_nom)) =
                 (xf.usize("f_bus"), xf.usize("t_bus"), xf.f("tm_nom"))
@@ -2377,32 +2419,25 @@ impl Writer {
             };
             let tm_nom = if xf.fields.get("configuration").and_then(Value::as_str) == Some("DELTA")
             {
-                tm_nom / 3f64.sqrt()
+                crate::electrical::calc_wye_phase_voltage(tm_nom)
             } else {
                 tm_nom
             };
             if !(tm_nom.is_finite() && tm_nom > 0.0) {
                 continue;
             }
-            edges
-                .entry(zone[f - 1])
-                .or_default()
-                .push((zone[t - 1], 1.0 / tm_nom));
-            edges
-                .entry(zone[t - 1])
-                .or_default()
-                .push((zone[f - 1], tm_nom));
+            edges.push((zone[f - 1], zone[t - 1]));
+            ratios.push(tm_nom);
         }
-        let mut stack: Vec<usize> = zone_base.keys().copied().collect();
-        while let Some(from) = stack.pop() {
-            let base = zone_base[&from];
-            for (to, scale) in edges.get(&from).cloned().unwrap_or_default() {
-                if let std::collections::btree_map::Entry::Vacant(entry) = zone_base.entry(to) {
-                    entry.insert(base * scale);
-                    stack.push(to);
-                }
-            }
-        }
+        let seeds: Vec<(usize, f64)> = zone_base.iter().map(|(&z, &b)| (z, b)).collect();
+        let mut zone_base =
+            crate::voltage_zones::calc_flooded_zone_bases(seeds, &edges, |k, forward, base| {
+                Some(if forward {
+                    base * (1.0 / ratios[k])
+                } else {
+                    base * ratios[k]
+                })
+            });
         // An island no stated base reaches (a transformer a previous hop
         // dropped) takes the nominal voltage of a load in it, else 1 kV, and
         // says so: PMD's `calc_voltage_bases` stops at such an island.
@@ -2431,7 +2466,14 @@ impl Writer {
                     .and_then(Value::as_str)
                     .unwrap_or("?")
                     .to_owned();
-                Some((if delta { kv / 3f64.sqrt() } else { kv }, load_name))
+                Some((
+                    if delta {
+                        crate::electrical::calc_wye_phase_voltage(kv)
+                    } else {
+                        kv
+                    },
+                    load_name,
+                ))
             });
             let (base, stands_in) = from_load.map_or_else(
                 || (1.0, "1 kV".to_owned()),
@@ -2478,7 +2520,7 @@ impl LossChains {
     fn winding_resistance(&self, w: usize) -> Cycle {
         let (v, s, ratio) = (self.vnom[w], self.snom[w], self.ratios[w]);
         Rc::new(move |pu: f64, base: f64| {
-            let z_w = v * v / s;
+            let z_w = powerio_core::electrical::calc_impedance_base(v, s).unwrap_or(f64::NAN);
             let r_pct = ((pu * base) * ratio * ratio) / z_w * 100.0;
             (r_pct / 100.0 * z_w / (ratio * ratio)) / base
         })
@@ -2489,7 +2531,7 @@ impl LossChains {
     fn pair_reactance(&self) -> Cycle {
         let (v, s, ratio) = (self.vnom[0], self.snom[0], self.ratios[0]);
         Rc::new(move |pu: f64, base: f64| {
-            let z1 = v * v / s;
+            let z1 = powerio_core::electrical::calc_impedance_base(v, s).unwrap_or(f64::NAN);
             let mut zbr = BTreeMap::new();
             zbr.insert((0usize, 1usize), Complex64::new(0.0, pu * base));
             let zsc = br2sc_impedance(&zbr, 2);
@@ -2510,8 +2552,8 @@ impl LossChains {
         let (v, s, ratio) = (self.vnom[0], self.snom[0], self.ratios[0]);
         Rc::new(move |pu: f64, base: f64| {
             let g_sh = (pu / base) / (ratio * ratio);
-            let pct = g_sh * v * v / s * 100.0;
-            let g_sh = pct / 100.0 * s / (v * v);
+            let pct = crate::electrical::calc_rated_power(g_sh, v) / s * 100.0;
+            let g_sh = crate::electrical::calc_rated_admittance(pct / 100.0 * s, v);
             g_sh * ratio * ratio * base
         })
     }
@@ -2521,8 +2563,8 @@ impl LossChains {
         let (v, s, ratio) = (self.vnom[0], self.snom[0], self.ratios[0]);
         Rc::new(move |pu: f64, base: f64| {
             let b_sh = (pu / base) / (ratio * ratio);
-            let pct = -b_sh * v * v / s * 100.0;
-            let b_sh = -(pct / 100.0 * s) / (v * v);
+            let pct = crate::electrical::calc_rated_power(-b_sh, v) / s * 100.0;
+            let b_sh = -crate::electrical::calc_rated_admittance(pct / 100.0 * s, v);
             b_sh * ratio * ratio * base
         })
     }
@@ -2554,7 +2596,7 @@ fn sc2br_impedance(
             zb[j][i] = zb[i][j];
         }
     }
-    let Some(y) = invert(&zb) else {
+    let Some(y) = super::invert(&zb) else {
         // A singular reduced matrix has no star equivalent; the pairs are
         // carried as stated, PMD's pseudo-inverse giving the same for the
         // nonsingular part is not reproduced here.
@@ -2585,49 +2627,6 @@ fn sc2br_impedance(
             ((i, j), z)
         })
         .collect()
-}
-
-/// Gauss-Jordan inverse of a small complex matrix; `None` when singular.
-fn invert(a: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    let n = a.len();
-    let mut m: Vec<Vec<Complex64>> = a
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut r = row.clone();
-            r.extend((0..n).map(|j| {
-                if i == j {
-                    Complex64::new(1.0, 0.0)
-                } else {
-                    Complex64::default()
-                }
-            }));
-            r
-        })
-        .collect();
-    for col in 0..n {
-        let pivot = (col..n).max_by(|&a, &b| m[a][col].norm().total_cmp(&m[b][col].norm()))?;
-        if m[pivot][col].norm() < 1e-300 {
-            return None;
-        }
-        m.swap(col, pivot);
-        let p = m[col][col];
-        for v in &mut m[col] {
-            *v /= p;
-        }
-        for row in 0..n {
-            if row != col {
-                let factor = m[row][col];
-                if factor != Complex64::default() {
-                    let pivot_row = m[col].clone();
-                    for (v, pv) in m[row].iter_mut().zip(&pivot_row) {
-                        *v -= factor * pv;
-                    }
-                }
-            }
-        }
-    }
-    Some(m.into_iter().map(|row| row[n..].to_vec()).collect())
 }
 
 /// A stashed PMD matrix (array of columns) or a plain row major array.

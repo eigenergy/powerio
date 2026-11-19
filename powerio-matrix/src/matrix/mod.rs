@@ -24,31 +24,44 @@ mod tests;
 pub use adjacency::calc_adjacency_matrix;
 pub use bdoubleprime::calc_bdoubleprime_matrix;
 pub use bprime::calc_bprime_matrix;
-pub(crate) use incidence::{IncidenceParts, build_incidence, calc_solver_branch_flow_matrix};
-pub use incidence::{calc_diagonal, calc_susceptance_diagonal};
+pub(crate) use incidence::{
+    IncidenceParts, assemble_bus_branch_incidence, assemble_bus_indicator, build_incidence,
+    calc_bus_scatter, calc_dc_angle_difference, calc_dc_branch_flow, calc_dc_branch_flow_into,
+    calc_dc_flow_offset, calc_dc_flow_weight_derivative, calc_dc_phase_shift_withdrawal,
+};
+pub use incidence::{calc_diagonal, calc_solver_branch_flow_matrix, calc_susceptance_diagonal};
 pub use lacpf::calc_lacpf_matrix;
+pub(crate) use laplacian::ground_with;
 pub use laplacian::{
-    GroundedIndexMap, calc_reference_indicator, calc_unit_vector, calc_weighted_laplacian,
-    ground_at, ground_at_each,
+    GroundedIndexMap, Grounding, calc_reference_indicator, calc_unit_vector,
+    calc_weighted_laplacian, ground_at, ground_at_each,
 };
 pub use powerio_tx::BranchSusceptanceFormula;
 pub use sensitivity::{
-    IslandPtdf, SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata,
-    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, calc_lodf, calc_lodf_columns,
-    calc_ptdf, calc_ptdf_by_island, calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+    GroundedLaplacianFactor, IslandPtdf, SensitivityMatrices, SensitivityMatrixMetadata,
+    SensitivityMetadata, SensitivityOptions, SensitivitySolver, SensitivitySolverPath,
+    calc_edge_flows, calc_edge_laplacian_product, calc_lodf, calc_lodf_columns, calc_ptdf,
+    calc_ptdf_by_island, calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
     calc_ptdf_rows,
 };
 pub use ybus::{YbusParts, calc_admittance_matrix};
 // Crate-internal: the gridfm columnar export and the stated-state balance reuse
 // the per-branch admittance and flow kernels so their branch powers and Y_bus
 // agree with `calc_admittance_matrix` by construction.
-pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
+pub(crate) use ybus::{
+    AdmittanceStamp, YbusFlags, branch_admittance, branch_flow_partials, branch_flows,
+};
 
 use sprs::CsMat;
 
-// The bound the matrix and instance builders share; it lives beside the DC
-// formula because both are properties of the branch primitives.
-pub(crate) use powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE;
+/// The product `a x` of a CSR matrix and a dense vector, each row summed in
+/// its stored column order. The one sparse matrix-vector product the crate's
+/// builders share.
+pub(crate) fn calc_csr_product(a: &CsMat<f64>, x: &[f64]) -> Vec<f64> {
+    a.outer_iterator()
+        .map(|row| row.iter().map(|(j, &v)| v * x[j]).sum())
+        .collect()
+}
 
 /// Which MATPOWER fast decoupled scheme to use.
 ///

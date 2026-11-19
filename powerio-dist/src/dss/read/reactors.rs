@@ -181,7 +181,7 @@ fn check_commands_and_frequency(raw: &RawDss) -> Result<(), String> {
 // kvar bank and its current rating using that edit's phase count.
 fn default_rating(object: &RawObject, vars: &super::VarMap) -> Result<f64, String> {
     let mut phases = 3.0;
-    let mut amps = (100.0 / phases) / (12.47 / 3.0_f64.sqrt());
+    let mut amps = (100.0 / phases) / crate::electrical::calc_wye_phase_voltage(12.47);
     let mut start = 0;
     for end in object.edit_bounds() {
         for property in &object.props[start..end] {
@@ -200,7 +200,7 @@ fn default_rating(object: &RawObject, vars: &super::VarMap) -> Result<f64, Strin
             }
         }
         let kv = if (2.0..=3.0).contains(&phases) {
-            12.47 / 3.0_f64.sqrt()
+            crate::electrical::calc_wye_phase_voltage(12.47)
         } else {
             12.47
         };
@@ -276,8 +276,15 @@ impl Reader<'_> {
         {
             return Err("invalid rated reactor parameters or AC frequency".into());
         }
-        let phase_kv = kv / if phases >= 2.0 { 3.0_f64.sqrt() } else { 1.0 };
-        let reactance = phase_kv * phase_kv * 1000.0 / (kvar / phases);
+        // The bank coil voltage rule of every OpenDSS shunt bank (this
+        // reader admits only WYE), in kilovolts, and the coil's reactance at
+        // its share of the rated power, `V² / S` in ohms (the squared
+        // voltage in kV·V over kvar).
+        let phase_kv = super::bank_coil_rating(kv, phases as usize, false);
+        let reactance = crate::electrical::calc_squared_voltage_impedance(
+            phase_kv * phase_kv * 1000.0,
+            kvar / phases,
+        );
         let inductance = reactance / std::f64::consts::TAU / base;
         let impedance =
             num_complex::Complex64::new(resistance, inductance * std::f64::consts::TAU * frequency);

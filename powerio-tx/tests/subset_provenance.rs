@@ -356,7 +356,7 @@ fn island_cut_and_normalization_keep_all_twelve_winding_ratings() {
         assert_eq!(
             transformer.winding_rating_sets(winding),
             (4..=12)
-                .map(|number| { BranchRatingSet::new(format!("RATE{number}"), f64::from(number)) })
+                .map(|number| { BranchRatingSet::new(format!("RATE{number}"), f64::from(number),) })
                 .collect::<Vec<_>>()
         );
     }

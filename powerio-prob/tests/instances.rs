@@ -190,7 +190,7 @@ fn replacing_an_opf_network_preserves_problem_semantics_and_rebinds_initial_poin
         .with_initial_point(initial);
 
     let mut edited = net;
-    edited.branches_mut()[0].rate_a += 25.0;
+    edited.branches_mut()[0].rate_a = edited.branches()[0].rate_a + 25.0;
     let replaced = instance.with_network(edited.clone()).unwrap();
 
     assert_eq!(replaced.objective().terms().len(), 2);

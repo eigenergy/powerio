@@ -114,6 +114,14 @@ def append_result(case: str, leg: str, mark: str) -> None:
             fh.write(f"{case}\t{leg}\t{mark}\n")
 
 
+def matrix_difference(left, right):
+    """Largest error over every entry, including implicit sparse zeros."""
+    difference = (left - right).tocsr()
+    if not np.isfinite(difference.data).all():
+        return float("inf")
+    return float(np.max(np.abs(difference.data), initial=0.0))
+
+
 def compare(path: str, want_ptdf: bool = True) -> list[str]:
     """Run every check for one case; return its failure messages (empty on a pass)."""
     failures: list[str] = []
@@ -147,12 +155,12 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
         ("tap_adjusted_reactance", mp["b"]),
         ("series_susceptance", None),
     ]:
-        incidence = net.calc_incidence_matrix(pio_formula).toarray()
+        incidence = net.calc_incidence_matrix(pio_formula).tocsr()
         branch_susceptances = np.asarray(
             net.calc_branch_susceptances(pio_formula), float
         )
-        branch_matrix = net.calc_branch_flow_matrix(pio_formula).toarray()
-        bus_matrix = net.calc_bus_susceptance_matrix(pio_formula).toarray()
+        branch_matrix = net.calc_branch_flow_matrix(pio_formula).tocsr()
+        bus_matrix = net.calc_bus_susceptance_matrix(pio_formula).tocsr()
         branch_shift_injection = np.asarray(
             net.calc_branch_phase_shift_injection(pio_formula), float
         )
@@ -172,12 +180,12 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
         else:
             series_b = formula_b
         exp_b = -series_b[idx]  # PowerModels sign = -MATPOWER b
-        expected_incidence = mp["Cft"][idx, :].toarray()
-        expected_branch_matrix = exp_b[:, None] * expected_incidence
+        expected_incidence = mp["Cft"][idx, :].tocsr()
+        expected_branch_matrix = sp.diags(exp_b) @ expected_incidence
         expected_bus_matrix = expected_incidence.T @ expected_branch_matrix
-        dinc = np.max(np.abs(incidence - expected_incidence))
-        dbf = np.max(np.abs(branch_matrix - expected_branch_matrix))
-        dbus = np.max(np.abs(bus_matrix - expected_bus_matrix))
+        dinc = matrix_difference(incidence, expected_incidence)
+        dbf = matrix_difference(branch_matrix, expected_branch_matrix)
+        dbus = matrix_difference(bus_matrix, expected_bus_matrix)
         db = np.max(
             np.abs(branch_susceptances - exp_b) / np.maximum(1.0, np.abs(exp_b))
         )
@@ -233,9 +241,9 @@ def compare(path: str, want_ptdf: bool = True) -> list[str]:
 
     # Sign trap: see the module docstring. makeBdc's b is already positive,
     # so the matpower formula's weighted Laplacian equals +Bbus, not -Bbus.
-    L = net.calc_weighted_laplacian("tap_adjusted_reactance").toarray()
-    dL = np.max(np.abs(L - mp["Bbus"].toarray()))
-    diag_positive = bool((np.diag(L) > 0).all())
+    L = net.calc_weighted_laplacian("tap_adjusted_reactance").tocsr()
+    dL = matrix_difference(L, mp["Bbus"])
+    diag_positive = bool((L.diagonal() > 0).all())
     print(
         "  calc_weighted_laplacian('tap_adjusted_reactance') vs +makeBdc Bbus: "
         f"max abs diff = {dL:.3e}"

@@ -38,9 +38,10 @@ impl Reader<'_> {
             .as_deref()
             .unwrap_or("PHASE_A")
         {
+            // The reference phase's own balanced angle, undone.
             "PHASE_A" => 0.0,
-            "PHASE_B" => 2.0 * std::f64::consts::PI / 3.0,
-            "PHASE_C" => -2.0 * std::f64::consts::PI / 3.0,
+            "PHASE_B" => -crate::sequence::calc_balanced_phase_angle(1, 3),
+            "PHASE_C" => -crate::sequence::calc_balanced_phase_angle(2, 3),
             _ => {
                 return Err(self.error(
                     key,
@@ -70,13 +71,11 @@ impl Reader<'_> {
                 "sequence-voltage substation requires an explicit three-phase SWING bus",
             ));
         }
-        let a = Complex64::from_polar(1.0, 2.0 * std::f64::consts::PI / 3.0);
         let rotation = Complex64::from_polar(1.0, angle);
-        let values = [
-            seq[0] + seq[1] + seq[2],
-            seq[0] + a.conj() * seq[1] + a * seq[2],
-            seq[0] + a * seq[1] + a.conj() * seq[2],
-        ]
+        let values = crate::sequence::calc_phase_components(
+            [seq[0], seq[1], seq[2]],
+            crate::sequence::SequenceRotation::Fortescue,
+        )
         .map(|v| v * rotation);
         if values
             .iter()

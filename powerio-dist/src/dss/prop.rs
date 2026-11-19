@@ -676,6 +676,35 @@ class!(
     ]
 );
 
+// TSData inherits CableData and then ConductorData in the pinned engine.
+class!(
+    TS_DATA,
+    "tsdata",
+    [
+        "diashield",
+        "tapelayer",
+        "tapelap",
+        "epsr",
+        "inslayer",
+        "diains",
+        "diacable",
+        "rdc",
+        "rac",
+        "runits",
+        "gmrac",
+        "gmrunits",
+        "radius",
+        "radunits",
+        "normamps",
+        "emergamps",
+        "diam",
+        "seasons",
+        "ratings",
+        "capradius",
+        "like"
+    ]
+);
+
 class!(
     LINE_GEOMETRY,
     "linegeometry",
@@ -715,6 +744,7 @@ static CLASSES: &[&DssClass] = &[
     &LINECODE,
     &WIRE_DATA,
     &CN_DATA,
+    &TS_DATA,
     &LINE_GEOMETRY,
     &LINE_SPACING,
     &LOAD,

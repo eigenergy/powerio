@@ -36,8 +36,8 @@ fn susceptance(shunt: &DistShunt) -> Option<(usize, f64)> {
         return None;
     }
     let total = (0..phases).fold(0.0, |sum, _| sum + b);
-    for i in 0..n {
-        for j in 0..n {
+    for (i, row) in shunt.b.iter().enumerate().take(n) {
+        for (j, &value) in row.iter().enumerate().take(n) {
             let expected = if i == phases && j == phases {
                 total
             } else if i == j {
@@ -47,7 +47,7 @@ fn susceptance(shunt: &DistShunt) -> Option<(usize, f64)> {
             } else {
                 0.0
             };
-            if shunt.b[i][j] != expected {
+            if value != expected {
                 return None;
             }
         }
@@ -75,12 +75,8 @@ impl DssWriter {
                 typed_kv: None,
             },
         );
-        let voltage = if phases == 2 || phases == 3 {
-            kv * 1e3 / 3f64.sqrt()
-        } else {
-            kv * 1e3
-        };
-        let kvar = b * voltage.powi(2) * phases as f64 / 1e3;
+        let voltage = crate::dss::read::bank_coil_voltage(kv, phases, false);
+        let kvar = crate::electrical::calc_rated_power(b, voltage) * phases as f64 / 1e3;
         self.check_name("capacitor", &shunt.name);
         let returns = vec![shunt.terminal_map[phases].clone(); phases];
         let mut line = format!(

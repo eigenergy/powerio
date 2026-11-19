@@ -16,13 +16,15 @@ import powerio
 
 
 SCHEMAS = {
-    "0.1.0": Path("tests/data/dist/bmopf/draft_bmopf_schema.json"),
-    "0.2.0": Path("powerio-dist/schemas/bmopf/0.2.0/bmopf.schema.json"),
+    # The historical first draft, the oracle for older input.
+    "legacy": Path("tests/data/dist/bmopf/draft_bmopf_schema.json"),
+    # The one BMOPF schema PowerIO writes.
+    "current": Path("powerio-dist/schemas/bmopf/bmopf.schema.json"),
 }
 SCHEMA_ALIASES = {
     # The original ENWL case names the draft schema's repository directory,
     # rather than the schema document's canonical raw-content $id.
-    "https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks": "0.1.0",
+    "https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks": "legacy",
 }
 SCHEMA_PATHS = frozenset(SCHEMAS.values())
 BMOPF_CASES = [
@@ -63,8 +65,11 @@ def declared_schema_version(doc: dict, schema_ids: dict[str, str]) -> str:
     if not isinstance(meta, dict):
         raise ValueError("emitted document has no meta object naming its BMOPF schema")
     version = meta.get("schema_version")
-    if version in SCHEMAS:
-        return version
+    # A current document states a patch release of the line its schema's $id
+    # directory names.
+    current = schema_ids["current"].rsplit("/", 2)[-2]
+    if isinstance(version, str) and version.rpartition(".")[0] == current.rpartition(".")[0]:
+        return "current"
     schema_id = meta.get("$schema")
     for candidate, expected_id in schema_ids.items():
         if schema_id == expected_id:

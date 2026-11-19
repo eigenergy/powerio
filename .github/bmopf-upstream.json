@@ -2,20 +2,11 @@
   "format": 1,
   "schemas": [
     {
-      "archived_sha256": "221cfd98cdea69636ba236a5a5e39a75b482736aeb7579045387eb5e5f2a5567",
-      "observed_sha256": "221cfd98cdea69636ba236a5a5e39a75b482736aeb7579045387eb5e5f2a5567",
-      "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/3",
-      "schema_status": "unchanged",
-      "status": "merged",
-      "version": "0.1.0"
-    },
-    {
-      "archived_sha256": "74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462",
-      "observed_sha256": "74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462",
+      "archived_sha256": "9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc",
+      "observed_sha256": "9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc",
       "review_url": "https://github.com/distribution-system-opt/dsopt-schema/pull/2",
       "schema_status": "unchanged",
-      "status": "open",
-      "version": "0.2.0"
+      "status": "open"
     }
   ]
 }

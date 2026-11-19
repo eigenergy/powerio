@@ -329,16 +329,16 @@ fn branch_obj(br: &Branch) -> Value {
     } else {
         m.insert("branch_type".into(), Value::String("line".into()));
     }
-    // PowerIO reserves zero for unlimited; Egret uses absent/null ratings.
+    // Egret uses absent/null ratings for unlimited.
     // A numeric zero in Egret is an enforced zero thermal limit.
-    if br.rate_a != 0.0 {
-        m.insert("rating_long_term".into(), jnum(br.rate_a));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_a) {
+        m.insert("rating_long_term".into(), jnum(limit));
     }
-    if br.rate_b != 0.0 {
-        m.insert("rating_short_term".into(), jnum(br.rate_b));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_b) {
+        m.insert("rating_short_term".into(), jnum(limit));
     }
-    if br.rate_c != 0.0 {
-        m.insert("rating_emergency".into(), jnum(br.rate_c));
+    if let Some(limit) = crate::thermal_limit::as_option(br.rate_c) {
+        m.insert("rating_emergency".into(), jnum(limit));
     }
     if let Some(flow) = br.solution {
         m.insert("pf".into(), jnum(flow.pf));
@@ -891,11 +891,13 @@ fn apply_varying(
         ))),
     };
     let row = varying.row;
-    // Egret states an unlimited rating point as null. PowerIO's branch model
-    // reserves zero for unlimited, so a native numeric zero also reads as
-    // unlimited here (issue #828; refusing it is planned for 0.12).
     let rating = || {
-        if value.is_null() { Ok(0.0) } else { number() }
+        rating_cell(Some(value), &varying.attribute).map_err(|error| {
+            bad(format!(
+                "{} {} at point {point}: {error}",
+                varying.section, varying.element
+            ))
+        })
     };
     match varying.section.as_str() {
         "load" => {
@@ -1064,6 +1066,15 @@ fn num_cell(slot: Option<&Value>, key: &str, default: f64) -> Result<f64> {
             .as_f64()
             .ok_or_else(|| bad(format!("`{key}` is not a number: {x}"))),
     }
+}
+
+/// Egret's missing/null rating is unlimited; numeric zero is a real bound.
+fn rating_cell(slot: Option<&Value>, key: &str) -> Result<f64> {
+    if slot.is_none_or(Value::is_null) {
+        return Ok(f64::INFINITY);
+    }
+    crate::thermal_limit::finite(num_cell(slot, key, 0.0)?)
+        .map_err(|error| bad(format!("`{key}`: {error}")))
 }
 
 fn bool_cell(slot: Option<&Value>, key: &str, default: bool) -> Result<bool> {
@@ -1241,9 +1252,9 @@ fn read_branch(row: BranchRow) -> Result<Branch> {
             0.0,
         )?,
         charging: None,
-        rate_a: num_cell(row.rating_long_term.as_ref(), "rating_long_term", 0.0)?,
-        rate_b: num_cell(row.rating_short_term.as_ref(), "rating_short_term", 0.0)?,
-        rate_c: num_cell(row.rating_emergency.as_ref(), "rating_emergency", 0.0)?,
+        rate_a: rating_cell(row.rating_long_term.as_ref(), "rating_long_term")?,
+        rate_b: rating_cell(row.rating_short_term.as_ref(), "rating_short_term")?,
+        rate_c: rating_cell(row.rating_emergency.as_ref(), "rating_emergency")?,
         // `json_extension::read_branch` reads the rating sets PowerIO wrote.
         rating_sets: Vec::new(),
         current_ratings: None,

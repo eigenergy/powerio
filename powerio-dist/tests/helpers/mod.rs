@@ -93,20 +93,6 @@ pub fn emit_bmopf_json(net: &MulticonductorNetwork) -> Conv {
     emit_value(net, DistTargetFormat::BmopfJson)
 }
 
-pub fn emit_bmopf_json_with_options(
-    net: &MulticonductorNetwork,
-    options: powerio_dist::BmopfEmitOptions,
-) -> Conv {
-    let mut emit_options = powerio_dist::EmitOptions::default();
-    emit_options.bmopf = options;
-    emit_module_with_options(
-        &powerio_core::PioModule::new(net.clone()),
-        DistTargetFormat::BmopfJson,
-        &emit_options,
-    )
-    .unwrap()
-}
-
 pub fn emit_pmd_json(net: &MulticonductorNetwork) -> Conv {
     emit_value(net, DistTargetFormat::PmdJson)
 }

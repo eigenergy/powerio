@@ -1,13 +1,17 @@
 # BMOPF schema archive
 
-These exact schema documents describe the BMOPF profiles supported by PowerIO.
+This exact schema document describes the one BMOPF PowerIO reads and writes.
 The archive is available without fetching an upstream branch. `manifest.json`
-records each document's SHA-256, embedded identifier, source revision, license,
-and associated review discussion. Files retain their upstream bytes.
+records the document's SHA-256, embedded identifier, source revision, license,
+and associated review discussion. The file retains its upstream bytes.
 
-- `0.1.0` is the historical baseline, with its versioned schema identifier.
-- `0.2.0` is a proposal. Supporting it in PowerIO does not establish Task Force
-  acceptance. Changes to the proposal require a reviewed archive update.
+The schema is the one proposed in
+[dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
+vendored from the Task Force repository
+[distribution-system-opt/dsopt-schema](https://github.com/distribution-system-opt/dsopt-schema)
+at commit `6796394`. Supporting it in PowerIO does not establish Task Force
+acceptance. Once the Task Force ratifies it, the pin moves to the release tag
+its `$id` names. Changes to the proposal require a reviewed archive update.
 
 The schema documents are copyright the IEEE PES Task Force on Benchmarking
 Multiconductor OPF for Distribution Systems and contributors, under CC BY 4.0;
@@ -20,6 +24,7 @@ Upstream work and its contribution process are documented in
 [dsopt-schema](https://github.com/distribution-system-opt/dsopt-schema) and the
 [Task Force contribution guide](https://github.com/distribution-system-opt/math-and-data-model-specifications/blob/main/docs/src/contributing.md).
 
-The unversioned historical test fixture remains under `tests/data/dist/bmopf`
-for source-fidelity tests. Its validation rules match this archive's `0.1.0`;
-its embedded identifier differs.
+PowerIO still reads documents written against older BMOPF drafts (including
+the early draft PowerIO 0.11 wrote) and reads them as BMOPF, so those schemas
+are not shipped. The historical first draft schema remains under
+`tests/data/dist/bmopf` as the test oracle for that older input.

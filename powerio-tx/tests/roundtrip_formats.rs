@@ -107,9 +107,9 @@ struct BranchValue {
     r: i64,
     x: i64,
     b: Option<i64>,
-    rate_a: i64,
-    rate_b: i64,
-    rate_c: i64,
+    rate_a: Option<i64>,
+    rate_b: Option<i64>,
+    rate_c: Option<i64>,
     tap: i64,
     shift: i64,
     in_service: bool,
@@ -220,9 +220,21 @@ fn branch_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<BranchValue
                 x: round_value(branch.x),
                 b: (!(target == TargetFormat::Pslf && branch.is_transformer()))
                     .then_some(round_value(branch.calc_total_charging_b())),
-                rate_a: round_value(branch.rate_a),
-                rate_b: round_value(branch.rate_b),
-                rate_c: round_value(branch.rate_c),
+                rate_a: branch
+                    .rate_a
+                    .is_finite()
+                    .then_some(branch.rate_a)
+                    .map(round_value),
+                rate_b: branch
+                    .rate_b
+                    .is_finite()
+                    .then_some(branch.rate_b)
+                    .map(round_value),
+                rate_c: branch
+                    .rate_c
+                    .is_finite()
+                    .then_some(branch.rate_c)
+                    .map(round_value),
                 tap: round_value(branch.tap),
                 shift: round_value(branch.shift),
                 in_service: branch.in_service,

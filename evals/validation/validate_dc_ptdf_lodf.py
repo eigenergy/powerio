@@ -1,4 +1,4 @@
-"""Independent MATPOWER makePTDF/makeLODF oracle, all three susceptance
+"""Independent MATPOWER makePTDF/makeLODF oracle for four susceptance
 formulas.
 
 Case read with matpowercaseframes (pinned in
@@ -11,7 +11,9 @@ order of in-service branches. The oracle checks both mappings. The large real
 grid fixtures used by validate_dc_matpower.py for the shift sign leg are
 skipped here — a dense PTDF over 10000+ buses is not worth the wall time, and
 case118/case30
-exercise every formula and the bridge branch case already.
+exercise every formula and the bridge branch case already. case118 carries
+nine off-nominal transformer taps, so there the two tap-reading formulas differ
+from their tap-ignoring counterparts; case30's taps are all nominal.
 
 Every PTDF and LODF entry is asserted at ABS_TOL below; the largest error
 observed while writing this oracle was 3e-13.
@@ -58,6 +60,8 @@ def build(cf, formula):
     stat = br["BR_STATUS"].astype(float).to_numpy() != 0.0
     if formula == "series":  # +x/(r^2+x^2) = -imag(inv(r+jx))
         b = x / (r * r + x * x)
+    elif formula == "series_tap":  # x/(r^2+x^2)/tap, tap 0 read as 1 above
+        b = x / (r * r + x * x) / tap
     elif formula == "matpower":  # 1/(x*tap)
         b = 1.0 / (x * tap)
     elif formula == "reactance_only":  # 1/x
@@ -127,7 +131,7 @@ def append_result(case: str, leg: str, mark: str) -> None:
 
 
 def compare(path: str) -> list[str]:
-    """Run PTDF and LODF for all three formulas; return failure messages."""
+    """Run PTDF and LODF for every formula; return failure messages."""
     failures: list[str] = []
     print(f"\n===== {path}")
     cf = CaseFrames(path)
@@ -156,6 +160,7 @@ def compare(path: str) -> list[str]:
 
     for formula, oracle_name in [
         ("series_susceptance", "series"),
+        ("tap_adjusted_series_susceptance", "series_tap"),
         ("tap_adjusted_reactance", "matpower"),
         ("reactance_only", "reactance_only"),
     ]:
@@ -184,7 +189,7 @@ def compare(path: str) -> list[str]:
             max_diag_err = float(np.max(np.abs(diag_vals - (-1.0))))
 
         print(
-            f"  {formula:<24} PTDF diff={dP:.3e}   LODF diff={dL:.3e}"
+            f"  {formula:<31} PTDF diff={dP:.3e}   LODF diff={dL:.3e}"
             f"   bridge cols={bad_idx.size} (off diag<={max_off_diag:.1e},"
             f" diag err={max_diag_err:.1e})"
             f"   min|1-h| kept={denom[good].min() if good.any() else float('nan'):.3e}"

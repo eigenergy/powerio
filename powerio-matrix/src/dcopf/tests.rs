@@ -186,7 +186,8 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     };
 
     let unlimited = preparation_from_view(&view, DcOpfOptions::default()).expect("default");
-    assert_close(unlimited.branches.f_max[0], 0.0);
+    assert_eq!(unlimited.branches.f_max[0], f64::INFINITY);
+    assert!(!unlimited.branches.thermal_limit_active[0]);
     assert!(!unlimited.synthesize_unrated_limits);
 
     // The bus voltage ceilings are 1.1, the reactance is 0.2, and the window
@@ -241,6 +242,10 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     rated.branches_mut()[0].rate_a = 50.0;
     let kept = preparation_from_view(&IndexedNetwork::new(&rated), options).expect("rated branch");
     assert_close(kept.branches.f_max[0], 0.5);
+    rated.branches_mut()[0].rate_a = 0.0;
+    let zero = preparation_from_view(&IndexedNetwork::new(&rated), options).expect("zero limit");
+    assert_eq!(zero.branches.f_max[0], 0.0);
+    assert!(zero.branches.thermal_limit_active[0]);
 }
 
 #[test]
@@ -529,7 +534,8 @@ fn a_preparation_written_before_the_hvdc_field_reads_as_no_injection() {
 
 #[test]
 fn per_unit_and_native_units_scale_all_power_coefficients() {
-    let net = small_network();
+    let mut net = small_network();
+    net.branches_mut()[0].rate_a = 75.0;
     let view = IndexedNetwork::new(&net);
     let native = preparation_from_view(
         &view,
@@ -1282,5 +1288,137 @@ mod matrix_tests {
         let merged_instance = DcOpfInstance::from_network(merged).expect("merged instance");
         calc_dc_opf_matrices(&merged_instance, &DcOpfAssemblyOptions::default())
             .expect("the merged network projects without skipping");
+    }
+}
+
+#[test]
+fn bundle_numeric_limits_respect_selection() {
+    use crate::dcopf::{DcOpfBundleOptions, emit_dcopf_bundle};
+    use powerio_prob::{ActiveConstraints, ConstraintSelection, DcOpfInstance};
+    let mut net = parse_matpower_file("../tests/data/case9.m").unwrap();
+    net.branches_mut()[0].rate_a = 0.0;
+    net.branches_mut()[1].rate_a = f64::INFINITY;
+    net.branches_mut()[2].rate_a = 125.0;
+    for selected in [false, true] {
+        let mut constraints = ActiveConstraints::default();
+        if !selected {
+            constraints.thermal_limits = ConstraintSelection::None;
+        }
+        let instance = DcOpfInstance::from_network(net.clone())
+            .unwrap()
+            .with_constraints(constraints);
+        let dir = tempfile::tempdir().unwrap();
+        let bundle =
+            emit_dcopf_bundle(&instance, dir.path(), &DcOpfBundleOptions::default()).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(bundle.dir.join("dcopf_meta.json")).unwrap())
+                .unwrap();
+        let file = "fmax.mtx";
+        assert_eq!(manifest["schema"], "powerio.dcopf");
+        assert!(!bundle.dir.join("thermal_limits.mtx").exists());
+        let limits = crate::io::read_vector_mtx(bundle.dir.join(file)).unwrap();
+        if selected {
+            assert_eq!(limits[0], 0.0);
+            assert_eq!(limits[1], f64::INFINITY);
+            assert_eq!(limits[2], 1.25);
+            if let Some(path) = std::env::var_os("POWERIO_THERMAL_BUNDLE_OUTPUT") {
+                std::fs::create_dir_all(&path).unwrap();
+                for file in &bundle.files {
+                    std::fs::copy(
+                        file,
+                        std::path::Path::new(&path).join(file.file_name().unwrap()),
+                    )
+                    .unwrap();
+                }
+            }
+        } else {
+            assert!(limits.iter().all(|&limit| limit == f64::INFINITY));
+        }
+        assert!(
+            manifest["operators"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|op| op["name"] == "branch_flow_limit" && op["file"] == file)
+        );
+    }
+}
+
+#[test]
+fn purely_resistive_branches_follow_the_selected_formula_denominator() {
+    use crate::DcOperators;
+    use crate::matrix::sensitivity::calc_ptdf;
+    use powerio_prob::DcPfInstance;
+    for formula in [
+        BranchSusceptanceFormula::SeriesSusceptance,
+        BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+        BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+        BranchSusceptanceFormula::TapAdjustedReactance,
+        BranchSusceptanceFormula::ReactanceOnly,
+    ] {
+        for alternate_path in [false, true] {
+            let mut net = small_network();
+            let edge = &mut net.branches_mut()[0];
+            edge.r = 0.1;
+            edge.x = 0.0;
+            edge.tap = 1.2;
+            edge.shift = 5.0;
+            if alternate_path {
+                net.branches_mut().push(branch(10, 30, 0.2));
+            }
+            for net in [net.clone(), net.to_normalized().unwrap()] {
+                let view = IndexedNetwork::new(&net);
+                let options = DcOpfOptions {
+                    formula,
+                    ..DcOpfOptions::default()
+                };
+                let instance = DcPfInstance::from_network(net.clone())
+                    .unwrap()
+                    .with_branch_susceptance_formula(formula);
+                if formula.reads_resistance() {
+                    let prep = preparation_from_view(&view, options).unwrap();
+                    let op = DcOperators::build(&instance).unwrap();
+                    assert_eq!(prep.n_branches(), net.branches().len());
+                    assert_eq!(prep.branches.skipped_zero_impedance, [] as [usize; 0]);
+                    assert_close(prep.branches.susceptance_magnitude[0], 0.0);
+                    assert_close(op.calc_branch_susceptances()[0], 0.0);
+                    assert_eq!(op.branch_rows()[0], 0);
+                    for p in &prep.p_shift {
+                        assert_close(*p, 0.0);
+                    }
+                    let flows = op.calc_branch_flow_dc(&[0.0, -0.1]).unwrap();
+                    assert_close(flows[0], 0.0);
+                    let ptdf = calc_ptdf(&view, formula);
+                    if alternate_path {
+                        let ptdf = ptdf.unwrap();
+                        assert_eq!(ptdf.rows(), 2);
+                        for (_, value) in ptdf.outer_view(0).unwrap().iter() {
+                            assert_close(*value, 0.0);
+                        }
+                        assert_close(flows[1], 0.5);
+                    } else {
+                        assert!(matches!(ptdf, Err(Error::SingularNetwork)), "{ptdf:?}");
+                    }
+                } else {
+                    assert!(matches!(
+                        preparation_from_view(&view, options),
+                        Err(Error::Transmission(powerio_tx::Error::ZeroImpedance {
+                            row: 0
+                        }))
+                    ));
+                    assert!(DcOperators::build(&instance).is_err());
+                    let skipped = preparation_from_view(
+                        &view,
+                        DcOpfOptions {
+                            skip_zero_impedance: true,
+                            ..options
+                        },
+                    )
+                    .unwrap();
+                    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+                    assert_eq!(skipped.n_branches(), usize::from(alternate_path));
+                }
+            }
+        }
     }
 }

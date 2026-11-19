@@ -28,6 +28,10 @@ pub(crate) struct IncidenceParts {
     /// Source-network branch indices for the accepted incidence columns.
     /// Entries align with columns of `a` and `b`; filtered branches are absent.
     pub(crate) branch_indices: Vec<usize>,
+    /// Dense from bus of each column, the `+1` row of `a`.
+    pub(crate) from: Vec<usize>,
+    /// Dense to bus of each column, the `-1` row of `a`.
+    pub(crate) to: Vec<usize>,
 }
 
 impl IncidenceParts {
@@ -69,42 +73,19 @@ pub(crate) fn build_incidence(
             bus_id: br.to,
             element_index: idx,
         })?;
-        // Zero impedance in every sense the selected formula can act on:
-        // `x = 1e-300` gives a finite weight of `1e300` that annihilates
-        // every real branch sharing a diagonal with it. The guard reads only
-        // the denominator the selected formula divides by, so a value the
-        // formula never reads cannot reject a branch (#324): the reciprocal
-        // rules bound the reactance, and the series formula bounds the whole
-        // impedance magnitude.
-        let degenerate = match formula {
-            BranchSusceptanceFormula::SeriesSusceptance => {
-                br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
-            }
-            _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,
-        };
-        if i == j || degenerate {
-            if i != j && degenerate && !opts.skip_zero_impedance {
+        if i == j {
+            continue;
+        }
+        // The one DC column rule: a degenerate impedance is `None`, a tap
+        // or weight the formula cannot use is an error. The shift is not
+        // part of the incidence factor.
+        let Some(column) = formula.calc_dc_column(br, idx, case.network().is_normalized())? else {
+            if !opts.skip_zero_impedance {
                 return Err(powerio_tx::Error::ZeroImpedance { row: idx }.into());
             }
             continue;
-        }
-        // Only `TapAdjustedReactance` divides by the tap, so only it can be
-        // bounded or rejected by one (#324); the other formulas never read
-        // the value.
-        let tap = if formula.reads_tap() {
-            br.calc_divisible_tap(idx)?
-        } else {
-            1.0
         };
-        // The incidence parts carry the internal positive factor weight (the
-        // Laplacian edge weight a sparse solver factors); public PowerModels
-        // sign results are the DC operator surface's to emit.
-        let b_e = formula.calc_solver_edge_weight(br.r, br.x, tap);
-        // A NaN reactance slips past the guard above and poisons the whole
-        // Laplacian.
-        if !b_e.is_finite() {
-            return Err(powerio_tx::Error::NonFiniteSusceptance { row: idx }.into());
-        }
+        let b_e = column.weight;
         cols.push(Column {
             i,
             j,
@@ -114,22 +95,88 @@ pub(crate) fn build_incidence(
     }
 
     // Pass 2: assemble.
-    let m = cols.len();
-    let mut a = CooBuilder::with_capacity_rect(n, m, 2 * m);
-    let mut b = Vec::with_capacity(m);
-    let mut branch_indices = Vec::with_capacity(m);
-    for (k, col) in cols.iter().enumerate() {
-        a.add(col.i, k, 1.0);
-        a.add(col.j, k, -1.0);
-        b.push(col.b_e);
-        branch_indices.push(col.branch_index);
-    }
+    let a = assemble_bus_branch_incidence(n, cols.iter().map(|col| (col.i, col.j)));
+    let b = cols.iter().map(|col| col.b_e).collect();
+    let branch_indices = cols.iter().map(|col| col.branch_index).collect();
+    let from = cols.iter().map(|col| col.i).collect();
+    let to = cols.iter().map(|col| col.j).collect();
 
     Ok(IncidenceParts {
-        a: a.finish_csr(),
+        a,
         b,
         branch_indices,
+        from,
+        to,
     })
+}
+
+/// The signed bus by branch incidence matrix over `n` buses, `n × m` CSR for
+/// the `m` columns `endpoints` yields: column `e` has `+1` at its from bus
+/// and `-1` at its to bus. A self-loop column (`from == to`) sums to an empty
+/// column. Within each bus row the columns ascend.
+///
+/// Every incidence matrix in the crate (the sensitivity factor, the DC
+/// operators, a DC preparation's) is this one counting sort straight into
+/// CSR: one pass counts each bus row, a second places the columns.
+///
+/// # Panics
+/// Panics if an endpoint is `>= n`.
+pub(crate) fn assemble_bus_branch_incidence(
+    n: usize,
+    endpoints: impl ExactSizeIterator<Item = (usize, usize)> + Clone,
+) -> CsMat<f64> {
+    assemble_by_columns(
+        n,
+        endpoints.map(|(from, to)| {
+            if from == to {
+                [None, None]
+            } else {
+                [Some((from, 1.0)), Some((to, -1.0))]
+            }
+        }),
+    )
+}
+
+/// The bus by element indicator over `n` buses, `n × k` CSR with a `1` at
+/// row `bus_of[e]` of column `e`: the generator to bus map `Cg` of a
+/// preparation.
+///
+/// # Panics
+/// Panics if a bus is `>= n`.
+pub(crate) fn assemble_bus_indicator(n: usize, bus_of: &[usize]) -> CsMat<f64> {
+    assemble_by_columns(n, bus_of.iter().map(|&bus| [Some((bus, 1.0))]))
+}
+
+/// CSR over `n` rows from columns given in order, each with at most `K`
+/// entries in distinct rows, by a counting sort: the row pointer from one
+/// count pass, then the columns placed in ascending order.
+fn assemble_by_columns<const K: usize>(
+    n: usize,
+    columns: impl ExactSizeIterator<Item = [Option<(usize, f64)>; K]> + Clone,
+) -> CsMat<f64> {
+    let m = columns.len();
+    let mut indptr = vec![0_usize; n + 1];
+    for column in columns.clone() {
+        for (row, _) in column.into_iter().flatten() {
+            assert!(row < n, "incidence row {row} out of range for {n} rows");
+            indptr[row + 1] += 1;
+        }
+    }
+    for row in 0..n {
+        indptr[row + 1] += indptr[row];
+    }
+    let nnz = indptr[n];
+    let mut next = indptr[..n].to_vec();
+    let mut indices = vec![0_usize; nnz];
+    let mut data = vec![0.0; nnz];
+    for (index, column) in columns.enumerate() {
+        for (row, value) in column.into_iter().flatten() {
+            indices[next[row]] = index;
+            data[next[row]] = value;
+            next[row] += 1;
+        }
+    }
+    CsMat::new((n, m), indptr, indices, data)
 }
 
 struct Column {
@@ -137,6 +184,100 @@ struct Column {
     j: usize,
     b_e: f64,
     branch_index: usize,
+}
+
+/// The constant term of a DC branch flow, `-w * shift`, for positive factor
+/// weight `w` and phase shift `shift` (radians): the flow at equal angles.
+/// The one spelling of the offset, shared by every DC flow, offset and phase
+/// shift injection in the crate.
+#[inline]
+pub(crate) fn calc_dc_flow_offset(weight: f64, shift: f64) -> f64 {
+    -weight * shift
+}
+
+/// DC branch flows `w (theta_from - theta_to) - w shift` at bus angles
+/// `theta` (radians), one per `((from, to), w, shift)` column, with `w` the
+/// positive factor weight. The one flow from angles in the crate:
+/// `DcOpfPreparation::calc_branch_flow` and
+/// `DcOperators::calc_branch_flow_dc` both read it.
+pub(crate) fn calc_dc_branch_flow(
+    theta: &[f64],
+    columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
+) -> Vec<f64> {
+    let mut flows = Vec::new();
+    calc_dc_branch_flow_into(theta, columns, &mut flows);
+    flows
+}
+
+/// [`calc_dc_branch_flow`] into a reused buffer, which it clears first: the
+/// form a builder evaluating many angle vectors (the PTDF and LODF columns)
+/// calls so each column allocates nothing.
+pub(crate) fn calc_dc_branch_flow_into(
+    theta: &[f64],
+    columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
+    flows: &mut Vec<f64>,
+) {
+    flows.clear();
+    flows.extend(columns.map(|(endpoints, weight, shift)| {
+        weight * calc_dc_angle_difference(theta, endpoints) + calc_dc_flow_offset(weight, shift)
+    }));
+}
+
+/// The angle difference `theta_from - theta_to` across one column, the
+/// column's entry of `Aᵀ theta`. The one angle difference the DC flows and
+/// their derivatives read.
+#[inline]
+pub(crate) fn calc_dc_angle_difference(theta: &[f64], (from, to): (usize, usize)) -> f64 {
+    theta[from] - theta[to]
+}
+
+/// The derivative of one column's DC flow ([`calc_dc_branch_flow`]) with
+/// respect to its factor weight `w`: `theta_from - theta_to - shift`, since
+/// the flow is `w (theta_from - theta_to) - w shift`.
+#[inline]
+pub(crate) fn calc_dc_flow_weight_derivative(
+    theta: &[f64],
+    endpoints: (usize, usize),
+    shift: f64,
+) -> f64 {
+    calc_dc_angle_difference(theta, endpoints) - shift
+}
+
+/// The incidence product `A x` over `n` buses, one per `((from, to), x)`
+/// column: each column's value leaves at its from bus (`+x`) and arrives at
+/// its to bus (`-x`). A self-loop column is empty, so its value cancels at its
+/// own bus. The one scatter of a branch vector onto buses in the crate:
+/// [`calc_dc_phase_shift_withdrawal`] and `DcOperators::calc_bus_injection_dc`
+/// both read it.
+pub(crate) fn calc_bus_scatter(
+    n: usize,
+    columns: impl Iterator<Item = ((usize, usize), f64)>,
+) -> Vec<f64> {
+    let mut buses = vec![0.0; n];
+    for ((from, to), value) in columns {
+        if from == to {
+            continue;
+        }
+        buses[from] += value;
+        buses[to] -= value;
+    }
+    buses
+}
+
+/// The nodal phase shift withdrawal `A (-w .* shift)` over `n` buses, one
+/// per `((from, to), w, shift)` column with `w` the positive factor weight:
+/// each column's flow offset ([`calc_dc_flow_offset`]) scattered by
+/// [`calc_bus_scatter`]. The one phase shift withdrawal in the crate: the DC
+/// preparation's `p_shift`, `DcOpfPreparation::calc_phase_shift_withdrawal`
+/// and `DcOperators::calc_bus_phase_shift_injection` all read it.
+pub(crate) fn calc_dc_phase_shift_withdrawal(
+    n: usize,
+    columns: impl Iterator<Item = ((usize, usize), f64, f64)>,
+) -> Vec<f64> {
+    calc_bus_scatter(
+        n,
+        columns.map(|(endpoints, weight, shift)| (endpoints, calc_dc_flow_offset(weight, shift))),
+    )
 }
 
 /// Sparse diagonal matrix from `values` (square, `len × len`).
@@ -154,16 +295,22 @@ pub fn calc_susceptance_diagonal(b: &[f64]) -> CsMat<f64> {
     calc_diagonal(b)
 }
 
-/// Calculate the branch flow matrix used by solver preparations,
-/// `Diagonal(w) * Aᵀ`, shape `m × n`, where `w` contains positive factor
-/// weights.
+/// Calculate the branch flow matrix `Diagonal(w) * Aᵀ`, shape `m × n`. Solver
+/// preparations pass positive factor weights; `DcOperators` passes the public
+/// PowerModels susceptances for its public `Bf`. The one branch flow matrix
+/// assembly in the crate.
 ///
 /// A complete affine branch flow also adds `-b * shift`; problem
 /// preparations expose that term through
 /// `DcOpfPreparation::calc_branch_flow_offset`. In the public PowerModels sign
 /// spelling the same flow is `p_branch = -Bf va + b .* shift` with negated
-/// susceptances.
-pub(crate) fn calc_solver_branch_flow_matrix(
+/// susceptances. [`DcOpfMatrices::branch_flow_matrix`](crate::DcOpfMatrices)
+/// is this matrix over a preparation's incidence and weights.
+///
+/// # Panics
+/// Panics if `susceptance_magnitude.len()` is not the incidence column count.
+#[must_use]
+pub fn calc_solver_branch_flow_matrix(
     bus_branch_incidence: &CsMat<f64>,
     susceptance_magnitude: &[f64],
 ) -> CsMat<f64> {

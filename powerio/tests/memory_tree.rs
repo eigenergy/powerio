@@ -192,11 +192,14 @@ fn format_catalog_tokens_resolve_and_read_only_targets_stay_read_only() {
                 .can_emit
         );
     }
-    assert!(
-        catalog
-            .iter()
-            .any(|entry| entry.format.token == "bmopf-json@0.2.0")
-    );
+    // One BMOPF token writes the one version PowerIO writes.
+    let bmopf: Vec<_> = catalog
+        .iter()
+        .filter(|entry| entry.format.token.starts_with("bmopf"))
+        .collect();
+    assert_eq!(bmopf.len(), 1, "{bmopf:?}");
+    assert_eq!(bmopf[0].format.token, "bmopf-json");
+    assert!(bmopf[0].format.can_emit);
 }
 
 #[test]

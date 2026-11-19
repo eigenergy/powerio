@@ -107,13 +107,18 @@ def check_case(path: Path) -> str:
                 xf_tap,
                 [b["tap"] if b["tap"] != 0.0 else 1.0 for b in xf_branches],
             )
-            # rate_a == 0 (unlimited) writes s_nom = base_mva, so only compare
-            # s_nom where the branch carries a limit.
-            for (_, row), b in zip(net.transformers.iterrows(), xf_branches):
-                if b["rate_a"] > 0.0:
-                    check_close(
-                        problems, "transformer.s_nom", float(row.s_nom), b["rate_a"]
-                    )
+            # The thermal limit is s_nom * s_max_pu. An unlimited rate_a (inf)
+            # writes s_nom = base_mva with s_max_pu = inf; a finite one writes
+            # s_nom = rate_a with s_max_pu = 1.
+            for (_, row), b in zip(
+                net.transformers.iterrows(), xf_branches, strict=True
+            ):
+                check_close(
+                    problems,
+                    "transformer s_nom * s_max_pu",
+                    float(row.s_nom) * float(row.s_max_pu),
+                    float(b["rate_a"]),
+                )
         else:
             problems.append(
                 f"line/transformer split: {len(net.transformers)} transformers"

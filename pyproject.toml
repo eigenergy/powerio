@@ -28,6 +28,8 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+sienna-files = ["h5py>=3.16", "numpy>=1.21"]
+pypsa-files = ["pypsa>=1.4,<2", "netCDF4>=1.7.5", "h5py>=3.16", "tables>=3.11"]
 # The matrix methods assemble scipy.sparse from the COO triplets the extension
 # returns; the graph helper builds a networkx graph. Install only what you use.
 matrix = ["numpy>=1.21", "scipy>=1.7"]
@@ -60,6 +62,12 @@ mcp = [
     "numpy>=1.21",
     "scipy>=1.7",
 ]
+
+[project.entry-points."interop.sources"]
+powerio_source = "powerio.interop:PowerIOSource"
+
+[project.entry-points."interop.sinks"]
+powerio_sink = "powerio.interop:PowerIOSink"
 
 [project.scripts]
 # Serves the powerio.mcp tool surface over stdio. Needs the `mcp` extra.

@@ -145,19 +145,10 @@ pub(super) fn sequence_impedance(code: &DistLineCode, length: f64) -> Option<[Co
     let result = if z[0][1] == z[0][2] {
         // DSS's Z1=Z2 branch uses exact (Z0-Z1)/3 mutual impedance.
         // The truncated rotation constants below apply only to Z1!=Z2.
-        let sequence = z[0][0] - z[0][1];
-        [z[0][0] + 2.0 * z[0][1], sequence, sequence]
+        let (sequence, zero) = crate::sequence::calc_sequence_from_phase(z[0][0], z[0][1]);
+        [zero, sequence, sequence]
     } else {
-        let alpha = Complex64::new(-0.5, 0.866_025);
-        let first_rotation = alpha - 1.0;
-        let second_rotation = alpha * alpha - 1.0;
-        let upper_delta = 3.0 * (z[0][1] - z[0][0]);
-        let lower_delta = 3.0 * (z[0][2] - z[0][0]);
-        let denominator = first_rotation * first_rotation - second_rotation * second_rotation;
-        let positive = (upper_delta * first_rotation - lower_delta * second_rotation) / denominator;
-        let negative = (lower_delta * first_rotation - upper_delta * second_rotation) / denominator;
-        let zero = 3.0 * z[0][0] - positive - negative;
-        [zero, positive, negative]
+        crate::sequence::calc_circulant_sequence_from_phase(z[0])
     };
     if result[1] == Complex64::default()
         || result
