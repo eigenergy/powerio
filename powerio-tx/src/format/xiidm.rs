@@ -1375,21 +1375,34 @@ fn json_array_text(values: &[JsonNode]) -> String {
 /// encoding; then the whole document is transcoded once. Offsets in read
 /// errors count bytes of this text.
 fn xiidm_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, str>, u64)> {
-    for (mark, name) in [([0xFF, 0xFE], "UTF-16LE"), ([0xFE, 0xFF], "UTF-16BE")] {
-        if bytes.starts_with(&mark) {
+    // UTF-16 with a byte order mark, or starting `<?` without one.
+    for (prefix, name) in [
+        (&[0xFF, 0xFE][..], "UTF-16LE"),
+        (&[0xFE, 0xFF][..], "UTF-16BE"),
+        (&[b'<', 0, b'?', 0][..], "UTF-16LE"),
+        (&[0, b'<', 0, b'?'][..], "UTF-16BE"),
+    ] {
+        if bytes.starts_with(prefix) {
             return Err(unsupported_xml_encoding(name));
         }
     }
     let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
     let mark_bytes = (bytes.len() - body.len()) as u64;
     // Only the declaration is read here. It is ASCII in every encoding the
-    // reader accepts, so it reads before the document is transcoded.
-    let declared = match quick_xml::Reader::from_reader(body).read_event() {
-        Ok(Event::Decl(declaration)) => {
-            validate_xml_encoding(&declaration)?;
-            declaration.encoder()
+    // reader accepts, so it reads before the document is transcoded. White
+    // space and comments before it are passed over, as the reader on
+    // quick-xml 0.41 passed over them.
+    let mut probe = quick_xml::Reader::from_reader(body);
+    probe.config_mut().trim_text(true);
+    let declared = loop {
+        match probe.read_event() {
+            Ok(Event::Comment(_)) => {}
+            Ok(Event::Decl(declaration)) => {
+                validate_xml_encoding(&declaration)?;
+                break declaration.encoder();
+            }
+            _ => break None,
         }
-        _ => None,
     };
     let text = match declared {
         Some(encoding) if encoding.name() != "UTF-8" => encoding
@@ -15433,7 +15446,44 @@ mod tests {
     }
 
     #[test]
-    fn a_utf16_byte_order_mark_is_rejected() {
+    fn a_single_byte_declaration_after_white_space_or_a_comment_still_selects_the_encoding() {
+        let source = BUS_BREAKER
+            .replace("encoding=\"UTF-8\"", "encoding=\"ISO-8859-1\"")
+            .replace("sourceFormat=\"test\"", "sourceFormat=\"Réseau\"");
+        for lead in ["\n  ", "<!-- exported -->", "\n<!-- a -->\n<!-- b -->\n"] {
+            let bytes: Vec<u8> = format!("{lead}{source}")
+                .chars()
+                .map(|value| u8::try_from(u32::from(value)).expect("fixture is ISO-8859-1"))
+                .collect();
+            assert!(std::str::from_utf8(&bytes).is_err());
+            let network = parse_xiidm_bytes(&bytes, &mut Diagnostics::new())
+                .unwrap_or_else(|error| panic!("lead {lead:?}: {error}"));
+            assert_eq!(
+                network.case_metadata().source_model_format.as_deref(),
+                Some("Réseau"),
+                "lead {lead:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn utf16_is_rejected_with_or_without_a_byte_order_mark() {
+        let utf16le: Vec<u8> = BUS_BREAKER
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let utf16be: Vec<u8> = BUS_BREAKER
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        for (bytes, name) in [(utf16le, "UTF-16LE"), (utf16be, "UTF-16BE")] {
+            let error = parse_xiidm_bytes(&bytes, &mut Diagnostics::new()).unwrap_err();
+            assert!(
+                error.to_string().contains("unsupported XIIDM XML encoding"),
+                "{error}"
+            );
+            assert!(error.to_string().contains(name), "{error}");
+        }
         for (mark, name) in [([0xFF, 0xFE], "UTF-16LE"), ([0xFE, 0xFF], "UTF-16BE")] {
             let mut bytes = mark.to_vec();
             bytes.extend_from_slice(BUS_BREAKER.as_bytes());
