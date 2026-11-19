@@ -888,14 +888,14 @@ pub(crate) fn parse_xiidm_bytes(
                 parsed
                     .consume(
                         TreeEvent::Start {
-                            tag: &tag,
+                            tag,
                             namespace: namespace.as_deref(),
                             attrs,
                             empty: false,
                         },
                         diagnostics,
                     )
-                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
+                    .map_err(|error| locate(error, tag, id.as_deref(), event_offset))?;
             }
             Event::Empty(element) => {
                 if element_depth >= MAX_XIIDM_ELEMENT_DEPTH {
@@ -913,20 +913,20 @@ pub(crate) fn parse_xiidm_bytes(
                 parsed
                     .consume(
                         TreeEvent::Start {
-                            tag: &tag,
+                            tag,
                             namespace: namespace.as_deref(),
                             attrs,
                             empty: true,
                         },
                         diagnostics,
                     )
-                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
+                    .map_err(|error| locate(error, tag, id.as_deref(), event_offset))?;
             }
             Event::End(element) => {
                 let tag = local_name(element.name().into_inner());
                 parsed
-                    .consume(TreeEvent::End(&tag), diagnostics)
-                    .map_err(|error| locate(error, &tag, None, event_offset))?;
+                    .consume(TreeEvent::End(tag), diagnostics)
+                    .map_err(|error| locate(error, tag, None, event_offset))?;
                 element_depth = element_depth.saturating_sub(1);
             }
             Event::Text(value) => {
