@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- pandapower JSON: the writer states `tap_dependency_table = false` for every transformer. pandapower 3.0 and later warned on `runpp` that the column was missing.
-
-- `AcPfInstance::from_network` gives a bus coded PV with no in service generator the PQ specification, as MATPOWER and pandapower give a bus with no generator. Only generators count as voltage controllers here; an HVDC line terminal does not. The bus was held at its stated voltage with reactive power no device supplies. `AcPfInstance::voltage_control_diagnostics` names those buses.
-
 ## 0.12.3
 
 - OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
