@@ -266,7 +266,11 @@ impl AcPfInstance {
     /// Build the instance from the network's stated data. A PQ bus states
     /// its net injections; a PV bus its net active injection and the
     /// regulating generator's voltage setpoint; a reference bus its setpoint
-    /// magnitude and stated angle. Net injections count in service
+    /// magnitude and stated angle. A bus coded PV with no in service
+    /// generator has nothing to hold its voltage, so it gets the PQ
+    /// specification, as MATPOWER's `bustypes` gives it;
+    /// [`voltage_control_diagnostics`](Self::voltage_control_diagnostics)
+    /// names those buses. Net injections count in service
     /// generators, loads, and HVDC lines; each in service HVDC line is a
     /// fixed injection at its stated terminal powers
     /// ([`HvdcTreatment::FixedInjection`]).
@@ -299,10 +303,12 @@ impl AcPfInstance {
             .map(|bus| {
                 let spec = match bus.kind {
                     BusType::Isolated => AcBusSpecification::Isolated,
-                    BusType::Pv => AcBusSpecification::Pv {
-                        p: net_active_power(&totals, bus.id),
-                        vm: controlled_magnitude(&totals, bus.id, bus.vm)?,
-                    },
+                    BusType::Pv if has_voltage_controller(&totals, bus.id) => {
+                        AcBusSpecification::Pv {
+                            p: net_active_power(&totals, bus.id),
+                            vm: controlled_magnitude(&totals, bus.id, bus.vm)?,
+                        }
+                    }
                     BusType::Ref => AcBusSpecification::Reference {
                         vm: controlled_magnitude(&totals, bus.id, bus.vm)?,
                         va: bus.va,
@@ -367,6 +373,30 @@ impl AcPfInstance {
         self.network
             .calc_hvdc_injections()
             .to_diagnostics(self.hvdc_treatment)
+    }
+
+    /// One diagnostic per bus the network codes PV that this instance
+    /// specifies as PQ because no in service generator is there to hold its
+    /// voltage. Empty when every PV bus has one.
+    #[must_use]
+    pub fn voltage_control_diagnostics(&self) -> Vec<powerio_core::Diagnostic> {
+        let totals = aggregate_bus_elements(&self.network, self.hvdc_treatment);
+        self.network
+            .buses()
+            .iter()
+            .zip(&self.specifications)
+            .filter(|(bus, specification)| {
+                bus.kind == BusType::Pv
+                    && matches!(specification, AcBusSpecification::Pq { .. })
+                    && !has_voltage_controller(&totals, bus.id)
+            })
+            .map(|(bus, _)| {
+                transform_assumption(&format!(
+                    "bus {} is coded PV but has no in service generator; it is specified as PQ",
+                    bus.id
+                ))
+            })
+            .collect()
     }
 
     /// The optional solver initial point.
@@ -765,6 +795,13 @@ fn net_reactive_power(totals: &BTreeMap<BusId, BusAggregate>, bus: BusId) -> f64
     totals
         .get(&bus)
         .map_or(0.0, |entry| entry.q_gen - entry.q_load + entry.q_hvdc)
+}
+
+/// Whether an in service generator at the bus states a voltage setpoint.
+fn has_voltage_controller(totals: &BTreeMap<BusId, BusAggregate>, bus: BusId) -> bool {
+    totals
+        .get(&bus)
+        .is_some_and(|entry| entry.setpoint.is_some())
 }
 
 /// The controlled voltage magnitude at one bus: the in service generators'

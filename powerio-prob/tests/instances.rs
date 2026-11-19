@@ -155,6 +155,44 @@ fn conflicting_voltage_controllers_are_refused_at_construction() {
 }
 
 #[test]
+fn a_pv_bus_with_no_in_service_generator_is_specified_as_pq() {
+    let mut net = case9();
+    let index = net
+        .generators()
+        .iter()
+        .position(|generator| generator.bus == BusId(2))
+        .expect("case9 has a generator at bus 2");
+    net.generators_mut()[index].in_service = false;
+    let position = net
+        .buses()
+        .iter()
+        .position(|bus| bus.id == BusId(2))
+        .unwrap();
+    assert_eq!(net.buses()[position].kind, BusType::Pv);
+
+    let instance = AcPfInstance::from_network(net).unwrap();
+    // No load and no generator in service: nothing is injected and nothing
+    // holds the voltage.
+    let AcBusSpecification::Pq { p, q } = instance.specifications()[position] else {
+        panic!("bus 2 has no in service generator, so it is a PQ bus")
+    };
+    assert_eq!(p.to_bits(), 0.0f64.to_bits());
+    assert_eq!(q.to_bits(), 0.0f64.to_bits());
+    let diagnostics = instance.voltage_control_diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code(), "TRANSFORM.INSTANCE.ASSUMPTION");
+    assert!(diagnostics[0].message().contains("bus 2"));
+
+    // With its generator in service the bus keeps the PV specification.
+    let instance = AcPfInstance::from_network(case9()).unwrap();
+    assert!(matches!(
+        instance.specifications()[position],
+        AcBusSpecification::Pv { .. }
+    ));
+    assert!(instance.voltage_control_diagnostics().is_empty());
+}
+
+#[test]
 fn the_objective_edit_never_copies_the_shared_network() {
     let net = case9();
     let bus_ptr = net.buses().as_ptr();

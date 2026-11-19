@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `AcPfInstance::from_network` gives a bus coded PV with no in service generator the PQ specification, as MATPOWER and pandapower do. It was held at its stated voltage with reactive power no device supplies. `AcPfInstance::voltage_control_diagnostics` names those buses.
+
 ## 0.12.3
 
 - OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
