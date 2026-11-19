@@ -1,4 +1,4 @@
-// A small Go client for PowerIO C ABI 7.
+// A small Go client for the PowerIO C ABI.
 package main
 
 /*
@@ -31,13 +31,27 @@ func fail(operation string, err *C.PioError) {
 	os.Exit(1)
 }
 
+// compatible reports whether the loaded library works with the header this
+// client was compiled against: the header's release series (the same major
+// and minor numbers before 1.0, the same major number from 1.0 on), at the
+// header's release or a newer one.
+func compatible(library C.PioVersionView) bool {
+	if library.major != C.PIO_VERSION_MAJOR {
+		return false
+	}
+	if library.minor != C.PIO_VERSION_MINOR {
+		return C.PIO_VERSION_MAJOR > 0 && library.minor > C.PIO_VERSION_MINOR
+	}
+	return library.patch >= C.PIO_VERSION_PATCH
+}
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: go-client case9.m")
 		os.Exit(2)
 	}
-	if C.pio_abi_version() != C.PIO_ABI_VERSION || C.PIO_ABI_VERSION != 7 {
-		fail("ABI mismatch", nil)
+	if !compatible(C.pio_version_numbers()) {
+		fail("the library is not in this header's release series, or it is older", nil)
 	}
 
 	path := C.CString(os.Args[1])
@@ -77,5 +91,5 @@ func main() {
 	C.pio_sparse_matrix_release(incidence)
 	C.pio_balanced_network_release(network)
 
-	fmt.Println("PowerIO Go ABI 7 probe passed")
+	fmt.Println("PowerIO Go probe passed")
 }

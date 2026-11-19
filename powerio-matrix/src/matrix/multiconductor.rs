@@ -11,21 +11,36 @@
 //! mappings remain valid after source row reordering.
 //!
 //! The passive admittance carries lines (series and both shunt halves from
-//! the linecode), shunts, and capacitor banks. Ideal equipment — two winding
-//! transformer coupling and voltage sources — enters the augmented system as
-//! exact constraint rows over the node voltages with their coupled ideal
-//! currents. Ideal WYE windings retain explicit floating or grounded neutral
-//! terminals. Transformer leakage, non-WYE connections, implicit neutral
-//! impedances, core shunts and tap decisions return an unsupported-physics
-//! error before assembly.
+//! the linecode), shunts, capacitor banks, and every transformer that states
+//! leakage: its terminal primitive
+//! ([`calc_transformer_primitive_admittance`]) carries WYE and DELTA
+//! windings, fixed taps, the magnetizing branch and finite neutral
+//! impedances, for two winding units, the BMOPF centre tap and the BMOPF
+//! single phase autotransformer. A solidly grounded transformer neutral
+//! enters the augmented system as an exact zero voltage row. Ideal equipment
+//! — a two winding transformer stating no leakage and voltage sources —
+//! enters the augmented system as exact constraint rows over the node
+//! voltages with their coupled ideal currents. Ideal WYE windings retain
+//! explicit floating or grounded neutral terminals; an ideal unit with a
+//! non-WYE connection, neutral impedances, a core shunt or tap bounds, and a
+//! leakage unit outside the primitive's shapes, return an unsupported
+//! physics error before assembly. Tap bounds on a leakage unit are decision
+//! data the nodal system does not read: it stamps the stated fixed tap.
 
 mod transformer;
+
+pub use powerio_dist::transformer::{
+    TransformerLeakageBase, TransformerPrimitive, calc_transformer_leakage_impedances,
+    calc_transformer_primitive_admittance, calc_transformer_winding_admittance,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostics::Diagnostic;
 use num_complex::Complex64;
-use powerio_dist::{Configuration, MulticonductorNetwork};
+use powerio_dist::{
+    DistCapacitor, DistLine, DistLineCode, DistShunt, DistTransformer, MulticonductorNetwork,
+};
 use sprs::CsMat;
 
 use crate::diagnostics::codes;
@@ -48,54 +63,58 @@ pub enum NodeRef {
     Ground,
 }
 
-/// The dense node indexing of one multiconductor network.
+/// The dense node indexing of one multiconductor network, over powerio-dist's
+/// flat terminal index (so bus names compare ASCII case insensitively, as
+/// every multiconductor calculation reads them).
 #[derive(Clone, Debug)]
 pub struct MulticonductorNodeIndex {
     nodes: Vec<DistNode>,
-    position: BTreeMap<(String, String), usize>,
-    grounded: BTreeSet<(String, String)>,
-}
-
-fn find(parent: &mut [usize], node: usize) -> usize {
-    let mut root = node;
-    while parent[root] != root {
-        root = parent[root];
-    }
-    let mut walk = node;
-    while parent[walk] != root {
-        let next = parent[walk];
-        parent[walk] = root;
-        walk = next;
-    }
-    root
+    terminals: powerio_dist::MulticonductorTerminalIndex,
+    /// Flat terminal position to dense row; `None` for a grounded terminal.
+    dense_of_terminal: Vec<Option<usize>>,
 }
 
 impl MulticonductorNodeIndex {
     /// Build the index: bus table order, each bus's stated terminal order,
-    /// with terminal `0` and explicitly grounded terminals excluded from the
-    /// unknowns. Closed switches merge their paired terminals into one
+    /// with earth terminals (terminal `0`, and any terminal the network's
+    /// terminal conventions name as earth: `powerio_dist::calc_terminal_role`)
+    /// and explicitly grounded terminals excluded from the unknowns. Closed switches merge their paired terminals into one
     /// node — the first spelling encountered names the merged node.
+    ///
+    /// # Errors
+    /// A duplicated bus or terminal identity, or a closed switch naming a
+    /// terminal its buses do not declare.
     pub fn build(network: &MulticonductorNetwork) -> Result<Self> {
-        // Union-find over provisional slots, one per ungrounded terminal.
-        let mut provisional: Vec<(String, String)> = Vec::new();
-        let mut slot: BTreeMap<(String, String), usize> = BTreeMap::new();
-        let mut grounded: BTreeSet<(String, String)> = BTreeSet::new();
+        let terminals = powerio_dist::MulticonductorTerminalIndex::build(network)
+            .map_err(|error| Error::Mtx(error.to_string()))?;
+        // Components over provisional slots, one per ungrounded terminal.
+        let mut grounded = vec![false; terminals.len()];
+        let mut slot: Vec<Option<usize>> = vec![None; terminals.len()];
+        let mut provisional: Vec<usize> = Vec::new();
+        let conventions = network.terminal_conventions();
         for bus in network.buses() {
             for terminal in &bus.terminals {
-                let key = (bus.id.clone(), terminal.clone());
-                if terminal == "0" || bus.grounded.contains(terminal) {
-                    grounded.insert(key);
+                let Some(position) = terminals.resolve(&bus.id, terminal) else {
+                    continue;
+                };
+                // Earth by the one terminal classification, or grounded at
+                // the bus.
+                if bus.terminal_role(terminal, conventions) == powerio_dist::TerminalRole::Earth
+                    || bus.grounded.contains(terminal)
+                {
+                    grounded[position] = true;
                     continue;
                 }
-                slot.insert(key.clone(), provisional.len());
-                provisional.push(key);
+                slot[position] = Some(provisional.len());
+                provisional.push(position);
             }
         }
 
         // Every union runs before any group is marked grounded, so a
         // grounding is a property of the finished group and the index is
         // identical under any declaration order of closed switches.
-        let mut parent: Vec<usize> = (0..provisional.len()).collect();
+        let mut joined_from: Vec<usize> = Vec::new();
+        let mut joined_to: Vec<usize> = Vec::new();
         let mut ground_touched: Vec<usize> = Vec::new();
         for switch in network.switches().iter().filter(|switch| !switch.open) {
             for (from, to) in switch
@@ -103,23 +122,19 @@ impl MulticonductorNodeIndex {
                 .iter()
                 .zip(switch.terminal_map_to.iter())
             {
-                let from_key = (switch.bus_from.clone(), from.clone());
-                let to_key = (switch.bus_to.clone(), to.clone());
-                match (slot.get(&from_key), slot.get(&to_key)) {
-                    (Some(&a), Some(&b)) => {
-                        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                        if ra != rb {
-                            parent[ra.max(rb)] = ra.min(rb);
-                        }
+                let from = terminals.resolve(&switch.bus_from, from);
+                let to = terminals.resolve(&switch.bus_to, to);
+                let slot_of = |position: Option<usize>| position.and_then(|p| slot[p]);
+                let grounded_at = |position: Option<usize>| position.is_some_and(|p| grounded[p]);
+                match (slot_of(from), slot_of(to)) {
+                    (Some(a), Some(b)) => {
+                        joined_from.push(a);
+                        joined_to.push(b);
                     }
                     // A closed switch onto ground grounds the other side's
                     // whole finished group.
-                    (Some(&a), None) if grounded.contains(&to_key) => {
-                        ground_touched.push(a);
-                    }
-                    (None, Some(&b)) if grounded.contains(&from_key) => {
-                        ground_touched.push(b);
-                    }
+                    (Some(a), None) if grounded_at(to) => ground_touched.push(a),
+                    (None, Some(b)) if grounded_at(from) => ground_touched.push(b),
                     _ => {
                         return Err(Error::Mtx(format!(
                             "switch `{}` names a terminal its buses do not declare",
@@ -129,35 +144,54 @@ impl MulticonductorNodeIndex {
                 }
             }
         }
-        let grounded_roots: BTreeSet<usize> = ground_touched
+        // Groups are labeled in order of their first slot, so the first
+        // spelling in table order names a merged node; the one component
+        // labeling in powerio-tx joins them.
+        let labels =
+            powerio_tx::calc_dense_island_labels(provisional.len(), &joined_from, &joined_to);
+        let grounded_labels: BTreeSet<usize> = ground_touched
             .into_iter()
-            .map(|slot| find(&mut parent, slot))
+            .map(|slot| labels[slot])
             .collect();
 
-        // Dense rows: one per surviving root, in provisional (table) order.
-        let mut dense_of_root: BTreeMap<usize, usize> = BTreeMap::new();
+        // Dense rows: one per surviving group, in provisional (table) order.
+        let mut dense_of_label: BTreeMap<usize, usize> = BTreeMap::new();
         let mut nodes = Vec::new();
-        let mut position = BTreeMap::new();
-        for index in 0..provisional.len() {
-            let root = find(&mut parent, index);
-            // A root whose group touched ground through a switch grounds the
-            // whole group.
-            if grounded_roots.contains(&root) {
-                grounded.insert(provisional[index].clone());
+        let mut dense_of_terminal = vec![None; terminals.len()];
+        for (index, &label) in labels.iter().enumerate() {
+            // A group that touched ground through a switch is grounded whole.
+            if grounded_labels.contains(&label) {
                 continue;
             }
-            let dense = *dense_of_root.entry(root).or_insert_with(|| {
-                let (bus, terminal) = provisional[root].clone();
+            let position = provisional[index];
+            let dense = *dense_of_label.entry(label).or_insert_with(|| {
+                let (bus, terminal) = terminals.terminals()[position].clone();
                 nodes.push(DistNode { bus, terminal });
                 nodes.len() - 1
             });
-            position.insert(provisional[index].clone(), dense);
+            dense_of_terminal[position] = Some(dense);
         }
         Ok(Self {
             nodes,
-            position,
-            grounded,
+            terminals,
+            dense_of_terminal,
         })
+    }
+
+    /// The flat terminal index underneath: every declared terminal, grounded
+    /// or not, at its stable position.
+    #[must_use]
+    pub const fn terminals(&self) -> &powerio_dist::MulticonductorTerminalIndex {
+        &self.terminals
+    }
+
+    /// Where the terminal at a flat position lands: a dense unknown or
+    /// ground. `None` for a position past the terminal index.
+    #[must_use]
+    pub fn resolve_position(&self, position: usize) -> Option<NodeRef> {
+        self.dense_of_terminal
+            .get(position)
+            .map(|dense| dense.map_or(NodeRef::Ground, NodeRef::Node))
     }
 
     /// The voltage unknowns, in dense row order.
@@ -182,14 +216,8 @@ impl MulticonductorNodeIndex {
     /// declare.
     #[must_use]
     pub fn resolve(&self, bus: &str, terminal: &str) -> Option<NodeRef> {
-        let key = (bus.to_owned(), terminal.to_owned());
-        if let Some(&dense) = self.position.get(&key) {
-            return Some(NodeRef::Node(dense));
-        }
-        if self.grounded.contains(&key) {
-            return Some(NodeRef::Ground);
-        }
-        None
+        let position = self.terminals.resolve(bus, terminal)?;
+        Some(self.dense_of_terminal[position].map_or(NodeRef::Ground, NodeRef::Node))
     }
 }
 
@@ -250,58 +278,19 @@ impl MulticonductorAdmittance {
     }
 }
 
-/// Small dense complex inverse by Gaussian elimination with partial
-/// pivoting, for conductor count sized matrices.
+/// The largest elimination pivot, in ohms, a series impedance inverse refuses
+/// as singular.
+const SINGULAR_PIVOT_OHMS: f64 = 1e-14;
+
+/// The dense inverse of a series impedance: `None` when a pivot is
+/// [`SINGULAR_PIVOT_OHMS`] or smaller (or NaN).
 fn invert(matrix: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    let n = matrix.len();
-    let mut work: Vec<Vec<Complex64>> = matrix.to_vec();
-    let mut inverse: Vec<Vec<Complex64>> = (0..n)
-        .map(|row| {
-            (0..n)
-                .map(|column| {
-                    if row == column {
-                        Complex64::new(1.0, 0.0)
-                    } else {
-                        Complex64::new(0.0, 0.0)
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    for pivot in 0..n {
-        let best = (pivot..n).max_by(|&a, &b| {
-            work[a][pivot]
-                .norm()
-                .partial_cmp(&work[b][pivot].norm())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })?;
-        if work[best][pivot].norm() == 0.0 {
-            return None;
-        }
-        work.swap(pivot, best);
-        inverse.swap(pivot, best);
-        let lead = work[pivot][pivot];
-        for column in 0..n {
-            work[pivot][column] /= lead;
-            inverse[pivot][column] /= lead;
-        }
-        for row in 0..n {
-            if row == pivot {
-                continue;
-            }
-            let factor = work[row][pivot];
-            if factor.norm() == 0.0 {
-                continue;
-            }
-            for column in 0..n {
-                let w = work[pivot][column];
-                let i = inverse[pivot][column];
-                work[row][column] -= factor * w;
-                inverse[row][column] -= factor * i;
-            }
-        }
-    }
-    Some(inverse)
+    powerio_dist::dense::invert_dense_matrix(
+        matrix,
+        powerio_dist::dense::DensePivot::Partial,
+        SINGULAR_PIVOT_OHMS,
+        0.0,
+    )
 }
 
 struct Stamper {
@@ -325,46 +314,325 @@ impl Stamper {
             self.susceptance.add(i, j, value.im);
         }
     }
+
+    /// Accumulate an element's primitive admittance over the node references
+    /// of its terminals, in the primitive's terminal order.
+    fn add_primitive(&mut self, terminals: &[NodeRef], primitive: &[Vec<Complex64>]) -> Result<()> {
+        scatter_primitive_admittance(terminals, primitive, |from, to, value| {
+            self.add(from, to, value);
+        })
+    }
 }
 
-/// Build the passive nodal admittance and the ideal equipment constraints.
+/// Scatter an element's primitive admittance onto the system positions of
+/// its terminals: `add(terminals[r], terminals[c], primitive[r][c])` for every
+/// entry, in row major order. The one scatter of a primitive into a nodal
+/// system: [`calc_multiconductor_admittance_matrix`] reads it over its node
+/// references, and a caller indexing terminals its own way reads it over
+/// its positions.
 ///
 /// # Errors
-/// A structurally broken network: an element naming an undeclared bus or
-/// terminal, or a line whose terminal maps disagree with its linecode shape.
-/// Everything the builder cannot stamp exactly is a structured diagnostic,
-/// never a silent omission or a fabricated impedance.
-#[allow(clippy::too_many_lines)] // one stamp block per element family
-#[allow(clippy::many_single_char_names)] // n and per conductor y/z/b follow the textbook stamps
-pub fn calc_multiconductor_admittance_matrix(
+/// A primitive that is not square over `terminals`.
+pub fn scatter_primitive_admittance<T: Copy>(
+    terminals: &[T],
+    primitive: &[Vec<Complex64>],
+    mut add: impl FnMut(T, T, Complex64),
+) -> Result<()> {
+    if primitive.len() != terminals.len()
+        || primitive.iter().any(|row| row.len() != terminals.len())
+    {
+        return Err(Error::Mtx(format!(
+            "a primitive admittance of {} rows does not match its {} terminals",
+            primitive.len(),
+            terminals.len()
+        )));
+    }
+    for (row, &from) in terminals.iter().enumerate() {
+        for (column, &to) in terminals.iter().enumerate() {
+            add(from, to, primitive[row][column]);
+        }
+    }
+    Ok(())
+}
+
+/// The primitive admittance of a line, siemens, over its terminals in the
+/// order `terminal_map_from` then `terminal_map_to`: the inverse of the
+/// linecode's series impedance over the length couples the two ends, and
+/// each end carries its shunt half,
+///
+/// ```text
+/// [ Y + Y_from     -Y      ]      Y = (Z_series · length)⁻¹
+/// [    -Y       Y + Y_to   ]      Y_from = (G_from + j B_from) · length
+/// ```
+///
+/// The one line stamp: [`calc_multiconductor_admittance_matrix`] scatters
+/// it into the nodal system.
+///
+/// # Errors
+/// A line whose terminal maps disagree with the linecode's conductor count,
+/// a linecode matrix of another shape, a length that is not finite and
+/// positive, or a singular series impedance.
+pub fn calc_line_primitive_admittance(
+    line: &DistLine,
+    code: &DistLineCode,
+) -> Result<Vec<Vec<Complex64>>> {
+    let conductors = code.n_conductors;
+    if line.terminal_map_from.len() != conductors || line.terminal_map_to.len() != conductors {
+        return Err(Error::Mtx(format!(
+            "line `{}` maps {}/{} terminals over a {conductors} conductor linecode",
+            line.name,
+            line.terminal_map_from.len(),
+            line.terminal_map_to.len()
+        )));
+    }
+    if !line.length.is_finite() || line.length <= 0.0 {
+        return Err(Error::Mtx(format!(
+            "line `{}` states no usable length",
+            line.name
+        )));
+    }
+    let square = |matrix: &[Vec<f64>]| {
+        matrix.len() == conductors && matrix.iter().all(|row| row.len() == conductors)
+    };
+    if ![
+        &code.r_series,
+        &code.x_series,
+        &code.g_from,
+        &code.b_from,
+        &code.g_to,
+        &code.b_to,
+    ]
+    .into_iter()
+    .all(|matrix| square(matrix))
+    {
+        return Err(Error::Mtx(format!(
+            "linecode `{}` states a matrix that is not {conductors} by {conductors}",
+            code.name
+        )));
+    }
+    let z: Vec<Vec<Complex64>> = (0..conductors)
+        .map(|row| {
+            (0..conductors)
+                .map(|column| {
+                    Complex64::new(code.r_series[row][column], code.x_series[row][column])
+                        * line.length
+                })
+                .collect()
+        })
+        .collect();
+    let Some(y_series) = invert(&z) else {
+        return Err(Error::Mtx(format!(
+            "line `{}` has a singular series impedance matrix",
+            line.name
+        )));
+    };
+    let mut primitive = vec![vec![Complex64::new(0.0, 0.0); 2 * conductors]; 2 * conductors];
+    for row in 0..conductors {
+        for column in 0..conductors {
+            let y = y_series[row][column];
+            let shunt_from =
+                Complex64::new(code.g_from[row][column], code.b_from[row][column]) * line.length;
+            let shunt_to =
+                Complex64::new(code.g_to[row][column], code.b_to[row][column]) * line.length;
+            primitive[row][column] = y + shunt_from;
+            primitive[conductors + row][conductors + column] = y + shunt_to;
+            primitive[row][conductors + column] = -y;
+            primitive[conductors + row][column] = -y;
+        }
+    }
+    Ok(primitive)
+}
+
+/// The primitive admittance of a shunt element, siemens, over its
+/// `terminal_map`: its stated `G + j B`.
+#[must_use]
+pub fn calc_shunt_primitive_admittance(shunt: &DistShunt) -> Vec<Vec<Complex64>> {
+    shunt
+        .g
+        .iter()
+        .zip(&shunt.b)
+        .map(|(g_row, b_row)| {
+            g_row
+                .iter()
+                .zip(b_row)
+                .map(|(&g, &b)| Complex64::new(g, b))
+                .collect()
+        })
+        .collect()
+}
+
+/// A capacitor bank's primitive admittance, siemens, over its terminal map:
+/// `j` times its susceptance ([`powerio_dist::calc_capacitor_susceptance`]).
+///
+/// Each coil of the bank's connection ([`powerio_dist::calc_element_connection`]:
+/// a WYE coil from each phase to its neutral or to ground, a DELTA coil
+/// between consecutive terminals or across a two terminal bank, a single
+/// phase coil across its two terminals) carries an equal share of the rated
+/// reactive power at its coil voltage:
+///
+/// ```text
+/// b = q_rated / coils / V²,   V = v_nom / √3 (WYE with more than one terminal), v_nom otherwise
+/// ```
+///
+/// The WYE nameplate is line to line when the bank has an explicit return
+/// or several phases; a one terminal WYE bank states its coil voltage.
+/// `None` for a configuration with no capacitor connection. The one
+/// capacitor stamp: [`calc_multiconductor_admittance_matrix`] scatters it
+/// into the nodal system and the multiconductor OPF writes it per unit.
+///
+/// # Errors
+/// A nameplate that is not finite with a positive voltage, or a terminal map
+/// its configuration cannot carry (an undeclared bus, an ambiguous WYE
+/// neutral, a single phase bank without two terminals).
+pub fn calc_capacitor_primitive_admittance(
     network: &MulticonductorNetwork,
-) -> Result<MulticonductorAdmittance> {
-    powerio_dist::require_electrical_readiness(network)?;
-    let index = MulticonductorNodeIndex::build(network)?;
-    let transformer_constraints = transformer::ideal_wye_constraints(network, &index)?;
-    let n = index.len();
-    let mut stamper = Stamper::new(n);
+    capacitor: &DistCapacitor,
+) -> Result<Option<Vec<Vec<Complex64>>>> {
+    let susceptance =
+        powerio_dist::calc_capacitor_susceptance(network, capacitor).map_err(Error::Mtx)?;
+    Ok(susceptance.map(|matrix| {
+        matrix
+            .into_iter()
+            .map(|row| row.into_iter().map(|b| Complex64::new(0.0, b)).collect())
+            .collect()
+    }))
+}
+
+/// The passive element family behind a [`PassivePrimitive`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PassiveFamily {
+    Line,
+    Shunt,
+    Capacitor,
+    Transformer,
+}
+
+impl PassiveFamily {
+    /// The family's lowercase name, as messages and element listings print it.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Line => "line",
+            Self::Shunt => "shunt",
+            Self::Capacitor => "capacitor",
+            Self::Transformer => "transformer",
+        }
+    }
+}
+
+/// A transformer neutral the source grounds solidly: an exact zero voltage
+/// at `(bus, terminal)`, not an admittance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GroundedNeutral<'a> {
+    /// The transformer that grounds it.
+    pub transformer: &'a str,
+    pub bus: &'a str,
+    pub terminal: &'a str,
+}
+
+impl GroundedNeutral<'_> {
+    /// Whether this neutral needs its own zero voltage row, given the voltage
+    /// an ideal source already prescribes on the same node (`None` when none
+    /// does): `true` without a prescription, `false` when the source already
+    /// fixes the node at exactly zero (a second row would make the
+    /// constraint rows rank deficient).
+    ///
+    /// The one rule for a solid neutral meeting a source:
+    /// [`calc_multiconductor_admittance_matrix`] and every caller assembling
+    /// its own prescribed voltages read it.
+    ///
+    /// # Errors
+    /// A nonzero prescribed voltage on the grounded node.
+    pub fn needs_zero_voltage_row(&self, prescribed: Option<Complex64>) -> Result<bool> {
+        match prescribed {
+            None => Ok(true),
+            Some(voltage) if voltage == Complex64::new(0.0, 0.0) => Ok(false),
+            Some(voltage) => Err(Error::Commit(powerio_core::Error::new(
+                &codes::BUILD_MULTI_PHYSICS_UNSUPPORTED,
+                format!(
+                    "transformer `{}` grounds neutral `{}`:{} solidly, but a source prescribes {} V there",
+                    self.transformer,
+                    self.bus,
+                    self.terminal,
+                    voltage.norm()
+                ),
+            ))),
+        }
+    }
+}
+
+/// Every admittance element of a network with the exact constraints it
+/// leaves to the caller: [`calc_passive_primitives`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct NetworkPrimitives<'a> {
+    /// Lines, shunts, capacitor banks, then transformers stating leakage,
+    /// each family in table order.
+    pub elements: Vec<PassivePrimitive<'a>>,
+    /// Solidly grounded transformer neutrals, once per `(bus, terminal)`
+    /// spelling, in transformer order.
+    pub grounded: Vec<GroundedNeutral<'a>>,
+    /// Transformers that state no leakage: ideal couplings with no
+    /// admittance, which need exact voltage constraints.
+    pub ideal_transformers: Vec<&'a DistTransformer>,
+    /// Elements left out because the builders do not stamp them.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// One passive element's primitive admittance, siemens, with the bus
+/// terminal behind each primitive row.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct PassivePrimitive<'a> {
+    pub family: PassiveFamily,
+    pub name: &'a str,
+    /// `(bus, terminal)` of each primitive row, in primitive order.
+    pub terminals: Vec<(&'a str, &'a str)>,
+    pub primitive: Vec<Vec<Complex64>>,
+}
+
+/// Every admittance element of the network with its primitive admittance:
+/// lines (series inverse and both shunt halves,
+/// [`calc_line_primitive_admittance`]), then shunts
+/// ([`calc_shunt_primitive_admittance`]), then capacitor banks
+/// ([`calc_capacitor_primitive_admittance`]), then every transformer that
+/// states leakage ([`calc_transformer_primitive_admittance`]), each family
+/// in table order, with the transformers' solidly grounded neutrals and the
+/// ideal transformers left for exact constraints. The one element list:
+/// [`calc_multiconductor_admittance_matrix`] scatters it over its node
+/// references, and a caller indexing terminals its own way scatters it over
+/// its positions with [`scatter_primitive_admittance`].
+///
+/// A line's linecode is found under the network's identifier convention
+/// ([`MulticonductorNetwork::identifier_key`]), the convention readiness
+/// checks. An element the builders do not stamp (a line without a usable
+/// length, a capacitor configuration with no primitive) is left out and
+/// reported in the diagnostics, never stamped approximately.
+///
+/// # Errors
+/// A line naming an undeclared linecode or mapping terminals that disagree
+/// with its linecode, a singular series impedance, a shunt whose matrices
+/// are not square over its terminal map or not finite, a capacitor whose
+/// nameplate is not finite and positive, a capacitor terminal map its
+/// configuration cannot carry, or a leakage transformer the primitive
+/// refuses.
+#[allow(clippy::too_many_lines)] // one block per element family, in stamp order
+pub fn calc_passive_primitives(network: &MulticonductorNetwork) -> Result<NetworkPrimitives<'_>> {
+    let mut linecodes: BTreeMap<String, &DistLineCode> = BTreeMap::new();
+    for code in network.line_codes() {
+        linecodes
+            .entry(network.identifier_key(&code.name))
+            .or_insert(code);
+    }
+    let mut primitives = Vec::with_capacity(
+        network.lines().len() + network.shunts().len() + network.capacitors().len(),
+    );
     let mut diagnostics = Vec::new();
 
-    let resolve = |bus: &str, terminal: &str, element: &str| -> Result<NodeRef> {
-        index.resolve(bus, terminal).ok_or_else(|| {
-            Error::Mtx(format!(
-                "{element} names terminal `{terminal}` bus `{bus}` does not declare"
-            ))
-        })
-    };
-
-    let linecode_of = |name: &str| {
-        network
-            .line_codes()
-            .iter()
-            .find(|linecode| linecode.name == name)
-    };
-
-    // Lines: series inverse of the linecode impedance over the length, and
-    // both shunt halves.
     for line in network.lines() {
-        let Some(code) = linecode_of(&line.linecode) else {
+        let Some(code) = linecodes.get(&network.identifier_key(&line.linecode)) else {
             return Err(Error::Mtx(format!(
                 "line `{}` names linecode `{}` the network does not declare",
                 line.name, line.linecode
@@ -389,147 +657,164 @@ pub fn calc_multiconductor_admittance_matrix(
             ));
             continue;
         }
-        let z: Vec<Vec<Complex64>> = (0..conductors)
-            .map(|row| {
-                (0..conductors)
-                    .map(|column| {
-                        Complex64::new(code.r_series[row][column], code.x_series[row][column])
-                            * line.length
-                    })
-                    .collect()
-            })
-            .collect();
-        let Some(y_series) = invert(&z) else {
-            return Err(Error::Mtx(format!(
-                "line `{}` has a singular series impedance matrix",
-                line.name
-            )));
-        };
-        let from: Vec<NodeRef> = line
-            .terminal_map_from
-            .iter()
-            .map(|terminal| resolve(&line.bus_from, terminal, &format!("line `{}`", line.name)))
-            .collect::<Result<_>>()?;
-        let to: Vec<NodeRef> = line
-            .terminal_map_to
-            .iter()
-            .map(|terminal| resolve(&line.bus_to, terminal, &format!("line `{}`", line.name)))
-            .collect::<Result<_>>()?;
-        for row in 0..conductors {
-            for column in 0..conductors {
-                let y = y_series[row][column];
-                stamper.add(from[row], from[column], y);
-                stamper.add(to[row], to[column], y);
-                stamper.add(from[row], to[column], -y);
-                stamper.add(to[row], from[column], -y);
-                let shunt_from = Complex64::new(code.g_from[row][column], code.b_from[row][column])
-                    * line.length;
-                let shunt_to =
-                    Complex64::new(code.g_to[row][column], code.b_to[row][column]) * line.length;
-                stamper.add(from[row], from[column], shunt_from);
-                stamper.add(to[row], to[column], shunt_to);
-            }
-        }
-    }
-
-    // Shunt elements: their stated admittance matrix across their terminals.
-    for shunt in network.shunts() {
-        let terminals: Vec<NodeRef> = shunt
-            .terminal_map
-            .iter()
-            .map(|terminal| resolve(&shunt.bus, terminal, &format!("shunt `{}`", shunt.name)))
-            .collect::<Result<_>>()?;
-        for row in 0..terminals.len() {
-            for column in 0..terminals.len() {
-                let value = Complex64::new(shunt.g[row][column], shunt.b[row][column]);
-                stamper.add(terminals[row], terminals[column], value);
-            }
-        }
-    }
-
-    // Capacitor banks: nameplate reactive power at nameplate voltage.
-    for capacitor in network.capacitors() {
-        let terminals: Vec<NodeRef> = capacitor
-            .terminal_map
-            .iter()
-            .map(|terminal| {
-                resolve(
-                    &capacitor.bus,
-                    terminal,
-                    &format!("capacitor `{}`", capacitor.name),
+        primitives.push(PassivePrimitive {
+            family: PassiveFamily::Line,
+            name: &line.name,
+            terminals: line
+                .terminal_map_from
+                .iter()
+                .map(|terminal| (line.bus_from.as_str(), terminal.as_str()))
+                .chain(
+                    line.terminal_map_to
+                        .iter()
+                        .map(|terminal| (line.bus_to.as_str(), terminal.as_str())),
                 )
-            })
-            .collect::<Result<_>>()?;
-        match capacitor.configuration {
-            Configuration::SinglePhase => {
-                if terminals.len() != 2 {
-                    return Err(Error::Mtx(format!(
-                        "single phase capacitor `{}` maps {} terminals",
-                        capacitor.name,
-                        terminals.len()
-                    )));
-                }
-                let b = capacitor.q_rated / (capacitor.v_nom * capacitor.v_nom);
-                let y = Complex64::new(0.0, b);
-                stamper.add(terminals[0], terminals[0], y);
-                stamper.add(terminals[1], terminals[1], y);
-                stamper.add(terminals[0], terminals[1], -y);
-                stamper.add(terminals[1], terminals[0], -y);
-            }
-            Configuration::Wye => {
-                // Phase terminals to the last terminal (neutral); nameplate
-                // voltage is line to line.
-                let phases = terminals.len().saturating_sub(1);
-                if phases == 0 {
-                    return Err(Error::Mtx(format!(
-                        "wye capacitor `{}` maps no phase terminal",
-                        capacitor.name
-                    )));
-                }
-                let v_ln = capacitor.v_nom / 3f64.sqrt();
-                let b = capacitor.q_rated / (phases as f64) / (v_ln * v_ln);
-                let neutral = terminals[phases];
-                for &phase in &terminals[..phases] {
-                    let y = Complex64::new(0.0, b);
-                    stamper.add(phase, phase, y);
-                    stamper.add(neutral, neutral, y);
-                    stamper.add(phase, neutral, -y);
-                    stamper.add(neutral, phase, -y);
-                }
-            }
-            Configuration::Delta => {
-                let phases = terminals.len();
-                if phases < 2 {
-                    return Err(Error::Mtx(format!(
-                        "delta capacitor `{}` maps {} terminals",
-                        capacitor.name, phases
-                    )));
-                }
-                // A two-terminal open-delta bank has one physical coil;
-                // a full N-terminal delta bank has N coils. Divide the
-                // bank's total rated vars by the number of stamped coils.
-                let loops = if phases == 2 { 1 } else { phases };
-                let b = capacitor.q_rated / (loops as f64) / (capacitor.v_nom * capacitor.v_nom);
-                for pair in 0..loops {
-                    let a = terminals[pair];
-                    let c = terminals[(pair + 1) % phases];
-                    let y = Complex64::new(0.0, b);
-                    stamper.add(a, a, y);
-                    stamper.add(c, c, y);
-                    stamper.add(a, c, -y);
-                    stamper.add(c, a, -y);
-                }
-            }
-            _ => {
-                diagnostics.push(Diagnostic::of(
-                    &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
-                    format!(
-                        "capacitor `{}` states a configuration this builder does not stamp",
-                        capacitor.name
-                    ),
-                ));
+                .collect(),
+            primitive: calc_line_primitive_admittance(line, code)?,
+        });
+    }
+
+    for shunt in network.shunts() {
+        let size = shunt.terminal_map.len();
+        let square = |matrix: &[Vec<f64>]| {
+            matrix.len() == size
+                && matrix
+                    .iter()
+                    .all(|row| row.len() == size && row.iter().all(|value| value.is_finite()))
+        };
+        if !square(&shunt.g) || !square(&shunt.b) {
+            return Err(Error::Mtx(format!(
+                "shunt `{}` states a matrix that is not finite and {size} by {size}",
+                shunt.name
+            )));
+        }
+        primitives.push(PassivePrimitive {
+            family: PassiveFamily::Shunt,
+            name: &shunt.name,
+            terminals: shunt
+                .terminal_map
+                .iter()
+                .map(|terminal| (shunt.bus.as_str(), terminal.as_str()))
+                .collect(),
+            primitive: calc_shunt_primitive_admittance(shunt),
+        });
+    }
+
+    for capacitor in network.capacitors() {
+        match calc_capacitor_primitive_admittance(network, capacitor)? {
+            Some(primitive) => primitives.push(PassivePrimitive {
+                family: PassiveFamily::Capacitor,
+                name: &capacitor.name,
+                terminals: capacitor
+                    .terminal_map
+                    .iter()
+                    .map(|terminal| (capacitor.bus.as_str(), terminal.as_str()))
+                    .collect(),
+                primitive,
+            }),
+            None => diagnostics.push(Diagnostic::of(
+                &codes::BUILD_MULTI_UNSUPPORTED_STAMP,
+                format!(
+                    "capacitor `{}` states a configuration this builder does not stamp",
+                    capacitor.name
+                ),
+            )),
+        }
+    }
+
+    let mut grounded: Vec<GroundedNeutral<'_>> = Vec::new();
+    let mut ideal_transformers = Vec::new();
+    for transformer in network.transformers() {
+        if powerio_dist::transformer::transformer_states_no_leakage(transformer) {
+            ideal_transformers.push(transformer);
+            continue;
+        }
+        let element = calc_transformer_primitive_admittance(network, transformer)?;
+        for &(bus, terminal) in &element.grounded {
+            if !grounded
+                .iter()
+                .any(|g| g.bus.eq_ignore_ascii_case(bus) && g.terminal == terminal)
+            {
+                grounded.push(GroundedNeutral {
+                    transformer: element.name,
+                    bus,
+                    terminal,
+                });
             }
         }
+        primitives.push(PassivePrimitive {
+            family: PassiveFamily::Transformer,
+            name: element.name,
+            terminals: element.terminals,
+            primitive: element.primitive,
+        });
+    }
+    Ok(NetworkPrimitives {
+        elements: primitives,
+        grounded,
+        ideal_transformers,
+        diagnostics,
+    })
+}
+
+/// Build the passive nodal admittance and the ideal equipment constraints.
+///
+/// # Errors
+/// A structurally broken network: an element naming an undeclared bus or
+/// terminal, or a line whose terminal maps disagree with its linecode shape.
+/// Everything the builder cannot stamp exactly is a structured diagnostic,
+/// never a silent omission or a fabricated impedance.
+pub fn calc_multiconductor_admittance_matrix(
+    network: &MulticonductorNetwork,
+) -> Result<MulticonductorAdmittance> {
+    powerio_dist::require_electrical_readiness(network)?;
+    let primitives = calc_passive_primitives(network)?;
+    assemble_multiconductor_admittance(network, &primitives)
+}
+
+/// [`calc_multiconductor_admittance_matrix`] over element primitives the
+/// caller already holds from [`calc_passive_primitives`] of the same
+/// network: a caller that also reads each element's primitive (for its port
+/// currents) lists them once. The one assembly of the multiconductor nodal
+/// system and its source, ideal transformer and grounded neutral rows.
+///
+/// # Errors
+/// As [`calc_multiconductor_admittance_matrix`], except that the network's
+/// electrical readiness is not checked again.
+#[allow(clippy::too_many_lines)] // one stamp block per element family
+#[allow(clippy::many_single_char_names)] // n and per conductor y/z/b follow the textbook stamps
+pub fn assemble_multiconductor_admittance(
+    network: &MulticonductorNetwork,
+    primitives: &NetworkPrimitives<'_>,
+) -> Result<MulticonductorAdmittance> {
+    let index = MulticonductorNodeIndex::build(network)?;
+    let n = index.len();
+    let mut stamper = Stamper::new(n);
+    let mut diagnostics = Vec::new();
+
+    let resolve = |bus: &str, terminal: &str, element: &str| -> Result<NodeRef> {
+        index.resolve(bus, terminal).ok_or_else(|| {
+            Error::Mtx(format!(
+                "{element} names terminal `{terminal}` bus `{bus}` does not declare"
+            ))
+        })
+    };
+
+    // Lines, shunts, capacitor banks and leakage transformers: the network's
+    // one element list, scattered over the node references of its
+    // terminals.
+    let elements = primitives;
+    let transformer_constraints =
+        transformer::ideal_wye_constraints(network, &elements.ideal_transformers, &index)?;
+    diagnostics.extend(elements.diagnostics.iter().cloned());
+    for element in &elements.elements {
+        let label = format!("{} `{}`", element.family.noun(), element.name);
+        let terminals: Vec<NodeRef> = element
+            .terminals
+            .iter()
+            .map(|&(bus, terminal)| resolve(bus, terminal, &label))
+            .collect::<Result<_>>()?;
+        stamper.add_primitive(&terminals, &element.primitive)?;
     }
 
     // Ideal equipment: constraint rows over the node voltages, collected as
@@ -559,8 +844,11 @@ pub fn calc_multiconductor_admittance_matrix(
             let node = resolve(&source.bus, terminal, &format!("source `{}`", source.name))?;
             let magnitude = source.v_magnitude.get(position).copied().unwrap_or(0.0);
             let angle = source.v_angle.get(position).copied().unwrap_or(0.0);
+            // A terminal that is its own reference (ground, or the stated
+            // reference terminal) has no voltage to prescribe: zero is
+            // already true there, anything else contradicts it.
             if node == reference {
-                if source.reference_terminal.is_some() && magnitude != 0.0 {
+                if magnitude != 0.0 {
                     return Err(Error::Mtx(format!(
                         "source `{}` has a nonzero voltage across electrically identical terminals",
                         source.name
@@ -590,6 +878,45 @@ pub fn calc_multiconductor_admittance_matrix(
         rhs_re.push(0.0);
         rhs_im.push(0.0);
         labels.push(constraint.label);
+        rows += 1;
+    }
+
+    // A solidly grounded transformer neutral: v = 0, its transpose the
+    // neutral's ground current, once per node. A source row that already
+    // fixes the node alone settles it (`GroundedNeutral::needs_zero_voltage_row`).
+    let mut fixed_by_source: BTreeMap<usize, Complex64> = BTreeMap::new();
+    for row in 0..rows {
+        let entries: Vec<&(usize, usize, f64)> =
+            constraint_re.iter().filter(|(r, _, _)| *r == row).collect();
+        // A one entry source row is `±v = rhs` (the node, or a reference
+        // terminal against ground).
+        if let [(_, dense, coefficient)] = entries.as_slice()
+            && labels[row].starts_with("source:")
+        {
+            fixed_by_source.insert(
+                *dense,
+                Complex64::new(rhs_re[row], rhs_im[row]) / *coefficient,
+            );
+        }
+    }
+    let mut grounded_nodes: BTreeSet<usize> = BTreeSet::new();
+    for neutral in &elements.grounded {
+        let label = format!("transformer `{}`", neutral.transformer);
+        let NodeRef::Node(dense) = resolve(neutral.bus, neutral.terminal, &label)? else {
+            continue;
+        };
+        if !grounded_nodes.insert(dense)
+            || !neutral.needs_zero_voltage_row(fixed_by_source.get(&dense).copied())?
+        {
+            continue;
+        }
+        constraint_re.push((rows, dense, 1.0));
+        rhs_re.push(0.0);
+        rhs_im.push(0.0);
+        labels.push(format!(
+            "transformer:{}:neutral:{}.{}",
+            neutral.transformer, neutral.bus, neutral.terminal
+        ));
         rows += 1;
     }
 

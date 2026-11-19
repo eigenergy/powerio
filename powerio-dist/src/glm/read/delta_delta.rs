@@ -28,7 +28,8 @@ impl Reader<'_> {
             ));
         }
         let ratio = primary / secondary;
-        let scale = secondary * secondary / rating;
+        // The secondary impedance base; an unusable base fails the check below.
+        let scale = crate::electrical::calc_impedance_base(secondary, rating).unwrap_or(f64::NAN);
         if !ratio.is_finite() || ratio <= 0.0 || !scale.is_finite() || scale <= 0.0 {
             return Err(self.error(cfg, "FBS delta transformer scaling overflows or underflows"));
         }

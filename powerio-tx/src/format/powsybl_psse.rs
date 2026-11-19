@@ -19,7 +19,12 @@ use crate::network::{
 /// `√3 · Vnom · I / 1000` MVA for `I` in A and `Vnom` in kV
 /// (`AbstractConverter.convertToMva`).
 pub(super) fn current_limit_mva(current_a: f64, nominal_kv: f64) -> f64 {
-    current_a / 1000.0 * 3f64.sqrt() * nominal_kv
+    powerio_core::electrical::calc_line_apparent_power(
+        nominal_kv,
+        current_a / 1000.0,
+        powerio_core::electrical::SQRT_3,
+        powerio_core::electrical::ApparentPowerOrder::CurrentFirst,
+    )
 }
 
 /// The MVA ratings of one set of current limits, permanent and temporary,
@@ -60,9 +65,9 @@ pub(super) fn rate_branches_from_current_limits(
         .collect::<HashMap<BusId, f64>>();
     let mut rated = Vec::new();
     for (index, branch) in net.branches().iter().enumerate() {
-        if branch.rate_a != 0.0
-            || branch.rate_b != 0.0
-            || branch.rate_c != 0.0
+        if !branch.rate_a.is_infinite()
+            || !branch.rate_b.is_infinite()
+            || !branch.rate_c.is_infinite()
             || !branch.rating_sets.is_empty()
         {
             continue;
@@ -114,7 +119,7 @@ pub(super) fn rate_branches_from_current_limits(
     let branches = projected.branches_mut();
     for (index, rates) in rated {
         let branch = &mut branches[index];
-        let rate = |slot: usize| rates.get(slot).copied().unwrap_or(0.0);
+        let rate = |slot: usize| rates.get(slot).copied().unwrap_or(f64::INFINITY);
         branch.rate_a = rate(0);
         branch.rate_b = rate(1);
         branch.rate_c = rate(2);

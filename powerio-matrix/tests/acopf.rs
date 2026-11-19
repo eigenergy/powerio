@@ -6,7 +6,7 @@
 use powerio_matrix::{
     AcOpfAssemblyOptions, AcPfAssemblyOptions, BalancedNetwork, Branch, Bus, BusId, BusType,
     GenCost, Generator, PreparedAcBusSpecification, PreparedObjective, build_ac_opf_preparation,
-    build_ac_pf_preparation,
+    build_ac_pf_preparation, calc_prepared_bus_specifications,
 };
 use powerio_prob::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, ActiveConstraints,
@@ -278,7 +278,7 @@ fn ac_opf_preparation_keeps_storage_fields_and_units() {
 fn ac_preparation_honors_feasibility_constraints_and_limit_synthesis() {
     let mut line = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
     line.uid = Some("line".into());
-    line.rate_a = 0.0;
+    line.rate_a = f64::INFINITY;
     let mut first = Bus::new(BusId(1), BusType::Ref, 230.0);
     first.vmin = 0.95;
     first.vmax = 1.05;
@@ -599,5 +599,119 @@ fn ac_pf_preparation_keeps_transformer_windings_out_of_source_branch_rows() {
                 winding: 2,
             },
         ]
+    );
+}
+
+#[test]
+fn zero_thermal_bounds_stay_active_and_bypass_synthesis() {
+    for synthesize in [false, true] {
+        let mut network = ac_consumer_network();
+        network.branches_mut()[0].rate_a = 0.0;
+        network.branches_mut()[1].rate_a = f64::INFINITY;
+        let instance = AcOpfInstance::from_network(network).unwrap();
+        let options = AcOpfAssemblyOptions::default().with_synthesize_unrated_limits(synthesize);
+        let prepared = build_ac_opf_preparation(&instance, &options).unwrap();
+        assert_eq!(prepared.branches.s_max[0], 0.0);
+        assert!(prepared.branches.thermal_limit_active[0]);
+        if synthesize {
+            assert!(prepared.branches.s_max[1].is_finite());
+            assert!(prepared.branches.s_max[1] > 0.0);
+        } else {
+            assert_eq!(prepared.branches.s_max[1], f64::INFINITY);
+            assert!(!prepared.branches.thermal_limit_active[1]);
+        }
+    }
+}
+
+#[test]
+fn energized_zero_limit_keeps_two_bus_shunts_and_admittance() {
+    use powerio_matrix::{BuildOptions, IndexedNetwork, calc_admittance_matrix};
+    let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+    branch.b = 0.04;
+    let mut network = BalancedNetwork::in_memory(
+        "zero-with-shunts",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![branch],
+    );
+    network.shunts_mut().push(Shunt::new(BusId(2), 2.0, 5.0));
+    let mut generator = Generator::new(BusId(1));
+    generator.pmax = 100.0;
+    network.generators_mut().push(generator);
+    network.assign_missing_component_ids();
+    let options = BuildOptions::default();
+    let admittance = calc_admittance_matrix(&IndexedNetwork::new(&network), &options).unwrap();
+    network.branches_mut()[0].rate_a = 0.0;
+    let zero = calc_admittance_matrix(&IndexedNetwork::new(&network), &options).unwrap();
+    assert_eq!(zero.g, admittance.g);
+    assert_eq!(zero.b, admittance.b);
+    assert!(network.branches()[0].in_service);
+    let instance = AcOpfInstance::from_network(network.clone()).unwrap();
+    let prepared = build_ac_opf_preparation(&instance, &AcOpfAssemblyOptions::default()).unwrap();
+    assert_eq!(prepared.branches.s_max, vec![0.0]);
+    assert_eq!(prepared.branches.thermal_limit_active, vec![true]);
+    network.branches_mut()[0].in_service = false;
+    let outage = calc_admittance_matrix(&IndexedNetwork::new(&network), &options).unwrap();
+    assert_ne!(outage.g, zero.g);
+    assert_ne!(outage.b, zero.b);
+    assert_eq!(network.shunts(), instance.network().shunts());
+}
+
+#[test]
+fn prepared_specifications_scale_by_the_instance_network_base() {
+    let network = BalancedNetwork::in_memory(
+        "specifications",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
+    );
+    let raw = AcPfInstance::new(
+        network.clone(),
+        vec![
+            AcBusSpecification::Reference { vm: 1.0, va: 30.0 },
+            AcBusSpecification::Pq { p: -10.0, q: -2.0 },
+        ],
+    )
+    .unwrap();
+    let prepared = calc_prepared_bus_specifications(&raw, powerio_matrix::Units::PerUnit).unwrap();
+    assert_eq!(
+        prepared[1],
+        PreparedAcBusSpecification::Pq { p: -0.1, q: -0.02 }
+    );
+    let PreparedAcBusSpecification::Reference { va, .. } = prepared[0] else {
+        panic!("reference expected");
+    };
+    assert!((va - 30f64.to_radians()).abs() < 1e-15);
+    // The preparation reads the same conversion at its retained buses.
+    let full = build_ac_pf_preparation(&raw, &AcPfAssemblyOptions::default()).unwrap();
+    assert_eq!(full.specifications.len(), 2);
+
+    // A normalized network already states per unit power and radians.
+    let mut network = network;
+    network.generators_mut().push(Generator::new(BusId(1)));
+    let normalized = network.to_normalized().unwrap();
+    let instance = AcPfInstance::new(
+        normalized,
+        vec![
+            AcBusSpecification::Reference { vm: 1.0, va: 0.5 },
+            AcBusSpecification::Pq { p: -0.1, q: -0.02 },
+        ],
+    )
+    .unwrap();
+    let prepared =
+        calc_prepared_bus_specifications(&instance, powerio_matrix::Units::PerUnit).unwrap();
+    assert_eq!(
+        prepared[1],
+        PreparedAcBusSpecification::Pq { p: -0.1, q: -0.02 }
+    );
+    assert_eq!(
+        prepared[0],
+        PreparedAcBusSpecification::Reference { vm: 1.0, va: 0.5 }
     );
 }

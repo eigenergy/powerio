@@ -165,8 +165,16 @@ pub(crate) fn quadratic_terms(cost: &GenCost, gen_index: usize) -> Result<(f64, 
     Ok((q, c, c0))
 }
 
-/// Sum of a generator column vector over the bus of each generator.
-pub(crate) fn sum_by_bus(n_buses: usize, bus_of_gen: &[usize], values: &[f64]) -> Vec<f64> {
+/// The per bus totals of an element column: `values[e]` added to bus
+/// `bus_of[e]` for each element, in element order, over `n_buses` buses. The
+/// one sum of a generator (or any element) column onto buses: the nodal
+/// generator data of the DC and AC preparations reads it, and a caller
+/// summing scheduled outputs or reactive limits by bus calls it.
+///
+/// # Panics
+/// Panics if a bus is `>= n_buses` or `values` is shorter than `bus_of`.
+#[must_use]
+pub fn calc_bus_totals(n_buses: usize, bus_of_gen: &[usize], values: &[f64]) -> Vec<f64> {
     let mut totals = vec![0.0; n_buses];
     for (generator, &bus) in bus_of_gen.iter().enumerate() {
         totals[bus] += values[generator];
@@ -174,8 +182,12 @@ pub(crate) fn sum_by_bus(n_buses: usize, bus_of_gen: &[usize], values: &[f64]) -
     totals
 }
 
-/// Which buses host a generator.
-pub(crate) fn buses_with_generators(n_buses: usize, bus_of_gen: &[usize]) -> Vec<bool> {
+/// Which of `n_buses` buses host at least one element of `bus_of`.
+///
+/// # Panics
+/// Panics if a bus is `>= n_buses`.
+#[must_use]
+pub fn calc_bus_hosts(n_buses: usize, bus_of_gen: &[usize]) -> Vec<bool> {
     let mut flags = vec![false; n_buses];
     for &bus in bus_of_gen {
         flags[bus] = true;
@@ -426,12 +438,9 @@ mod tests {
     #[test]
     fn bounds_sum_and_the_flags_mark_the_hosting_buses() {
         assert_eq!(
-            sum_by_bus(3, &[0, 2, 2], &[1.0, 2.0, 4.0]),
+            calc_bus_totals(3, &[0, 2, 2], &[1.0, 2.0, 4.0]),
             vec![1.0, 0.0, 6.0]
         );
-        assert_eq!(
-            buses_with_generators(3, &[0, 2, 2]),
-            vec![true, false, true]
-        );
+        assert_eq!(calc_bus_hosts(3, &[0, 2, 2]), vec![true, false, true]);
     }
 }

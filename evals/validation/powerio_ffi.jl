@@ -1,9 +1,9 @@
-# Thin Julia binding over the powerio C ABI 7 (powerio-capi), shared by the
+# Thin Julia binding over the powerio C ABI (powerio-capi), shared by the
 # parse benchmark and the ExaPowerIO validator. Build the library first:
 #
 #   cargo build --release -p powerio-capi
 #
-# ABI 7 exposes one balanced network through owner rooted typed views: a
+# The C ABI exposes one balanced network through owner rooted typed views: a
 # `pio_balanced_network_*_count` query and a `pio_balanced_network_*_at` fill
 # per element family. The views carry raw MATPOWER values: demand, shunt, and
 # generation in MW/MVAr (not per unit), branch `shift` in degrees, branch `b`

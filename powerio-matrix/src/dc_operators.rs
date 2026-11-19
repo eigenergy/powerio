@@ -40,15 +40,6 @@ fn row_identity(uid: Option<&str>, table: &str, row: usize) -> String {
     uid.map_or_else(|| format!("{table}:{row}"), str::to_owned)
 }
 
-fn calc_incidence(bus_count: usize, endpoints: &[(usize, usize)]) -> SparseMatrix {
-    let mut incidence = crate::matrix::triplet::CooBuilder::new_rect(bus_count, endpoints.len());
-    for (column, &(from, to)) in endpoints.iter().enumerate() {
-        incidence.add(from, column, 1.0);
-        incidence.add(to, column, -1.0);
-    }
-    incidence.finish_csr()
-}
-
 /// The reference constrained linear system: the positive definite matrix a
 /// sparse solver factors, its right hand side, and the mapping from reduced
 /// rows back to bus rows.
@@ -217,30 +208,28 @@ impl DcOperators {
                     ),
                 ));
             };
-            // Only the tap-reading formula can be bounded by a tap (#324).
-            let tap = if formula.reads_tap() {
-                branch.calc_divisible_tap(row).map_err(|_| {
-                    Error::new(
+            // The one DC column rule; only the error wording and the skip
+            // policy are this builder's.
+            let column = match formula.calc_dc_column(branch, row, network.is_normalized()) {
+                Ok(column) => column,
+                Err(powerio_tx::Error::DegenerateTap { .. }) => {
+                    return Err(Error::new(
                         &codes::BUILD_OPERATOR_NOT_A_NUMBER,
                         format!(
                             "branch `{identity}` states a tap the selected formula cannot divide by"
                         ),
-                    )
-                })?
-            } else {
-                1.0
-            };
-            // The same divisibility floor the other DC builders apply: a
-            // formally nonzero impedance below it yields a finite weight big
-            // enough to annihilate every real branch sharing a bus.
-            let degenerate = match formula {
-                BranchSusceptanceFormula::SeriesSusceptance => {
-                    branch.r.hypot(branch.x) < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE
+                    ));
                 }
-                // Any formula that reads a reactance is bounded by it.
-                _ => branch.x.abs() < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE,
+                Err(_) => {
+                    return Err(Error::new(
+                        &codes::BUILD_OPERATOR_ZERO_IMPEDANCE,
+                        format!(
+                            "branch `{identity}` has no finite DC susceptance under the selected formula; resolve it explicitly with merge_zero_impedance_buses"
+                        ),
+                    ));
+                }
             };
-            if degenerate {
+            let Some(column) = column else {
                 if options.skip_zero_impedance {
                     skipped_branch_rows.push(row);
                     continue;
@@ -251,17 +240,10 @@ impl DcOperators {
                         "zero impedance branch `{identity}` has no finite DC operator row; resolve it explicitly with merge_zero_impedance_buses or build with skip_zero_impedance"
                     ),
                 ));
-            }
-            let susceptance = formula.calc_branch_susceptance(branch.r, branch.x, tap);
-            if !susceptance.is_finite() {
-                return Err(Error::new(
-                    &codes::BUILD_OPERATOR_ZERO_IMPEDANCE,
-                    format!(
-                        "branch `{identity}` has no finite DC susceptance under the selected formula; resolve it explicitly with merge_zero_impedance_buses"
-                    ),
-                ));
-            }
-            let shift = branch_phase_shift_radians(formula, network.is_normalized(), branch.shift);
+            };
+            // The public susceptance is the negated factor weight.
+            let susceptance = -column.weight;
+            let shift = column.shift;
             if !shift.is_finite() {
                 return Err(Error::new(
                     &codes::BUILD_OPERATOR_NOT_A_NUMBER,
@@ -276,7 +258,8 @@ impl DcOperators {
             endpoints.push((from, to));
         }
 
-        let incidence = calc_incidence(bus_ids.len(), &endpoints);
+        let incidence =
+            crate::matrix::assemble_bus_branch_incidence(bus_ids.len(), endpoints.iter().copied());
         let mut operators = Self {
             bus_ids,
             source_bus_ids,
@@ -465,15 +448,13 @@ impl DcOperators {
     /// Calculate the branch flow matrix `Bf = Diagonal(b) * A`, `m × n`.
     #[must_use]
     pub fn calc_branch_flow_matrix(&self) -> SparseMatrix {
-        let transpose = self.incidence.transpose_view().to_csr();
-        scale_rows(&transpose, &self.branch_susceptance)
+        crate::matrix::calc_solver_branch_flow_matrix(&self.incidence, &self.branch_susceptance)
     }
 
     /// Calculate the bus susceptance matrix `B = Aᵀ * Diagonal(b) * A`, `n × n`.
     #[must_use]
     pub fn calc_bus_susceptance_matrix(&self) -> SparseMatrix {
-        let bf = self.calc_branch_flow_matrix();
-        &self.incidence * &bf
+        crate::matrix::calc_weighted_laplacian(&self.incidence, &self.branch_susceptance)
     }
 
     /// The per bus net power injection the instance states, per unit on the
@@ -490,7 +471,7 @@ impl DcOperators {
         self.branch_susceptance
             .iter()
             .zip(self.shift_radians.iter())
-            .map(|(&susceptance, &shift)| susceptance * shift)
+            .map(|(&susceptance, &shift)| crate::matrix::calc_dc_flow_offset(-susceptance, shift))
             .collect()
     }
 
@@ -498,21 +479,17 @@ impl DcOperators {
     /// `p_shift = Aᵀ * (b .* shift)` in bus order.
     #[must_use]
     pub fn calc_bus_phase_shift_injection(&self) -> Vec<f64> {
-        let mut injection = vec![0.0; self.bus_ids.len()];
-        for (column, value) in self
-            .calc_branch_phase_shift_injection()
-            .into_iter()
-            .enumerate()
-        {
-            if value == 0.0 {
-                continue;
-            }
-            // Column `column` of A is `e_from - e_to`.
-            let (from, to) = self.endpoints(column);
-            injection[from] += value;
-            injection[to] -= value;
-        }
-        injection
+        // The positive factor weight is the negated public susceptance; the
+        // scatter is the crate's one phase shift withdrawal over it.
+        crate::matrix::calc_dc_phase_shift_withdrawal(
+            self.bus_ids.len(),
+            self.endpoints
+                .iter()
+                .copied()
+                .zip(self.branch_susceptance.iter())
+                .zip(self.shift_radians.iter().copied())
+                .map(|((endpoints, &susceptance), shift)| (endpoints, -susceptance, shift)),
+        )
     }
 
     /// Calculate DC active power flow in branch order from bus voltage angles
@@ -531,15 +508,17 @@ impl DcOperators {
                 ),
             ));
         }
-        Ok(self
-            .endpoints
-            .iter()
-            .zip(self.branch_susceptance.iter())
-            .zip(self.shift_radians.iter())
-            .map(|((&(from, to), &susceptance), &shift)| {
-                -susceptance * (voltage_angles[from] - voltage_angles[to]) + susceptance * shift
-            })
-            .collect())
+        // The positive factor weight is the negated public susceptance; the
+        // flow is the crate's one DC flow over it.
+        Ok(crate::matrix::calc_dc_branch_flow(
+            voltage_angles,
+            self.endpoints
+                .iter()
+                .copied()
+                .zip(self.branch_susceptance.iter())
+                .zip(self.shift_radians.iter().copied())
+                .map(|((endpoints, &susceptance), shift)| (endpoints, -susceptance, shift)),
+        ))
     }
 
     /// Calculate DC active power injection in bus order from bus voltage
@@ -549,12 +528,10 @@ impl DcOperators {
     /// The voltage angle length differs from the bus axis length.
     pub fn calc_bus_injection_dc(&self, voltage_angles: &[f64]) -> Result<Vec<f64>, Error> {
         let branch_flows = self.calc_branch_flow_dc(voltage_angles)?;
-        let mut injections = vec![0.0; self.bus_ids.len()];
-        for (&(from, to), flow) in self.endpoints.iter().zip(branch_flows) {
-            injections[from] += flow;
-            injections[to] -= flow;
-        }
-        Ok(injections)
+        Ok(crate::matrix::calc_bus_scatter(
+            self.bus_ids.len(),
+            self.endpoints.iter().copied().zip(branch_flows),
+        ))
     }
 
     /// Calculate the reference constrained linear system over the internal positive
@@ -576,92 +553,76 @@ impl DcOperators {
                 "the instance states no reference bus to ground the system",
             ));
         }
-        let n = self.bus_ids.len();
-        let mut is_reference = vec![false; n];
-        for &row in &self.reference_rows {
-            is_reference[row] = true;
-        }
-        let mut reduced_of_full = vec![usize::MAX; n];
-        let mut retained_rows = Vec::with_capacity(n - self.reference_rows.len());
-        for (row, reduced) in reduced_of_full.iter_mut().enumerate() {
-            if !is_reference[row] {
-                *reduced = retained_rows.len();
-                retained_rows.push(row);
-            }
-        }
-
-        let mut matrix = crate::matrix::triplet::CooBuilder::new(retained_rows.len());
-        // A branch to an eliminated reference bus still carries an
-        // off-diagonal Laplacian entry; since its column is gone, that
-        // entry's contribution moves to the retained row's right hand side
-        // instead, carrying the reference bus's stated angle in.
-        let mut reference_coupling = vec![0.0; retained_rows.len()];
-        for (column, &(from, to)) in self.endpoint_table().iter().enumerate() {
-            // The positive factor weight is the negated public susceptance.
-            let weight = -self.branch_susceptance[column];
-            let (rf, rt) = (reduced_of_full[from], reduced_of_full[to]);
-            if rf != usize::MAX {
-                matrix.add(rf, rf, weight);
-            }
-            if rt != usize::MAX {
-                matrix.add(rt, rt, weight);
-            }
-            match (rf != usize::MAX, rt != usize::MAX) {
-                (true, true) => {
-                    matrix.add(rf, rt, -weight);
-                    matrix.add(rt, rf, -weight);
-                }
-                (true, false) => reference_coupling[rf] += weight * self.reference_va_radians[to],
-                (false, true) => {
-                    reference_coupling[rt] += weight * self.reference_va_radians[from];
-                }
-                (false, false) => {}
-            }
-        }
+        // The internal positive factor weights are the negated public
+        // susceptances; the grounded matrix is the crate's one weighted
+        // Laplacian with the reference rows and columns removed.
+        let weights: Vec<f64> = self.branch_susceptance.iter().map(|b| -b).collect();
+        let laplacian = crate::matrix::calc_weighted_laplacian(&self.incidence, &weights);
         let shift_injection = self.calc_bus_phase_shift_injection();
-        let rhs = retained_rows
+        let injection: Vec<f64> = self
+            .net_injection
             .iter()
-            .zip(reference_coupling.iter())
-            .map(|(&row, &coupling)| self.net_injection[row] - shift_injection[row] + coupling)
+            .zip(&shift_injection)
+            .map(|(p, shift)| p - shift)
             .collect();
-        Ok(ReferenceConstrainedSystem {
-            matrix: matrix.finish_csr(),
-            rhs,
-            retained_rows,
-        })
-    }
-
-    fn endpoints(&self, column: usize) -> (usize, usize) {
-        self.endpoints[column]
-    }
-
-    /// Endpoint rows per column, recovered from the incidence structure.
-    fn endpoint_table(&self) -> &[(usize, usize)] {
-        &self.endpoints
+        let reference_va: Vec<f64> = self
+            .reference_rows
+            .iter()
+            .map(|&row| self.reference_va_radians[row])
+            .collect();
+        Ok(calc_reference_constrained_system(
+            &laplacian,
+            &self.reference_rows,
+            &reference_va,
+            &injection,
+        ))
     }
 }
 
-fn branch_phase_shift_radians(
-    formula: BranchSusceptanceFormula,
-    normalized: bool,
-    shift: f64,
-) -> f64 {
-    if !formula.includes_phase_shifts() {
-        0.0
-    } else if normalized {
-        shift
+/// The reference constrained linear system of a DC power flow over a bus
+/// Laplacian `L` with positive branch weights: `L` with the reference rows and
+/// columns removed, and at each retained row the right hand side
+/// `injection - (L va_ref)`, where `va_ref` holds each reference row's angle,
+/// radians, and zero elsewhere. `injection` is the full length nodal power
+/// the angles must carry (net injection less every fixed withdrawal), per
+/// unit; `reference_va` is aligned with `reference_rows`. Solving
+/// `matrix · va = rhs` gives the retained angles with each reference fixed at
+/// its stated angle. [`DcOperators::calc_reference_constrained_system`] is this
+/// over the instance's operators.
+///
+/// # Panics
+/// `injection` shorter than the Laplacian's row count, or a reference row
+/// outside it.
+#[must_use]
+pub fn calc_reference_constrained_system(
+    laplacian: &SparseMatrix,
+    reference_rows: &[usize],
+    reference_va: &[f64],
+    injection: &[f64],
+) -> ReferenceConstrainedSystem {
+    let n = laplacian.rows();
+    let grounding = crate::matrix::Grounding::new(reference_rows);
+    let retained_rows = grounding.full_of_reduced(n);
+    // A branch to an eliminated reference bus still carries an off-diagonal
+    // Laplacian entry; since its column is gone, its contribution moves to the
+    // retained row's right hand side, carrying the reference bus's stated
+    // angle in. With every reference at zero there is nothing to carry.
+    let mut reference_angles = vec![0.0; n];
+    for (&row, &va) in reference_rows.iter().zip(reference_va) {
+        reference_angles[row] = va;
+    }
+    let reference_load = if reference_angles.iter().any(|&va| va != 0.0) {
+        crate::matrix::calc_csr_product(laplacian, &reference_angles)
     } else {
-        shift.to_radians()
+        vec![0.0; n]
+    };
+    let rhs = retained_rows
+        .iter()
+        .map(|&row| injection[row] - reference_load[row])
+        .collect();
+    ReferenceConstrainedSystem {
+        matrix: crate::matrix::ground_with(laplacian, &grounding),
+        rhs,
+        retained_rows,
     }
-}
-
-/// `diag(values) * matrix`, scaling each row of a CSR matrix.
-fn scale_rows(matrix: &SparseMatrix, values: &[f64]) -> SparseMatrix {
-    let mut scaled = matrix.clone();
-    for (row, mut row_vec) in scaled.outer_iterator_mut().enumerate() {
-        for (_, entry) in row_vec.iter_mut() {
-            *entry *= values[row];
-        }
-    }
-    scaled
 }

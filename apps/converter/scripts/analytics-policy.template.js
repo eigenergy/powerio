@@ -5,8 +5,7 @@
   const formats = ['unknown', 'matpower', 'psse', 'psse34', 'psse35', 'psse-rawx',
     'powermodels-json', 'pandapower-json', 'pypsa-csv', 'egret-json', 'powerworld',
     'pslf', 'xiidm', 'jiidm', 'cgmes', 'ucte', 'surge-json', 'ieee-cdf', 'pwb',
-    'opfdata-json', 'goc3-json', 'dss', 'cim-dist', 'sincal-balanced', 'sincal-multiconductor', 'pmd-json', 'bmopf-json',
-    'bmopf-json@0.1.0', 'bmopf-json@0.2.0'];
+    'opfdata-json', 'goc3-json', 'dss', 'cim-dist', 'sincal-balanced', 'sincal-multiconductor', 'pmd-json', 'bmopf-json'];
   const codes = [
     'PARSE.MATPOWER.MALFORMED', 'PARSE.SOURCE.MALFORMED', 'PARSE.GOC3.MALFORMED',
     'PARSE.XIIDM.VERSION_UNSUPPORTED', 'PARSE.IEEE_CDF.MALFORMED',

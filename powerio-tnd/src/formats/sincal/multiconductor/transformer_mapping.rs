@@ -286,22 +286,15 @@ pub(super) fn phase_admittance(input: &NominalTransformerInput) -> Result<[[Comp
     let mut result = [[ZERO; 6]; 6];
     // F diag(Y0,Y1,Y2) F^-1 for each port block. Positive sequence uses
     // [1,a²,a], negative uses [1,a,a²]; arbitrary unbalanced voltages survive.
-    let phases = [
-        Complex64::new(1.0, 0.0),
-        Complex64::new(-0.5, -3.0_f64.sqrt() / 2.0),
-        Complex64::new(-0.5, 3.0_f64.sqrt() / 2.0),
-    ];
     for from in 0..2 {
         for to in 0..2 {
-            for row in 0..3 {
-                for column in 0..3 {
-                    let factor = phases[row] * phases[column].conj();
-                    result[3 * from + row][3 * to + column] = checked(
-                        (zero[from][to]
-                            + positive[from][to] * factor
-                            + negative[from][to] * factor.conj())
-                            / 3.0,
-                    )?;
+            let block = powerio_dist::sequence::calc_phase_matrix_from_sequence(
+                [zero[from][to], positive[from][to], negative[from][to]],
+                powerio_dist::sequence::SequenceRotation::Rectangular,
+            );
+            for (row, values) in block.iter().enumerate() {
+                for (column, &value) in values.iter().enumerate() {
+                    result[3 * from + row][3 * to + column] = checked(value)?;
                 }
             }
         }

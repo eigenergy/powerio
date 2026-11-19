@@ -119,6 +119,9 @@ run() { # <label> <command...>
     "$@" || phase_fail=$((phase_fail + 1))
 }
 
+run "DC matrix comparison regression checks" \
+    "$PY" -m unittest discover -s evals/validation -p test_validate_dc_matpower.py
+
 # 1. PowerModels exports each .m to a per_unit reference JSON (one Julia process).
 #    Must precede the conversions: the PMread leg re-emits these references.
 run "PowerModels reference export (PMread)" \
@@ -186,9 +189,9 @@ fi
 echo "=== DC MATPOWER oracle (makeBdc, DC operations, one PTDF check) ==="
 "$PY" evals/validation/validate_dc_matpower.py "${dc_args[@]}" || true
 
-# 4i. PTDF/LODF across all three susceptance formulas, with bridge handling.
+# 4i. PTDF/LODF across four susceptance formulas, with bridge handling.
 #     Small cases only: PTDF and LODF are dense here.
-echo "=== DC MATPOWER oracle (PTDF/LODF, three formulas) ==="
+echo "=== DC MATPOWER oracle (PTDF/LODF, four formulas) ==="
 "$PY" evals/validation/validate_dc_ptdf_lodf.py "${DCCASES[@]}" || true
 
 # 5. Full reader x writer matrix (its own batched process).

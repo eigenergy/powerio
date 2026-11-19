@@ -90,7 +90,7 @@ fn execute(raw: &RawDss, finalize: bool) -> (States, Result<EarthModel, String>)
                                     .ok_or("LineSpacing did not exist at assignment")?;
                                 state.fetch_spacing(source.object, &context)
                             }
-                            Some("wires" | "cncables") => {
+                            Some("wires" | "cncables" | "tscables") => {
                                 let objects = raw.line_history[&point.object]
                                     .wires
                                     .get(&offset)
@@ -102,7 +102,7 @@ fn execute(raw: &RawDss, finalize: bool) -> (States, Result<EarthModel, String>)
                                     })
                                     .collect::<Result<Vec<_>, _>>()?;
                                 state.bind_conductors(
-                                    prop.name.as_deref() == Some("cncables"),
+                                    prop.name.as_deref() != Some("wires"),
                                     &objects,
                                     &context,
                                 )

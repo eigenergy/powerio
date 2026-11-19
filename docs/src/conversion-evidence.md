@@ -28,6 +28,37 @@ The grades are `lossless`, `exact`, `restated`, `approximate`, `dropped`, and
 `not_run_by_this_suite`: self round trips do not establish native tool acceptance.
 These are CI artifact versions, independent of PowerIO IR document versions.
 
+## Reading the results
+
+The overview combines `lossless` and `exact` as **Preserved**: no reported loss
+or typed-model change within the tested coverage. `exact` also records that
+the original source can be replayed byte for byte and that a fresh write is
+lossless. That extra evidence remains in the original grade and
+`verification.byte_echo_exact`; combining the display does not remove a check.
+
+| Display | Original grade | Meaning |
+| --- | --- | --- |
+| Preserved | `lossless`, `exact` | No reported loss or typed-model change in the tested projection. |
+| Representation / defaults | `restated` | A different representation, generated default, relabeled identifier, or informational remark is reported. |
+| Adjusted / partly checked | `approximate` | An adjustment is reported, or some electrical comparison remains unverified. Inspect the findings and limitations to distinguish these. |
+| Data omitted | `dropped` | At least one piece of source data has no corresponding target field. |
+| Failed checks | `failed` | An error, invariant failure, or baseline mismatch needs attention. |
+
+For example, the PMD source parser can move inline line impedances into
+reusable internal line-code records; the PMD writer puts them inline again.
+This representation change produces a remark, not a report of omitted
+impedance values. An adjustment changes or infers a value; an omission leaves
+some source data out. A limited comparison is uncertainty about verification
+and must remain visible separately from a known adjustment.
+
+Each cell reports its most serious finding. A single omitted metadata field
+can therefore give a cell the same `dropped` grade as several omitted fields.
+The grade is not a percentage of the case preserved or a calibrated 1–10
+fidelity score. Counts must distinguish conversions from source parses, and
+comparisons must retain fixture identities and coverage. Native-consumer
+acceptance is a separate check. Display grouping does not change JSON grades,
+the baseline, diagnostic severity, or any acceptance rule.
+
 A website can display this evidence, filter by format pair and diagnostic, and
 link to the exact workflow run. Imported JSON is evidence to inspect, not proof
 of its origin. Match repository, tested commit, run and artifact identity before

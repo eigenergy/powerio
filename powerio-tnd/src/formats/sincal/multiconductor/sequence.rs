@@ -75,13 +75,12 @@ impl SequenceParameters {
 
 fn phase_matrix(positive: f64, zero: f64) -> ConductorMatrix {
     // Divide before adding to avoid overflowing large finite input values.
-    let mutual = zero / 3.0 - positive / 3.0;
-    let diagonal = 2.0 * (positive / 3.0) + zero / 3.0;
-    let mut matrix = vec![vec![mutual; 3]; 3];
-    for (i, row) in matrix.iter_mut().enumerate() {
-        row[i] = diagonal;
-    }
-    matrix
+    powerio_dist::sequence::calc_phase_from_sequence(
+        3,
+        positive,
+        zero,
+        powerio_dist::sequence::SequenceThird::DivideFirst,
+    )
 }
 
 pub(super) struct SequenceLine {

@@ -530,9 +530,27 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         x: num_at(&rec.rhs, 2, 0.0, "branch x", rec)?,
         b: num_at(&rec.rhs, 3, 0.0, "branch b", rec)?,
         charging: None,
-        rate_a: num_at(&rec.rhs, 4, 0.0, "branch rate1", rec)?,
-        rate_b: num_at(&rec.rhs, 5, 0.0, "branch rate2", rec)?,
-        rate_c: num_at(&rec.rhs, 6, 0.0, "branch rate3", rec)?,
+        rate_a: crate::thermal_limit::from_zero_unlimited(num_at(
+            &rec.rhs,
+            4,
+            0.0,
+            "branch rate1",
+            rec,
+        )?)?,
+        rate_b: crate::thermal_limit::from_zero_unlimited(num_at(
+            &rec.rhs,
+            5,
+            0.0,
+            "branch rate2",
+            rec,
+        )?)?,
+        rate_c: crate::thermal_limit::from_zero_unlimited(num_at(
+            &rec.rhs,
+            6,
+            0.0,
+            "branch rate3",
+            rec,
+        )?)?,
         rating_sets: Vec::new(),
         current_ratings: None,
         tap: 0.0,
@@ -602,9 +620,9 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
             tap: 1.0,
             shift: 0.0,
             nominal_kv: 0.0,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             control: None,
         };
         let imp = |r, x| Impedance {
@@ -619,9 +637,9 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
                     tap: if tap == 0.0 { 1.0 } else { tap },
                     shift,
                     nominal_kv: 0.0,
-                    rate_a,
-                    rate_b,
-                    rate_c,
+                    rate_a: crate::thermal_limit::from_zero_unlimited(rate_a)?,
+                    rate_b: crate::thermal_limit::from_zero_unlimited(rate_b)?,
+                    rate_c: crate::thermal_limit::from_zero_unlimited(rate_c)?,
                     control: None,
                 },
                 nominal(to),
@@ -633,6 +651,7 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
             star_va: 0.0,
             mag_g: 0.0,
             mag_b: 0.0,
+            magnetizing_connection: crate::network::MagnetizingConnection::StarPoint,
             in_service,
             name,
             uid: None,
@@ -661,9 +680,9 @@ fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
         x,
         b: 0.0,
         charging: None,
-        rate_a,
-        rate_b,
-        rate_c,
+        rate_a: crate::thermal_limit::from_zero_unlimited(rate_a)?,
+        rate_b: crate::thermal_limit::from_zero_unlimited(rate_b)?,
+        rate_c: crate::thermal_limit::from_zero_unlimited(rate_c)?,
         rating_sets: Vec::new(),
         current_ratings: None,
         tap: if tap == 0.0 { 1.0 } else { tap },
@@ -1459,9 +1478,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
                 num(br.r),
                 num(br.x),
                 num(br.calc_total_charging_b()),
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
             );
         }
     }
@@ -1502,9 +1521,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
             );
             // Second physical line: ratings at 6-8, phase shift at 10, tap at 16.
             let mut line2 = vec!["0".to_string(); 17];
-            line2[6] = num(br.rate_a);
-            line2[7] = num(br.rate_b);
-            line2[8] = num(br.rate_c);
+            line2[6] = num(crate::thermal_limit::to_zero_unlimited(br.rate_a));
+            line2[7] = num(crate::thermal_limit::to_zero_unlimited(br.rate_b));
+            line2[8] = num(crate::thermal_limit::to_zero_unlimited(br.rate_c));
             line2[10] = num(br.shift);
             line2[16] = num(br.calc_effective_tap());
             let _ = writeln!(s, "{}", line2.join(" "));
@@ -1540,9 +1559,15 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
             );
             // Only the primary winding's ratio/ratings have a column here.
             let mut line2 = vec!["0".to_string(); 17];
-            line2[6] = num(tr.windings[0].rate_a);
-            line2[7] = num(tr.windings[0].rate_b);
-            line2[8] = num(tr.windings[0].rate_c);
+            line2[6] = num(crate::thermal_limit::to_zero_unlimited(
+                tr.windings[0].rate_a,
+            ));
+            line2[7] = num(crate::thermal_limit::to_zero_unlimited(
+                tr.windings[0].rate_b,
+            ));
+            line2[8] = num(crate::thermal_limit::to_zero_unlimited(
+                tr.windings[0].rate_c,
+            ));
             line2[10] = num(tr.windings[0].shift);
             line2[16] = num(tr.windings[0].tap);
             let _ = writeln!(s, "{}", line2.join(" "));
@@ -1792,7 +1817,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> TextEmission {
     let drops_winding_detail = net.transformers_3w().iter().any(|t| {
         t.windings[1..]
             .iter()
-            .any(|w| (w.tap - 1.0).abs() > 1e-9 || w.rate_a.abs() > 1e-9)
+            .any(|w| (w.tap - 1.0).abs() > 1e-9 || !w.rate_a.is_infinite())
     });
     if drops_winding_detail {
         warnings.push(
@@ -2176,9 +2201,9 @@ end
             x: 0.1,
             b: 0.02,
             charging: None,
-            rate_a: 100.0,
-            rate_b: 100.0,
-            rate_c: 100.0,
+            rate_a: (100.0),
+            rate_b: (100.0),
+            rate_c: (100.0),
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.0,

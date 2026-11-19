@@ -1,5 +1,6 @@
 //! Positive-sequence physical units to the balanced network's MW/kV/pu basis.
 use super::{error, rows::NativeRow, settings::StaticProfiles};
+use powerio_core::electrical::{ReactiveRatioForm, calc_reactive_ratio};
 use powerio_tx::Result;
 use powerio_tx::network::{
     BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BusId, BusType, Generator, Load,
@@ -22,8 +23,21 @@ fn quadrature(magnitude: f64, real: f64, context: &str) -> Result<f64> {
     if real > magnitude {
         return Err(error(format!("{context}: real part exceeds magnitude")));
     }
-    // Avoid cancellation/overflow from subtracting separately squared values.
-    finite(((magnitude - real) * (magnitude + real)).sqrt(), context)
+    finite(
+        powerio_core::electrical::calc_quadrature(magnitude, real),
+        context,
+    )
+}
+
+/// The three phase rating in MVA of a current in amperes at `kv`
+/// ([`powerio_core::electrical::calc_line_apparent_power`]).
+fn rating_mva(kv: f64, amps: f64) -> f64 {
+    powerio_core::electrical::calc_line_apparent_power(
+        kv,
+        amps,
+        powerio_core::electrical::SQRT_3,
+        powerio_core::electrical::ApparentPowerOrder::FactorFirst,
+    ) / 1000.0
 }
 
 pub(super) fn line(
@@ -60,7 +74,7 @@ pub(super) fn line(
     if kv(network, ports[0]).to_bits() != kv(network, ports[1]).to_bits() {
         return Err(row.bad("Un", "line joins unlike voltage bases"));
     }
-    let base_z = kv(network, ports[0]).powi(2) / network.base_mva();
+    let base_z = impedance_base(kv(network, ports[0]), network.base_mva());
     let length = row.positive("l")?;
     let parallel = row.positive("ParSys")?;
     let scale = finite(length / parallel / base_z, "line impedance base")?;
@@ -122,13 +136,16 @@ pub(super) fn line(
         "line current limit",
     )?;
     branch.current_ratings = Some(BranchCurrentRatings::new(amps, 0.0, 0.0));
-    branch.rate_a = finite(
-        3.0_f64.sqrt() * kv(network, ports[0]) * amps / 1000.0,
+    let rate = finite(
+        rating_mva(kv(network, ports[0]), amps),
         "line thermal rating",
     )?;
     // A stated limit must not round to zero, which would read as unlimited.
-    if ampacity > 0.0 && (amps == 0.0 || branch.rate_a == 0.0) {
+    if ampacity > 0.0 && (amps == 0.0 || rate == 0.0) {
         return Err(row.bad("fr", "line current limit underflows"));
+    }
+    if rate > 0.0 {
+        branch.rate_a = rate;
     }
     branch.uid = Some(uid.to_owned());
     if default_temperature {
@@ -190,7 +207,10 @@ pub(super) fn load(
             if !(0.0..=1.0).contains(&pf) {
                 return Err(row.bad("cosphi", "unsupported power factor"));
             }
-            (s * pf, s * (1.0 - pf * pf).sqrt())
+            (
+                s * pf,
+                s * powerio_core::electrical::calc_power_factor_sine(pf),
+            )
         }
         11 | 12 => {
             let p = row.number("P")? * row.number("fP")?;
@@ -198,7 +218,7 @@ pub(super) fn load(
             if pf > 1.0 {
                 return Err(row.bad("cosphi", "power factor exceeds one"));
             }
-            (p, p / pf * (1.0 - pf * pf).sqrt())
+            (p, p * calc_reactive_ratio(pf, ReactiveRatioForm::Sine))
         }
         _ => return Err(row.bad("Flag_Lf", "unsupported balanced load mode")),
     };
@@ -414,7 +434,16 @@ pub(super) fn transformer(
     if magnitude == 0.0 {
         return Err(row.bad("uk", "zero impedance transformer"));
     }
-    let secondary_scale = (un2 / kv(network, ports[1])).powi(2) * network.base_mva() / sn;
+    // The nameplate per unit on `Un2` at `Sn` over the system per unit on
+    // the secondary bus base.
+    let secondary_scale = powerio_core::electrical::calc_impedance_rebase(
+        1.0,
+        un2,
+        sn,
+        kv(network, ports[1]),
+        network.base_mva(),
+        powerio_core::electrical::RebaseOrder::BaseQuotient,
+    );
     let mut branch = Branch::new(
         ports[0],
         ports[1],
@@ -457,12 +486,8 @@ pub(super) fn transformer(
     let loss_mw = row.nonnegative("Vfe")? / 1000.0;
     let no_load_mva = sn * row.nonnegative("i0")? / 100.0;
     let magnetizing_mvar = quadrature(no_load_mva, loss_mw, "transformer no-load loss")?;
-    let y_scale = (kv(network, ports[1]) / un2 / secondary).powi(2) / network.base_mva();
-    let g = finite(loss_mw * y_scale / 2.0, "transformer core conductance")?;
-    let b = finite(
-        -magnetizing_mvar * y_scale / 2.0,
-        "transformer core susceptance",
-    )?;
+    let bus_base = impedance_base(kv(network, ports[1]), network.base_mva());
+    let (g, b) = core_admittance(loss_mw, magnetizing_mvar, un2 * secondary, bus_base)?;
     branch.charging = Some(BranchCharging::new(g, b, g, b));
     branch.b = 2.0 * b;
     branch.rate_a = sn;
@@ -504,12 +529,44 @@ pub(super) fn capacitor(
         "capacitor loss",
     )?;
     let reactive = quadrature(current, loss, "capacitor apparent power")?;
-    let scale = (kv(network, bus) / row.positive("Un")?).powi(2);
+    // The nameplate admittance at `Un`, as the power it draws at the bus base.
+    let (un, bus_kv) = (row.positive("Un")?, kv(network, bus));
+    let at_bus = |power: f64| {
+        powerio_core::electrical::calc_rated_power(
+            powerio_core::electrical::calc_rated_admittance(power, un),
+            bus_kv,
+        )
+    };
     let mut shunt = Shunt::new(
         bus,
-        finite(loss * scale, "capacitor G")?,
-        finite(reactive * scale, "capacitor B")?,
+        finite(at_bus(loss), "capacitor G")?,
+        finite(at_bus(reactive), "capacitor B")?,
     );
     shunt.uid = Some(uid.to_owned());
     Ok(shunt)
+}
+
+/// A transformer's core conductance and susceptance, half at each end: its
+/// no-load loss and magnetizing power as admittances at the tapped winding
+/// voltage `winding_kv` (`calc_rated_admittance`), in per unit on the bus
+/// impedance base `bus_base`.
+fn core_admittance(
+    loss_mw: f64,
+    magnetizing_mvar: f64,
+    winding_kv: f64,
+    bus_base: f64,
+) -> Result<(f64, f64)> {
+    let per_unit = |power: f64| {
+        powerio_core::electrical::calc_rated_admittance(power, winding_kv) * bus_base / 2.0
+    };
+    Ok((
+        finite(per_unit(loss_mw), "transformer core conductance")?,
+        finite(-per_unit(magnetizing_mvar), "transformer core susceptance")?,
+    ))
+}
+
+/// The one per unit impedance base (`powerio_core::electrical`), `NaN` for an
+/// unusable base so the finiteness check below names it.
+fn impedance_base(kv: f64, base_mva: f64) -> f64 {
+    powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN)
 }

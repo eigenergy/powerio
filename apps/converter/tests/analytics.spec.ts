@@ -1,5 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { inspectQueued } from './helpers';
 
 async function productionRoutes(context: BrowserContext, disabled = false) {
   const sent: any[] = [];
@@ -38,6 +39,7 @@ test('analytics needs consent, remains isolated, and sends only the closed vocab
     try { return !!parent.document.querySelector('input[type=file]'); } catch { return false; }
   })).toBe(false);
   await page.getByRole('button', { name: 'Transmission', exact: true }).click();
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Convert', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Download all', exact: false })).toBeEnabled();
@@ -63,6 +65,7 @@ for (const blocked of ['tracker', 'policy']) {
     await expect(page.getByRole('button', { name: 'Choose files', exact: false })).toBeEnabled();
     if (blocked === 'tracker') await consent(page);
     await page.getByRole('button', { name: 'Transmission', exact: true }).click();
+  await inspectQueued(page);
     await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Convert', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Download all', exact: false })).toBeEnabled();
@@ -99,6 +102,7 @@ test('native parser problems report reviewed codes without messages, paths, or e
   await page.getByLabel('Choose power system files', { exact: true }).setInputFiles({
     name: 'BEFORE.CONSENT.json', mimeType: 'application/json', buffer: Buffer.from('{private:'),
   });
+  await inspectQueued(page);
   await expect(page.getByText("Couldn't convert", { exact: true })).toBeVisible();
   await consent(page);
   await expect.poll(() => sent.length).toBeGreaterThan(0);
@@ -107,6 +111,7 @@ test('native parser problems report reviewed codes without messages, paths, or e
     { name: 'PRIVATE.UTILITY.dss', mimeType: 'text/plain', buffer: Buffer.from('Clear\nNew Circuit.PRIVATEGRID bus1=SECRET_BUS basekv=12.47\nRedirect SECRET.DEPENDENCY.dss\n') },
     { name: 'PRIVATE.PARSE.m', mimeType: 'text/plain', buffer: Buffer.from('function mpc = PRIVATEGRID\nmpc.version = \'2\';\nmpc.bus = [ SECRET_BUS ];\n') },
   ]);
+  await inspectQueued(page);
   await expect.poll(() => sent.some(event => event.payload.data?.code === 'READ.DSS.INCLUDE_LOAD_FAILED')).toBe(true);
   await expect.poll(() => sent.some(event => event.payload.name === 'parse_result' && event.payload.data?.outcome === 'error')).toBe(true);
   const missing = sent.find(event => event.payload.data?.code === 'READ.DSS.INCLUDE_LOAD_FAILED');
@@ -149,6 +154,7 @@ test('opting out clears events queued while the analytics script is loading', as
   await consent(page);
   await expect.poll(() => requested).toBe(true);
   await page.getByRole('button', { name: 'Transmission', exact: true }).click();
+  await inspectQueued(page);
   await expect(page.getByRole('button', { name: 'Convert', exact: true })).toBeEnabled();
   await page.getByRole('checkbox', { name: 'Share limited usage and error statistics' }).uncheck();
   release();

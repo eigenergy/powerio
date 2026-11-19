@@ -457,3 +457,31 @@ fn edited_storage_can_mix_generation_consumption_and_reactive_only_branches() {
         .collect();
     assert_eq!(actual, [(-400.0, 40.0), (500.0, -50.0), (0.0, 60.0)]);
 }
+
+#[test]
+fn an_inactive_component_is_not_evaluated() {
+    let model = DistLoadVoltageModel::Exponential {
+        v_nom: vec![10.0],
+        gamma_p: vec![2.0],
+        gamma_q: vec![-1_000_000.0],
+    };
+    // The reactive exponent overflows at 0.8 pu, so the full evaluation is
+    // refused, while a purely active load reads only its active factor.
+    assert!(model.power_scale(0, 8.0).is_err());
+    let [p, q] = model.power_scale_where(0, 8.0, [true, false]).unwrap();
+    assert!((p - 0.64).abs() < 1e-15);
+    assert_eq!(q, 0.0);
+    let zip = DistLoadVoltageModel::Zip {
+        v_nom: vec![10.0],
+        alpha_z: vec![0.2],
+        alpha_i: vec![0.3],
+        alpha_p: vec![0.5],
+        beta_z: vec![0.1],
+        beta_i: vec![0.4],
+        beta_p: vec![0.5],
+    };
+    assert_eq!(
+        zip.power_scale(0, 8.0).unwrap(),
+        zip.power_scale_where(0, 8.0, [true, true]).unwrap()
+    );
+}

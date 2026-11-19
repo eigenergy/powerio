@@ -175,7 +175,7 @@ fn lindist3flow_instance_and_solution_emit_their_network_with_diagnostics() {
     );
     let result = emit(
         &PioModule::new(instance.as_ref().clone()),
-        "bmopf-json@0.2.0",
+        "bmopf-json",
         Destination::memory("instance.json").unwrap(),
     )
     .unwrap();
@@ -199,7 +199,7 @@ fn lindist3flow_instance_and_solution_emit_their_network_with_diagnostics() {
         LinDist3FlowOpfSolution::new(instance, Termination::Converged, values, 0.0).unwrap();
     let result = emit(
         &PioModule::new(solution),
-        "bmopf-json@0.2.0",
+        "bmopf-json",
         Destination::memory("solution.json").unwrap(),
     )
     .unwrap();

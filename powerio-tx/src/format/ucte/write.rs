@@ -355,7 +355,10 @@ fn current_limit_amps(branch: &Branch, kv: f64) -> Option<i64> {
         .current_ratings
         .map(|ratings| ratings.c_rating_a)
         .filter(|amps| *amps > 0.0)
-        .or_else(|| (branch.rate_a > 0.0).then(|| branch.rate_a * 1000.0 / (SQRT_3 * kv)))?;
+        .or_else(|| {
+            crate::thermal_limit::as_option(branch.rate_a)
+                .map(|mva| powerio_core::electrical::calc_line_current(mva * 1000.0, kv, SQRT_3))
+        })?;
     Some(amps.round() as i64)
 }
 
@@ -675,8 +678,8 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                 numbers.losses.charging_conductance += 1;
             }
         }
-        if crate::format::nonzero_differs(branch.rate_b, branch.rate_a)
-            || crate::format::nonzero_differs(branch.rate_c, branch.rate_a)
+        if crate::format::thermal_limit_differs(branch.rate_b, branch.rate_a)
+            || crate::format::thermal_limit_differs(branch.rate_c, branch.rate_a)
         {
             numbers.losses.rate_b_c += 1;
         }
@@ -690,7 +693,8 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                     ),
                 });
             };
-            let zbase = to_kv * to_kv / BASE_MVA;
+            let zbase =
+                powerio_core::electrical::calc_impedance_base(to_kv, BASE_MVA).unwrap_or(f64::NAN);
             let mut field = Field::new();
             field.put(0, &from_code.text());
             field.put(9, &to_code.text());
@@ -748,7 +752,8 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
                 ),
             });
         };
-        let zbase = to_kv * to_kv / BASE_MVA;
+        let zbase =
+            powerio_core::electrical::calc_impedance_base(to_kv, BASE_MVA).unwrap_or(f64::NAN);
         let tap = branch.calc_effective_tap();
         let rated_u1 = extra_f64(&branch.extras, "ucte_rated_voltage_1")
             .filter(|u| *u > 0.0)
@@ -967,10 +972,13 @@ pub(crate) fn write_ucte(net: &BalancedNetwork) -> Result<TextEmission> {
             .current_rating
             .filter(|amps| *amps > 0.0)
             .or_else(|| {
-                switch
-                    .thermal_rating
-                    .filter(|mva| *mva > 0.0)
-                    .map(|mva| mva * 1000.0 / (SQRT_3 * kv_of[&switch.to]))
+                switch.thermal_rating.filter(|mva| *mva > 0.0).map(|mva| {
+                    powerio_core::electrical::calc_line_current(
+                        mva * 1000.0,
+                        kv_of[&switch.to],
+                        SQRT_3,
+                    )
+                })
             });
         if let Some(amps) = amps {
             put_integer(

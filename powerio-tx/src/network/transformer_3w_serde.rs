@@ -12,7 +12,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(doc)]
 use super::Bus;
-use super::{Extras, Impedance, Transformer3W, WINDING_IN_SERVICE_EXTRA, Winding};
+use super::{
+    Extras, Impedance, MagnetizingConnection, Transformer3W, WINDING_IN_SERVICE_EXTRA, Winding,
+};
 
 const PARTIAL_TYPE: &str = "powerio.PartialTransformer3W";
 
@@ -37,9 +39,14 @@ struct Transformer3WFields {
     /// Star-point voltage magnitude (p.u.) and angle (degrees), as solved.
     star_vm: f64,
     star_va: f64,
-    /// Magnetizing shunt referred to the star point (p.u. on the system base).
+    /// Magnetizing shunt conductance and susceptance (p.u. on the system
+    /// base), connected where `magnetizing_connection` says.
     mag_g: f64,
     mag_b: f64,
+    /// Where `mag_g` and `mag_b` connect. Absent means the star point, the
+    /// meaning every 0.11 document has.
+    #[serde(default, skip_serializing_if = "is_star_point")]
+    magnetizing_connection: MagnetizingConnection,
     in_service: bool,
     name: Option<String>,
     /// Stable row identity; see [`Bus::uid`].
@@ -53,6 +60,11 @@ struct Transformer3WFields {
     #[serde(default, rename = "value", deserialize_with = "reject_reserved")]
     #[cfg_attr(feature = "schema", schemars(skip))]
     _reserved_value: (),
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if passes a reference
+fn is_star_point(connection: &MagnetizingConnection) -> bool {
+    *connection == MagnetizingConnection::StarPoint
 }
 
 fn reject_reserved<'de, D: Deserializer<'de>>(_: D) -> Result<(), D::Error> {
@@ -70,6 +82,7 @@ impl From<Transformer3WFields> for Transformer3W {
             star_va: fields.star_va,
             mag_g: fields.mag_g,
             mag_b: fields.mag_b,
+            magnetizing_connection: fields.magnetizing_connection,
             in_service: fields.in_service,
             name: fields.name,
             uid: fields.uid,
@@ -83,14 +96,20 @@ struct TransformerBody<'a>(&'a Transformer3W);
 impl Serialize for TransformerBody<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let t = self.0;
-        let mut body =
-            serializer.serialize_struct("Transformer3W", 9 + usize::from(t.uid.is_some()))?;
+        let star = is_star_point(&t.magnetizing_connection);
+        let mut body = serializer.serialize_struct(
+            "Transformer3W",
+            9 + usize::from(t.uid.is_some()) + usize::from(!star),
+        )?;
         body.serialize_field("windings", &t.windings)?;
         body.serialize_field("z", &t.z)?;
         body.serialize_field("star_vm", &t.star_vm)?;
         body.serialize_field("star_va", &t.star_va)?;
         body.serialize_field("mag_g", &t.mag_g)?;
         body.serialize_field("mag_b", &t.mag_b)?;
+        if !star {
+            body.serialize_field("magnetizing_connection", &t.magnetizing_connection)?;
+        }
         body.serialize_field("in_service", &t.in_service)?;
         body.serialize_field("name", &t.name)?;
         if let Some(uid) = &t.uid {
@@ -128,6 +147,7 @@ enum Field {
     StarVa,
     MagG,
     MagB,
+    MagnetizingConnection,
     InService,
     Name,
     Uid,
@@ -139,6 +159,7 @@ enum Field {
 }
 
 impl<'de> Deserialize<'de> for Transformer3W {
+    #[allow(clippy::too_many_lines)] // one flat visitor arm per record field
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct TransformerVisitor;
         impl<'de> Visitor<'de> for TransformerVisitor {
@@ -155,6 +176,7 @@ impl<'de> Deserialize<'de> for Transformer3W {
                 let mut star_va = None;
                 let mut mag_g = None;
                 let mut mag_b = None;
+                let mut magnetizing_connection = None;
                 let mut in_service = None;
                 let mut name = None;
                 let mut uid = None;
@@ -182,6 +204,7 @@ impl<'de> Deserialize<'de> for Transformer3W {
                         Field::StarVa => read_field!(star_va),
                         Field::MagG => read_field!(mag_g),
                         Field::MagB => read_field!(mag_b),
+                        Field::MagnetizingConnection => read_field!(magnetizing_connection),
                         Field::InService => read_field!(in_service),
                         Field::Name => read_field!(name),
                         Field::Uid => read_field!(uid),
@@ -229,6 +252,7 @@ impl<'de> Deserialize<'de> for Transformer3W {
                     star_va: star_va.ok_or_else(|| A::Error::missing_field("star_va"))?,
                     mag_g: mag_g.ok_or_else(|| A::Error::missing_field("mag_g"))?,
                     mag_b: mag_b.ok_or_else(|| A::Error::missing_field("mag_b"))?,
+                    magnetizing_connection: magnetizing_connection.unwrap_or_default(),
                     in_service: in_service.ok_or_else(|| A::Error::missing_field("in_service"))?,
                     name: name.unwrap_or(None),
                     uid: uid.unwrap_or(None),
@@ -293,5 +317,60 @@ impl schemars::JsonSchema for Transformer3W {
             Transformer3WFields::json_schema(generator),
             generator.subschema_for::<PartialTransformer3WWire>(),
         ]})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::{BusId, Impedance, Winding};
+    use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
+
+    fn transformer(connection: MagnetizingConnection) -> Transformer3W {
+        let mut t = Transformer3W::new(
+            [
+                Winding::new(BusId(1)),
+                Winding::new(BusId(2)),
+                Winding::new(BusId(3)),
+            ],
+            [Impedance::new(0.0, 0.1, 100.0); 3],
+        );
+        t.mag_g = 0.001;
+        t.mag_b = -0.02;
+        t.magnetizing_connection = connection;
+        t
+    }
+
+    #[test]
+    fn a_star_point_body_keeps_the_0_11_layout() {
+        let json = transformer(MagnetizingConnection::StarPoint)
+            .serialize(NonFiniteSer(serde_json::value::Serializer))
+            .unwrap();
+        assert!(json.get("magnetizing_connection").is_none(), "{json}");
+        let back = Transformer3W::deserialize(NonFiniteDe(json)).unwrap();
+        assert_eq!(
+            back.magnetizing_connection,
+            MagnetizingConnection::StarPoint
+        );
+    }
+
+    #[test]
+    fn a_winding_1_connection_round_trips_and_reads_back() {
+        let original = transformer(MagnetizingConnection::Winding1Terminal);
+        let json = original
+            .serialize(NonFiniteSer(serde_json::value::Serializer))
+            .unwrap();
+        assert_eq!(json["magnetizing_connection"], "winding1_terminal");
+        let back = Transformer3W::deserialize(NonFiniteDe(json)).unwrap();
+        assert_eq!(back, original);
+        // The partial record carries it inside its value.
+        let mut partial = original;
+        partial.set_winding_in_service([true, false, true]);
+        let json = partial
+            .serialize(NonFiniteSer(serde_json::value::Serializer))
+            .unwrap();
+        assert_eq!(json["value"]["magnetizing_connection"], "winding1_terminal");
+        let back = Transformer3W::deserialize(NonFiniteDe(json)).unwrap();
+        assert_eq!(back, partial);
     }
 }

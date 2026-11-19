@@ -14,7 +14,7 @@ run bash scripts/check-release-features.sh
 run bash scripts/deprecated-inventory.sh --assert-empty
 
 # The tag decision, against the tag the workspace version implies.
-version=$(grep -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+version=$(grep -m1 -oE '^version = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?"' Cargo.toml | cut -d'"' -f2)
 run env TAG="v$version" bash scripts/release-tag-check.sh
 
 # The five asset names the tag workflow builds and PowerIO.jl's artifact

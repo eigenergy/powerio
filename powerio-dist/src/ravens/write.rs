@@ -54,6 +54,7 @@ pub(crate) fn emit_ravens_json_text(
     net: &MulticonductorNetwork,
 ) -> Result<TextEmission, powerio_core::Error> {
     validate_transformer_bases(net)?;
+    crate::cim::require_phase_clocks(net)?;
     let returns = super::neutral::prepare(net)?;
     let prepared = super::source::prepare(returns.as_ref())?;
     let net = prepared.as_ref();
@@ -87,7 +88,7 @@ fn validate_transformer_bases(net: &MulticonductorNetwork) -> Result<(), powerio
             continue;
         }
         for (index, winding) in transformer.windings.iter().enumerate() {
-            if !crate::model::n_winding_impedance_base(1, winding.v_ref, winding.s_rating)
+            if !crate::electrical::calc_impedance_base(winding.v_ref, winding.s_rating)
                 .is_some_and(|base| base.is_finite() && base > 0.0)
             {
                 return Err(powerio_core::Error::new(
@@ -236,13 +237,15 @@ fn xf64(extras: &Extras, key: &str) -> Option<f64> {
 /// Whether the bus grounds its neutral conductor.
 fn neutral_grounded(net: &MulticonductorNetwork, bus: &str) -> bool {
     net.bus(bus)
-        .is_some_and(|b| b.grounded.iter().any(|t| terminal_phase(t) == Some("N")))
+        .is_some_and(|b| b.grounded.iter().any(|t| crate::cim::is_wire_neutral(t)))
 }
 
-/// Whether a terminal name is a phase conductor: anything the shared phase
-/// vocabulary does not read as the neutral (`4`, `n`, `N`).
+/// Whether a terminal name is a phase conductor: anything that is not the
+/// neutral under the CIM wire convention ([`crate::cim::is_wire_neutral`],
+/// the one terminal classification over the convention the MG-RAVENS
+/// reader states), so a single phase bus `[1, 4]` keeps its neutral.
 fn is_hot(terminal: &str) -> bool {
-    terminal_phase(terminal) != Some("N")
+    !crate::cim::is_wire_neutral(terminal)
 }
 
 /// PhaseCode states a set; ordering belongs to phase records, not this enum.
@@ -327,7 +330,7 @@ struct Writer {
 // Omitting duplicate bounds is lossless, including libm-scale differences
 // between phase magnitudes; no approximate comparison or global tolerance.
 fn source_fixes_phase_bounds(net: &MulticonductorNetwork, bus: &crate::DistBus) -> bool {
-    let phases = bus.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+    let phases = bus.phase_indices(net.terminal_conventions());
     let fixed = |index: usize| {
         net.sources().iter().find_map(|source| {
             if !source.bus.eq_ignore_ascii_case(&bus.id)
@@ -1033,12 +1036,18 @@ impl Writer {
             obj.insert("EnergyConsumer.grounded".into(), Value::Bool(grounded));
             obj.insert("Equipment.inService".into(), Value::Bool(true));
             if let Some(&v) = load.voltage_model.v_nom().first() {
-                let base = if delta { v } else { v * 3f64.sqrt() };
+                let base = if delta {
+                    v
+                } else {
+                    crate::electrical::calc_wye_line_voltage(v)
+                };
                 let base = stable_fixed(base, |b| {
                     if delta {
                         b
                     } else {
-                        (b / 3f64.sqrt()) * 3f64.sqrt()
+                        crate::electrical::calc_wye_line_voltage(
+                            crate::electrical::calc_wye_phase_voltage(b),
+                        )
                     }
                 });
                 let name = format!("BaseV_{}", fdisp(base / 1e3));
@@ -1446,7 +1455,7 @@ impl Writer {
                 // wye bank sits line-to-neutral, everything else line-to-line.
                 self.base_of(&shunt.bus).map(|base| {
                     if !delta && n == 1 {
-                        base / 3f64.sqrt()
+                        crate::electrical::calc_wye_phase_voltage(base)
                     } else {
                         base
                     }
@@ -1697,7 +1706,7 @@ impl Writer {
                 let rated_amps = if hot == 1 {
                     rated_s / u
                 } else {
-                    rated_s / (3f64.sqrt() * u)
+                    crate::electrical::calc_line_current(rated_s, u, crate::electrical::SQRT_3)
                 };
                 let pu = stable_fixed(amps / rated_amps, |v| (v * rated_amps) / rated_amps);
                 let pu = self.num(pu, &what);
@@ -1822,11 +1831,10 @@ impl Writer {
                 .map(|(k, _)| k)
                 .collect();
             let has_neutral = source.terminal_map.iter().any(|t| !is_hot(t));
-            let n = hot.len().max(1) as f64;
             let chord = if hot.len() <= 1 {
                 1.0
             } else {
-                2.0 * (std::f64::consts::PI / n).sin()
+                crate::sequence::calc_polygon_chord(hot.len())
             };
             let v_ln = hot
                 .first()
@@ -1878,11 +1886,7 @@ impl Writer {
                     // The whole source's line to line base, so every part
                     // states the same `nominalVoltage` and seeds the same
                     // BaseVoltage.
-                    let ll = line_to_line_chord(hot.len());
-                    let nominal = xf64(&source.extras, "basekv").map_or_else(
-                        || stable_fixed(v_ln * ll, |v| (v / ll) * ll),
-                        |kv| stable_fixed(kv * 1e3, |v| (v / 1e3) * 1e3),
-                    );
+                    let nominal = source_nominal_voltage(source);
                     let nominal_v = self.num(nominal, &part_what);
                     let magnitude_v = self.num(magnitude, &part_what);
                     let angle_v = self.num(angle, &part_what);
@@ -1927,12 +1931,8 @@ impl Writer {
 
             let magnitude = stable_fixed(v_ln * chord, |v| (v / chord) * chord);
             // `nominalVoltage` is line to line in CIM: the stated base, or
-            // the line to line equivalent of the first phasor.
-            let ll = line_to_line_chord(hot.len());
-            let nominal = xf64(&source.extras, "basekv").map_or_else(
-                || stable_fixed(v_ln * ll, |v| (v / ll) * ll),
-                |kv| stable_fixed(kv * 1e3, |v| (v / 1e3) * 1e3),
-            );
+            // the source's line to line voltage base.
+            let nominal = source_nominal_voltage(source);
             let nominal_v = self.num(nominal, &what);
             let magnitude_v = self.num(magnitude, &what);
             let angle_v = self.num(angle, &what);
@@ -2010,11 +2010,29 @@ impl Writer {
                 );
                 continue;
             }
+            // The clocks state the vector group shift the physics stamps,
+            // `leadlag` included. `require_phase_clocks` has refused a unit
+            // whose shift is unknown; a direct caller still never gets a
+            // wrong clock.
+            let three_phase = xf.phases == 3;
+            let clocks = match (0..xf.windings.len())
+                .map(|k| crate::cim::tank_phase_clock(xf, k, three_phase))
+                .collect::<Result<Vec<f64>, _>>()
+            {
+                Ok(clocks) => clocks,
+                Err(error) => {
+                    self.warn(
+                        &C::EMIT_RAVENS_DIST_RECORD_DROPPED,
+                        format!("{what}: no phase-angle clock: {error}; skipped"),
+                    );
+                    continue;
+                }
+            };
             let info_name = format!("{}_info", xf.name);
             let mut obj = identified("PowerTransformer", &xf.name, extras_mrid(&xf.extras));
             obj.insert(
                 "PowerTransformer.vectorGroup".into(),
-                Value::String(vector_group(xf)),
+                Value::String(vector_group(xf, &clocks)),
             );
 
             let mut tank = identified("TransformerTank", &xf.name, None);
@@ -2026,8 +2044,9 @@ impl Writer {
             let mut end_infos = Vec::new();
             for (k, w) in xf.windings.iter().enumerate() {
                 let num = k as u64 + 1;
-                let grounded =
-                    w.conn == DistWindingConn::Wye && !w.r_neutral.is_some_and(|r| r < 0.0);
+                let grounded = w.conn == DistWindingConn::Wye
+                    && crate::transformer::calc_stated_neutral_grounding(w)
+                        != crate::transformer::WindingNeutralGrounding::Floating;
                 let mut end = identified(
                     "TransformerTankEnd",
                     &format!("{}_End_{num}", xf.name),
@@ -2050,7 +2069,7 @@ impl Writer {
                 // to be byte stable.
                 let mut ordered = w.terminal_map.clone();
                 if grounded && !ordered.iter().any(|t| !is_hot(t)) {
-                    ordered.push("4".to_owned());
+                    ordered.push(powerio_core::cim::NEUTRAL_TERMINAL.to_owned());
                 }
                 end.insert(
                     "TransformerTankEnd.orderedPhases".into(),
@@ -2092,13 +2111,15 @@ impl Writer {
                         }
                     )),
                 );
-                info.insert("TransformerEndInfo.phaseAngleClock".into(), Value::from(0));
+                info.insert(
+                    "TransformerEndInfo.phaseAngleClock".into(),
+                    Value::from(clocks[k]),
+                );
                 let rated_u = self.num(w.v_ref, &what);
                 let rated_s = self.num(w.s_rating, &what);
                 info.insert("TransformerEndInfo.ratedU".into(), rated_u);
                 info.insert("TransformerEndInfo.ratedS".into(), rated_s);
-                if let Some(z_base) = crate::model::n_winding_impedance_base(1, w.v_ref, w.s_rating)
-                {
+                if let Some(z_base) = crate::electrical::calc_impedance_base(w.v_ref, w.s_rating) {
                     let r = self.num(written_r_ohm(w.r_pct, z_base), &what);
                     info.insert("TransformerEndInfo.r".into(), r);
                 }
@@ -2132,7 +2153,7 @@ impl Writer {
             // exactly that. Ohms here would read back as an impedance below
             // the winding resistance.
             let w1 = &xf.windings[0];
-            if let Some(z_base) = crate::model::n_winding_impedance_base(1, w1.v_ref, w1.s_rating) {
+            if let Some(z_base) = crate::electrical::calc_impedance_base(w1.v_ref, w1.s_rating) {
                 let xhl = xf.xsc_pct.first().copied().unwrap_or(0.0);
                 // The pair resistance as the reader recovers it from the
                 // written `TransformerEndInfo.r`, so the cycle below is the
@@ -2143,7 +2164,7 @@ impl Writer {
                     .map(|w| {
                         let mut w = w.clone();
                         if let Some(z_base) =
-                            crate::model::n_winding_impedance_base(1, w.v_ref, w.s_rating)
+                            crate::electrical::calc_impedance_base(w.v_ref, w.s_rating)
                         {
                             w.r_pct = written_r_ohm(w.r_pct, z_base) / z_base * 100.0;
                         }
@@ -2194,14 +2215,16 @@ impl Writer {
                 let mut test = identified("NoLoadTest", &format!("{info_name}_1_noload"), None);
                 let energised = self.num(w1.v_ref, &what);
                 test.insert("NoLoadTest.energisedEndVoltage".into(), energised);
-                if let Some(pct) = imag {
-                    let pct = self.num(pct, &what);
-                    test.insert("NoLoadTest.excitingCurrent".into(), pct);
-                }
-                if let Some(pct) = noloadloss {
-                    let loss = stable_fixed(pct / 100.0 * w1.s_rating, |v| {
-                        (v / w1.s_rating * 100.0) / 100.0 * w1.s_rating
-                    });
+                // The loss in kW and the whole exciting current, the test
+                // distribution CIM writes ([`crate::cim::no_load_test_values`]).
+                let (loss, exciting) = crate::cim::no_load_test_values(
+                    noloadloss.unwrap_or(0.0),
+                    imag.unwrap_or(0.0),
+                    w1.s_rating,
+                );
+                let exciting = self.num(exciting, &what);
+                test.insert("NoLoadTest.excitingCurrent".into(), exciting);
+                if noloadloss.is_some() {
                     let loss = self.num(loss, &what);
                     test.insert("NoLoadTest.loss".into(), loss);
                 }
@@ -2229,7 +2252,8 @@ impl Writer {
             );
             assets.insert(info_name, Value::Object(wrapper));
 
-            self.warn_extras(&what, &xf.extras, &["%noloadloss", "%imag"]);
+            // `leadlag` rides in the clocks.
+            self.warn_extras(&what, &xf.extras, &["%noloadloss", "%imag", "leadlag"]);
             table.insert(xf.name.clone(), Value::Object(obj));
         }
         (table, assets)
@@ -2243,7 +2267,13 @@ impl Writer {
         let normal = self.base_of(bus);
         // The upstream converter uses line-to-line voltage limits even on
         // a single-phase bus. Keep canonical multiply/divide cycles stable.
-        let scale = |v: f64| stable_fixed(v * 3f64.sqrt(), |x| x / 3f64.sqrt() * 3f64.sqrt());
+        let scale = |v: f64| {
+            stable_fixed(crate::electrical::calc_wye_line_voltage(v), |x| {
+                crate::electrical::calc_wye_line_voltage(crate::electrical::calc_wye_phase_voltage(
+                    x,
+                ))
+            })
+        };
         Some(self.voltage_limit_set(b.v_min.map(scale), b.v_max.map(scale), normal))
     }
 
@@ -2498,10 +2528,14 @@ fn wrap_angle(a: f64) -> f64 {
 
 /// A conventional vector-group label (`Dyn0`, `Yy0`); decorative — the
 /// reader types connections from the catalog records.
-fn vector_group(xf: &DistTransformer) -> String {
+/// The IEC vector group: each winding's connection letter (capital for the
+/// first), `n` for a grounded wye neutral, and each later winding's clock.
+fn vector_group(xf: &DistTransformer, clocks: &[f64]) -> String {
     let mut out = String::new();
     for (k, w) in xf.windings.iter().enumerate() {
-        let grounded = w.conn == DistWindingConn::Wye && !w.r_neutral.is_some_and(|r| r < 0.0);
+        let grounded = w.conn == DistWindingConn::Wye
+            && crate::transformer::calc_stated_neutral_grounding(w)
+                != crate::transformer::WindingNeutralGrounding::Floating;
         let letter = match (k, w.conn) {
             (0, DistWindingConn::Delta) => "D",
             (0, DistWindingConn::Wye) => "Y",
@@ -2512,8 +2546,10 @@ fn vector_group(xf: &DistTransformer) -> String {
         if grounded && w.conn == DistWindingConn::Wye {
             out.push_str(if k == 0 { "N" } else { "n" });
         }
+        if k > 0 {
+            out.push_str(&clocks.get(k).copied().unwrap_or(0.0).to_string());
+        }
     }
-    out.push('0');
     out
 }
 
@@ -2555,16 +2591,32 @@ fn versions() -> Value {
 /// three-phase element's line-to-line base is more authoritative than a
 /// single-phase regulator's `v_ref·√3` estimate), higher volts breaks ties.
 /// A total order, so seed selection is independent of element order.
-/// The factor from a line to neutral magnitude to its line to line
-/// equivalent for `hot` phase conductors: the chord of the positive sequence
-/// n-gon (`sqrt(3)` at three), and `sqrt(3)` again for a single conductor,
-/// whose magnitude is line to neutral.
-fn line_to_line_chord(hot: usize) -> f64 {
-    if hot <= 1 {
-        3f64.sqrt()
-    } else {
-        2.0 * (std::f64::consts::PI / hot as f64).sin()
-    }
+/// A source's line to line `nominalVoltage`, volts: its `basekv` when it
+/// carries one, else the one source voltage base over its hot terminals in
+/// the `EnergySource` form, its first phase's magnitude times the polygon
+/// chord ([`crate::VoltageSource::calc_line_to_line_voltage`],
+/// [`crate::sequence::LineVoltageForm::FirstPhase`]; zero when it has no
+/// hot terminal), at the fixed point of the reader's `basekv` round trip so
+/// write → read → write is byte stable. The writer states it on every
+/// `EnergySource` of the source and seeds the source bus's `BaseVoltage`
+/// with it.
+fn source_nominal_voltage(source: &crate::VoltageSource) -> f64 {
+    let volts = xf64(&source.extras, "basekv").map_or_else(
+        || {
+            let hot: Vec<usize> = source
+                .terminal_map
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| is_hot(t))
+                .map(|(k, _)| k)
+                .collect();
+            source
+                .calc_line_to_line_voltage(&hot, crate::sequence::LineVoltageForm::FirstPhase)
+                .unwrap_or(0.0)
+        },
+        |kv| kv * 1e3,
+    );
+    stable_fixed(volts, |v| (v / 1e3) * 1e3)
 }
 
 fn seed_better(x: (usize, f64), y: (usize, f64)) -> bool {
@@ -2572,12 +2624,12 @@ fn seed_better(x: (usize, f64), y: (usize, f64)) -> bool {
 }
 
 /// Nominal line-to-line volts per bus (lowercased id): seeded by sources and
-/// transformer windings, flooded across lines and switches. Loads do not
-/// seed — a load's own base may legitimately differ from the bus base.
+/// transformer windings, shared across each voltage zone of lines and
+/// switches. Loads do not seed — a load's own base may legitimately differ
+/// from the bus base.
 ///
-/// Selection is order-independent: each bus keeps the most authoritative seed
-/// ([`seed_better`]) rather than the first one written, and the flood takes
-/// the per-component maximum. Element order (a dss parse keeps file order, a
+/// Selection is order-independent: each zone keeps its most authoritative
+/// seed ([`seed_better`]) rather than the first one written. Element order (a dss parse keeps file order, a
 /// RAVENS parse sorts by name) therefore cannot change the result, so
 /// write → read → write is byte stable.
 fn bus_bases(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
@@ -2596,77 +2648,56 @@ fn bus_bases(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
         }
     };
     for source in net.sources() {
-        let hot = source.terminal_map.iter().filter(|t| is_hot(t)).count();
-        // A source states the system base at its bus: `basekv` when it
-        // carries one, else the line to line equivalent of its first
-        // phasor, which is what the writer states as `nominalVoltage` and
-        // the reader hands back as `basekv`, so both passes seed alike. The
-        // seed outranks a winding's (a single phase part of a split source
-        // still states the whole source's base).
-        let volts = xf64(&source.extras, "basekv").map_or_else(
-            || {
-                let first = source
-                    .terminal_map
-                    .iter()
-                    .position(|t| is_hot(t))
-                    .and_then(|k| source.v_magnitude.get(k))
-                    .copied()
-                    .unwrap_or(0.0);
-                first * line_to_line_chord(hot)
-            },
-            |kv| stable_fixed(kv * 1e3, |v| (v / 1e3) * 1e3),
-        );
-        seed(&source.bus, 3, volts);
+        // A source states the system base at its bus: what the writer states
+        // as `nominalVoltage` ([`source_nominal_voltage`]) and the reader
+        // hands back as `basekv`, so both passes seed alike. The seed
+        // outranks a winding's (a single phase part of a split source still
+        // states the whole source's base).
+        seed(&source.bus, 3, source_nominal_voltage(source));
     }
     for xf in net.transformers() {
         for w in &xf.windings {
             let hot = w.terminal_map.iter().filter(|t| is_hot(t)).count();
             let volts = if hot <= 1 {
-                w.v_ref * 3f64.sqrt()
+                crate::electrical::calc_wye_line_voltage(w.v_ref)
             } else {
                 w.v_ref
             };
             seed(&w.bus, hot.max(1), volts);
         }
     }
-    // Flood across zero-impedance-class edges (lines and switches share a
-    // base). Take the per-edge maximum both ways and iterate to a fixed
-    // point; max propagation converges to the per-component maximum
-    // regardless of edge order.
-    loop {
-        let mut changed = false;
-        let edges = net
-            .lines()
-            .iter()
-            .map(|l| (&l.bus_from, &l.bus_to))
-            .chain(net.switches().iter().map(|s| (&s.bus_from, &s.bus_to)));
-        for (a, b) in edges {
-            let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
-            let best = match (seeds.get(&a).copied(), seeds.get(&b).copied()) {
-                (Some(x), Some(y)) => {
-                    if seed_better(x, y) {
-                        x
-                    } else {
-                        y
-                    }
-                }
-                (Some(x), None) => x,
-                (None, Some(y)) => y,
-                (None, None) => continue,
-            };
-            for end in [a, b] {
-                if seeds.get(&end) != Some(&best) {
-                    seeds.insert(end, best);
-                    changed = true;
+    // Lines and every switch share a base: the one zone partition
+    // (`calc_voltage_zone_labels`), each zone taking its most authoritative
+    // seed, which no element order changes. A line or switch naming an
+    // undeclared bus leaves every bus on its own seed.
+    let Ok(labels) = crate::voltage_zones::calc_voltage_zone_labels(
+        net,
+        crate::voltage_zones::ZoneSwitches::All,
+    ) else {
+        return seeds
+            .into_iter()
+            .map(|(bus, (_, volts))| (bus, volts))
+            .collect();
+    };
+    let mut best: BTreeMap<usize, (usize, f64)> = BTreeMap::new();
+    for (bus, &zone) in net.buses().iter().zip(&labels) {
+        if let Some(&candidate) = seeds.get(&bus.id.to_ascii_lowercase()) {
+            match best.get(&zone) {
+                Some(&current) if !seed_better(candidate, current) => {}
+                _ => {
+                    best.insert(zone, candidate);
                 }
             }
         }
-        if !changed {
-            break;
-        }
     }
-    seeds
+    let mut bases: BTreeMap<String, f64> = seeds
         .into_iter()
         .map(|(bus, (_, volts))| (bus, volts))
-        .collect()
+        .collect();
+    for (bus, zone) in net.buses().iter().zip(&labels) {
+        if let Some(&(_, volts)) = best.get(zone) {
+            bases.insert(bus.id.to_ascii_lowercase(), volts);
+        }
+    }
+    bases
 }

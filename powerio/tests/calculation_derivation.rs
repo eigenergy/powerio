@@ -291,3 +291,48 @@ fn neutral_kron_reports_wrong_model_and_projection_failures() {
         "TRANSFORM.DIST.KRON_REDUCTION_FAILED"
     );
 }
+
+#[test]
+fn new_dc_conventions_round_trip_as_instances() {
+    use powerio::{
+        BranchSusceptanceFormula as F, DcOpfInstance, DcPfInstance, PioModule, PioValue,
+    };
+    let PioValue::BalancedNetwork(net) = network_module().into_value() else {
+        panic!("network")
+    };
+    for f in [
+        F::TapAdjustedSeriesSusceptance,
+        F::SeriesSusceptanceNoPhaseShift,
+    ] {
+        for value in [
+            PioValue::DcOpfInstance(
+                DcOpfInstance::from_network(net.clone())
+                    .unwrap()
+                    .with_branch_susceptance_formula(f),
+            ),
+            PioValue::DcPfInstance(
+                DcPfInstance::from_network(net.clone())
+                    .unwrap()
+                    .with_branch_susceptance_formula(f),
+            ),
+        ] {
+            let module = PioModule::new(value);
+            let output = powerio::serialize(
+                &module,
+                powerio::Destination::memory("case.pio.json").unwrap(),
+            )
+            .unwrap();
+            let powerio::EmittedOutput::Memory { mut artifacts } = output.into_output() else {
+                panic!("memory")
+            };
+            let bytes = artifacts.pop().unwrap().into_bytes();
+            let decoded = powerio::deserialize(bytes.as_slice()).unwrap();
+            let actual = match decoded.value() {
+                PioValue::DcOpfInstance(i) => i.branch_susceptance_formula(),
+                PioValue::DcPfInstance(i) => i.branch_susceptance_formula(),
+                _ => panic!("wrong type"),
+            };
+            assert_eq!(actual, f);
+        }
+    }
+}

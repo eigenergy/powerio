@@ -25,6 +25,7 @@ use powerio_tx::{AngleDifferenceBounds, EmitOptions, MissingGenCostPolicy};
 use serde_json::json;
 mod cases;
 mod codes;
+mod collection;
 mod module_io;
 mod tui;
 
@@ -61,6 +62,15 @@ struct SincalCliOptions {
     /// Experimental: assume schema-11.5 NULL source controls inactive; emits warnings.
     #[arg(long)]
     sincal_assume_inactive_source_controls: bool,
+    /// OpenDSS input: bytes the case may pull in through Redirect, Compile,
+    /// Buscoords and loadshape files [default: 67108864, 64 MiB]. A region
+    /// with several hundred thousand lines and loads needs more.
+    #[arg(long, value_name = "BYTES")]
+    dss_max_include_bytes: Option<usize>,
+    /// OpenDSS input: property assignments and edit records the case may
+    /// retain across all its objects [default: 4194304].
+    #[arg(long, value_name = "COUNT")]
+    dss_max_properties: Option<usize>,
 }
 
 impl SincalCliOptions {
@@ -70,11 +80,23 @@ impl SincalCliOptions {
             && self.sincal_acquired_tables.is_none()
             && self.acquisition_root.is_none()
             && !self.sincal_assume_inactive_source_controls
+            && self.dss_max_include_bytes.is_none()
+            && self.dss_max_properties.is_none()
     }
 
     fn options(&self, from: Option<FormatArg>) -> anyhow::Result<powerio::ParseOptions> {
         let mut options = parse_options(from.map(FormatArg::name))?;
         options.acquisition_root.clone_from(&self.acquisition_root);
+        if self.dss_max_include_bytes.is_some() || self.dss_max_properties.is_some() {
+            let mut limits = powerio::dist::DssReadLimits::default();
+            if let Some(bytes) = self.dss_max_include_bytes {
+                limits = limits.max_include_bytes(bytes);
+            }
+            if let Some(count) = self.dss_max_properties {
+                limits = limits.max_properties(count);
+            }
+            options = options.dss_limits(limits);
+        }
         if self.sincal_variant.is_some()
             || self.sincal_snapshot_hours.is_some()
             || self.sincal_acquired_tables.is_some()
@@ -134,6 +156,11 @@ enum DiagnosticsFormat {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Inspect and explicitly select inputs from a ZIP or folder collection.
+    Collection {
+        #[command(subcommand)]
+        command: collection::CollectionCommand,
+    },
     /// Launch the interactive TUI (default if no subcommand is given).
     Tui {
         /// Directory scanned recursively for case files (.m, .raw, .aux,
@@ -679,6 +706,25 @@ enum FormatArg {
     /// Surge native JSON network document.
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
+    /// PowerSystems.jl serialized System JSON (reads data formats 4.0.0 and 5.0.0, writes 5.0.0).
+    #[value(name = "powersystems-json", alias = "powersystems")]
+    PowerSystemsJson,
+    /// SiennaSchemas SystemDocument (preserve source version, otherwise 0.4).
+    #[value(name = "sienna-json", alias = "sienna")]
+    SiennaJson,
+    /// SiennaSchemas 0.1 SystemDocument.
+    #[value(name = "sienna-0-1-json")]
+    Sienna01Json,
+    /// SiennaSchemas 0.2 SystemDocument.
+    #[value(name = "sienna-0-2-json")]
+    Sienna02Json,
+    /// SiennaSchemas 0.3 SystemDocument.
+    #[value(name = "sienna-0-3-json")]
+    Sienna03Json,
+    /// SiennaSchemas 0.4 SystemDocument.
+    #[value(name = "sienna-0-4-json")]
+    Sienna04Json,
+
     /// JSON document from a DeepMind OPFData release (parse only).
     #[value(
         name = "opfdata-json",
@@ -716,19 +762,14 @@ enum FormatArg {
     /// PowerModelsDistribution MATHEMATICAL JSON (parse and emit).
     #[value(name = "pmd-math-json", alias = "pmd-math", alias = "mathematical")]
     PmdMathJson,
-    /// IEEE BMOPF JSON distribution case (parse and emit).
+    /// IEEE BMOPF JSON distribution case (parse and emit). A document from an
+    /// older BMOPF draft reads as BMOPF.
     #[value(name = "bmopf-json", alias = "bmopf")]
     BmopfJson,
     /// Distribution CIM, CIM100 RDF/XML (parse and emit; parse also reads a
     /// directory of documents).
     #[value(name = "cim-dist", alias = "cimdist")]
     CimDist,
-    /// Re-encode against the BMOPF 0.1.0 schema.
-    #[value(name = "bmopf-json@0.1.0")]
-    Bmopf010,
-    /// Re-encode against draft BMOPF 0.2.
-    #[value(name = "bmopf-json@0.2.0")]
-    Bmopf020,
 }
 
 impl FormatArg {
@@ -754,6 +795,13 @@ impl FormatArg {
             FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Goc3Json => TargetFormat::Goc3Json,
             FormatArg::SurgeJson => TargetFormat::SurgeJson,
+            FormatArg::PowerSystemsJson => TargetFormat::PowerSystemsJson,
+            FormatArg::SiennaJson => TargetFormat::SiennaJson { version: 0 },
+            FormatArg::Sienna01Json => TargetFormat::SiennaJson { version: 1 },
+            FormatArg::Sienna02Json => TargetFormat::SiennaJson { version: 2 },
+            FormatArg::Sienna03Json => TargetFormat::SiennaJson { version: 3 },
+            FormatArg::Sienna04Json => TargetFormat::SiennaJson { version: 4 },
+
             FormatArg::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
             FormatArg::RavensJson => TargetFormat::RavensJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
@@ -773,37 +821,42 @@ impl FormatArg {
             | FormatArg::PmdJson
             | FormatArg::PmdMathJson
             | FormatArg::BmopfJson
-            | FormatArg::Bmopf010
-            | FormatArg::Bmopf020
             | FormatArg::CimDist => return None,
         })
     }
 
     /// Reader-family selection includes formats without a fresh writer.
     /// MG-RAVENS is excluded: its two profiles share the token, so the
-    /// facade picks the family from the document.
+    /// facade picks the family from the document. pandapower JSON is
+    /// excluded for the same reason.
     fn is_distribution_input(self) -> bool {
-        (self.distribution().is_some() && self != Self::RavensJson)
+        (self.distribution().is_some() && !self.has_content_profile())
             || self == Self::SincalMulticonductor
     }
 
-    /// The distribution target, or `None` outside that family. For every
-    /// writable format exactly one of this and [`FormatArg::transmission`]
-    /// is `Some`, so adding one without wiring its family is a compile
-    /// error; gridfm is read only and returns `None` from both. MG-RAVENS is
-    /// the one format in both: its token writes either network kind.
+    /// Whether the token reads either network kind, picked from the content.
+    fn has_content_profile(self) -> bool {
+        matches!(self, Self::RavensJson | Self::PandapowerJson)
+    }
+
+    /// The distribution target, or `None` outside that family. The match
+    /// lists every token, so adding one without wiring its family is a
+    /// compile error. Each writable format has this or
+    /// [`FormatArg::transmission`] as `Some`. gridfm is read only and returns
+    /// `None` from both. MG-RAVENS and pandapower JSON are the two formats in
+    /// both. The MG-RAVENS token writes either network kind. A
+    /// multiconductor pandapower network only echoes its retained source.
     fn distribution(self) -> Option<powerio_dist::DistTargetFormat> {
         use powerio_dist::DistTargetFormat;
         match self {
             FormatArg::RavensJson => Some(DistTargetFormat::RavensJson),
+            FormatArg::PandapowerJson => Some(DistTargetFormat::PandapowerJson),
             FormatArg::Dss => Some(DistTargetFormat::Dss),
             FormatArg::Gridlabd => Some(DistTargetFormat::Gridlabd),
             FormatArg::GridlabdArras => Some(DistTargetFormat::GridlabdArras),
             FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
             FormatArg::PmdMathJson => Some(DistTargetFormat::PmdMathJson),
-            FormatArg::BmopfJson | FormatArg::Bmopf010 | FormatArg::Bmopf020 => {
-                Some(DistTargetFormat::BmopfJson)
-            }
+            FormatArg::BmopfJson => Some(DistTargetFormat::BmopfJson),
             FormatArg::CimDist => Some(DistTargetFormat::CimDist),
             FormatArg::Matpower
             | FormatArg::PowerModelsJson
@@ -819,11 +872,16 @@ impl FormatArg {
             | FormatArg::Cgmes
             | FormatArg::Ucte
             | FormatArg::PowerWorld
-            | FormatArg::PandapowerJson
             | FormatArg::PypsaCsv
             | FormatArg::Pslf
             | FormatArg::Goc3Json
             | FormatArg::SurgeJson
+            | FormatArg::PowerSystemsJson
+            | FormatArg::SiennaJson
+            | FormatArg::Sienna01Json
+            | FormatArg::Sienna02Json
+            | FormatArg::Sienna03Json
+            | FormatArg::Sienna04Json
             | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
             | FormatArg::Pwb
@@ -857,6 +915,13 @@ impl FormatArg {
             FormatArg::Pslf => "pslf",
             FormatArg::Goc3Json => "goc3-json",
             FormatArg::SurgeJson => "surge-json",
+            FormatArg::PowerSystemsJson => "powersystems-json",
+            FormatArg::SiennaJson => "sienna-json",
+            FormatArg::Sienna01Json => "sienna-0-1-json",
+            FormatArg::Sienna02Json => "sienna-0-2-json",
+            FormatArg::Sienna03Json => "sienna-0-3-json",
+            FormatArg::Sienna04Json => "sienna-0-4-json",
+
             FormatArg::DeepMindOpfDataJson => "opfdata-json",
             FormatArg::RavensJson => "ravens-json",
             FormatArg::Gridfm => "gridfm",
@@ -868,8 +933,6 @@ impl FormatArg {
             FormatArg::PmdJson => "pmd-json",
             FormatArg::PmdMathJson => "pmd-math-json",
             FormatArg::BmopfJson => "bmopf-json",
-            FormatArg::Bmopf010 => "bmopf-json@0.1.0",
-            FormatArg::Bmopf020 => "bmopf-json@0.2.0",
             FormatArg::CimDist => "cim-dist",
         }
     }
@@ -925,6 +988,12 @@ impl From<SchemeArg> for Scheme {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum BranchSusceptanceFormulaArg {
+    /// Series susceptance scaled by the transformer tap, with phase shifts.
+    #[value(name = "tap-adjusted-series-susceptance")]
+    TapAdjustedSeriesSusceptance,
+    /// PowerModels DCP: series susceptance, without taps or phase shifts.
+    #[value(name = "series-susceptance-no-phase-shift")]
+    SeriesSusceptanceNoPhaseShift,
     /// The whole series impedance: `imag(inv(r + jx))`, with phase shift
     /// injections.
     #[value(name = "series-susceptance")]
@@ -945,6 +1014,12 @@ impl From<BranchSusceptanceFormulaArg> for BranchSusceptanceFormula {
             BranchSusceptanceFormulaArg::SeriesSusceptance => Self::SeriesSusceptance,
             BranchSusceptanceFormulaArg::TapAdjustedReactance => Self::TapAdjustedReactance,
             BranchSusceptanceFormulaArg::ReactanceOnly => Self::ReactanceOnly,
+            BranchSusceptanceFormulaArg::TapAdjustedSeriesSusceptance => {
+                Self::TapAdjustedSeriesSusceptance
+            }
+            BranchSusceptanceFormulaArg::SeriesSusceptanceNoPhaseShift => {
+                Self::SeriesSusceptanceNoPhaseShift
+            }
         }
     }
 }
@@ -1071,6 +1146,7 @@ fn main() -> std::process::ExitCode {
     install_tracing(cli.diagnostics_format);
     let _ = DIAGNOSTICS_FORMAT.set(cli.diagnostics_format);
     let result: anyhow::Result<()> = match cli.command.unwrap_or_else(default_command) {
+        Command::Collection { command } => collection::run(command),
         Command::Tui { data_dir, out_dir } => tui::run(tui::TuiOptions { data_dir, out_dir }),
         Command::Batch {
             input,
@@ -2660,6 +2736,10 @@ fn convert_parsed_module(
     output: Option<&Path>,
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
+    // The reader's findings are reported before anything is emitted, so a
+    // refused conversion still shows why (an element the reader could not
+    // type) ahead of the error, in text and in the JSON array alike.
+    report_diagnostics(module.diagnostics());
     match &module.value() {
         powerio::PioValue::BalancedNetwork(_) => {
             let module = module.map_value(|value| match value {
@@ -2792,13 +2872,8 @@ fn convert_multiconductor_module(
             to.name()
         )
     })?;
-    let emission = if matches!(to, FormatArg::Bmopf010 | FormatArg::Bmopf020) {
-        let result = powerio::emit(module, to.name(), powerio::Destination::memory("output")?)?;
-        module_io::unpack_memory_emission(result, None)?
-    } else {
-        module_io::emit_multiconductor_module(module, target)
-            .with_context(|| format!("emitting {}", target.name()))?
-    };
+    let emission = module_io::emit_multiconductor_module(module, target)
+        .with_context(|| format!("emitting {}", target.name()))?;
     finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
@@ -2842,14 +2917,15 @@ fn convert_typed_module(
     finish_memory_emission(module.diagnostics(), &emission, output)
 }
 
+/// Report the emission's findings, write the output, and fail when the
+/// reader or the writer reported an error. [`convert_parsed_module`] has
+/// already reported `parse_diagnostics`; they are counted here.
 fn finish_memory_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     emission: &module_io::MemoryEmission,
     output: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let mut diagnostics = parse_diagnostics.to_vec();
-    diagnostics.extend(emission.diagnostics.iter().cloned());
-    report_diagnostics(&diagnostics);
+    report_diagnostics(&emission.diagnostics);
     write_conversion_output(&emission.text, &emission.sidecars, output)?;
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),
@@ -2857,14 +2933,13 @@ fn finish_memory_emission(
     )
 }
 
+/// [`finish_memory_emission`] for a writer that wrote `output` itself.
 fn finish_path_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     result: &powerio::EmitResult,
     output: &Path,
 ) -> anyhow::Result<()> {
-    let mut diagnostics = parse_diagnostics.to_vec();
-    diagnostics.extend(result.diagnostics().iter().cloned());
-    report_diagnostics(&diagnostics);
+    report_diagnostics(result.diagnostics());
     report_written(output);
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),
@@ -3578,7 +3653,7 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
         let f = stdin_format(from)?;
         let source = module_io::declare_format(stdin_source()?, Some(f.name()))
             .context("declaring the standard input format")?;
-        if f == FormatArg::RavensJson {
+        if f.has_content_profile() {
             // Both MG-RAVENS profiles share the token; the facade reads the
             // family from the document.
             let module = powerio::parse(source).context("reading standard input")?;
@@ -3601,7 +3676,7 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
                  subcommand, not this command",
             ));
         }
-        if f == FormatArg::RavensJson {
+        if f.has_content_profile() {
             return module_family_case(
                 input,
                 load_module_with_selection(input, Some(f), &SincalCliOptions::default())?,
@@ -3645,7 +3720,8 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
 fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::Result<FamilyCase> {
     match case.format {
         DetectedFormat::Transmission(
-            powerio_tx::format::routing::TransmissionFormat::RavensJson,
+            powerio_tx::format::routing::TransmissionFormat::RavensJson
+            | powerio_tx::format::routing::TransmissionFormat::PandapowerJson,
         )
         | DetectedFormat::Distribution(
             powerio_tx::format::routing::DistributionFormat::RavensJson,
@@ -3817,6 +3893,35 @@ mod tests {
         let source =
             powerio::Source::from_memory("module.pio.json", text.as_bytes().to_vec()).unwrap();
         powerio::deserialize(source).unwrap()
+    }
+
+    #[test]
+    fn dss_limit_flags_set_the_opendss_read_limits() {
+        let defaults = powerio::dist::DssReadLimits::default();
+        assert_eq!(
+            SincalCliOptions::default()
+                .options(None)
+                .unwrap()
+                .dss_limits,
+            None
+        );
+        let selection = SincalCliOptions {
+            dss_max_include_bytes: Some(1 << 30),
+            ..Default::default()
+        };
+        assert!(!selection.is_empty());
+        assert_eq!(
+            selection.options(None).unwrap().dss_limits,
+            Some(defaults.max_include_bytes(1 << 30))
+        );
+        let selection = SincalCliOptions {
+            dss_max_properties: Some(1 << 26),
+            ..Default::default()
+        };
+        assert_eq!(
+            selection.options(None).unwrap().dss_limits,
+            Some(defaults.max_properties(1 << 26))
+        );
     }
 
     #[test]
@@ -4016,6 +4121,36 @@ mod tests {
                 FamilyCase::Distribution(_) => panic!("an empty asset catalog changed the family"),
             }
         }
+    }
+
+    #[test]
+    fn family_case_reads_pandapower_by_its_tables() {
+        for from in [None, Some(FormatArg::PandapowerJson)] {
+            match parse_family_case(&data("dist/pandapower/tiny_3ph.json"), from).unwrap() {
+                FamilyCase::Distribution(module) => assert_eq!(module.value().buses().len(), 5),
+                FamilyCase::Transmission(_) => panic!("a three-phase network read balanced"),
+            }
+            match parse_family_case(&data("pandapower/example.json"), from).unwrap() {
+                FamilyCase::Transmission(module) => assert_eq!(module.value().buses().len(), 7),
+                FamilyCase::Distribution(_) => panic!("a balanced network read multiconductor"),
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let output = tmp.path().join("echo.json");
+        run_convert(
+            &data("dist/pandapower/tiny_3ph.json"),
+            FormatArg::PandapowerJson,
+            Some(&output),
+            None,
+            0,
+            GenCostCliOptions::preserve(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            std::fs::read(data("dist/pandapower/tiny_3ph.json")).unwrap()
+        );
     }
 
     #[test]
@@ -4272,13 +4407,10 @@ mpc.branch = [
             vec![7200.0, 0.0],
             vec![0.0, 0.0],
         ));
-        let mut options = powerio_dist::EmitOptions::default();
-        options.bmopf.sideload_coordinates = true;
         let module = powerio_core::PioModule::new(net);
-        let bmopf = crate::module_io::emit_multiconductor_module_with_options(
+        let bmopf = crate::module_io::emit_multiconductor_module(
             &module,
             powerio_dist::DistTargetFormat::BmopfJson,
-            &options,
         )
         .unwrap();
         std::fs::write(&input, bmopf.text).unwrap();

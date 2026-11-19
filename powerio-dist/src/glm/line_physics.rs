@@ -1,5 +1,24 @@
 use crate::DistLineCode;
+use crate::overhead::CarsonEarth;
 use num_complex::Complex64;
+
+/// GridLAB-D's simplified Carson earth return at `frequency`: its rounded
+/// coefficients in ohms per mile with distances in feet, at its fixed
+/// 100 ohm-metre earth resistivity, `ln D_e = 7.6786 + ln(ρ / f) / 2`. The
+/// overhead, underground and triplex readers and the triplex writer's
+/// geometry reconstruction read it, through
+/// [`crate::overhead::calc_carson_impedance`].
+pub(super) fn carson_earth(frequency: f64) -> CarsonEarth {
+    CarsonEarth::new(
+        0.001_588_36 * frequency,
+        0.002_022_37 * frequency,
+        crate::overhead::calc_earth_return_log_depth(
+            100.0,
+            frequency,
+            crate::overhead::EarthDepthForm::GridLabD,
+        ),
+    )
+}
 
 /// The pinned link implementations set d=a, including NR current readback.
 /// A physical pi line needs distinct

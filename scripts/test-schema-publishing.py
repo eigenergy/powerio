@@ -12,6 +12,7 @@ workflow = (ROOT / ".github/workflows/docs.yml").read_text()
 marker = "    - name: PowerIO IR schema history\n      run: |\n"
 script = textwrap.dedent(workflow.split(marker, 1)[1].split("    - uses:", 1)[0])
 cases = {
+    "pio-ir/0.12.0": "pio-ir/0.12.0",
     "pio-ir/2": "pio-ir/2",
     "pio-ir/2/0.11.1": "pio-ir/2/0.11.1",
     "pio-ir/1": "pio-module/1",

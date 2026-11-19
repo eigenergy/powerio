@@ -154,3 +154,76 @@ fn an_unknown_element_column_is_refused() {
     let error = parse(&dir).unwrap_err().to_string();
     assert!(error.contains("names no element"), "{error}");
 }
+
+#[test]
+fn branch_limits_use_each_components_own_nominal_rating() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    write_folder(dir, &STATIC_TABLES);
+    write_folder(
+        dir,
+        &[
+            ("snapshots.csv", "snapshot\nzero\nunbounded\nfinite\n"),
+            (
+                "lines.csv",
+                "name,bus0,bus1,x,s_nom,s_max_pu\nshared,B1,B2,0.1,100,1\nfixed,B1,B2,0.2,20,0.5\n",
+            ),
+            (
+                "transformers.csv",
+                "name,bus0,bus1,x,s_nom,tap_ratio\nshared,B1,B2,0.1,50,1.1\n",
+            ),
+            (
+                "lines-s_max_pu.csv",
+                "snapshot,shared\nzero,0\nunbounded,inf\nfinite,0.75\n",
+            ),
+            (
+                "transformers-s_max_pu.csv",
+                "snapshot,shared\nzero,inf\nunbounded,0\nfinite,0.5\n",
+            ),
+        ],
+    );
+    let source = powerio_core::Source::open(dir).unwrap();
+    let sequence = __parse_pypsa_csv_time_series(&source).unwrap();
+    assert!(sequence.inputs_vary);
+    assert!(sequence.has_varying_columns);
+    assert!(
+        !sequence
+            .diagnostics
+            .iter()
+            .any(|d| d.message().contains("s_max_pu.csv"))
+    );
+    for (net, ratings) in sequence.series.values().iter().zip([
+        [0.0, 10.0, f64::INFINITY],
+        [f64::INFINITY, 10.0, 0.0],
+        [75.0, 10.0, 25.0],
+    ]) {
+        assert_eq!(
+            net.branches().iter().map(|b| b.rate_a).collect::<Vec<_>>(),
+            ratings
+        );
+        assert!(net.branches().iter().all(|b| b.in_service));
+        assert!((net.branches()[2].x - 0.002).abs() < 1e-12);
+        assert!((net.branches()[2].tap - 1.1).abs() < 1e-12);
+    }
+    for invalid in ["-1", "NaN", "-inf", "1e308", "4.9406564584124654e-324"] {
+        let nominal = if invalid == "4.9406564584124654e-324" {
+            "0.25"
+        } else {
+            "100"
+        };
+        write_folder(
+            dir,
+            &[
+                (
+                    "lines.csv",
+                    &format!("name,bus0,bus1,x,s_nom\nshared,B1,B2,0.1,{nominal}\n"),
+                ),
+                (
+                    "lines-s_max_pu.csv",
+                    &format!("snapshot,shared\nzero,{invalid}\nunbounded,1\nfinite,1\n"),
+                ),
+            ],
+        );
+        assert!(parse(dir).is_err(), "accepted {invalid}");
+    }
+}
