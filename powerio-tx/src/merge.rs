@@ -1423,8 +1423,9 @@ impl BusMerge {
         for shunt in source.shunts().iter().filter(|shunt| shunt.in_service) {
             inject(shunt.bus, -shunt.g, true);
         }
+        let storage_scale = source.storage_power_scale();
         for storage in source.storage().iter().filter(|storage| storage.in_service) {
-            inject(storage.bus, -storage.ps, true);
+            inject(storage.bus, -storage.ps * storage_scale, true);
         }
         for line in source.hvdc().iter().filter(|line| line.in_service) {
             inject(line.from, -line.pf, true);
@@ -1824,7 +1825,7 @@ fn solve_dense(matrix: &[f64], rhs: &[f64], size: usize) -> Option<Vec<f64>> {
 mod tests {
     use super::*;
     use crate::network::{
-        Area, Branch, Bus, Generator, Hvdc, Impedance, Load, Shunt, SolverParams, Switch,
+        Area, Branch, Bus, Generator, Hvdc, Impedance, Load, Shunt, SolverParams, Storage, Switch,
         SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
         TransformerControlMode, Winding,
     };
@@ -2431,6 +2432,35 @@ mod tests {
                 .all(|flow| flow.method == RemovedFlowMethod::Tree)
         );
         assert!(flows.diagnostics.is_empty(), "{:#?}", flows.diagnostics);
+    }
+
+    #[test]
+    fn removed_flows_read_storage_in_mw_in_a_normalized_network() {
+        // Normalization keeps storage `ps` in MW, so the normalized copy
+        // must scale it like the loads it sits next to. Exact zero impedance
+        // lines merge in both copies; normalization folds closed switches.
+        let mut network = fed_group(vec![line(2, 3, 0.0, 0.0), line(3, 4, 0.0, 0.0)]);
+        let mut storage = Storage::new(BusId(4));
+        storage.ps = 20.0;
+        network.storage_mut().push(storage);
+        let normalized = network.to_normalized().unwrap();
+        assert_eq!(normalized.storage()[0].ps, 20.0);
+        let raw = network
+            .merge_buses(&BusMergeRule::exact())
+            .unwrap()
+            .calc_removed_flows(&MergedFlows::new(&[100.0], &[-100.0]))
+            .unwrap();
+        let per_unit = normalized
+            .merge_buses(&BusMergeRule::exact())
+            .unwrap()
+            .calc_removed_flows(&MergedFlows::new(&[1.0], &[-1.0]))
+            .unwrap();
+        let p: Vec<f64> = raw.branches.iter().map(|flow| flow.p_from).collect();
+        assert_eq!(p, [100.0, 70.0]);
+        assert_eq!(per_unit.branches.len(), 2);
+        for (raw, per_unit) in raw.branches.iter().zip(&per_unit.branches) {
+            assert!((raw.p_from - per_unit.p_from * 100.0).abs() < 1e-9);
+        }
     }
 
     #[test]

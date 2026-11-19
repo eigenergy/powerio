@@ -579,10 +579,12 @@ pub fn calc_stated_state_mismatch(
             flags[idx] |= StatedBusFlags::FACTS;
         }
     }
-    // Storage power is a withdrawal, PowerModels' `ps`/`qs`.
+    // Storage power is a withdrawal, PowerModels' `ps`/`qs`, in MW and MVAr
+    // even in a normalized network.
+    let storage_scale = view.network().storage_power_scale() / base;
     for storage in view.network().storage().iter().filter(|s| s.in_service) {
         if let Some(idx) = view.bus_index(storage.bus) {
-            stated[idx] -= Complex64::new(storage.ps, storage.qs) / base;
+            stated[idx] -= Complex64::new(storage.ps, storage.qs) * storage_scale;
             flags[idx] |= StatedBusFlags::STORAGE;
         }
     }

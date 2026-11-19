@@ -4,6 +4,8 @@
 
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
+- Storage power in a normalized network: `to_normalized` keeps storage `ps` and `qs` in MW and MVAr, as PowerModels does. `calc_stated_state_mismatch`, `build_ac_opf_preparation` and `BusMerge::calc_removed_flows` read them as per unit and were off by `base_mva` at every storage bus. They now convert them, so a network and its normalized copy give the same results. `BalancedNetwork::storage_power_scale` states the factor.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
