@@ -149,6 +149,57 @@ vm/va to 1e-6/1e-4, ZIP load totals vs MATPOWER Pd/Qd to the .m print
 quantum, dispatch and branch values likewise. `powerio/tests/`
 `powerworld_parity.rs` asserts all of this.
 
+## The writer's vocabulary (established against Simulator 24)
+
+Simulator is the only reader whose interpretation of a written `.aux` matters.
+Through SimAuto, PowerWorld Simulator 24 (build 2026-05-20) loaded the
+0.11.12 writer's `case14` and its message log reported what it lost:
+
+- `BusVMax`, `BusVMin`, `ShuntMW`, `ShuntMVR`, `ShuntStatus`, and
+  `LineXFRatio` are not defined (`GetFieldList` confirms; `LineBMVA` and
+  `LineCMVA` are not listed either, though the loader accepted them). The
+  limits, the shunt values, and every transformer tap were dropped.
+- A load needs `LoadSMW` and `LoadSMVR` (`LoadMW`/`LoadMVR` are the derived
+  totals), a switched shunt needs `SSStatus`, `SSCMode`, and `SSNMVR`, a
+  generator needs `GenAGCAble` and `GenAVRAble`, and a bus needs `AreaNum`,
+  `ZoneNum`, and a nonblank `BusName`. Missing any, Simulator creates
+  nothing: no load, shunt, or generator was created.
+- `BusCat` is computed and ignored on input; the slack is `BusSlack`.
+  `BusVoltLimHigh:1`/`BusVoltLimLow:1` are enterable only with
+  `BusVoltLim` YES. `LineTap` is enterable only on a transformer, so
+  `BranchDeviceType` precedes it in the row.
+- The system base is `Sim_Solution_Options` `SBase`. Both the
+  `Sim_Solution_Options (SBase)` block and a `Sim_Solution_Options_Value`
+  row set it; the writer states the former before any Branch row.
+- A branch is its two buses in either order plus its circuit: loading
+  `3113 5289 "1"` after `5289 3113 "1"` updates the first branch and logs
+  nothing (`case2869pegase` lost two lines this way). The writer counts
+  positional circuits per unordered bus pair, and so do both readers.
+- Load, shunt, and generator IDs are two characters (`GetFieldList` marks
+  them `*2B*`); a longer ID is truncated, so `"100"` at a bus that already
+  has `"10"` merges with it. The writer numbers devices per bus, and both
+  readers read an ID equal to its per bus position as the default.
+- `ZBRThreshold` (default 0.0002 pu, floor 0.00005; a lower value clamps)
+  groups the buses a branch at or below it joins for voltage control: one
+  generator set point wins and the other bus reads `PQ (Remote Reg
+  Secondary)`. The branch keeps its impedance in the power flow. pegase's
+  1043 to 3513 line (r 1e-5, x 2e-4) moved bus 3513's set point from
+  1.029628 to 1.029789. The writer states the floor when a branch is at or
+  below the default, before any Bus row, since the grouping forms on load.
+- A nominal voltage of 0 loads as 138 kV and area or zone 0 as 1; the
+  writer reports both. Shunt `SSNMW` is consumption, MATPOWER's `Gs` sign
+  (a 10 MW shunt raised the slack output by 10 MW).
+- Simulator keeps per unit values in single precision: a `GenMW` of 829.8
+  reads back 829.80003357.
+- A new case's areas are created off AGC, so `GenAGCAble` does not move
+  the dispatch; the writer states YES, Simulator's default. AVR is what
+  makes a bus PV in Simulator, so `GenAVRAble` follows the bus type.
+
+`evals/validation/validate_powerworld_simauto.py` holds the writer to this:
+per case, an empty loss log, equal object counts, every written field read
+back through `GetParametersMultipleElement`, and a power flow equal to a
+MATPOWER style solution of PowerIO's network.
+
 ## The .pwb binary format (decode evidence)
 
 Established by differential analysis of lawfully obtained files, no
