@@ -2810,6 +2810,50 @@ fn surge_storage_generator_is_not_duplicated_after_canonical_write() {
 }
 
 #[test]
+fn surge_storage_generator_states_output_positive_power() {
+    // Surge states a storage unit as a generator: p and q are output and
+    // pmin = -charge limit. PowerIO's Storage.ps and qs are withdrawal.
+    let mut net = parse_str(SURGE_TINY, "surge-json").unwrap().network;
+    let storage = &net.storage()[0];
+    assert_close(storage.ps, 3.0);
+    assert_close(storage.qs, -1.0);
+    assert_close(storage.qmin, -5.0);
+    assert_close(storage.qmax, 5.0);
+
+    net.storage_mut()[0].qmin = -2.0;
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let generator = doc["network"]["generators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g.get("storage").is_some())
+        .unwrap();
+    assert_eq!(generator["p"], -3.0);
+    assert_eq!(generator["q"], 1.0);
+    assert_eq!(generator["qmin"], -5.0);
+    assert_eq!(generator["qmax"], 2.0);
+    assert_eq!(generator["pmin"], -12.0);
+    assert_eq!(generator["pmax"], 10.0);
+
+    // A zero stays +0.0 through the writer and the reader.
+    net.storage_mut()[0].qs = 0.0;
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let q = doc["network"]["generators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g.get("storage").is_some())
+        .unwrap()["q"]
+        .as_f64()
+        .unwrap();
+    assert!(q == 0.0 && q.is_sign_positive());
+    let back = parse_str(&surge.text, "surge-json").unwrap().network;
+    assert!(back.storage()[0].qs.is_sign_positive());
+}
+
+#[test]
 fn surge_writer_round_trips_supported_core_fields() {
     let net = rich_audit_network();
     let conv = emit_value(&net, TargetFormat::SurgeJson).unwrap();

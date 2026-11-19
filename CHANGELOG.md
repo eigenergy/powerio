@@ -4,6 +4,8 @@
 
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
+- Surge JSON: a storage unit's `p` and `q` are generator output, positive when it discharges, next to `pmin` as the negative charge limit. The reader took them as `Storage.ps` and `qs`, which are positive when charging. The writer did the inverse. So a charging unit became a discharging one in both directions. Both now flip the sign of `p`, `q`, `qmin` and `qmax`, as the XIIDM battery mapping does.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
