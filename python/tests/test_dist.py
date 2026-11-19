@@ -525,3 +525,26 @@ def test_source_energy_prices_and_schema_digest_survive_ir():
     for token in ("bmopf-json@0.1.0", "bmopf-json@0.2.0"):
         with pytest.raises(powerio.PowerIOError, match="PowerIO writes one BMOPF"):
             powerio.emit(restored, token)
+
+
+def test_dss_limits_reach_the_opendss_read(tmp_path):
+    # Two includes. One byte of include budget admits the first and refuses
+    # the second, which leaves the network incomplete, so the read fails.
+    (tmp_path / "Master.dss").write_text("new circuit.c\nredirect a.dss\nredirect b.dss\n")
+    (tmp_path / "a.dss").write_text("new load.a bus1=sourcebus.1 phases=1 kv=1 kw=1\n")
+    (tmp_path / "b.dss").write_text("new load.b bus1=sourcebus.1 phases=1 kv=1 kw=1\n")
+    master = tmp_path / "Master.dss"
+    assert len(powerio.parse(master).value.loads) == 2
+    assert len(powerio.parse(master, dss_max_properties=1 << 26).value.loads) == 2
+    with pytest.raises(powerio.PowerIOError) as refused:
+        powerio.parse(master, dss_max_include_bytes=1)
+    assert "READ.DSS.INCLUDE_BUDGET" in [d.code for d in refused.value.diagnostics]
+    buffers = {name: (tmp_path / name).read_bytes() for name in ("a.dss", "b.dss")}
+    with pytest.raises(powerio.PowerIOError) as refused:
+        powerio.parse(master.read_bytes(), name="Master.dss", named_buffers=buffers,
+                      dss_max_include_bytes=1)
+    assert "READ.DSS.INCLUDE_BUDGET" in [d.code for d in refused.value.diagnostics]
+    with pytest.raises(TypeError, match="dss_max_include_bytes must be an integer"):
+        powerio.parse(master, dss_max_include_bytes=1.5)
+    with pytest.raises(ValueError, match="dss_max_properties must not be negative"):
+        powerio.parse(master, dss_max_properties=-1)

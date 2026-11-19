@@ -15,15 +15,8 @@ impl Writer<'_> {
         load: &DistLoad,
         target: DistLocationTarget,
     ) -> Result<(), Error> {
-        let connections = connections(load)?;
-        let active = phases(
-            &load
-                .terminal_map
-                .iter()
-                .filter(|t| t.as_str() != "n")
-                .cloned()
-                .collect::<Vec<_>>(),
-        )?;
+        let connections = connections(load, self.neutral_last(&load.bus, &load.terminal_map))?;
+        let active = phases(&self.phase_terminals(&load.bus, &load.terminal_map))?;
         let available = self
             .phases
             .get(load.bus.as_str())
@@ -80,12 +73,13 @@ impl Writer<'_> {
             }
             let power = Complex64::new(load.p_nom[i], load.q_nom[i]);
             let base = reference(1.0, from, to);
-            let value = match law {
-                "power" => power,
-                "current" => base / base.norm() * power.conj() / nominal[i],
-                _ if power == Complex64::default() => Complex64::default(),
-                _ => nominal[i] * nominal[i] / power.conj(),
-            };
+            let value = crate::load_voltage::calc_zip_coefficient(
+                crate::glm::read::zip_law(law),
+                power,
+                base / base.norm(),
+                // A constant power law states no nominal voltage.
+                nominal.get(i).copied().unwrap_or(f64::NAN),
+            );
             if power != Complex64::default() && value == Complex64::default() {
                 return Err(unsupported(
                     "phase-pair load coefficient underflows to zero",
@@ -106,22 +100,33 @@ impl Writer<'_> {
     }
 }
 
-fn connections(load: &DistLoad) -> Result<Vec<(&String, &String)>, Error> {
-    let result = match (load.configuration, load.terminal_map.as_slice()) {
-        (Configuration::SinglePhase | Configuration::Delta, [a, b]) => vec![(a, b)],
-        (Configuration::Delta, [a, b, c]) => vec![(a, b), (b, c), (c, a)],
-        (Configuration::Wye, map) if map.len() >= 2 && map.last().is_some_and(|n| n == "n") => map
-            [..map.len() - 1]
-            .iter()
-            .map(|p| (p, &map[map.len() - 1]))
-            .collect(),
-        _ => {
-            return Err(unsupported(format!(
-                "load {} needs an additional connection model",
-                load.name
-            )));
+/// The terminal pairs of a load's connections; `neutral_last` states
+/// whether its WYE neutral is its last terminal, where GridLAB-D states it.
+fn connections(load: &DistLoad, neutral_last: bool) -> Result<Vec<(&String, &String)>, Error> {
+    let map = load.terminal_map.as_slice();
+    let neutral_last = map.len() >= 2 && neutral_last;
+    let channels = match load.configuration {
+        Configuration::Wye if !neutral_last => None,
+        Configuration::Wye => {
+            crate::calc_connection_channels(load.configuration, map.len(), map.len() - 1, None).ok()
+        }
+        configuration => {
+            crate::calc_connection_channels(configuration, map.len(), load.p_nom.len(), None).ok()
         }
     };
+    let result = channels
+        .and_then(|channels| {
+            channels
+                .iter()
+                .map(|channel| channel.to.map(|to| (&map[channel.from], &map[to])))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| {
+            unsupported(format!(
+                "load {} needs an additional connection model",
+                load.name
+            ))
+        })?;
     if load.configuration == Configuration::Wye
         && result
             .iter()

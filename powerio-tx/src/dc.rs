@@ -34,6 +34,19 @@ pub(crate) fn series_admittance_parts(r: f64, x: f64) -> (f64, f64) {
     (r / denom, -x / denom)
 }
 
+/// One branch's column of a DC network model, from
+/// [`BranchSusceptanceFormula::calc_dc_column`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct DcBranchColumn {
+    /// The internal positive factor weight, the negation of the public
+    /// PowerModels susceptance, per unit on the network base.
+    pub weight: f64,
+    /// The phase shift the column carries, radians; zero when the formula
+    /// carries no phase shift injections. Not checked for finiteness.
+    pub shift: f64,
+}
+
 /// Rule for the DC branch susceptance `b`.
 ///
 /// The public `b` follows PowerModels: it is negative for an inductive
@@ -125,6 +138,115 @@ impl BranchSusceptanceFormula {
         effective_tap: f64,
     ) -> f64 {
         -self.calc_branch_susceptance(resistance, reactance, effective_tap)
+    }
+
+    /// The derivative of [`calc_branch_susceptance`](Self::calc_branch_susceptance)
+    /// with respect to the branch's series susceptance `b_s = -x/(r² + x²)`,
+    /// holding the series conductance `g = r/(r² + x²)` and the tap fixed.
+    ///
+    /// The series formulas are linear in `b_s`: `1` and, tap adjusted,
+    /// `1/tap`. The reciprocal reactance formulas read `x = -b_s/(g² + b_s²)`,
+    /// so `d(-1/x)/db_s = 1 - (g/b_s)² = 1 - (r/x)²`, divided by the tap for
+    /// [`Self::TapAdjustedReactance`]. A sensitivity that perturbs a branch's
+    /// series susceptance multiplies by this factor to move the DC weight the
+    /// formula assembles.
+    ///
+    /// Non-finite in, non-finite out, as the susceptance itself.
+    #[must_use]
+    pub fn calc_susceptance_sensitivity_to_series_susceptance(
+        self,
+        resistance: f64,
+        reactance: f64,
+        effective_tap: f64,
+    ) -> f64 {
+        let reciprocal_reactance = || {
+            let ratio = resistance / reactance;
+            1.0 - ratio * ratio
+        };
+        match self {
+            Self::SeriesSusceptance | Self::SeriesSusceptanceNoPhaseShift => {
+                if resistance.is_finite() && reactance.is_finite() {
+                    1.0
+                } else {
+                    f64::NAN
+                }
+            }
+            Self::TapAdjustedSeriesSusceptance => {
+                if resistance.is_finite() && reactance.is_finite() && effective_tap.is_finite() {
+                    1.0 / effective_tap
+                } else {
+                    f64::NAN
+                }
+            }
+            Self::ReactanceOnly => reciprocal_reactance(),
+            Self::TapAdjustedReactance => reciprocal_reactance() / effective_tap,
+        }
+    }
+
+    /// The phase shift a DC column under this formula carries, radians: the
+    /// branch's stated `shift` (degrees, or radians in a normalized network)
+    /// when the formula carries phase shift injections, else zero. The one
+    /// phase shift rule every DC builder reads.
+    #[must_use]
+    pub fn calc_phase_shift_radians(self, shift: f64, normalized: bool) -> f64 {
+        if !self.includes_phase_shifts() {
+            0.0
+        } else if normalized {
+            shift
+        } else {
+            shift.to_radians()
+        }
+    }
+
+    /// The DC column of one branch under this formula: its positive factor
+    /// weight ([`calc_solver_edge_weight`](Self::calc_solver_edge_weight)) and
+    /// its phase shift ([`calc_phase_shift_radians`](Self::calc_phase_shift_radians)).
+    /// The one place a branch becomes a DC column; every DC builder (the
+    /// incidence factor, the DC operators, the DC OPF preparation) reads it
+    /// and keeps only its own skip-or-refuse policy and error wording.
+    ///
+    /// `Ok(None)` for a degenerate impedance: the denominator the formula
+    /// divides by is under [`MIN_DIVISIBLE_MAGNITUDE`], `hypot(r, x)` for a
+    /// formula that reads the resistance and `|x|` otherwise, so a value the
+    /// formula never reads cannot reject a branch (#324). A formally nonzero
+    /// impedance below the bound would give a finite weight big enough to
+    /// annihilate every real branch sharing a bus with it.
+    ///
+    /// # Errors
+    /// [`Error::DegenerateTap`](crate::Error::DegenerateTap) when the formula
+    /// divides by a tap it cannot divide by, and
+    /// [`Error::NonFiniteSusceptance`](crate::Error::NonFiniteSusceptance)
+    /// when the weight is not finite (a NaN reactance slips past the bound
+    /// and would poison the whole Laplacian). `row` only labels the error.
+    pub fn calc_dc_column(
+        self,
+        branch: &crate::Branch,
+        row: usize,
+        normalized: bool,
+    ) -> crate::Result<Option<DcBranchColumn>> {
+        let denominator = if self.reads_resistance() {
+            branch.r.hypot(branch.x)
+        } else {
+            branch.x.abs()
+        };
+        if denominator < MIN_DIVISIBLE_MAGNITUDE {
+            return Ok(None);
+        }
+        // Only the tap-reading formulas divide by the tap, so only they can
+        // be bounded or rejected by one (#324).
+        let tap = if self.reads_tap() {
+            branch.calc_divisible_tap(row)?
+        } else {
+            1.0
+        };
+        let weight = self.calc_solver_edge_weight(branch.r, branch.x, tap);
+        if !weight.is_finite() {
+            return Err(crate::Error::NonFiniteSusceptance { row });
+        }
+        Ok(Some(DcBranchColumn {
+            weight,
+            shift: self.calc_phase_shift_radians(branch.shift, normalized),
+        }))
     }
 
     /// Whether the selected formula reads the transformer tap, and so whether
@@ -225,6 +347,50 @@ mod tests {
         let dcp = BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift;
         assert!(dcp.reads_resistance() && !dcp.reads_tap() && !dcp.includes_phase_shifts());
         assert!((dcp.calc_branch_susceptance(0.1, 0.2, f64::NAN) + 4.0).abs() < 1e-12);
+    }
+
+    /// The analytic sensitivity to the series susceptance matches a central
+    /// difference that moves `b_s` with `g` and the tap held fixed.
+    #[test]
+    fn susceptance_sensitivity_matches_central_difference() {
+        let formulas = [
+            BranchSusceptanceFormula::SeriesSusceptance,
+            BranchSusceptanceFormula::TapAdjustedReactance,
+            BranchSusceptanceFormula::ReactanceOnly,
+            BranchSusceptanceFormula::TapAdjustedSeriesSusceptance,
+            BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift,
+        ];
+        for &(r, x, tap) in &[(0.01, 0.1, 1.0), (0.05, 0.08, 0.97), (0.0, 0.25, 1.05)] {
+            let (g, b_s) = series_admittance_parts(r, x);
+            let at = |b: f64| {
+                let denom = g * g + b * b;
+                (g / denom, -b / denom)
+            };
+            let h = 1e-6 * b_s.abs();
+            let (r_hi, x_hi) = at(b_s + h);
+            let (r_lo, x_lo) = at(b_s - h);
+            for formula in formulas {
+                let fd = (formula.calc_branch_susceptance(r_hi, x_hi, tap)
+                    - formula.calc_branch_susceptance(r_lo, x_lo, tap))
+                    / (2.0 * h);
+                let analytic =
+                    formula.calc_susceptance_sensitivity_to_series_susceptance(r, x, tap);
+                assert!(
+                    (fd - analytic).abs() <= 1e-6 * analytic.abs().max(1.0),
+                    "{formula:?} at r={r} x={x} tap={tap}: fd {fd} vs analytic {analytic}"
+                );
+            }
+        }
+        assert!(
+            BranchSusceptanceFormula::TapAdjustedReactance
+                .calc_susceptance_sensitivity_to_series_susceptance(0.1, f64::NAN, 1.0)
+                .is_nan()
+        );
+        assert!(
+            BranchSusceptanceFormula::SeriesSusceptance
+                .calc_susceptance_sensitivity_to_series_susceptance(f64::INFINITY, 0.1, 1.0)
+                .is_nan()
+        );
     }
 
     /// Public values carry PowerModels signs: negative for an inductive

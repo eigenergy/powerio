@@ -438,7 +438,8 @@ pub(crate) fn parse_ucte_source(
                     )));
                 }
                 let kv = id.node1.base_kv();
-                let zbase = kv * kv / BASE_MVA;
+                let zbase =
+                    powerio_core::electrical::calc_impedance_base(kv, BASE_MVA).unwrap_or(f64::NAN);
                 let r = record.number(22, 28, "resistance")?;
                 let x = record.number(29, 35, "reactance")?;
                 let b = record.number(36, 44, "susceptance")?;
@@ -491,7 +492,8 @@ pub(crate) fn parse_ucte_source(
                 let to = node_bus(&node_index, id.node1, &record)?;
                 let kv1 = id.node1.base_kv();
                 let kv2 = id.node2.base_kv();
-                let zbase = kv1 * kv1 / BASE_MVA;
+                let zbase = powerio_core::electrical::calc_impedance_base(kv1, BASE_MVA)
+                    .unwrap_or(f64::NAN);
                 let rated_u1 = rated_voltage(
                     &mut reader,
                     &record,
@@ -881,7 +883,12 @@ fn apply_current_limit(
     match current_limit {
         Some(limit) if limit > 0 => {
             let amps = limit as f64;
-            branch.rate_a = SQRT_3 * kv * amps / 1000.0;
+            branch.rate_a = powerio_core::electrical::calc_line_apparent_power(
+                kv,
+                amps,
+                SQRT_3,
+                powerio_core::electrical::ApparentPowerOrder::FactorFirst,
+            ) / 1000.0;
         }
         Some(limit) => reader.warn(
             &codes::READ_UCTE_VALUE_SUBSTITUTED,

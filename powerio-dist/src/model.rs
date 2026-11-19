@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geo::{DistGeoMeta, DistLocation};
 
+mod bus_index;
 mod located_network;
 
 pub type Extras = BTreeMap<String, serde_json::Value>;
@@ -107,33 +108,42 @@ pub struct DistBus {
 }
 
 impl DistBus {
-    /// Phase positions in terminal order, using explicit BMOPF roles when supplied.
+    /// The role of one of this bus's terminals ([`calc_terminal_role`] over
+    /// the bus's terminal names).
+    #[must_use]
+    pub fn terminal_role(
+        &self,
+        terminal: &str,
+        conventions: Option<&serde_json::Value>,
+    ) -> TerminalRole {
+        calc_terminal_role(&self.terminals, terminal, conventions)
+    }
+
+    /// Phase positions in terminal order: the terminals whose
+    /// [`calc_terminal_role`] is [`TerminalRole::Phase`], using explicit BMOPF
+    /// roles when supplied.
     #[must_use]
     pub fn phase_indices(&self, conventions: Option<&serde_json::Value>) -> Vec<usize> {
-        let numeric_four = self.terminals.len() == 4
-            && ["1", "2", "3", "4"]
-                .iter()
-                .all(|t| self.terminals.iter().any(|v| v == t));
+        self.role_indices(TerminalRole::Phase, conventions)
+    }
+
+    /// Neutral positions in terminal order: the terminals whose
+    /// [`calc_terminal_role`] is [`TerminalRole::Neutral`].
+    #[must_use]
+    pub fn neutral_indices(&self, conventions: Option<&serde_json::Value>) -> Vec<usize> {
+        self.role_indices(TerminalRole::Neutral, conventions)
+    }
+
+    fn role_indices(
+        &self,
+        role: TerminalRole,
+        conventions: Option<&serde_json::Value>,
+    ) -> Vec<usize> {
         self.terminals
             .iter()
             .enumerate()
-            .filter_map(|(index, terminal)| {
-                let nonphase = if let Some(roles) = conventions {
-                    ["neutral", "earth"].iter().any(|role| {
-                        roles
-                            .get(role)
-                            .and_then(serde_json::Value::as_array)
-                            .is_some_and(|names| {
-                                names
-                                    .iter()
-                                    .any(|name| name.as_str() == Some(terminal.as_str()))
-                            })
-                    })
-                } else {
-                    terminal.eq_ignore_ascii_case("n") || (numeric_four && terminal == "4")
-                };
-                (!nonphase).then_some(index)
-            })
+            .filter(|(_, terminal)| self.terminal_role(terminal, conventions) == role)
+            .map(|(index, _)| index)
             .collect()
     }
 
@@ -159,6 +169,68 @@ impl DistBus {
             location: None,
             extras: Extras::new(),
         }
+    }
+}
+
+/// The role a terminal plays on its bus ([`calc_terminal_role`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TerminalRole {
+    /// A phase conductor.
+    Phase,
+    /// A neutral conductor.
+    Neutral,
+    /// Earth: ground terminal `0`, or a terminal the conventions call earth.
+    Earth,
+}
+
+/// The role of `terminal` among a bus's `terminals`. With BMOPF terminal
+/// conventions (the `terminal_conventions` block, whose `neutral` and
+/// `earth` lists name terminals) a named terminal takes the role it is
+/// named in and every other terminal is a phase. Without conventions `n` or
+/// `N` is neutral, and so is `4` when the terminals are exactly `1` to `4`
+/// (the four wire spelling OpenDSS and PowerModelsDistribution share), and
+/// every other terminal is a phase. Ground terminal `0` is earth either way.
+///
+/// The one terminal classification: [`DistBus::phase_indices`],
+/// [`DistBus::neutral_indices`], the WYE neutral of a connection
+/// ([`crate::calc_wye_neutral_position`]), the BMOPF reader, validator and
+/// writer, the PMD MATHEMATICAL writer, the multiconductor to balanced
+/// lowering, and the CIM and MG-RAVENS readers and writers (over the CIM
+/// wire convention, which those readers state for their networks:
+/// [`MulticonductorNetwork::terminal_conventions`]) read it.
+#[must_use]
+pub fn calc_terminal_role<S: AsRef<str>>(
+    terminals: &[S],
+    terminal: &str,
+    conventions: Option<&serde_json::Value>,
+) -> TerminalRole {
+    if terminal == "0" {
+        return TerminalRole::Earth;
+    }
+    if let Some(roles) = conventions {
+        let named = |role: &str| {
+            roles
+                .get(role)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|names| names.iter().any(|name| name.as_str() == Some(terminal)))
+        };
+        return if named("neutral") {
+            TerminalRole::Neutral
+        } else if named("earth") {
+            TerminalRole::Earth
+        } else {
+            TerminalRole::Phase
+        };
+    }
+    let numeric_four = terminals.len() == 4
+        && ["1", "2", "3", "4"]
+            .iter()
+            .all(|t| terminals.iter().any(|v| v.as_ref() == *t));
+    if terminal.eq_ignore_ascii_case("n") || (numeric_four && terminal == "4") {
+        TerminalRole::Neutral
+    } else {
+        TerminalRole::Phase
     }
 }
 
@@ -910,21 +982,43 @@ impl UntypedObject {
 /// original source text for the byte exact echo tier is not carried here; it
 /// lives on the [`PioModule`](powerio_core::PioModule) a parse returns,
 /// alongside this network.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MulticonductorNetwork {
     tables: std::sync::Arc<MulticonductorNetworkTables>,
+    /// Bus positions by name for [`MulticonductorNetwork::bus`], derived
+    /// from `tables` on demand and shared by the handles that share them.
+    bus_index: std::sync::Arc<bus_index::BusIndex>,
+}
+
+// The derived text of the tables alone: the index is derived data.
+#[allow(clippy::missing_fields_in_debug)]
+impl std::fmt::Debug for MulticonductorNetwork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MulticonductorNetwork")
+            .field("tables", &self.tables)
+            .finish()
+    }
 }
 
 impl MulticonductorNetwork {
     pub(crate) fn from_tables(tables: MulticonductorNetworkTables) -> Self {
         Self {
             tables: std::sync::Arc::new(tables),
+            bus_index: std::sync::Arc::default(),
         }
     }
 
     /// The one mutation door: copies the shared tables on first write to a
-    /// shared handle, so no other handle observes the change.
+    /// shared handle, so no other handle observes the change. This handle
+    /// leaves here with an empty bus index no other handle holds, before the
+    /// caller can change a bus; a handle that shared the old index keeps it
+    /// with the tables it was built from. Handles share an index only by
+    /// `Clone`, which shares the tables with it.
     pub(crate) fn tables_mut(&mut self) -> &mut MulticonductorNetworkTables {
+        match std::sync::Arc::get_mut(&mut self.bus_index) {
+            Some(index) => index.clear(),
+            None => self.bus_index = std::sync::Arc::default(),
+        }
         std::sync::Arc::make_mut(&mut self.tables)
     }
 }
@@ -1062,6 +1156,25 @@ dist_table_accessors! {
 }
 
 impl MulticonductorNetwork {
+    /// The network's terminal conventions, which [`calc_terminal_role`]
+    /// reads: the BMOPF `terminal_conventions` its source stated (the
+    /// `bmopf_terminal_conventions` extra), else, for a network read from
+    /// distribution CIM or MG-RAVENS, the CIM wire convention those readers
+    /// state (`4`, `n` or `N` is the neutral on every bus, so a single phase
+    /// bus `[1, 4]` has a neutral); `None` otherwise.
+    #[must_use]
+    pub fn terminal_conventions(&self) -> Option<&serde_json::Value> {
+        self.tables
+            .extras
+            .get("bmopf_terminal_conventions")
+            .or_else(|| match self.tables.source_format {
+                Some(DistSourceFormat::CimDist | DistSourceFormat::RavensJson) => {
+                    Some(crate::cim::wire_conventions())
+                }
+                _ => None,
+            })
+    }
+
     /// Hz.
     #[must_use]
     pub fn base_frequency(&self) -> f64 {
@@ -1071,6 +1184,19 @@ impl MulticonductorNetwork {
     #[must_use]
     pub fn base_frequency_mut(&mut self) -> &mut f64 {
         &mut self.tables_mut().base_frequency
+    }
+
+    /// The key under which this network's source identifies an element by
+    /// name: ASCII lowercase for an OpenDSS source, whose names are case
+    /// insensitive, the name itself otherwise. Readiness and every name
+    /// lookup over the tables (a line's linecode, say) compare these keys.
+    #[must_use]
+    pub fn identifier_key(&self, name: &str) -> String {
+        if self.tables.source_format == Some(crate::model::DistSourceFormat::Dss) {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_owned()
+        }
     }
 }
 
@@ -1128,7 +1254,7 @@ impl MulticonductorNetwork {
 
     /// Case insensitive, matching the source formats' name semantics.
     pub fn bus(&self, id: &str) -> Option<&DistBus> {
-        self.buses().iter().find(|b| b.id.eq_ignore_ascii_case(id))
+        self.bus_index.find(self.buses(), id)
     }
 
     /// Case insensitive, matching the source formats' name semantics.
@@ -1292,30 +1418,6 @@ fn matrix_extent(m: &ConductorMatrix) -> usize {
     m.iter().map(Vec::len).fold(m.len(), usize::max)
 }
 
-/// Windings per phase for an n-winding transformer terminal map: WYE counts
-/// the hot terminals (excluding the shared neutral), DELTA counts terminals
-/// directly except the phase to phase two terminal case.
-pub(crate) fn n_winding_phase_count(conn: DistWindingConn, terminal_map: &[String]) -> usize {
-    match conn {
-        DistWindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
-        DistWindingConn::Delta => {
-            if terminal_map.len() == 2 {
-                1
-            } else {
-                terminal_map.len().max(1)
-            }
-        }
-    }
-}
-
-/// `phases * v_nom^2 / s`, the impedance base for an n-winding transformer
-/// winding, or `None` if any input isn't a positive finite number.
-pub(crate) fn n_winding_impedance_base(phases: usize, v_nom: f64, s: f64) -> Option<f64> {
-    let phases = phases as f64;
-    (phases > 0.0 && v_nom.is_finite() && v_nom > 0.0 && s.is_finite() && s > 0.0)
-        .then_some(phases * v_nom * v_nom / s)
-}
-
 /// The two phase conductors of a line to line regulating winding: exactly
 /// two terminals, both named 1..=3, distinct, in terminal map order.
 pub(crate) fn winding_phase_pair(winding: &DistWinding) -> Option<(u8, u8)> {
@@ -1377,16 +1479,6 @@ pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
     pairs
 }
 
-/// Actual coil voltage base, including the fixed winding tap.
-pub(crate) fn winding_coil_voltage(winding: &DistWinding, phases: usize) -> f64 {
-    let divisor = if winding.conn == DistWindingConn::Wye && matches!(phases, 2 | 3) {
-        3f64.sqrt()
-    } else {
-        1.0
-    };
-    winding.v_ref * winding.tap / divisor
-}
-
 /// OpenDSS no-load percentages for an explicit winding-2 terminal-coil shunt.
 /// Other winding locations cannot use the OpenDSS exciting-branch parameters.
 pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f64, f64)> {
@@ -1396,7 +1488,7 @@ pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f6
     }
     let g = shunt.get("g")?.as_f64()?;
     let b = shunt.get("b")?.as_f64()?;
-    let voltage = winding_coil_voltage(t.windings.get(1)?, t.phases);
+    let voltage = crate::transformer::calc_coil_voltage(t, 1) * t.windings.get(1)?.tap;
     let rating = t.windings.first()?.s_rating;
     if !voltage.is_finite()
         || voltage <= 0.0
@@ -1407,13 +1499,40 @@ pub(crate) fn transformer_no_load_percentages(t: &DistTransformer) -> Option<(f6
     {
         return None;
     }
-    let scale = 100.0 * t.phases.max(1) as f64 * voltage.powi(2) / rating;
+    let scale = 100.0
+        * t.phases.max(1) as f64
+        * powerio_core::electrical::calc_impedance_base(voltage, rating)?;
     Some((g * scale, -b * scale))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_roles_follow_the_conventions_or_the_spellings() {
+        let four = ["1", "2", "3", "4"];
+        assert_eq!(calc_terminal_role(&four, "4", None), TerminalRole::Neutral);
+        assert_eq!(
+            calc_terminal_role(&["1", "4"], "4", None),
+            TerminalRole::Phase
+        );
+        assert_eq!(
+            calc_terminal_role(&["a", "N"], "N", None),
+            TerminalRole::Neutral
+        );
+        assert_eq!(calc_terminal_role(&["1"], "0", None), TerminalRole::Earth);
+        let conventions = serde_json::json!({"neutral": ["x"], "earth": ["g"]});
+        let names = ["1", "x", "g", "n"];
+        let role = |t| calc_terminal_role(&names, t, Some(&conventions));
+        assert_eq!(role("x"), TerminalRole::Neutral);
+        assert_eq!(role("g"), TerminalRole::Earth);
+        assert_eq!(role("n"), TerminalRole::Phase);
+        let bus = DistBus::new("b", names.iter().map(|t| (*t).to_owned()).collect());
+        assert_eq!(bus.phase_indices(Some(&conventions)), vec![0, 3]);
+        assert_eq!(bus.neutral_indices(Some(&conventions)), vec![1]);
+        assert_eq!(bus.neutral_indices(None), vec![3]);
+    }
 
     #[test]
     fn multiconductor_json_uses_only_final_nonfinite_spellings() {

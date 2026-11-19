@@ -158,7 +158,7 @@ impl Reader<'_> {
             endpoints.push(root);
         }
         let nominal = self.nominal[&endpoints[0]];
-        let r_pct = 100.0 * resistance / nominal.powi(2);
+        let r_pct = regulator_r_pct(resistance, nominal);
         if !r_pct.is_finite() || (resistance > 0.0 && r_pct == 0.0) {
             return Err(self.error(
                 key,
@@ -252,17 +252,17 @@ impl Reader<'_> {
             terminals.clone(),
             DistWindingConn::Wye,
             nominal,
-            1.0,
+            REGULATOR_RATING,
         );
         let mut secondary = DistWinding::new(
             &self.names[&endpoints[1]],
             terminals,
             DistWindingConn::Wye,
             nominal,
-            1.0,
+            REGULATOR_RATING,
         );
         primary.tap = ratio;
-        secondary.r_pct = 100.0 * resistance / nominal.powi(2);
+        secondary.r_pct = regulator_r_pct(resistance, nominal);
         let mut t = DistTransformer::new(&name, vec![primary, secondary], vec![0.0], 1);
         t.extras
             .insert("ppm_antifloat".into(), serde_json::json!(0.0));
@@ -280,4 +280,17 @@ impl Reader<'_> {
             .push("s_rating: 1 VA normalization base; no source nameplate rating");
         self.attach(key, DistLocationTarget::Transformer, name);
     }
+}
+
+/// The normalization rating, volt amperes, of a regulator phase's windings:
+/// GridLAB-D states no nameplate rating for a regulator.
+const REGULATOR_RATING: f64 = 1.0;
+
+/// The series resistance `resistance`, ohms, of a regulator phase as a
+/// percentage on its winding base (`nominal` volts at [`REGULATOR_RATING`]):
+/// `100 · R / Z_base`. `NaN` when the base is unusable (its square leaves the
+/// finite positive range).
+fn regulator_r_pct(resistance: f64, nominal: f64) -> f64 {
+    crate::electrical::calc_impedance_base(nominal, REGULATOR_RATING)
+        .map_or(f64::NAN, |base| 100.0 * resistance / base)
 }

@@ -7,9 +7,22 @@ use std::collections::{HashMap, HashSet};
 mod state;
 pub(super) use state::State;
 
+#[cfg(test)]
 pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<State, String> {
+    resolve_with_codes(raw, point, &mut HashMap::new())
+}
+
+/// [`resolve`] with the linecode states already evaluated kept in `codes`.
+/// A caller resolving every line of a script passes one map, so lines that
+/// fetched the same state of a linecode share one evaluation of it. Without
+/// it each line replays its linecode's whole history, and a linecode declared
+/// again in every feeder of a region has a long one.
+pub(super) fn resolve_with_codes(
+    raw: &RawDss,
+    point: Snapshot,
+    codes: &mut HashMap<Snapshot, linecode::State>,
+) -> Result<State, String> {
     let mut cache = HashMap::new();
-    let mut codes = HashMap::new();
     let mut visiting = HashSet::new();
     let mut pending = vec![(point, false)];
     let mut budget = 1_usize << 22;
@@ -30,7 +43,7 @@ pub(super) fn resolve(raw: &RawDss, point: Snapshot) -> Result<State, String> {
             .get(..point.copies)
             .ok_or("invalid Line copy prefix")?;
         if ready {
-            let state = replay(raw, point, &cache, &mut codes, &mut budget)?;
+            let state = replay(raw, point, &cache, codes, &mut budget)?;
             charge(&mut budget, state.n * state.n * 6)?;
             cache.insert(point, state);
             visiting.remove(&point);

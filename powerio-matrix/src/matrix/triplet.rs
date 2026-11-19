@@ -107,6 +107,33 @@ impl CooBuilder {
         tri.to_csr()
     }
 
+    /// Finish as CSR with explicit zeros pruned off the diagonal, and an
+    /// entry at every diagonal position of the leading square, an explicit
+    /// zero where nothing accumulated.
+    pub(crate) fn finish_csr_with_diagonal(self) -> CsMat<f64> {
+        let side = self.rows.min(self.cols);
+        let mut tri = TriMat::with_capacity((self.rows, self.cols), self.entries.len() + side);
+        let mut has_diagonal = vec![false; side];
+        for (key, v) in self.entries {
+            let i = key / self.cols;
+            let j = key % self.cols;
+            if i == j {
+                has_diagonal[i] = true;
+                tri.add_triplet(i, j, v);
+            } else if v != 0.0 {
+                tri.add_triplet(i, j, v);
+            }
+        }
+        for (k, _) in has_diagonal
+            .iter()
+            .enumerate()
+            .filter(|(_, present)| !**present)
+        {
+            tri.add_triplet(k, k, 0.0);
+        }
+        tri.to_csr()
+    }
+
     /// Finish as a CSC matrix.
     pub fn finish_csc(self) -> CsMat<f64> {
         self.finish_csr().to_csc()

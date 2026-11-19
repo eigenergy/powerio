@@ -115,6 +115,8 @@ impl Reader<'_> {
             .map(|o| o.name.to_ascii_lowercase())
             .collect();
         let mut resolved = Vec::new();
+        // Linecode states already evaluated, shared by every line below.
+        let mut codes = std::collections::HashMap::new();
         let mut joint = raw
             .of_class("line")
             .any(|o| o.get("geometry").is_some() || o.get("spacing").is_some())
@@ -131,7 +133,7 @@ impl Reader<'_> {
                 if self.retain_deferred_line(object, None) {
                     continue;
                 }
-                line::resolve(raw, raw.line_snapshot(index))
+                line::resolve_with_codes(raw, raw.line_snapshot(index), &mut codes)
             };
             let mut state = match result {
                 Ok(state) => state,

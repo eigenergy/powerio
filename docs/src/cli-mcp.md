@@ -180,5 +180,7 @@ Outside the server, both limits default to 1 GiB for Rust, C, Python, and
 Julia path-based acquisition. CGMES XML counts against the referenced limit
 from a path or from memory, so a CGMES file above 1 GiB needs both settings
 raised. XIIDM and JIIDM documents keep a fixed 64 MiB limit, and an OpenDSS
-case stops following includes once they have loaded 64 MiB of script text.
+case stops following includes once they have loaded 64 MiB of script text,
+unless `--dss-max-include-bytes` raises that for `convert`, `summary`, or
+`serialize`.
 [Resource limits](pio-json-schema.md#resource-limits) lists every limit.

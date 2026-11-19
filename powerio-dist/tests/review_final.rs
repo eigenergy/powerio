@@ -147,10 +147,8 @@ fn ravens_reader_validates_test_bases_before_losing_impedance_or_losses() {
             });
             assert!(helpers::parse_str(&overflow.to_string(), "ravens-json").is_err());
         } else {
-            assert_eq!(
-                control.transformers()[0].extras["%noloadloss"],
-                json!(0.005)
-            );
+            // CIM100's NoLoadTest.loss is KiloActivePower: 5 kW of 100 kVA.
+            assert_eq!(control.transformers()[0].extras["%noloadloss"], json!(5.0));
         }
         for invalid in [json!(0), json!(-1), json!(null), json!("bad")] {
             let mut document = input.clone();

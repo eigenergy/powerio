@@ -299,3 +299,227 @@ fn source_auxiliary_names_respect_case_insensitive_network_identity() {
         3
     );
 }
+
+/// A tank's clocks are its vector group shift, the delta orientation the
+/// physics stamps: a delta–wye tank is clock 1 when the high voltage winding
+/// leads (OpenDSS's default) and clock 11 when the low voltage winding leads
+/// (`leadlag=euro`, or a step-up unit whose first winding is the low voltage
+/// delta). The writer states that clock and the vector group, the reader
+/// reads clock 11 back as `leadlag` euro, and a clock neither convention
+/// represents is refused with the represented clock named.
+#[test]
+fn phase_angle_clock_follows_the_winding_layout() {
+    let deck = |kvs: &str, leadlag: &str| {
+        format!(
+            "Clear
+New Circuit.c basekv=115 pu=1 phases=3 bus1=src
+New Transformer.sub phases=3 windings=2 buses=[src lv] conns=[delta wye] kvs=[{kvs}] kvas=[5000 5000] xhl=8 {leadlag}
+New Load.l bus1=lv.1.2.3 phases=3 kv=4.16 kw=100 kvar=10
+Set VoltageBases=[115 4.16]
+Calcvoltagebases
+Solve
+"
+        )
+    };
+    let clocks_of = |doc: &mut Value| {
+        let mut clocks = Vec::new();
+        visit(doc, "TransformerEndInfo", &mut |info| {
+            clocks.push((
+                info["TransformerEndInfo.endNumber"].as_u64().unwrap(),
+                info["TransformerEndInfo.phaseAngleClock"].as_f64().unwrap(),
+            ));
+        });
+        clocks.sort_by_key(|(end, _)| *end);
+        clocks
+    };
+    let shift = |net: &MulticonductorNetwork| {
+        powerio_dist::transformer::calc_transformer_phase_shift(&net.transformers()[0]).unwrap()
+    };
+    for (kvs, leadlag, clock, group, degrees) in [
+        ("115 4.16", "", 1.0, "Dyn1", 30.0),
+        ("115 4.16", "leadlag=euro", 11.0, "Dyn11", -30.0),
+        ("115 4.16", "leadlag=lead", 11.0, "Dyn11", -30.0),
+        ("4.16 115", "", 11.0, "Dyn11", -30.0),
+    ] {
+        let source = parse_dss_str(&deck(kvs, leadlag));
+        assert_eq!(shift(&source), degrees, "{kvs} {leadlag}");
+        let out = source.emit_value(DistTargetFormat::RavensJson);
+        assert!(
+            !out.warnings.iter().any(|w| w.contains("leadlag")),
+            "{:#?}",
+            out.warnings
+        );
+        let mut doc: Value = serde_json::from_str(&out.text).unwrap();
+        assert_eq!(
+            clocks_of(&mut doc),
+            [(1, 0.0), (2, clock)],
+            "{kvs} {leadlag}"
+        );
+        let mut groups = Vec::new();
+        visit(&mut doc, "PowerTransformer", &mut |pt| {
+            groups.push(pt["PowerTransformer.vectorGroup"].clone());
+        });
+        assert_eq!(groups, [json!(group)]);
+        let read = parse_str(&out.text, "ravens-json").unwrap();
+        assert_eq!(read.transformers().len(), 1, "{:#?}", read.warnings);
+        assert!(
+            !read.warnings.iter().any(|w| w.contains("phaseAngleClock")),
+            "{:#?}",
+            read.warnings
+        );
+        assert_eq!(shift(&read), degrees, "{kvs} {leadlag}");
+    }
+
+    // An unknown convention has no clock: both writers refuse the network
+    // rather than drop the unit or guess its shift.
+    let mut unknown = parse_dss_str(&deck("115 4.16", ""));
+    unknown.transformers_mut()[0]
+        .extras
+        .insert("leadlag".into(), json!("sideways"));
+    for target in [DistTargetFormat::RavensJson, DistTargetFormat::CimDist] {
+        let error = powerio_dist::emit(
+            &powerio_core::PioModule::new((*unknown).clone()),
+            target,
+            powerio_core::Destination::memory("out").unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("leadlag"), "{target:?}: {error}");
+    }
+
+    let mut doc: Value = serde_json::from_str(
+        &parse_dss_str(&deck("115 4.16", ""))
+            .emit_value(DistTargetFormat::RavensJson)
+            .text,
+    )
+    .unwrap();
+    visit(&mut doc, "TransformerEndInfo", &mut |info| {
+        if info["TransformerEndInfo.endNumber"].as_u64() == Some(2) {
+            info["TransformerEndInfo.phaseAngleClock"] = json!(5);
+        }
+    });
+    let refused = parse_str(&doc.to_string(), "ravens-json").unwrap();
+    assert_eq!(refused.transformers().len(), 0);
+    assert!(
+        refused.warnings.iter().any(|w| w.contains(
+            "end 2 phaseAngleClock 5 is not represented by its winding layout (clock 1, or its \
+             European counterpart)"
+        )),
+        "{:#?}",
+        refused.warnings
+    );
+}
+
+/// A single phase wye load stating `grounded` false whose neutral no
+/// equipment but such loads reaches hangs from a floating node, so it does
+/// not draw its stated power. The reader keeps the statement, as a round
+/// trip needs, and says so for every such load; a neutral a four wire line
+/// carries is not reported.
+#[test]
+fn isolated_single_phase_load_neutrals_are_reported() {
+    let deck = |line_conductors: &str| {
+        let n = line_conductors.split('.').count();
+        let diagonal = |v: &str| {
+            (0..n)
+                .map(|i| {
+                    (0..=i)
+                        .map(|j| if i == j { v } else { "0" })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        format!(
+            "Clear
+New Circuit.c basekv=4.16 pu=1 phases=3 bus1=src
+New Linecode.lc nphases={n} rmatrix=[{r}] xmatrix=[{x}] units=km
+New Line.l bus1=src.{line_conductors} bus2=lv.{line_conductors} linecode=lc length=1 units=km phases={n}
+New Load.a bus1=lv.1.4 phases=1 kv=2.4 kw=100 kvar=10
+New Load.b bus1=lv.2.4 phases=1 kv=2.4 kw=50 kvar=5
+Set VoltageBases=[4.16]
+Calcvoltagebases
+Solve
+",
+            r = diagonal("0.1"),
+            x = diagonal("0.2"),
+        )
+    };
+    let read = |conductors: &str| {
+        let written = parse_dss_str(&deck(conductors))
+            .emit_value(DistTargetFormat::RavensJson)
+            .text;
+        parse_str(&written, "ravens-json").unwrap()
+    };
+    let three_wire = read("1.2.3");
+    let reported: Vec<&String> = three_wire
+        .warnings
+        .iter()
+        .filter(|w| w.contains("the neutral floats"))
+        .collect();
+    assert_eq!(reported.len(), 2, "{:#?}", three_wire.warnings);
+    assert!(reported.iter().any(|w| w.contains("load a:")));
+    assert!(reported.iter().any(|w| w.contains("load b:")));
+    // Kept as stated: the neutral is not grounded.
+    assert!(
+        !three_wire
+            .bus("lv")
+            .unwrap()
+            .grounded
+            .iter()
+            .any(|t| t == "4")
+    );
+
+    let four_wire = read("1.2.3.4");
+    assert!(
+        !four_wire
+            .warnings
+            .iter()
+            .any(|w| w.contains("the neutral floats")),
+        "{:#?}",
+        four_wire.warnings
+    );
+}
+
+/// MG-RAVENS and distribution CIM read and write a `NoLoadTest` alike, by
+/// CIM100's units: `NoLoadTest.loss` is `KiloActivePower` and
+/// `excitingCurrent` is the whole exciting current, whose quadrature part is
+/// OpenDSS's magnetizing `%imag`. IEEE13_Assets' `FdrXfmr` (500 kVA,
+/// `%NoLoadLoss=0.6 %imag=1.1`) is a 3 kW test exciting
+/// `sqrt(0.6² + 1.1²)` percent, the current the MG-RAVENS exporter writes.
+#[test]
+fn no_load_test_is_kilowatts_and_the_whole_exciting_current() {
+    let deck = "Clear
+New Circuit.c basekv=4.16 pu=1 phases=3 bus1=src
+New Transformer.xfm1 phases=3 windings=2 buses=[src lv] conns=[wye wye] kvs=[4.16 0.48] kvas=[500 500] xhl=2 %r=0.55 %noloadloss=0.6 %imag=1.1
+New Load.l bus1=lv.1.2.3 phases=3 kv=0.48 kw=100 kvar=10
+Set VoltageBases=[4.16 0.48]
+Calcvoltagebases
+Solve
+";
+    let source = parse_dss_str(deck);
+    let out = source.emit_value(DistTargetFormat::RavensJson);
+    let mut doc: Value = serde_json::from_str(&out.text).unwrap();
+    let mut tests = Vec::new();
+    visit(&mut doc, "NoLoadTest", &mut |t| tests.push(t.clone()));
+    assert_eq!(tests.len(), 1, "{tests:#?}");
+    let loss = tests[0]["NoLoadTest.loss"].as_f64().unwrap();
+    let exciting = tests[0]["NoLoadTest.excitingCurrent"].as_f64().unwrap();
+    assert!((loss - 3.0).abs() < 1e-12, "{loss}");
+    assert!((exciting - 0.6_f64.hypot(1.1)).abs() < 1e-12, "{exciting}");
+
+    // The reader gives back the source percentages exactly.
+    let back = parse_str(&out.text, "ravens-json").unwrap();
+    let extras = &back.transformers()[0].extras;
+    assert_eq!(extras["%noloadloss"], json!(0.6));
+    assert_eq!(extras["%imag"], json!(1.1));
+
+    // The exporter's own test (IEEE13_Assets states the exciting current
+    // 1.252996408614167) reads as the magnetizing current, not the total.
+    visit(&mut doc, "NoLoadTest", &mut |t| {
+        t["NoLoadTest.excitingCurrent"] = json!(1.252_996_408_614_167);
+    });
+    let back = parse_str(&doc.to_string(), "ravens-json").unwrap();
+    let imag = back.transformers()[0].extras["%imag"].as_f64().unwrap();
+    assert!((imag - 1.1).abs() < 1e-12, "{imag}");
+}

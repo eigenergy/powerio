@@ -193,6 +193,57 @@ pub struct McOpfLoadLaw {
     /// Active then reactive terms; each `[coefficient, exponent]` contributes coefficient * (|U| / nominal)^exponent in per-unit power.
     pub terms: [Vec<[f64; 2]>; 2],
 }
+impl McOpfLoadLaw {
+    /// A law of active then reactive `[coefficient, exponent]` terms at the
+    /// per unit coil nominal voltage `nominal`.
+    #[must_use]
+    pub fn new(nominal: f64, terms: [Vec<[f64; 2]>; 2]) -> Self {
+        Self { nominal, terms }
+    }
+
+    /// The law's per unit active and reactive power at the per unit voltage
+    /// magnitude `voltage` (on `V_base`), each with its derivative with
+    /// respect to `voltage`: the terms summed by the one power law term
+    /// evaluation ([`powerio_core::electrical::calc_voltage_power_term`]) at
+    /// the ratio `voltage / nominal`.
+    #[must_use]
+    pub fn calc_power(&self, voltage: f64) -> [(f64, f64); 2] {
+        let ratio = voltage / self.nominal;
+        self.terms.each_ref().map(|terms| {
+            let (value, slope) = powerio_core::electrical::calc_voltage_power_terms(terms, ratio);
+            (value, slope / self.nominal)
+        })
+    }
+
+    /// The constant admittance of a law whose every term has exponent two
+    /// (pure constant impedance), per unit: `conj(Σ P + j Σ Q) / nominal²`
+    /// ([`powerio_dist::calc_load_nominal_admittance`]), so
+    /// the coil current is `Y U` at every voltage, zero included. `None`
+    /// when any term has another exponent.
+    #[must_use]
+    #[allow(clippy::float_cmp)] // the impedance exponent is an exact spelling
+    pub fn calc_impedance_admittance(&self) -> Option<num_complex::Complex64> {
+        if !self.terms.iter().flatten().all(|t| t[1] == 2.0) {
+            return None;
+        }
+        let [active, reactive] = self
+            .terms
+            .each_ref()
+            .map(|terms| terms.iter().map(|t| t[0]).sum::<f64>());
+        Some(powerio_dist::calc_load_nominal_admittance(
+            num_complex::Complex64::new(active, reactive),
+            self.nominal,
+        ))
+    }
+}
+
+/// The softplus width of a prepared droop curve as a share of its mean knot
+/// voltage: `epsilon = MC_OPF_DROOP_SMOOTHING · mean(knots)`, so a knot moved
+/// by `dk` widens every corner by `MC_OPF_DROOP_SMOOTHING · dk / n`. The one
+/// smoothing rule: the preparation sets it and the curve's parameter
+/// sensitivities differentiate it.
+pub const MC_OPF_DROOP_SMOOTHING: f64 = 2e-3;
+
 /// Smooth clipped piecewise-linear controller, with SI-derived per-unit knots.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -206,6 +257,167 @@ pub struct McOpfDroop {
     /// Positive softplus smoothing width in per-unit voltage.
     pub epsilon: f64,
 }
+/// The value and slope of a smoothed droop curve, and the response of both
+/// to a parameter direction ([`McOpfDroop::calc_parameter_derivative`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct McOpfDroopValue {
+    /// The control power, per unit.
+    pub value: f64,
+    /// Its derivative with respect to the monitored voltage, per unit.
+    pub slope: f64,
+}
+
+/// `[softplus(z), sigmoid(z), sigmoid'(z), softplus(z) − z sigmoid(z)]`,
+/// in the entropy form that neither cancels nor overflows when saturated.
+fn smooth_hinge(z: f64) -> [f64; 4] {
+    let e = (-z.abs()).exp();
+    let sigma = if z >= 0.0 {
+        1.0 / (1.0 + e)
+    } else {
+        e / (1.0 + e)
+    };
+    [
+        z.max(0.0) + e.ln_1p(),
+        sigma,
+        e / (1.0 + e).powi(2),
+        e.ln_1p() + z.abs() * e / (1.0 + e),
+    ]
+}
+
+/// One softplus corner of a droop curve: it adds
+/// `coefficient · width · softplus((v − knot) / width)` to the control power
+/// at the monitored voltage `v` ([`McOpfDroopTerms`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct McOpfDroopHinge {
+    /// The signed slope change at the knot, per unit power per unit
+    /// voltage: `+sⱼ` at a segment's lower knot, `−sⱼ` at its upper knot.
+    pub coefficient: f64,
+    /// The knot, per unit voltage.
+    pub knot: f64,
+    /// The softplus width `ε`, per unit voltage.
+    pub width: f64,
+}
+
+/// A droop curve as a sum: `constant + Σ hinges`
+/// ([`McOpfDroop::calc_terms`]). A segment of zero slope adds no hinge.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct McOpfDroopTerms {
+    /// The control power at the lowest knot and below, per unit.
+    pub constant: f64,
+    /// The corners, two per segment of nonzero slope, lower knot first.
+    pub hinges: Vec<McOpfDroopHinge>,
+}
+
+impl McOpfDroop {
+    /// The curve's terms, the one statement of the smoothed piecewise linear
+    /// curve: [`calc_control`](Self::calc_control) sums them and a symbolic
+    /// model builds its expression from them.
+    #[must_use]
+    #[allow(clippy::float_cmp)] // a flat segment has an exactly zero slope
+    pub fn calc_terms(&self) -> McOpfDroopTerms {
+        let mut hinges = Vec::new();
+        for j in 0..self.knots.len().saturating_sub(1) {
+            let slope = (self.values[j + 1] - self.values[j]) / (self.knots[j + 1] - self.knots[j]);
+            if slope == 0.0 {
+                continue;
+            }
+            for (k, sign) in [(j, 1.0), (j + 1, -1.0)] {
+                hinges.push(McOpfDroopHinge {
+                    coefficient: sign * slope,
+                    knot: self.knots[k],
+                    width: self.epsilon,
+                });
+            }
+        }
+        McOpfDroopTerms {
+            constant: self.values[0],
+            hinges,
+        }
+    }
+
+    /// The mean monitored voltage magnitude: `|V_p − V_n|` over the monitor
+    /// pairs (`V_n = 0` for ground), averaged, from per unit terminal
+    /// voltages indexed like the preparation's terminals.
+    #[must_use]
+    pub fn calc_monitored_voltage(&self, voltage: &[num_complex::Complex64]) -> f64 {
+        let total: f64 = self
+            .monitors
+            .iter()
+            .map(|&(p, n)| {
+                (voltage[p] - n.map_or(num_complex::Complex64::new(0.0, 0.0), |n| voltage[n]))
+                    .norm()
+            })
+            .sum();
+        total / self.monitors.len() as f64
+    }
+
+    /// The curve's control power at the monitored voltage `voltage` and its
+    /// slope: the piecewise linear curve through `(knots, values)` with each
+    /// corner smoothed by a softplus of width `epsilon`,
+    ///
+    /// ```text
+    /// c(v) = values₀ + Σⱼ sⱼ ε (softplus((v − kⱼ)/ε) − softplus((v − kⱼ₊₁)/ε)),
+    /// sⱼ = (valuesⱼ₊₁ − valuesⱼ) / (kⱼ₊₁ − kⱼ).
+    /// ```
+    ///
+    /// The one droop evaluation: the OPF residual, its validation and its
+    /// parameter sensitivities read it.
+    #[must_use]
+    pub fn calc_control(&self, voltage: f64) -> McOpfDroopValue {
+        let terms = self.calc_terms();
+        let mut value = terms.constant;
+        let mut slope = 0.0;
+        for hinge in &terms.hinges {
+            let [softplus, sigmoid, ..] = smooth_hinge((voltage - hinge.knot) / hinge.width);
+            value += hinge.coefficient * hinge.width * softplus;
+            slope += hinge.coefficient * sigmoid;
+        }
+        McOpfDroopValue { value, slope }
+    }
+
+    /// The directional derivative of [`calc_control`](Self::calc_control)
+    /// along a change `(d_knots, d_values, d_epsilon)` of the curve's
+    /// parameters, at a fixed monitored voltage: the change of the control
+    /// power (`value`) and of its voltage slope (`slope`).
+    ///
+    /// # Panics
+    /// When `d_knots` or `d_values` is shorter than the curve.
+    #[must_use]
+    pub fn calc_parameter_derivative(
+        &self,
+        voltage: f64,
+        d_knots: &[f64],
+        d_values: &[f64],
+        d_epsilon: f64,
+    ) -> McOpfDroopValue {
+        let (knots, values, epsilon) = (&self.knots, &self.values, self.epsilon);
+        let mut value = d_values[0];
+        let mut slope = 0.0;
+        for j in 0..knots.len().saturating_sub(1) {
+            let width = knots[j + 1] - knots[j];
+            let s = (values[j + 1] - values[j]) / width;
+            let ds = (d_values[j + 1] - d_values[j] - s * (d_knots[j + 1] - d_knots[j])) / width;
+            let z = [
+                (voltage - knots[j]) / epsilon,
+                (voltage - knots[j + 1]) / epsilon,
+            ];
+            let [a, b] = z.map(smooth_hinge);
+            let hinge = epsilon * (a[0] - b[0]);
+            let dh = d_epsilon * (a[3] - b[3]) - d_knots[j] * a[1] + d_knots[j + 1] * b[1];
+            let dz = [
+                (-d_knots[j] - z[0] * d_epsilon) / epsilon,
+                (-d_knots[j + 1] - z[1] * d_epsilon) / epsilon,
+            ];
+            value += ds * hinge + s * dh;
+            slope += ds * (a[1] - b[1]) + s * (a[2] * dz[0] - b[2] * dz[1]);
+        }
+        McOpfDroopValue { value, slope }
+    }
+}
+
 /// One two-terminal coil; a missing negative terminal means physical ground.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -442,24 +654,6 @@ fn unique(family: &str, names: impl Iterator<Item = String>) -> Result<()> {
     }
     Ok(())
 }
-fn root(parent: &mut [usize], mut n: usize) -> usize {
-    while parent[n] != n {
-        parent[n] = parent[parent[n]];
-        n = parent[n];
-    }
-    n
-}
-fn join(parent: &mut [usize], a: usize, b: usize) -> bool {
-    let a = root(parent, a);
-    let b = root(parent, b);
-    if a == b {
-        false
-    } else {
-        parent[a] = b;
-        true
-    }
-}
-
 /// Prepare the AC multiconductor IVR profile without creating solver expressions.
 ///
 /// Supports coupled lines, shunts, capacitors, ideal switches/sources, WYE and
@@ -660,7 +854,7 @@ fn validate_profile(
 fn prepare_terminals(net: &MulticonductorNetwork) -> Result<(Vec<McOpfTerminal>, Positions)> {
     let mut terminals = Vec::new();
     let mut positions = BTreeMap::new();
-    let conventions = net.extras().get("bmopf_terminal_conventions");
+    let conventions = net.terminal_conventions();
     for bus in net.buses() {
         extras(
             &bus.id,
@@ -676,17 +870,14 @@ fn prepare_terminals(net: &MulticonductorNetwork) -> Result<(Vec<McOpfTerminal>,
                 return Err(invalid(&bus.id, "unknown grounded terminal"));
             }
         }
-        let phases: Vec<_> = bus
-            .phase_indices(conventions)
-            .into_iter()
-            .filter(|&i| bus.terminals[i] != "0")
-            .collect();
+        let phases = bus.phase_indices(conventions);
         for (k, t) in bus.terminals.iter().enumerate() {
-            let grounded = t == "0" || bus.grounded.contains(t);
-            let angle = phases
-                .iter()
-                .position(|p| *p == k)
-                .map_or(0.0, |p| -(p as f64) * std::f64::consts::TAU / 3.0);
+            // Earth by the one terminal classification, or grounded at the bus.
+            let grounded = bus.terminal_role(t, conventions) == powerio_dist::TerminalRole::Earth
+                || bus.grounded.contains(t);
+            let angle = phases.iter().position(|p| *p == k).map_or(0.0, |p| {
+                powerio_dist::sequence::calc_balanced_phase_angle(p, 3)
+            });
             let start = if grounded || !phases.contains(&k) {
                 [0.0, 0.0]
             } else {
@@ -723,6 +914,29 @@ impl Context<'_> {
             })
             .collect()
     }
+    /// A DELTA edge joins phases: grounding a phase does not change its role,
+    /// so the declared terminal conventions decide, not voltage or names.
+    fn require_phase_terminals(&self, name: &str, bus_id: &str, tm: &[String]) -> Result<()> {
+        let bus = self
+            .net
+            .bus(bus_id)
+            .ok_or_else(|| invalid(name, "unknown bus"))?;
+        let phases: Vec<&str> = bus
+            .phase_indices(self.net.terminal_conventions())
+            .into_iter()
+            .map(|i| bus.terminals[i].as_str())
+            .collect();
+        if let Some(t) = tm.iter().find(|t| !phases.contains(&t.as_str())) {
+            return Err(invalid(
+                name,
+                format!("delta requires phase terminals; {bus_id}:{t} is neutral or earth"),
+            ));
+        }
+        Ok(())
+    }
+    /// The coils of a WYE, DELTA or single phase connection over global
+    /// terminals: the one connection rule
+    /// ([`powerio_dist::calc_element_connection`]).
     fn coils(
         &self,
         name: &str,
@@ -731,61 +945,25 @@ impl Context<'_> {
         config: Configuration,
     ) -> Result<(Vec<usize>, CoilPairs)> {
         let ids = self.resolve(name, bus_id, tm)?;
-        let bus = self
-            .net
-            .bus(bus_id)
-            .ok_or_else(|| invalid(name, "unknown bus"))?;
-        let phases: Vec<_> = bus
-            .phase_indices(self.net.extras().get("bmopf_terminal_conventions"))
-            .into_iter()
-            .filter(|&i| bus.terminals[i] != "0")
-            .collect();
-        let nonphase: Vec<_> = tm
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| !phases.iter().any(|i| bus.terminals[*i] == **t))
-            .map(|(i, _)| i)
-            .collect();
-        let coils = match config {
+        match config {
             Configuration::Delta => {
-                // A delta edge joins phases. Grounding a phase does not change
-                // its role; use the declared conventions, not voltage or names.
-                if let Some(&i) = nonphase.first() {
-                    return Err(invalid(
-                        name,
-                        format!(
-                            "delta requires phase terminals; {bus_id}:{} is neutral or earth",
-                            tm[i]
-                        ),
-                    ));
-                }
-                if ids.len() == 2 {
-                    vec![(ids[0], Some(ids[1]))]
-                } else if ids.len() == 3 {
-                    (0..3).map(|i| (ids[i], Some(ids[(i + 1) % 3]))).collect()
-                } else {
+                self.require_phase_terminals(name, bus_id, tm)?;
+                if !matches!(ids.len(), 2 | 3) {
                     return Err(invalid(name, "delta requires two or three terminals"));
                 }
             }
-            Configuration::SinglePhase => {
-                if ids.len() != 2 {
-                    return Err(invalid(name, "single-phase requires two terminals"));
-                }
-                vec![(ids[0], Some(ids[1]))]
+            Configuration::SinglePhase if ids.len() != 2 => {
+                return Err(invalid(name, "single-phase requires two terminals"));
             }
-            Configuration::Wye => {
-                if nonphase.len() > 1 {
-                    return Err(invalid(name, "ambiguous neutral"));
-                }
-                let neutral = nonphase.first().map(|i| ids[*i]);
-                ids.iter()
-                    .enumerate()
-                    .filter(|(i, _)| !nonphase.contains(i))
-                    .map(|(_, id)| (*id, neutral))
-                    .collect()
-            }
+            Configuration::Wye | Configuration::SinglePhase => {}
             _ => return Err(unsupported(name, "unknown configuration")),
-        };
+        }
+        let coils: CoilPairs =
+            powerio_dist::calc_element_connection(self.net, bus_id, tm, config, None)
+                .map_err(|reason| invalid(name, reason))?
+                .iter()
+                .map(|coil| (ids[coil.from], coil.to.map(|to| ids[to])))
+                .collect();
         if coils.is_empty() {
             return Err(invalid(name, "no coils"));
         }
@@ -802,7 +980,7 @@ fn prepare_sources(ctx: &Context<'_>, vb: f64, terminals: &mut [McOpfTerminal]) 
         let bus = net
             .bus(&src.bus)
             .ok_or_else(|| invalid(&src.name, "unknown source bus"))?;
-        let phases = bus.phase_indices(net.extras().get("bmopf_terminal_conventions"));
+        let phases = bus.phase_indices(net.terminal_conventions());
         for (k, terminal) in bus.terminals.iter().enumerate() {
             if !phases.contains(&k)
                 && !terminals[ctx.positions[&(bus.id.clone(), terminal.clone())]].grounded
@@ -878,15 +1056,11 @@ fn prepare_voltage_limits(
 ) -> Result<Vec<McOpfVoltageLimit>> {
     let net = ctx.net;
     let positions = ctx.positions;
-    let conventions = net.extras().get("bmopf_terminal_conventions");
+    let conventions = net.terminal_conventions();
     let selected = instance.constraints();
     let mut voltage_limits = Vec::new();
     for bus in net.buses() {
-        let phases: Vec<_> = bus
-            .phase_indices(conventions)
-            .into_iter()
-            .filter(|&i| bus.terminals[i] != "0")
-            .collect();
+        let phases = bus.phase_indices(conventions);
         let nonph: Vec<_> = (0..bus.terminals.len())
             .filter(|i| !phases.contains(i))
             .collect();
@@ -1055,47 +1229,36 @@ fn prepare_shunts(ctx: &Context<'_>, zb: f64) -> Result<Vec<McOpfShunt>> {
     }
     for cap in net.capacitors() {
         extras(&cap.name, &cap.extras, &[])?;
-        let (ids, pairs) = ctx.coils(&cap.name, &cap.bus, &cap.terminal_map, cap.configuration)?;
-        let n = pairs.len();
-        let ratings = vec![cap.q_rated / n as f64; n];
-        // The canonical WYE bank nameplate is line-to-line when it has an
-        // explicit return, including a one-coil bank. SINGLE_PHASE is across
-        // its two terminals. BMOPF per-coil arrays already arrive as shunts.
-        let nominal = if cap.configuration == Configuration::Wye && ids.len() > 1 {
-            cap.v_nom / 3f64.sqrt()
-        } else {
-            cap.v_nom
-        };
+        let ids = resolve(&cap.name, &cap.bus, &cap.terminal_map)?;
+        if cap.configuration == Configuration::Delta {
+            ctx.require_phase_terminals(&cap.name, &cap.bus, &cap.terminal_map)?;
+        }
         finite(&cap.name, &[cap.q_rated, cap.v_nom])?;
-        if nominal <= 0.0 || !nominal.is_finite() || ratings.iter().any(|q| *q < 0.0) {
+        if cap.q_rated < 0.0 {
             return Err(invalid(
                 &cap.name,
                 "capacitor requires positive voltage and nonnegative var",
             ));
         }
-        let mut b = vec![vec![0.0; ids.len()]; ids.len()];
-        for (k, (p, q)) in pairs.iter().enumerate() {
-            let positive_slot = ids
+        // The one capacitor stamp, siemens, written per unit.
+        let primitive =
+            crate::matrix::multiconductor::calc_capacitor_primitive_admittance(net, cap)
+                .map_err(|error| invalid(&cap.name, error))?
+                .ok_or_else(|| unsupported(&cap.name, "unknown configuration"))?;
+        let scaled = |part: fn(&num_complex::Complex64) -> f64| -> Result<Vec<Vec<f64>>> {
+            primitive
                 .iter()
-                .position(|v| v == p)
-                .ok_or_else(|| invalid(&cap.name, "missing capacitor terminal"))?;
-            let admittance = ratings[k] / nominal.powi(2) * zb;
-            finite(&cap.name, &[admittance])?;
-            b[positive_slot][positive_slot] += admittance;
-            if let Some(q) = q {
-                let negative_slot = ids
-                    .iter()
-                    .position(|v| v == q)
-                    .ok_or_else(|| invalid(&cap.name, "missing capacitor return"))?;
-                b[negative_slot][negative_slot] += admittance;
-                b[positive_slot][negative_slot] -= admittance;
-                b[negative_slot][positive_slot] -= admittance;
-            }
-        }
+                .map(|row| {
+                    let row: Vec<f64> = row.iter().map(|y| part(y) * zb).collect();
+                    finite(&cap.name, &row)?;
+                    Ok(row)
+                })
+                .collect()
+        };
         shunts.push(McOpfShunt {
             identity: format!("capacitor:{}", cap.name),
-            g: vec![vec![0.0; ids.len()]; ids.len()],
-            b,
+            g: scaled(|y| y.re)?,
+            b: scaled(|y| y.im)?,
             terminals: ids,
         });
     }
@@ -1342,7 +1505,7 @@ fn prepare_source_devices(
 }
 fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -> Result<()> {
     // Conservative structural checks. Do not classify numerical near-zero Z as ideal.
-    let mut ideal: Vec<_> = (0..terminals.len()).collect();
+    let mut ideal = powerio_core::union_find::UnionFind::new(terminals.len());
     for br in branches.iter().filter(|b| !b.open) {
         for k in 0..br.from.len() {
             if br.r[k].iter().chain(&br.x[k]).all(|x| *x == 0.0) {
@@ -1352,7 +1515,7 @@ fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -
                         "ideal row between fixed terminals has undetermined current",
                     ));
                 }
-                if !join(&mut ideal, br.from[k], br.to[k]) {
+                if !ideal.union(br.to[k], br.from[k]) {
                     return Err(invalid(&br.identity, "dependent ideal-conductor cycle"));
                 }
             }
@@ -1360,7 +1523,7 @@ fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -
     }
     let mut ideal_fixed = BTreeSet::new();
     for (i, t) in terminals.iter().enumerate() {
-        if t.fixed.is_some() && !ideal_fixed.insert(root(&mut ideal, i)) {
+        if t.fixed.is_some() && !ideal_fixed.insert(ideal.find(i)) {
             return Err(unsupported(
                 &t.bus,
                 "ideal path joins multiple fixed voltage references",
@@ -1370,20 +1533,21 @@ fn check_ideal_topology(branches: &[McOpfBranch], terminals: &[McOpfTerminal]) -
     Ok(())
 }
 fn check_topology(branches: &[McOpfBranch], terminals: &mut [McOpfTerminal]) -> Result<()> {
-    let mut connected: Vec<_> = (0..terminals.len()).collect();
-    for br in branches.iter().filter(|b| !b.open) {
-        for (&a, &b) in br.from.iter().zip(&br.to) {
-            join(&mut connected, a, b);
-        }
-    }
+    let connected = powerio_core::union_find::calc_component_labels(
+        terminals.len(),
+        branches
+            .iter()
+            .filter(|b| !b.open)
+            .flat_map(|br| br.from.iter().copied().zip(br.to.iter().copied())),
+    );
     let mut anchors = BTreeMap::new();
     for (i, t) in terminals.iter().enumerate() {
         if let Some(value) = t.fixed {
-            anchors.entry(root(&mut connected, i)).or_insert(value);
+            anchors.entry(connected[i]).or_insert(value);
         }
     }
     for (i, t) in terminals.iter_mut().enumerate() {
-        let Some(value) = anchors.get(&root(&mut connected, i)) else {
+        let Some(value) = anchors.get(&connected[i]) else {
             return Err(unsupported(
                 &format!("{}:{}", t.bus, t.terminal),
                 "conductor component has no fixed voltage reference",
@@ -1448,22 +1612,40 @@ fn prepare_load_laws(
     if matches!(model, Law::ConstantPower { .. }) {
         return Ok(vec![None; n]);
     }
-    let at = |v: &[f64], k: usize, default: f64| -> Result<f64> {
-        if v.is_empty() {
-            return Ok(default);
-        }
-        if v.len() != 1 && v.len() != n {
-            return Err(invalid(
-                &load.name,
-                "load law vector must be scalar or per coil",
-            ));
-        }
-        finite(&load.name, v)?;
-        Ok(v[if v.len() == 1 { 0 } else { k }])
+    if matches!(
+        model,
+        Law::BoundedZip { .. } | Law::BoundedExponential { .. } | Law::BoundedConstantPower { .. }
+    ) {
+        return Err(unsupported(
+            &load.name,
+            "voltage-bounded load laws require piecewise IVR equations; a nominal-law approximation is not implicit (opt in with BoundedLoadLawPolicy::ProjectToNominal)",
+        ));
+    }
+    let axis_ok = |v: &[f64]| v.is_empty() || v.len() == n;
+    let axes: Vec<&[f64]> = match model {
+        Law::Exponential {
+            gamma_p, gamma_q, ..
+        } => vec![gamma_p, gamma_q],
+        Law::Zip {
+            alpha_z,
+            alpha_i,
+            alpha_p,
+            beta_z,
+            beta_i,
+            beta_p,
+            ..
+        } => vec![alpha_z, alpha_i, alpha_p, beta_z, beta_i, beta_p],
+        _ => Vec::new(),
     };
+    if !axis_ok(model.v_nom()) || axes.iter().any(|v| !axis_ok(v)) {
+        return Err(invalid(
+            &load.name,
+            "load law vector must state one entry per coil",
+        ));
+    }
     (0..n)
         .map(|k| {
-            let nominal = at(model.v_nom(), k, f64::NAN)? / vb;
+            let nominal = model.nominal_voltage(k).unwrap_or(f64::NAN) / vb;
             if !nominal.is_finite() || nominal <= 0.0 {
                 return Err(invalid(
                     &load.name,
@@ -1472,45 +1654,23 @@ fn prepare_load_laws(
             }
             let p = load.p_nom[k] / sb;
             let q = load.q_nom[k] / sb;
-            let terms = match &model {
-                Law::ConstantImpedance { .. } => [vec![[p, 2.0]], vec![[q, 2.0]]],
-                Law::ConstantCurrent { .. } => [vec![[p, 1.0]], vec![[q, 1.0]]],
-                Law::Exponential {
-                    gamma_p, gamma_q, ..
-                } => [
-                    vec![[p, at(gamma_p, k, 0.0)?]],
-                    vec![[q, at(gamma_q, k, 0.0)?]],
-                ],
-                Law::Zip {
-                    alpha_z,
-                    alpha_i,
-                    alpha_p,
-                    beta_z,
-                    beta_i,
-                    beta_p,
-                    ..
-                } => {
-                    let a_empty = alpha_z.is_empty() && alpha_i.is_empty() && alpha_p.is_empty();
-                    let b_empty = beta_z.is_empty() && beta_i.is_empty() && beta_p.is_empty();
-                    [
-                        vec![
-                            [p * at(alpha_z, k, 0.0)?, 2.0],
-                            [p * at(alpha_i, k, 0.0)?, 1.0],
-                            [p * at(alpha_p, k, f64::from(a_empty))?, 0.0],
-                        ],
-                        vec![
-                            [q * at(beta_z, k, 0.0)?, 2.0],
-                            [q * at(beta_i, k, 0.0)?, 1.0],
-                            [q * at(beta_p, k, f64::from(b_empty))?, 0.0],
-                        ],
-                    ]
-                }
-                Law::BoundedZip { .. } | Law::BoundedExponential { .. } | Law::BoundedConstantPower { .. } => {
-                    return Err(unsupported(&load.name, "voltage-bounded load laws require piecewise IVR equations; a nominal-law approximation is not implicit (opt in with BoundedLoadLawPolicy::ProjectToNominal)"));
-                }
-                _ => return Err(unsupported(&load.name, "unknown load voltage law")),
-            };
-            let terms = terms.map(|v| v.into_iter().filter(|t| t[0] != 0.0).collect::<Vec<_>>());
+            // The one term form of the law (`DistLoadVoltageModel::calc_power_terms`),
+            // scaled to this coil's per unit nominal power.
+            let fractions = model
+                .calc_power_terms(k)
+                .map_err(|error| invalid(&load.name, &error))?
+                .ok_or_else(|| unsupported(&load.name, "unknown load voltage law"))?;
+            let terms = [p, q]
+                .into_iter()
+                .zip(fractions)
+                .map(|(power, row)| {
+                    row.into_iter()
+                        .map(|[fraction, exponent]| [power * fraction, exponent])
+                        .filter(|t| t[0] != 0.0)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let terms: [Vec<[f64; 2]>; 2] = terms.try_into().expect("two components");
             for row in &terms {
                 for t in row {
                     finite(&load.name, t)?;
@@ -1574,7 +1734,7 @@ fn prepare_angles(ctx: &Context<'_>, instance: &McAcOpfInstance) -> Result<Vec<M
             continue;
         }
         if let Some([lower, upper]) = window(&bus.id, &bus.extras)? {
-            let phase = bus.phase_indices(ctx.net.extras().get("bmopf_terminal_conventions"));
+            let phase = bus.phase_indices(ctx.net.terminal_conventions());
             let nominal: Vec<f64> = bus
                 .extras
                 .get("va_nom")
@@ -1617,9 +1777,19 @@ fn prepare_sequences(
                 "sequence bounds require exactly three phases",
             ));
         }
+        // Column `k` of the sequence transform: the zero, positive and
+        // negative components of a unit phasor on phase `k`.
+        let columns = [0, 1, 2].map(|k| {
+            let mut unit = [num_complex::Complex64::default(); 3];
+            unit[k] = num_complex::Complex64::new(1.0, 0.0);
+            powerio_dist::sequence::calc_sequence_components(
+                unit,
+                powerio_dist::sequence::SequenceRotation::Fortescue,
+            )
+        });
         for (name, sequence, lower, upper) in [
             ("positive", 1, bus.vpos_min, bus.vpos_max),
-            ("negative", -1, None, bus.vneg_max),
+            ("negative", 2, None, bus.vneg_max),
             ("zero", 0, None, bus.vzero_max),
         ] {
             if lower.is_none() && upper.is_none() {
@@ -1631,9 +1801,9 @@ fn prepare_sequences(
                 return Err(invalid(&bus.id, "invalid sequence interval"));
             }
             let mut combination = Vec::new();
-            for (k, &id) in pids.iter().enumerate() {
-                let angle = f64::from(sequence) * (k as f64) * std::f64::consts::TAU / 3.0;
-                combination.push((id, [angle.cos() / 3.0, angle.sin() / 3.0]));
+            for (column, &id) in columns.iter().zip(pids) {
+                let entry = column[sequence];
+                combination.push((id, [entry.re, entry.im]));
             }
             if sequence == 0
                 && let Some(n) = neutral
@@ -1692,4 +1862,60 @@ fn device_current_caps(
         return Ok((coils, None));
     }
     Ok((coils, neutral))
+}
+
+#[cfg(test)]
+mod evaluation_tests {
+    use super::*;
+
+    #[test]
+    fn a_load_law_sums_its_terms_with_their_voltage_slope() {
+        let law = McOpfLoadLaw {
+            nominal: 0.5,
+            terms: [vec![[1.0, 2.0], [0.5, 0.0]], vec![[0.2, 1.0]]],
+        };
+        let [(p, dp), (q, dq)] = law.calc_power(0.4);
+        assert!((p - (0.64 + 0.5)).abs() < 1e-15);
+        assert!((dp - 2.0 * 0.8 / 0.5).abs() < 1e-15);
+        assert!((q - 0.16).abs() < 1e-15 && (dq - 0.4).abs() < 1e-15);
+    }
+
+    #[test]
+    fn a_droop_curve_and_its_derivatives_match_finite_differences() {
+        let curve = McOpfDroop {
+            monitors: vec![(0, None)],
+            knots: vec![0.95, 0.98, 1.02, 1.05],
+            values: vec![0.4, 0.0, 0.0, -0.4],
+            epsilon: 0.005,
+        };
+        let h = 1e-7;
+        for v in [0.9, 0.97, 1.0, 1.03, 1.1] {
+            let c = curve.calc_control(v);
+            let fd =
+                (curve.calc_control(v + h).value - curve.calc_control(v - h).value) / (2.0 * h);
+            assert!((c.slope - fd).abs() < 1e-5, "{v}: {} {fd}", c.slope);
+        }
+        assert!((curve.calc_control(0.9).value - 0.4).abs() < 1e-4);
+        assert!((curve.calc_control(1.1).value + 0.4).abs() < 1e-4);
+        let (dk, dv, de) = ([0.0, 0.01, 0.0, -0.02], [0.1, 0.0, 0.0, 0.05], 0.001);
+        let moved = |t: f64| McOpfDroop {
+            monitors: curve.monitors.clone(),
+            knots: curve.knots.iter().zip(dk).map(|(k, d)| k + t * d).collect(),
+            values: curve
+                .values
+                .iter()
+                .zip(dv)
+                .map(|(k, d)| k + t * d)
+                .collect(),
+            epsilon: curve.epsilon + t * de,
+        };
+        for v in [0.96, 0.99, 1.04] {
+            let d = curve.calc_parameter_derivative(v, &dk, &dv, de);
+            let (plus, minus) = (moved(h).calc_control(v), moved(-h).calc_control(v));
+            assert!((d.value - (plus.value - minus.value) / (2.0 * h)).abs() < 1e-5);
+            assert!((d.slope - (plus.slope - minus.slope) / (2.0 * h)).abs() < 1e-3);
+        }
+        let voltage = [num_complex::Complex64::new(1.01, 0.0)];
+        assert!((curve.calc_monitored_voltage(&voltage) - 1.01).abs() < 1e-15);
+    }
 }

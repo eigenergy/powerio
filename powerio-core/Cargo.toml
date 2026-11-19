@@ -20,6 +20,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # Deterministic CIM identifiers (UUID version 5) shared by the CIM adapters.
 uuid = { workspace = true }
+# The complex scalar of the shared dense elimination kernel.
+num-complex = { workspace = true }
 schemars = { workspace = true, optional = true }
 
 # The no-replace output commit calls the platform rename that refuses an

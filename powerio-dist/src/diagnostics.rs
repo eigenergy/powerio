@@ -149,8 +149,16 @@ pub mod codes {
             "a value the model needs was absent or unusable and was defaulted";
         READ_DSS_VALUE_UNSUPPORTED = "READ.DSS.VALUE_UNSUPPORTED", Warning,
             "a property value outside the modeled set was read as the nearest one";
+        READ_DSS_CONTROL_NOT_EXECUTED = "READ.DSS.CONTROL_NOT_EXECUTED", Warning,
+            "a control is retained without running it; equipment keeps its written settings";
         READ_DSS_OBJECT_UNTYPED = "READ.DSS.OBJECT_UNTYPED", Warning,
             "an object shape the model does not type yet is kept untyped";
+        /// `New` named a general object (a linecode, a loadshape, wire data
+        /// and the like) that already exists. OpenDSS edits the existing
+        /// object without a message, and so does the reader. Severity
+        /// `Remark`: the script is valid and nothing was lost.
+        READ_DSS_OBJECT_REDEFINED = "READ.DSS.OBJECT_REDEFINED", Remark,
+            "a second `New` for an existing general object edited it, as OpenDSS does";
         READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
             "a disabled source is retained without electrical contributions";
         EMIT_DSS_PROJECT_UNREPRESENTABLE = "EMIT.DSS.PROJECT_UNREPRESENTABLE", Error,
@@ -185,6 +193,10 @@ pub mod codes {
             "line geometry remains source data without calculated conductor impedances";
         BUILD_DIST_ELECTRICAL_INCOMPLETE = "BUILD.DIST.ELECTRICAL_INCOMPLETE", Error,
             "distribution equipment lacks the electrical data required for numerical use", category = Data;
+        BUILD_DIST_TRANSFORMER_INVALID = "BUILD.DIST.TRANSFORMER_INVALID", Error,
+            "a transformer's nameplate, tap, terminal map, neutral or magnetizing data is not usable", category = Data;
+        BUILD_DIST_TRANSFORMER_UNSUPPORTED = "BUILD.DIST.TRANSFORMER_UNSUPPORTED", Error,
+            "a transformer's shape or stated property has no supported winding equations", category = Data;
         TRANSFORM_DIST_LINDIST3FLOW_PREPARATION_FAILED =
             "TRANSFORM.DIST.LINDIST3FLOW_PREPARATION_FAILED", Error,
             "a distribution component cannot be prepared for LinDist3Flow", category = Data;

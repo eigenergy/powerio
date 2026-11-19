@@ -9,7 +9,6 @@ mod prep;
 mod tests;
 
 use crate::matrix::calc_solver_branch_flow_matrix;
-use crate::matrix::triplet::CooBuilder;
 use crate::{
     IndexedNetwork, SparseMatrix, calc_diagonal, calc_reference_indicator, calc_weighted_laplacian,
     ground_at_each,
@@ -22,6 +21,8 @@ use powerio_tx::HvdcTreatment;
 use prep::{DcOpfOptions, apply_instance_semantics, preparation_from_view};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, emit_dcopf_bundle};
+pub use limits::SynthesizedLimitWindow;
+pub use nodal::{calc_bus_hosts, calc_bus_totals};
 pub use prep::{
     DcBranchParameters, DcGeneratorParameters, DcOpfPreparation, NodalGeneratorParameters, Units,
 };
@@ -45,6 +46,10 @@ pub struct DcOpfAssemblyOptions {
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
     /// states. If false, an absent rating reads as unlimited.
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval a synthesized limit spans: the source's
+    /// stated one (the default) or the selected bounds the preparation
+    /// carries ([`SynthesizedLimitWindow`]).
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Apply PowerModels' ±60 degree correction to unconstrained or unusable
     /// branch angle difference intervals in the prepared arrays.
     pub correct_angle_difference_bounds: bool,
@@ -65,6 +70,7 @@ impl Default for DcOpfAssemblyOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
+            synthesized_limit_window: SynthesizedLimitWindow::Stated,
             correct_angle_difference_bounds: true,
             hvdc_treatment: HvdcTreatment::default(),
             angle_difference_bounds: None,
@@ -88,6 +94,13 @@ impl DcOpfAssemblyOptions {
     #[must_use]
     pub const fn with_synthesize_unrated_limits(mut self, synthesize: bool) -> Self {
         self.synthesize_unrated_limits = synthesize;
+        self
+    }
+
+    /// Select the angle difference interval a synthesized limit spans.
+    #[must_use]
+    pub const fn with_synthesized_limit_window(mut self, window: SynthesizedLimitWindow) -> Self {
+        self.synthesized_limit_window = window;
         self
     }
 
@@ -184,6 +197,7 @@ pub fn build_dc_opf_preparation(
             units: options.units,
             skip_zero_impedance: options.skip_zero_impedance,
             synthesize_unrated_limits: options.synthesize_unrated_limits,
+            synthesized_limit_window: options.synthesized_limit_window,
             angle_difference_bounds: options.selected_angle_difference_bounds(),
             hvdc_treatment: options.hvdc_treatment,
             objective,
@@ -193,32 +207,134 @@ pub fn build_dc_opf_preparation(
     Ok(preparation)
 }
 
+impl DcOpfPreparation {
+    /// The signed bus by branch incidence matrix `A` of this preparation,
+    /// `n_buses × n_branches` CSR: column `e` has `+1` at the branch's from
+    /// bus and `-1` at its to bus, in active branch column order. Self-loops
+    /// never reach the preparation, so every column has exactly two entries.
+    ///
+    /// This is the matrix [`DcOpfMatrices::bus_branch_incidence`] carries,
+    /// from the one incidence assembly every builder in the crate uses, read
+    /// from the arrays the preparation already holds: one pass over the
+    /// branch columns, with no network indexing and no
+    /// [`DcOperators`](crate::DcOperators) build. Row `i` of the CSR lists
+    /// the `(branch, sign)` pairs at bus `i` in ascending branch order.
+    ///
+    /// # Panics
+    /// Panics if a branch column names a bus `>= n_buses`, which no
+    /// preparation builder produces.
+    #[must_use]
+    pub fn calc_bus_branch_incidence(&self) -> SparseMatrix {
+        crate::matrix::assemble_bus_branch_incidence(
+            self.n_buses,
+            self.branches
+                .from_bus
+                .iter()
+                .copied()
+                .zip(self.branches.to_bus.iter().copied()),
+        )
+    }
+
+    /// The generator to bus map `Cg` of this preparation, `n_buses ×
+    /// n_generators` CSR with a `1` at row `bus_of_gen[g]` of column `g`. Row
+    /// `i` lists the generators at bus `i` in ascending column order. This is
+    /// [`DcOpfMatrices::generator_bus`].
+    ///
+    /// # Panics
+    /// Panics if a generator names a bus `>= n_buses`, which no preparation
+    /// builder produces.
+    #[must_use]
+    pub fn calc_generator_bus_incidence(&self) -> SparseMatrix {
+        crate::matrix::assemble_bus_indicator(self.n_buses, &self.generators.bus_of_gen)
+    }
+
+    /// Every sparse DC OPF matrix of this preparation, as
+    /// [`calc_dc_opf_matrices`] returns them for the instance the
+    /// preparation came from, without preparing it again.
+    #[must_use]
+    pub fn calc_matrices(&self) -> DcOpfMatrices {
+        matrices_from_preparation(self)
+    }
+
+    /// The branch flows at the bus angles `theta` (radians, dense bus order),
+    /// in active branch column order and the preparation's power unit:
+    /// `f = diag(b) Aᵀ theta + branch_flow_offset`, with `b` the positive
+    /// [`DcBranchParameters::susceptance_magnitude`] and the offset from
+    /// [`Self::calc_branch_flow_offset`]. Positive flow runs from the from
+    /// bus to the to bus.
+    ///
+    /// # Panics
+    /// Panics if `theta.len()` is not `n_buses`.
+    #[must_use]
+    pub fn calc_branch_flow(&self, theta: &[f64]) -> Vec<f64> {
+        assert_eq!(
+            theta.len(),
+            self.n_buses,
+            "calc_branch_flow: theta has {} entries for {} buses",
+            theta.len(),
+            self.n_buses
+        );
+        let branches = &self.branches;
+        crate::matrix::calc_dc_branch_flow(
+            theta,
+            branches
+                .from_bus
+                .iter()
+                .copied()
+                .zip(branches.to_bus.iter().copied())
+                .zip(branches.susceptance_magnitude.iter().copied())
+                .zip(branches.shift.iter().copied())
+                .map(|((endpoints, weight), shift)| (endpoints, weight, shift)),
+        )
+    }
+
+    /// The angle difference `theta_from - theta_to` across active branch
+    /// column `branch`, its entry of `Aᵀ theta`, for any bus vector `theta`
+    /// (angles, or a bus dual).
+    ///
+    /// # Panics
+    /// Panics if `branch` is not an active branch column or `theta` is shorter
+    /// than `n_buses`.
+    #[must_use]
+    pub fn calc_angle_difference(&self, theta: &[f64], branch: usize) -> f64 {
+        crate::matrix::calc_dc_angle_difference(
+            theta,
+            (self.branches.from_bus[branch], self.branches.to_bus[branch]),
+        )
+    }
+
+    /// The derivative of branch column `branch`'s flow
+    /// ([`calc_branch_flow`](Self::calc_branch_flow)) at the bus angles
+    /// `theta` with respect to its positive weight
+    /// [`DcBranchParameters::susceptance_magnitude`]:
+    /// `theta_from - theta_to - shift`, in radians.
+    ///
+    /// # Panics
+    /// As [`calc_angle_difference`](Self::calc_angle_difference).
+    #[must_use]
+    pub fn calc_branch_flow_weight_derivative(&self, theta: &[f64], branch: usize) -> f64 {
+        crate::matrix::calc_dc_flow_weight_derivative(
+            theta,
+            (self.branches.from_bus[branch], self.branches.to_bus[branch]),
+            self.branches.shift[branch],
+        )
+    }
+}
+
 pub(crate) fn matrices_from_preparation(instance: &DcOpfPreparation) -> DcOpfMatrices {
     let n = instance.n_buses;
-    let m = instance.n_branches();
-    let mut incidence = CooBuilder::with_capacity_rect(n, m, 2 * m);
-    for column in 0..m {
-        incidence.add(instance.branches.from_bus[column], column, 1.0);
-        incidence.add(instance.branches.to_bus[column], column, -1.0);
-    }
-    let incidence = incidence.finish_csr();
+    let incidence = instance.calc_bus_branch_incidence();
     let laplacian = calc_weighted_laplacian(&incidence, &instance.branches.susceptance_magnitude);
     let grounded_laplacian = ground_at_each(&laplacian, instance.reference_buses.as_ref());
     let branch_flow_matrix =
         calc_solver_branch_flow_matrix(&incidence, &instance.branches.susceptance_magnitude);
-
-    let n_gen = instance.n_generators();
-    let mut generator_bus = CooBuilder::with_capacity_rect(n, n_gen, n_gen);
-    for (column, &bus) in instance.generators.bus_of_gen.iter().enumerate() {
-        generator_bus.add(bus, column, 1.0);
-    }
 
     DcOpfMatrices {
         bus_branch_incidence: incidence,
         laplacian,
         grounded_laplacian,
         branch_flow_matrix,
-        generator_bus: generator_bus.finish_csr(),
+        generator_bus: instance.calc_generator_bus_incidence(),
         generator_cost: calc_diagonal(&instance.generators.q),
         reference_selector: calc_reference_indicator(n, instance.reference_buses.as_ref()),
     }

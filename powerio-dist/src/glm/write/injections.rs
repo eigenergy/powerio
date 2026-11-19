@@ -63,7 +63,9 @@ impl Writer<'_> {
                 IbrTopology::SinglePhase if inverter.terminal_map.len() == 2 && p.len() == 1 => {
                     Configuration::SinglePhase
                 }
-                IbrTopology::FourLeg if inverter.terminal_map.last().is_some_and(|n| n == "n") => {
+                IbrTopology::FourLeg
+                    if self.neutral_last(&inverter.bus, &inverter.terminal_map) =>
+                {
                     Configuration::Wye
                 }
                 _ => {

@@ -119,6 +119,9 @@ run() { # <label> <command...>
     "$@" || phase_fail=$((phase_fail + 1))
 }
 
+run "DC matrix comparison regression checks" \
+    "$PY" -m unittest discover -s evals/validation -p test_validate_dc_matpower.py
+
 # 1. PowerModels exports each .m to a per_unit reference JSON (one Julia process).
 #    Must precede the conversions: the PMread leg re-emits these references.
 run "PowerModels reference export (PMread)" \

@@ -138,8 +138,16 @@ impl State {
         Ok(())
     }
 
+    fn earth_return(&self) -> linecode::EarthReturn {
+        linecode::EarthReturn {
+            rg: self.rg,
+            xg: self.xg,
+            kxg: self.kxg,
+        }
+    }
+
     fn update_kxg(&mut self) {
-        self.kxg = self.xg / (658.5 * (self.rho / self.frequency).sqrt()).ln();
+        self.kxg = linecode::calc_earth_return_kxg(self.xg, self.rho, self.frequency);
     }
 
     fn recalc(&mut self) {
@@ -149,11 +157,15 @@ impl State {
             self.sequence.values[5] = self.sequence.values[4];
         }
         let sequence = |positive: f64, zero: f64| {
-            let mut rows = vec![vec![(zero - positive) / 3.0; self.n]; self.n];
-            for (i, row) in rows.iter_mut().enumerate() {
-                row[i] = (2.0 * positive + zero) / 3.0;
-            }
-            rows
+            // OpenDSS Line.RecalcElementData divides by three
+            // (`Zs := (Ztemp + Cmplx(R0, X0)) / 3`); only LineCode
+            // multiplies by its rounded `OneThird`.
+            crate::sequence::calc_phase_from_sequence(
+                self.n,
+                positive,
+                zero,
+                crate::sequence::SequenceThird::Divide,
+            )
         };
         self.matrices = LineMatrices {
             r: sequence(self.sequence.values[0], self.sequence.values[2]),
@@ -255,24 +267,12 @@ impl State {
             return Err("Line AC frequency must exceed 0.51 Hz".into());
         }
         let ratio = frequency / self.frequency;
-        let xgmod = if self.xg == 0.0 {
-            0.0
-        } else {
-            0.5 * self.kxg * ratio.ln()
-        };
         let mut matrix = self.matrices.clone();
-        for i in 0..self.n {
-            for j in 0..self.n {
-                matrix.r[i][j] = (matrix.r[i][j] + self.rg * (ratio - 1.0)) / meters;
-                matrix.x[i][j] = (matrix.x[i][j] - xgmod) * ratio / meters;
-                matrix.b[i][j] = matrix.b[i][j] * ratio / meters;
-                if !matrix.r[i][j].is_finite()
-                    || !matrix.x[i][j].is_finite()
-                    || !matrix.b[i][j].is_finite()
-                {
-                    return Err("Line per-meter matrices became nonfinite".into());
-                }
-            }
+        if !self
+            .earth_return()
+            .correct(&mut matrix, ratio, linecode::LineScale::PerMeter(meters))
+        {
+            return Err("Line per-meter matrices became nonfinite".into());
         }
         Ok(matrix)
     }
@@ -701,24 +701,12 @@ impl State {
         }
         let ratio = frequency / self.frequency;
         let length = self.length / self.units_convert;
-        let xgmod = if self.xg == 0.0 {
-            0.0
-        } else {
-            0.5 * self.kxg * ratio.ln()
-        };
         let mut matrix = self.matrices.clone();
-        for i in 0..self.n {
-            for j in 0..self.n {
-                matrix.r[i][j] = (matrix.r[i][j] + self.rg * (ratio - 1.0)) * length;
-                matrix.x[i][j] = (matrix.x[i][j] - xgmod) * length * ratio;
-                matrix.b[i][j] *= length * ratio;
-                if !matrix.r[i][j].is_finite()
-                    || !matrix.x[i][j].is_finite()
-                    || !matrix.b[i][j].is_finite()
-                {
-                    return Err("Line primitive became nonfinite".into());
-                }
-            }
+        if !self
+            .earth_return()
+            .correct(&mut matrix, ratio, linecode::LineScale::Length(length))
+        {
+            return Err("Line primitive became nonfinite".into());
         }
         let impedance: Vec<Vec<_>> = matrix
             .r

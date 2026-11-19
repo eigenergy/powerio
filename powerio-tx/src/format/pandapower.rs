@@ -394,7 +394,7 @@ pub(crate) fn parse_pandapower_source(
                 } else {
                     crate::thermal_limit::scaled(
                         crate::thermal_limit::from_zero_unlimited(max_i_ka)?,
-                        v_from * 3.0_f64.sqrt() * par,
+                        powerio_core::electrical::calc_wye_line_voltage(v_from) * par,
                     )?
                 },
                 rate_b: f64::INFINITY,
@@ -1615,8 +1615,13 @@ fn branch_frames(
                 ),
                 jnum((terminal.g_fr + terminal.g_to) / zb * 1e6),
                 jnum(
-                    crate::thermal_limit::as_option(br.rate_a)
-                        .map_or(0.0, |value| value / (v_from * 3.0_f64.sqrt())),
+                    crate::thermal_limit::as_option(br.rate_a).map_or(0.0, |value| {
+                        powerio_core::electrical::calc_line_current(
+                            value,
+                            v_from,
+                            powerio_core::electrical::SQRT_3,
+                        )
+                    }),
                 ),
                 jnum(1.0),
                 Value::from(1_u64),

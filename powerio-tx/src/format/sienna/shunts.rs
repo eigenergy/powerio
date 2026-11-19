@@ -4,12 +4,21 @@ use super::{
 };
 use crate::network::{ShuntBlock, SwitchedShuntControl, SwitchedShuntMode};
 
-pub(super) fn scale(row: &Value, kv: f64) -> Result<f64> {
+/// The bus voltage, kilovolts, a shunt row's admittances are rated at:
+/// `Some(kv)` for `NATURAL_UNITS` (siemens, converted by
+/// [`powerio_core::electrical::calc_rated_power`]), `None` for
+/// `COMPONENT_MVAR` (already megawatts and megavars at 1 per unit).
+pub(super) fn natural_kv(row: &Value, kv: f64) -> Result<Option<f64>> {
     match row["admittance_units"].as_str().unwrap_or("COMPONENT_MVAR") {
-        "COMPONENT_MVAR" => Ok(1.0),
-        "NATURAL_UNITS" => Ok(positive(kv, "base_voltage")?.powi(2)),
+        "COMPONENT_MVAR" => Ok(None),
+        "NATURAL_UNITS" => Ok(Some(positive(kv, "base_voltage")?)),
         other => Err(error(format!("unsupported shunt admittance_units {other}"))),
     }
+}
+/// A shunt row's admittance `y` as the power it draws at 1 per unit, in the
+/// units [`natural_kv`] names.
+pub(super) fn rated_power(y: f64, kv: Option<f64>) -> f64 {
+    kv.map_or(y, |kv| powerio_core::electrical::calc_rated_power(y, kv))
 }
 fn mode(tag: &str) -> Result<(SwitchedShuntMode, i64)> {
     Ok(match tag {
@@ -40,7 +49,7 @@ pub(super) fn read(
     version: u8,
 ) -> Result<Shunt> {
     let bus = bus_ref(row, "bus", ids)?;
-    let factor = scale(row, buses[&bus].base_kv)?;
+    let kv = natural_kv(row, buses[&bus].base_kv)?;
     let steps = row["number_of_steps"]
         .as_array()
         .map_or(&[][..], Vec::as_slice);
@@ -65,8 +74,8 @@ pub(super) fn read(
             .ok_or_else(|| error("number_engaged exceeds available steps"))?;
         let block = ShuntBlock::with_admittance(
             n,
-            number(y, "real")? * factor,
-            number(y, "imag")? * factor,
+            rated_power(number(y, "real")?, kv),
+            rated_power(number(y, "imag")?, kv),
         );
         #[allow(clippy::cast_precision_loss)] // count is bounded by a u32 step count.
         let count = count as f64;
@@ -74,7 +83,10 @@ pub(super) fn read(
         b += block.b * count;
         blocks.push(block);
     }
-    b = optional(row, "solved_admittance", b / factor)? * factor;
+    let stated = kv.map_or(b, |kv| {
+        powerio_core::electrical::calc_rated_admittance(b, kv)
+    });
+    b = rated_power(optional(row, "solved_admittance", stated)?, kv);
     let mut shunt = Shunt::new(bus, g, b);
     shunt.uid = uid("SwitchedAdmittance", row)?;
     shunt.in_service = available(row)?;

@@ -1194,6 +1194,16 @@ pub struct McAcOpfSolution {
     pub source_active_injection: Vec<StoredF64>,
     #[serde(deserialize_with = "bounded_operating_point_values")]
     pub generator_active_power: Vec<StoredF64>,
+    /// Per coil generator active dispatch, watts, positive for generation:
+    /// generator table order, each generator's coil order. Absent when the
+    /// producer did not report it, as in every document written before the
+    /// field existed.
+    #[serde(
+        default,
+        deserialize_with = "bounded_optional_values",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub generator_coil_active_power: Option<Vec<StoredF64>>,
     pub objective: StoredF64,
 }
 

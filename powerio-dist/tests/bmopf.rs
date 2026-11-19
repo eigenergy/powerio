@@ -1567,13 +1567,24 @@ fn n_winding_transformer_round_trips_through_bmopf() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["n_winding"]["t3"];
     assert_eq!(t["windings"].as_array().unwrap().len(), 3);
-    assert_eq!(t["windings"][0]["delta_roll"], serde_json::json!(-1));
+    // A DELTA winding that states no roll takes BMOPFTools' default, +1,
+    // and the writer states the orientation the unit has.
+    assert_eq!(t["windings"][0]["delta_roll"], serde_json::json!(1));
     assert!(t["windings"][1].get("delta_roll").is_none(), "{t:?}");
     assert!(t["windings"][2].get("delta_roll").is_none(), "{t:?}");
     assert_eq!(t["windings"][1]["v_nom"], serde_json::json!(100.0));
     assert_eq!(t["x_sc"]["1_2"], serde_json::json!(0.04));
     assert_eq!(t["g_no_load"], serde_json::json!(0.001));
     assert_eq!(t["b_no_load"], serde_json::json!(-0.002));
+
+    // The round trip keeps the ring orientation: read, written and read
+    // again, the DELTA winding has the same direction.
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(
+        powerio_dist::transformer::calc_delta_direction(&net.transformers()[0], 0).unwrap(),
+        powerio_dist::transformer::calc_delta_direction(&again.transformers()[0], 0).unwrap(),
+    );
+    assert_eq!(emit_bmopf_json(&again).text, out.text);
 }
 
 #[test]

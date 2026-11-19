@@ -24,6 +24,8 @@ schema = ["dep:schemars", "powerio-core/schema"]
 [dependencies]
 powerio-archive.workspace = true
 powerio-core = { workspace = true }
+# The complex pi model block of a branch, shared with the matrix builders.
+num-complex.workspace = true
 thiserror = "2"
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.
 lexical-core = "1"
