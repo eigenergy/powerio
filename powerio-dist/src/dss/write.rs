@@ -369,6 +369,17 @@ fn winding_array(
     }
 }
 
+/// Give a part split from one element a name no other record has, adding a
+/// numeric suffix when the first choice is taken.
+fn reserve_part_name(names: &mut BTreeSet<String>, name: &mut String) {
+    let base = name.clone();
+    let mut suffix = 2;
+    while !names.insert(name.to_ascii_lowercase()) {
+        *name = format!("{base}_{suffix}");
+        suffix += 1;
+    }
+}
+
 /// An extra as a number: the reader stashes written tokens as strings and
 /// materialized defaults as numbers.
 fn extras_f64(extras: &Extras, key: &str) -> Option<f64> {
@@ -1771,12 +1782,7 @@ impl DssWriter {
         for load in net.loads() {
             for mut part in self.load_parts(load) {
                 if let Cow::Owned(ref mut part) = part {
-                    let base = part.name.clone();
-                    let mut suffix = 2;
-                    while !names.insert(part.name.to_ascii_lowercase()) {
-                        part.name = format!("{base}_{suffix}");
-                        suffix += 1;
-                    }
+                    reserve_part_name(&mut names, &mut part.name);
                 }
                 self.write_load(&part);
             }
@@ -2373,17 +2379,13 @@ impl DssWriter {
         // The stated `kv` is the generator's only stated voltage. On the
         // whole generator it is line to line; a wye part is single phase, so
         // it takes the line to neutral value, and a delta part keeps it.
-        let part_kv = g
-            .extras
-            .get("kv")
-            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()))
-            .map(|kv| {
-                if g.configuration == Configuration::Delta {
-                    kv
-                } else {
-                    crate::electrical::calc_wye_phase_voltage(kv)
-                }
-            });
+        let part_kv = extras_f64(&g.extras, "kv").map(|kv| {
+            if g.configuration == Configuration::Delta {
+                kv
+            } else {
+                crate::electrical::calc_wye_phase_voltage(kv)
+            }
+        });
         maps.into_iter()
             .enumerate()
             .map(|(i, map)| {
@@ -2436,12 +2438,7 @@ impl DssWriter {
         for g in net.generators() {
             for mut part in self.generator_parts(g) {
                 if let Cow::Owned(ref mut part) = part {
-                    let base = part.name.clone();
-                    let mut suffix = 2;
-                    while !names.insert(part.name.to_ascii_lowercase()) {
-                        part.name = format!("{base}_{suffix}");
-                        suffix += 1;
-                    }
+                    reserve_part_name(&mut names, &mut part.name);
                 }
                 records.push(part);
             }

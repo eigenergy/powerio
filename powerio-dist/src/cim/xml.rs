@@ -103,7 +103,6 @@ fn prefixed_name(
     local: &str,
     cim_namespaces: &mut BTreeSet<String>,
 ) -> String {
-    let local = local.to_owned();
     match resolve {
         ResolveResult::Bound(ns) => {
             let uri: &str = ns.as_ref();
@@ -111,7 +110,7 @@ fn prefixed_name(
                 if !cim_namespaces.contains(uri) {
                     cim_namespaces.insert(uri.to_owned());
                 }
-                local
+                local.to_owned()
             } else if uri == MD_NS {
                 format!("md:{local}")
             } else if uri.contains("entsoe.eu") {
@@ -129,7 +128,7 @@ fn prefixed_name(
                 format!("{tag}:{local}")
             }
         }
-        _ => local,
+        _ => local.to_owned(),
     }
 }
 
@@ -331,8 +330,7 @@ fn resolve_general_ref(reference: &quick_xml::events::BytesRef<'_>) -> Option<St
     }
 }
 
-/// The text of one attribute: transcoded to UTF-8, the predefined entities
-/// expanded, and normalized under [`XML_VERSION`].
+/// The text of one attribute: the predefined entities expanded, and normalized under [`XML_VERSION`].
 fn attribute_value<'a>(attribute: &Attribute<'a>) -> Result<Cow<'a, str>> {
     attribute.normalized_value(XML_VERSION).map_err(xml_err)
 }
