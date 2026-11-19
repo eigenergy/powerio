@@ -75,7 +75,7 @@ impl std::fmt::Display for SequenceTransformConvention {
 }
 
 const DEFAULT_LOWERING_BASE_MVA: f64 = 100.0;
-const SQRT_3: f64 = 1.732_050_807_568_877_2;
+use powerio_core::electrical::SQRT_3;
 const COUPLING_TOLERANCE: f64 = 1.0e-9;
 
 fn default_lowering_base_mva() -> f64 {
@@ -330,7 +330,7 @@ fn normalized_note(note: String) -> String {
 struct LoweringState<'a> {
     net: &'a MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,
-    neutral_terminals: BTreeSet<String>,
+    neutral_terminals: ReferenceTerminals,
     /// Every multiconductor bus (lowercase) to its balanced bus: merged
     /// members map to their canonical bus's ID.
     bus_ids: BTreeMap<String, BusId>,
@@ -387,7 +387,7 @@ impl<'a> LoweringState<'a> {
             .enumerate()
             .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
             .collect();
-        let mut union = UnionFind::new(net.buses().len());
+        let mut union = powerio_core::union_find::UnionFind::new(net.buses().len());
         let mut removed_switches = Vec::new();
         for sw in net.switches().iter().filter(|sw| !sw.open) {
             let (Some(&from), Some(&to)) = (
@@ -396,7 +396,7 @@ impl<'a> LoweringState<'a> {
             ) else {
                 continue;
             };
-            union.join(from, to);
+            union.union_keep_smaller(from, to);
             removed_switches.push(sw.name.clone());
             records.assumptions.push(format!(
                 "closed switch {} merged bus {} into bus {} and was removed; no impedance \
@@ -408,7 +408,7 @@ impl<'a> LoweringState<'a> {
         let mut merged_buses = BTreeMap::new();
         let mut number = BTreeMap::new();
         for (row, bus) in net.buses().iter().enumerate() {
-            let root = union.root(row);
+            let root = union.find(row);
             if root == row {
                 let id = BusId(number.len() + 1);
                 number.insert(row, id);
@@ -422,7 +422,7 @@ impl<'a> LoweringState<'a> {
             .iter()
             .map(|bus| {
                 let key = bus.id.to_ascii_lowercase();
-                let root = union.root(row_of[&key]);
+                let root = union.find(row_of[&key]);
                 (key, number[&root])
             })
             .collect();
@@ -530,23 +530,13 @@ impl<'a> LoweringState<'a> {
             .enumerate()
             .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
             .collect();
-        let mut zones = UnionFind::new(self.net.buses().len());
-        for line in self.net.lines() {
-            if let (Some(&from), Some(&to)) = (
-                row_of.get(&line.bus_from.to_ascii_lowercase()),
-                row_of.get(&line.bus_to.to_ascii_lowercase()),
-            ) {
-                zones.join(from, to);
-            }
-        }
-        for sw in self.net.switches().iter().filter(|sw| !sw.open) {
-            if let (Some(&from), Some(&to)) = (
-                row_of.get(&sw.bus_from.to_ascii_lowercase()),
-                row_of.get(&sw.bus_to.to_ascii_lowercase()),
-            ) {
-                zones.join(from, to);
-            }
-        }
+        // Preflight refused a network whose lines or switches name unknown
+        // buses; should one slip through, each bus is its own zone.
+        let zones = powerio_dist::voltage_zones::calc_voltage_zone_labels(
+            self.net,
+            powerio_dist::voltage_zones::ZoneSwitches::Closed,
+        )
+        .unwrap_or_else(|_| (0..self.net.buses().len()).collect());
 
         let mut zone_base: BTreeMap<usize, f64> = BTreeMap::new();
         for source in self.net.sources() {
@@ -562,10 +552,12 @@ impl<'a> LoweringState<'a> {
                 continue;
             };
             if v1.norm().is_finite() && v1.norm() > 0.0 {
-                zone_base.entry(zones.root(row)).or_insert(v1.norm());
+                zone_base.entry(zones[row]).or_insert(v1.norm());
             }
         }
 
+        // A supported transformer bases the far zone with the far winding's
+        // rated voltage.
         let supported: Vec<(usize, usize, f64, f64)> = self
             .net
             .transformers()
@@ -575,35 +567,22 @@ impl<'a> LoweringState<'a> {
                     classify_transformer(self.net, transformer, &self.neutral_terminals).ok()?;
                 let high_row = *row_of.get(&high.bus.to_ascii_lowercase())?;
                 let low_row = *row_of.get(&low.bus.to_ascii_lowercase())?;
-                Some((high_row, low_row, high.v_ref, low.v_ref))
+                Some((zones[high_row], zones[low_row], high.v_ref, low.v_ref))
             })
             .collect();
-        loop {
-            let mut changed = false;
-            for &(high_row, low_row, high_v, low_v) in &supported {
-                let (high_zone, low_zone) = (zones.root(high_row), zones.root(low_row));
-                match (
-                    zone_base.contains_key(&high_zone),
-                    zone_base.contains_key(&low_zone),
-                ) {
-                    (true, false) => {
-                        zone_base.insert(low_zone, low_v);
-                        changed = true;
-                    }
-                    (false, true) => {
-                        zone_base.insert(high_zone, high_v);
-                        changed = true;
-                    }
-                    _ => {}
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
+        let edges: Vec<(usize, usize)> = supported.iter().map(|&(h, l, _, _)| (h, l)).collect();
+        let seeds: Vec<(usize, f64)> = zone_base.iter().map(|(&z, &b)| (z, b)).collect();
+        let zone_base =
+            powerio_dist::voltage_zones::calc_flooded_zone_bases(seeds, &edges, |k, forward, _| {
+                Some(if forward {
+                    supported[k].3
+                } else {
+                    supported[k].2
+                })
+            });
 
         for (row, bus) in self.net.buses().iter().enumerate() {
-            let zone = zones.root(row);
+            let zone = zones[row];
             let base = zone_base.get(&zone).copied().unwrap_or_else(|| {
                 self.records.dropped_fields.push(format!(
                     "bus {} voltage base defaulted to the reference base",
@@ -773,7 +752,7 @@ format!(
         balanced_buses
     }
 
-    /// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`) has no
+    /// A rated capacitor bank (the BMOPF `capacitor`) has no
     /// balanced equivalent yet: `q_rated` at `v_nom` is a nameplate rating,
     /// not the admittance a balanced `Shunt` carries. The bank therefore
     /// drops, and the record names it, because a silent drop removes
@@ -903,10 +882,10 @@ format!(
             );
             let rate = line_rate_mva(line, code, &active, base_volts).unwrap_or_else(|| {
                 self.records.dropped_fields.push(format!(
-                    "line {} thermal rating defaulted to 0 MVA",
+                    "line {} has no finite apparent-power rating; projected as unlimited",
                     line.name
                 ));
-                0.0
+                f64::INFINITY
             });
             let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
             branch.b = charging.calc_total_b();
@@ -963,7 +942,7 @@ format!(
         label: &str,
         matrix: &[Vec<Complex64>],
     ) -> Complex64 {
-        let seq = sequence_matrix(matrix);
+        let seq = powerio_dist::sequence::calc_sequence_matrix(matrix);
         let coupling = sequence_coupling_norm(&seq);
         if coupling > COUPLING_TOLERANCE {
             self.records.approximations.push(format!(
@@ -1050,18 +1029,34 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             let base_from = self.base_volts(&high.bus);
             let base_to = self.base_volts(&low.bus);
             let tap = (high.v_ref * high.tap / base_from) / (low.v_ref * low.tap / base_to);
-            let z_scale = (self.options.base_mva * 1_000_000.0 / high.s_rating)
-                * (high.v_ref / base_from).powi(2);
-            // Each winding states %R on its own power rating; the low winding
-            // figure converts onto the high winding base before the sum.
+            let z_scale = powerio_core::electrical::calc_impedance_rebase(
+                1.0,
+                high.v_ref,
+                high.s_rating,
+                base_from,
+                self.options.base_mva * 1_000_000.0,
+                powerio_core::electrical::RebaseOrder::PowerRatio,
+            );
+            // The pair's nameplate leakage on the first winding's rating
+            // (each winding's %R referred from its own rating), and the
+            // connection shift of the one delta orientation.
             let low_rating_scale = high.s_rating / low.s_rating;
-            let r = ((high.r_pct + low.r_pct * low_rating_scale) / 100.0) * z_scale;
-            let x = (transformer.xsc_pct[0] / 100.0) * z_scale;
-            let shift = if high.v_ref >= low.v_ref { 30.0 } else { -30.0 };
+            let Ok(leakage) = powerio_dist::transformer::calc_transformer_leakage_impedances(
+                transformer,
+                &powerio_dist::transformer::TransformerLeakageBase::Nameplate,
+            ) else {
+                continue;
+            };
+            let r = leakage[0][1].re * z_scale;
+            let x = leakage[0][1].im * z_scale;
+            let Ok(shift) = powerio_dist::transformer::calc_transformer_phase_shift(transformer)
+            else {
+                continue;
+            };
             let rate = high.s_rating / 1_000_000.0;
             self.records.assumptions.push(format!(
-                "transformer {} lowered as a balanced branch with tap {tap:.6} and the ANSI \
-                 {shift} degree connection shift (high voltage side leads)",
+                "transformer {} lowered as a balanced branch with tap {tap:.6} and its \
+                 {shift} degree connection shift",
                 transformer.name
             ));
             if (low_rating_scale - 1.0).abs() > 1e-9 {
@@ -1080,12 +1075,6 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             {
                 self.records.dropped_fields.push(format!(
                     "transformer {} neutral grounding impedance dropped",
-                    transformer.name
-                ));
-            }
-            if transformer.xsc_pct.len() > 1 {
-                self.records.dropped_fields.push(format!(
-                    "transformer {} extra short circuit reactances dropped",
                     transformer.name
                 ));
             }
@@ -1155,7 +1144,7 @@ format!(
                 let matrix = complex_matrix(&shunt.g, &shunt.b, 1.0);
                 let reduced = kron_or_select(&matrix, &active, &neutral)
                     .map_err(|message| self.shunt_matrix_error(idx, &shunt.name, &message))?;
-                let seq = sequence_matrix(&reduced);
+                let seq = powerio_dist::sequence::calc_sequence_matrix(&reduced);
                 seq[1][1]
             } else {
                 self.records.approximations.push(format!(
@@ -1166,7 +1155,8 @@ format!(
                 partial_phase_admittance(&shunt.g, &shunt.b, &active)
             };
             let base_volts = self.base_volts(&shunt.bus);
-            let scale = base_volts * base_volts / 1_000_000.0;
+            let scale = powerio_core::electrical::calc_impedance_base(base_volts, 1_000_000.0)
+                .unwrap_or(f64::NAN);
             let mut balanced = Shunt::new(bus, y.re * scale, y.im * scale);
             balanced.extras = source_extra("multiconductor_shunt", &shunt.name);
             shunts.push(balanced);
@@ -1299,34 +1289,8 @@ struct VoltageBase {
 }
 
 fn z_base_ohm_of(line_to_line_volts: f64, base_mva: f64) -> f64 {
-    line_to_line_volts * line_to_line_volts / (base_mva * 1_000_000.0)
-}
-
-pub(crate) struct UnionFind {
-    parent: Vec<usize>,
-}
-
-impl UnionFind {
-    pub(crate) fn new(len: usize) -> Self {
-        Self {
-            parent: (0..len).collect(),
-        }
-    }
-
-    pub(crate) fn root(&mut self, mut node: usize) -> usize {
-        while self.parent[node] != node {
-            self.parent[node] = self.parent[self.parent[node]];
-            node = self.parent[node];
-        }
-        node
-    }
-
-    pub(crate) fn join(&mut self, a: usize, b: usize) {
-        let (a, b) = (self.root(a), self.root(b));
-        // The smaller row stays the root, so the canonical member is stable.
-        let (keep, fold) = if a <= b { (a, b) } else { (b, a) };
-        self.parent[fold] = keep;
-    }
+    powerio_core::electrical::calc_impedance_base(line_to_line_volts, base_mva * 1_000_000.0)
+        .unwrap_or(f64::NAN)
 }
 
 #[derive(Clone, Copy)]
@@ -1353,7 +1317,7 @@ fn source_extra(key: &str, value: &str) -> BalancedExtras {
 fn active_positions(
     terminals: &[String],
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Vec<usize> {
     terminals
         .iter()
@@ -1367,7 +1331,7 @@ fn active_positions(
 fn neutral_positions(
     terminals: &[String],
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Vec<usize> {
     terminals
         .iter()
@@ -1383,7 +1347,7 @@ fn same_active_phase_order(
     from_terminals: &[String],
     to_bus: Option<&DistBus>,
     to_terminals: &[String],
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> bool {
     let from: Vec<_> = from_terminals
         .iter()
@@ -1398,30 +1362,29 @@ fn same_active_phase_order(
     from == to
 }
 
+/// A source's balanced line voltage phasor over three phase positions:
+/// `√3 V₁` ([`powerio_dist::sequence::calc_sequence_components`]), whose
+/// magnitude is the one source line to line base
+/// ([`powerio_dist::VoltageSource::calc_line_to_line_voltage`]) and whose
+/// angle is the positive sequence angle.
 fn positive_sequence_voltage(
     source: &powerio_dist::VoltageSource,
     positions: &[usize],
 ) -> Option<Complex64> {
-    if positions.len() != 3 {
+    let base = source.calc_line_to_line_voltage(
+        positions,
+        powerio_dist::sequence::LineVoltageForm::PositiveSequence,
+    )?;
+    let &[a, b, c] = positions else {
         return None;
-    }
-    let mut phase = [Complex64::new(0.0, 0.0); 3];
-    for (out, &idx) in phase.iter_mut().zip(positions.iter()) {
-        let magnitude = *source.v_magnitude.get(idx)?;
-        let angle = *source.v_angle.get(idx)?;
-        if !magnitude.is_finite() || !angle.is_finite() {
-            return None;
-        }
-        *out = Complex64::from_polar(magnitude, angle);
-    }
-    let basis = sequence_basis();
-    let mut seq = [Complex64::new(0.0, 0.0); 3];
-    for (sequence_idx, out) in seq.iter_mut().enumerate() {
-        for phase_idx in 0..3 {
-            *out += basis[phase_idx][sequence_idx].conj() * phase[phase_idx];
-        }
-    }
-    Some(seq[1])
+    };
+    let phasor =
+        |index: usize| Complex64::from_polar(source.v_magnitude[index], source.v_angle[index]);
+    let [_, positive, _] = powerio_dist::sequence::calc_sequence_components(
+        [phasor(a), phasor(b), phasor(c)],
+        powerio_dist::sequence::SequenceRotation::Fortescue,
+    );
+    Some(Complex64::from_polar(base, positive.arg()))
 }
 
 fn complex_matrix(
@@ -1466,9 +1429,8 @@ fn kron_or_select(
     if matrix_is_near_zero(&m_pn) && matrix_is_near_zero(&m_np) && matrix_is_near_zero(&m_nn) {
         return Ok(m_pp);
     }
-    let inv_nn = invert_complex_matrix(&m_nn)?;
-    let correction = matmul(&matmul(&m_pn, &inv_nn), &m_np);
-    Ok(matrix_sub(&m_pp, &correction))
+    powerio_dist::kron::calc_kron_reduced_impedance(matrix, active, neutral, f64::EPSILON)
+        .ok_or_else(|| "neutral block is singular".to_owned())
 }
 
 fn matrix_is_near_zero(matrix: &[Vec<Complex64>]) -> bool {
@@ -1495,117 +1457,6 @@ fn submatrix(matrix: &[Vec<Complex64>], rows: &[usize], cols: &[usize]) -> Vec<V
         .collect()
 }
 
-#[allow(clippy::needless_range_loop)]
-fn invert_complex_matrix(matrix: &[Vec<Complex64>]) -> Result<Vec<Vec<Complex64>>, String> {
-    let n = matrix.len();
-    if n == 0 || matrix.iter().any(|row| row.len() != n) {
-        return Err("neutral block is not square".to_owned());
-    }
-    let mut aug = vec![vec![Complex64::new(0.0, 0.0); 2 * n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            aug[i][j] = matrix[i][j];
-        }
-        aug[i][n + i] = Complex64::new(1.0, 0.0);
-    }
-
-    for col in 0..n {
-        let pivot = (col..n)
-            .max_by(|&a, &b| aug[a][col].norm_sqr().total_cmp(&aug[b][col].norm_sqr()))
-            .ok_or_else(|| "neutral block is singular".to_owned())?;
-        if aug[pivot][col].norm() <= f64::EPSILON {
-            return Err("neutral block is singular".to_owned());
-        }
-        if pivot != col {
-            aug.swap(pivot, col);
-        }
-        let pivot_value = aug[col][col];
-        for j in 0..(2 * n) {
-            aug[col][j] /= pivot_value;
-        }
-        for row in 0..n {
-            if row == col {
-                continue;
-            }
-            let factor = aug[row][col];
-            if factor.norm() <= f64::EPSILON {
-                continue;
-            }
-            for j in 0..(2 * n) {
-                let pivot_entry = aug[col][j];
-                aug[row][j] -= factor * pivot_entry;
-            }
-        }
-    }
-
-    Ok(aug
-        .into_iter()
-        .map(|row| row.into_iter().skip(n).collect())
-        .collect())
-}
-
-fn matmul(a: &[Vec<Complex64>], b: &[Vec<Complex64>]) -> Vec<Vec<Complex64>> {
-    if a.is_empty() || b.is_empty() {
-        return Vec::new();
-    }
-    let rows = a.len();
-    let cols = b[0].len();
-    let inner = b.len();
-    let mut out = vec![vec![Complex64::new(0.0, 0.0); cols]; rows];
-    for i in 0..rows {
-        for k in 0..inner {
-            for j in 0..cols {
-                out[i][j] += a[i][k] * b[k][j];
-            }
-        }
-    }
-    out
-}
-
-fn matrix_sub(a: &[Vec<Complex64>], b: &[Vec<Complex64>]) -> Vec<Vec<Complex64>> {
-    a.iter()
-        .zip(b.iter())
-        .map(|(a_row, b_row)| {
-            a_row
-                .iter()
-                .zip(b_row.iter())
-                .map(|(&a_value, &b_value)| a_value - b_value)
-                .collect()
-        })
-        .collect()
-}
-
-#[allow(clippy::many_single_char_names)]
-fn sequence_basis() -> [[Complex64; 3]; 3] {
-    let scale = 1.0 / SQRT_3;
-    let a = Complex64::from_polar(1.0, 2.0 * PI / 3.0);
-    let a2 = a * a;
-    [
-        [
-            Complex64::new(scale, 0.0),
-            Complex64::new(scale, 0.0),
-            Complex64::new(scale, 0.0),
-        ],
-        [Complex64::new(scale, 0.0), a2 * scale, a * scale],
-        [Complex64::new(scale, 0.0), a * scale, a2 * scale],
-    ]
-}
-
-fn sequence_matrix(matrix: &[Vec<Complex64>]) -> [[Complex64; 3]; 3] {
-    let basis = sequence_basis();
-    let mut seq = [[Complex64::new(0.0, 0.0); 3]; 3];
-    for p in 0..3 {
-        for q in 0..3 {
-            for i in 0..3 {
-                for j in 0..3 {
-                    seq[p][q] += basis[i][p].conj() * matrix[i][j] * basis[j][q];
-                }
-            }
-        }
-    }
-    seq
-}
-
 fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
     let mut sum = 0.0;
     for (i, row) in seq.iter().enumerate() {
@@ -1618,7 +1469,7 @@ fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
     sum.sqrt()
 }
 
-/// The branch rating, in MVA. BMOPF schema 0.1.0 gives a line its own
+/// The branch rating, in MVA. BMOPF gives a line its own
 /// `i_max`/`s_max`, which "overrides the linecode's i_max for this line", so
 /// both line fields are tried before either linecode field. Within one owner
 /// `s_max` comes first, because an apparent power limit needs no voltage.
@@ -1640,7 +1491,14 @@ fn line_rate_mva(
             return Some(mva);
         }
         if let Some(amps) = i_max.and_then(|values| limiting_amps(values, active)) {
-            return Some(SQRT_3 * line_to_line_volts * amps / 1_000_000.0);
+            return Some(
+                powerio_core::electrical::calc_line_apparent_power(
+                    line_to_line_volts,
+                    amps,
+                    SQRT_3,
+                    powerio_core::electrical::ApparentPowerOrder::FactorFirst,
+                ) / 1_000_000.0,
+            );
         }
     }
     None
@@ -1907,7 +1765,7 @@ fn switch_merge_blockers(
     net: &MulticonductorNetwork,
     index: usize,
     sw: &powerio_dist::DistSwitch,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Vec<Diagnostic> {
     let path = format!("/switches/{index}");
     let mut blockers = Vec::new();
@@ -2008,17 +1866,28 @@ fn switch_merge_blockers(
     blockers
 }
 
-fn global_neutral_terminals(net: &MulticonductorNetwork) -> BTreeSet<String> {
-    net.buses()
-        .iter()
-        .flat_map(|bus| bus.grounded.iter().cloned())
-        .collect()
+/// What [`is_neutral_terminal`] reads beyond a terminal's bus: the
+/// network's terminal conventions and every terminal name it grounds.
+struct ReferenceTerminals {
+    conventions: Option<serde_json::Value>,
+    grounded: BTreeSet<String>,
+}
+
+fn global_neutral_terminals(net: &MulticonductorNetwork) -> ReferenceTerminals {
+    ReferenceTerminals {
+        conventions: net.terminal_conventions().cloned(),
+        grounded: net
+            .buses()
+            .iter()
+            .flat_map(|bus| bus.grounded.iter().cloned())
+            .collect(),
+    }
 }
 
 fn active_terminal_count(
     terminals: &[String],
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> usize {
     terminals
         .iter()
@@ -2026,15 +1895,25 @@ fn active_terminal_count(
         .count()
 }
 
+/// Whether the lowering treats a terminal as a reference conductor rather
+/// than an active phase: its role on the bus is not a phase
+/// ([`powerio_dist::calc_terminal_role`]; without its bus, by the name
+/// alone), over the network's terminal conventions, its bus grounds it, or
+/// the network grounds a terminal of that name anywhere (a materialized
+/// OpenDSS neutral keeps one name).
 fn is_neutral_terminal(
     terminal: &str,
     bus: Option<&DistBus>,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> bool {
-    terminal == "0"
-        || terminal.eq_ignore_ascii_case("n")
+    let conventions = neutral_terminals.conventions.as_ref();
+    let role = match bus {
+        Some(bus) => bus.terminal_role(terminal, conventions),
+        None => powerio_dist::calc_terminal_role(&[terminal], terminal, conventions),
+    };
+    role != powerio_dist::TerminalRole::Phase
         || bus.is_some_and(|b| b.grounded.iter().any(|g| g == terminal))
-        || neutral_terminals.contains(terminal)
+        || neutral_terminals.grounded.contains(terminal)
 }
 
 fn check_phase_reference(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
@@ -2087,7 +1966,7 @@ fn check_transformers(net: &MulticonductorNetwork, report: &mut MulticonductorTo
 fn classify_transformer<'net>(
     net: &'net MulticonductorNetwork,
     transformer: &'net powerio_dist::DistTransformer,
-    neutral_terminals: &BTreeSet<String>,
+    neutral_terminals: &ReferenceTerminals,
 ) -> Result<[&'net powerio_dist::DistWinding; 2], String> {
     use powerio_dist::DistWindingConn;
     if transformer.phases != 3 {
@@ -2151,9 +2030,12 @@ fn classify_transformer<'net>(
     if !(low.s_rating.is_finite() && low.s_rating > 0.0) {
         return Err("has no finite positive low winding power rating".to_owned());
     }
-    match transformer.xsc_pct.first() {
-        Some(x) if x.is_finite() && *x >= 0.0 => {}
-        _ => return Err("states no finite short circuit reactance".to_owned()),
+    match transformer.xsc_pct.as_slice() {
+        [x] if x.is_finite() && *x >= 0.0 => {}
+        _ => return Err("states no single finite short circuit reactance".to_owned()),
+    }
+    if let Err(error) = powerio_dist::transformer::calc_transformer_phase_shift(transformer) {
+        return Err(error.to_string());
     }
     Ok([high, low])
 }

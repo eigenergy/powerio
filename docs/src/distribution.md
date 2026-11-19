@@ -2,8 +2,8 @@
 
 A multiconductor network is the conductor level distribution model, and
 OpenDSS, GridLAB-D, PowerModelsDistribution ENGINEERING and MATHEMATICAL
-JSON, BMOPF JSON, the multiconductor MG-RAVENS JSON profile, and distribution
-CIM all parse to it. When you need a calculation, construct an
+JSON, BMOPF JSON, the multiconductor MG-RAVENS JSON profile, three-phase
+pandapower JSON, and distribution CIM all parse to it. When you need a calculation, construct an
 `McAcPfInstance`, `McAcOpfInstance`, `LinDist3FlowPfInstance`, or
 `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
@@ -38,7 +38,7 @@ reference currents. IR 2 uses a distinct tagged source record, so older readers
 reject this new physics; ordinary earth-referenced records are unchanged.
 `McAcPfInstance::source_boundary` borrows both voltage endpoints and their
 phasor differences. The additive C `PioVoltageSourceBoundaryView` serves
-network and PF instance callers without changing the existing ABI 7 layouts.
+network and PF instance callers without changing the existing C ABI layouts.
 Legacy C source views reject references they cannot describe. The OpenDSS
 writer preserves referenced constraints through exact equivalent circuits.
 GridLAB-D and the JSON writers accept an already perfectly grounded reference;
@@ -186,18 +186,22 @@ is refused.
 | `ConnectivityNode`, `Terminal.phases` | buses, with the terminals the equipment uses; a `Ground` at a node grounds the conductors its phase code names |
 | `ACLineSegment` with `ACLineSegmentPhase` | lines, every conductor in `sequenceNumber` order, the neutral included; each end's `Terminal.phases` is its own map, so a lateral landing on another phase keeps both |
 | `PerLengthPhaseImpedance` | line codes in ohm/m and S/m |
-| `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus |
+| `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus; a single phase load stating `grounded` false whose neutral nothing but such loads reaches is kept as stated with a `READ.RAVENS_DIST.VALUE_CONFLICT` finding, since its neutral floats (the CIM reader grounds it) |
 | `LinearShuntCompensator` | shunt banks; `Yn` is a wye bank whose neutral is grounded, `Y` one on an ungrounded neutral |
 | the `Switch` classes with `SwitchPhase` | switches with their state |
-| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit |
+| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit; each end's `phaseAngleClock` is the vector group shift, as in distribution CIM below (clock 11 on a delta–wye unit reads as `leadlag` euro), or the tank stays untyped with the represented clock named; the writer states each end's clock and the vector group (`Dyn1`, `Dyn11`) |
 | `EnergySource` | voltage sources; a source whose phasors are not one balanced set is written as one single phase `EnergySource` per conductor with the same phasors |
 | `RotatingMachine`, `PowerElectronicsConnection` | generators and inverter based resources |
 
-Line import currently supports impedance stated through
-`PerLengthPhaseImpedance`. Segments whose impedance comes only from wire or
-cable assets (`WireSpacingInfo`, `OverheadWireInfo`,
-`ConcentricNeutralCableInfo`, or `TapeShieldCableInfo`) have no typed line
-projection yet; their source records are retained and the omission is diagnosed.
+A segment with a `PerLengthPhaseImpedance` takes it. A segment without one,
+on a `WireSpacingInfo`, takes the impedance of its wires, calculated as the
+CIM reader does (see [Wire catalog lines](#wire-catalog-lines)). A segment
+whose wires cannot be calculated stays untyped at its source path with the
+reason, and the catalog records stay untyped as well. In-service equipment
+kept untyped this way (a segment, switch, tank or load the reader cannot
+type) round trips to MG-RAVENS, and conversion to any other format refuses
+it (`READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`) rather than writing the
+feeder without it.
 
 Voltage limits follow the upstream converter's line-to-line base, including
 single-phase equipment. PowerIO converts them to phase-to-ground bounds in the
@@ -225,6 +229,28 @@ and diagnostic, and includes controls that reject malformed output. See
 [`evals/validation/ravens/`](https://github.com/eigenergy/powerio/tree/main/evals/validation/ravens)
 for the revision, commands, and scope; schema validity alone does not establish
 electrical equivalence.
+
+## pandapower three-phase JSON
+
+pandapower JSON has one token, `pandapower-json`, for balanced and three-phase
+networks. A document whose `asymmetric_load`, `asymmetric_sgen` or
+`res_bus_3ph` table has rows is a network for pandapower's `runpp_3ph`, and
+`powerio_tnd::formats::pandapower` reads it here. The facade and the CLI pick
+the reader from the content. Every bus has the phase terminals 1, 2 and 3
+and a grounded neutral 4, lines turn their sequence data into phase
+matrices, an external grid is an ideal source, and loads and static
+generators are constant power, balanced or per phase.
+
+This reading does not map transformers, shunts, switches and the other
+element tables yet, and reports each one it drops. A document with rows in a
+table only the balanced reader maps (`trafo`, `shunt`, `gen`, `storage`,
+`dcline`) keeps reading balanced, as in PowerIO 0.12.0, when that reader
+accepts it. A transformer or a switch that joins or splits buses changes the
+connectivity, so `powerio batch` skips a three-phase network read without
+one. An element on an out-of-service bus is kept with `in_service` false in
+its extras. Writing a three-phase network to `pandapower-json` returns its
+unchanged source; any other multiconductor network is refused with
+`EMIT.DIST.PANDAPOWER_UNSUPPORTED`.
 
 ## PowerModelsDistribution MATHEMATICAL model
 
@@ -301,6 +327,35 @@ code. A diagram without a code is a drawing. PowerIO does not reproject: the
 network's `geo` metadata names the CRS, and a geographic layer applied with
 `apply_geo_layer` replaces the coordinates with reprojected ones.
 
+### Wire catalog lines
+
+A segment with no `PerLengthImpedance` that names a `WireSpacingInfo` takes
+the impedance of its conductors: each `ACLineSegmentPhase` names a
+`WirePosition` by its `sequenceNumber` and a wire catalog entry by its
+`PowerSystemResource.AssetDatasheet` (`OverheadWireInfo`, `WireInfo`,
+`ConcentricNeutralCableInfo` or `TapeShieldCableInfo`). The OpenDSS line
+constants that read `geometry` calculate it, under OpenDSS's default earth
+(Deri, 100 ohm-m) since CIM states none, reported once as a
+`VALUE_DEFAULTED` finding. Positions and diameters are meters and
+resistances ohm/m, as CIM states them; `diameterOverScreen` is the tape's
+inside diameter. A position repeated with the same coordinates is one
+position. A neutral (`N`) phase the segment's `Terminal.phases` does not
+state is Kron reduced, as an OpenDSS line on a spacing with more conductors
+than phases reduces its neutrals; one the terminals state stays a conductor.
+
+A position no phase names leaves the impedance unknown (an unstated neutral
+changes every phase entry), and the segment is refused with the position
+named: `READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or an untyped segment in
+MG-RAVENS; either way conversion to another format refuses it. The
+MG-RAVENS `IEEE13_Assets` example, as XML or JSON, is such a document: it
+names no wire for the neutral of nine of its eleven segments (`650632`,
+`632670`, `670671`, `671680`, `632633`, `632645`, `671684`, `684611` and
+`684652`); `645646` states a `PerLengthImpedance`. Its one complete wire
+catalog segment (`692675`, concentric neutral) matches OpenDSS to 2e-5,
+the difference of the exporter's 1609.3 m mile; the same conductors stated
+completely, neutral included, match OpenDSS to 1e-13 of each matrix's
+largest entry.
+
 Without a `BaseFrequency`, distribution CIM reads at 60 Hz in both CIM16 and
 CIM100, with a `READ.CIM_DIST.VALUE_DEFAULTED` finding. The namespace identifies
 the schema, not the grid's operating frequency; state `BaseFrequency` for 50 Hz
@@ -331,13 +386,20 @@ from test losses, a loss of 0 states nothing, and a nonzero loss that
 disagrees with the end resistances is reported
 (`READ.CIM_DIST.VALUE_CONFLICT`).
 
-Tank phase clocks are validated against the represented winding layout:
-aligned connections use clock 0, the supported three-phase D/Y lagging
-connection uses clock 1, and reversed single-phase center-tap halves use
-clock 6. Other vector groups (including clock 11), invalid clocks, inactive
-tanks or parents, and disconnected end terminals are refused. An absent clock
-is assumed to match the layout with a diagnostic. Fresh writing derives the
-clock from the current windings and reports conflicting retained metadata.
+Tank phase clocks are the vector group shift the physics stamps
+(`powerio_dist::transformer`'s delta orientation): aligned connections are
+clock 0, a three-phase D/Y unit is clock 1 when the high voltage winding
+leads (OpenDSS's default `leadlag`) and clock 11 when the low voltage
+winding leads, and reversed single-phase center-tap halves are clock 6. A
+D/Y unit stating clock 11 reads with `leadlag` euro, so it stamps the -30
+degree shift. Other clocks, invalid clocks, inactive tanks or parents, and
+disconnected end terminals are refused. An absent clock is assumed to match
+the layout with a diagnostic. Fresh writing derives the clock from the
+current windings and `leadlag` and reports conflicting retained metadata;
+the `PowerTransformerEnd` form states its clocks whenever OpenDSS's default
+convention does not represent them, so a unit neither convention represents
+(a Y-D-D unit whose deltas roll opposite ways) is written with its clocks
+and refused on reading, never read back with a winding shifted.
 
 A transformer whose extras carry
 `cim_form = "tank"` is written as tanks, grouped under the `PowerTransformer`
@@ -346,7 +408,7 @@ sharing one `TransformerTankInfo`; every other transformer, including those
 from other formats, takes the `PowerTransformerEnd` form.
 
 Regulator controls, distributed energy resources
-(`PowerElectronicsConnection`), machines, wire and cable geometry, operational limits,
+(`PowerElectronicsConnection`), machines, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
@@ -373,7 +435,8 @@ maps back exactly, so write, read, write is byte stable. The output is not
 fully qualified against external producer corpora. The committed synthetic
 tank cases are checked against native OpenDSS grounded admittance stamps and
 loaded coil phasors by `evals/validation/validate_cim_tanks.py`, including fresh
-CIM writing and a clock-1/clock-11 control. This does not establish support for
+CIM writing, a clock-1/clock-11 control and a clock 11 tank read as
+`leadlag` euro. This does not establish support for
 producer dialects outside the documented electrical profile.
 
 ### Distribution CIM status
@@ -402,8 +465,8 @@ producer dialects outside the documented electrical profile.
   not run yet.
 - **Not mapped.** Regulator and tap changer controls (`RegulatingControl`,
   `TapChangerControl`), distributed energy resources
-  (`PowerElectronicsConnection`) and machines, wire and cable geometry,
-  operational limits, and `LoadResponseCharacteristic` are reported on read
+  (`PowerElectronicsConnection`) and machines, operational limits, and
+  `LoadResponseCharacteristic` are reported on read
   (`READ.CIM_DIST.CLASS_UNMAPPED`, `READ.CIM_DIST.FIELD_UNMAPPED`). A
   document that connects equipment through `TopologicalNode` (bus branch)
   only is refused. On write, generators, inverter based resources, and
@@ -1014,35 +1077,52 @@ The [GridLAB-D oracle harness](https://github.com/eigenergy/powerio/tree/main/ev
 documents pinned engines, supported physics, canonical and project checks,
 and remaining limitations.
 
-## BMOPF schema versions
+## BMOPF schema
 
-PowerIO v0.11.0 supports **draft BMOPF 0.2**, subject to Task Force
-review. The schema version is separate from the PowerIO release and from
-PowerIO IR version 2. Producer provenance records the proposal revision and
-schema digest. Previously emitted schema identifiers remain readable aliases.
+There is one BMOPF. PowerIO reads and writes the schema proposed in
+[dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
+subject to Task Force ratification. No PowerIO format token, option, or type
+names a BMOPF version. Producer provenance records the proposal revision and
+schema digest.
 
-An unqualified `bmopf-json` emission preserves an unchanged source byte for
-byte. An explicit schema version always re-encodes the selected version:
+A document from an older BMOPF draft is read as BMOPF and reported once with
+`READ.BMOPF.SCHEMA_LEGACY`; the older drafts include the `bmopf-report`
+drafts and the early draft PowerIO 0.11 wrote. The reader accepts the older
+layouts (tables and transformer fields under `extras`, the `tap` and `cost`
+spellings, `v_min`/`v_max`, `vn_max`, the `extras.geojson` layer). A
+`bmopf-json` emission preserves an unchanged source byte for byte only when
+that source states the current schema; an older document is written in the
+current schema:
 
 ```sh
-powerio convert feeder.json --to bmopf-json@0.1.0 -o legacy.json
-powerio convert feeder.json --to bmopf-json@0.2.0 -o proposal.json
+powerio convert legacy.json --to bmopf-json -o feeder.json
 ```
 
-The same format strings work with Rust `powerio::emit`, Python `powerio.emit`,
-C `pio_emit`, Julia `emit` and the PowerIO MCP emission tool. Rust also exposes
-`BmopfSchemaVersion` and `BmopfEmitOptions` for the distribution writer.
+`bmopf-json` is the one BMOPF format string; a `bmopf-json@<version>` string
+is refused. It works with Rust `powerio::emit`, Python `powerio.emit`, C
+`pio_emit`, Julia `emit` and the PowerIO MCP emission tool. Rust also exposes
+`BmopfEmitOptions` for the distribution writer.
 
-Legacy output relocates proposed-only equipment and transformer fields into
-`extras`, with diagnostics. A consumer that ignores those extensions cannot be
-assumed to calculate the same network. Proposal output uses the declared tables
-and preserves winding ratings, taps, neutral impedances and current-limit data.
+Output uses the declared tables and preserves winding ratings, taps, neutral
+impedances and current-limit data.
 
-Unequal bus phase bounds remain individual values through parsing, IR version 2
+Unequal bus phase bounds remain individual values through parsing, PowerIO IR,
 and explicit BMOPF output. Uniform values use `v_min`/`v_max`; unequal values
 use `v_min_phase`/`v_max_phase` in the typed Rust model. A present scalar takes
-precedence over the corresponding vector. PMD voltage arrays instead follow
-terminal order and use engineering voltage units.
+precedence over the corresponding vector. In the document the phase to ground
+bound is `vpg_min`/`vpg_max`, and the schema rejects the older spelling
+`v_min`/`v_max`; the neutral to ground cap is `vng_max`, `vn_max` in older
+drafts. Output writes `vpg_*` and `vng_max`; the reader takes either
+spelling, and a current document that uses an old name gets one
+`READ.BMOPF.SCHEMA_LEGACY`. PMD voltage arrays instead follow terminal order
+and use engineering voltage units.
+
+The schema also declares geometry: `bus.*.geo` (GeoJSON Point), `line.*.geo`
+(GeoJSON LineString) and `meta.crs`, and a `geo` on every other located
+element. Output writes bus locations and line routes there, and component
+locations as the `geo` Point of the element they attach to. The `extras.geojson` FeatureCollection PowerIO 0.11 wrote still
+reads. See
+[Geo and display](geo-and-display.md#bmopf-geometry-and-schema-validity).
 
 The C and Julia bus views expose unequal limits as
 `phase_to_ground_voltage_min_v` and `phase_to_ground_voltage_max_v`, while
@@ -1064,34 +1144,43 @@ circuit, core shunts and tap-control decisions. Malformed winding maps and
 invalid ratios fail instead of producing an incomplete matrix.
 
 The BMOPF proposal schema is pinned to
-[`664b494`](https://github.com/distribution-system-opt/dsopt-schema/commit/664b494f2ee31ee76f8f78e7852cdb1f1c9a8e7d),
-with SHA-256 `74d6c6de3637d52e42a26c4cb0584f51df70d69f360b236cf5e23afaf7669462`.
-Fresh output places a PowerIO archive commit URL in `meta.$schema`. Proposal output
-records the canonical identity, proposal status, digest and revision under
-`meta.provenance.powerio_bmopf`. Existing provenance is preserved; a name
-collision uses a numbered producer entry. Reading the former canonical or
-version-directory identifiers remains supported without fetching remote data.
+[`6796394`](https://github.com/distribution-system-opt/dsopt-schema/commit/6796394f6a4326b61c7fcf5ab5c0d55181b67d25),
+with SHA-256 `9c9217afe0a62af77506f7d6ce6e0726d03f338f164a1621a7631cb03c638bdc`,
+the revision that reconciled the proposal with the Task Force's schema
+(`vpg_*` bounds, typed geometry, one identifier) and applied the Task Force
+review answers (`vng_max`, geometry for every located element), the review
+fixes, and the identity and consistency changes. The pin moves to the release
+tag the schema's `$id` names once the Task Force ratifies the proposal.
+Output states only `meta.schema_version`, which the schema requires as the
+document's one version identifier, and no
+`meta.$schema`: a URL per release made every patch release reject every
+earlier document, and consumers had to allow-list producer archive URLs
+([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
+Output records the schema's `$id`, the proposal commit, the schema digest, and the retrieval permalink of the exact
+bytes under `meta.provenance.powerio_bmopf`.
+Existing provenance is preserved; a name collision uses a numbered producer
+entry. Reading the PowerIO archive URLs that 0.11 stamped, the dsopt-schema
+commit permalinks, and the version-directory identifiers remains supported
+without fetching remote data.
 
-The supported schemas ship in the Rust crate at `schemas/bmopf/`, in the
-Python package at `powerio/schemas/bmopf/`, and in each C/Julia library archive
-at `schemas/bmopf/`. Their manifests record the exact bytes and upstream
-review references. Python can read them with `importlib.resources.files("powerio")`.
+The schema ships in the Rust crate at `schemas/bmopf/bmopf.schema.json`, in
+the Python package at `powerio/schemas/bmopf/`, and in each C/Julia library
+archive at `schemas/bmopf/`. The manifest records the exact bytes and upstream
+review references. Older drafts' schemas are not shipped. Python can read them with `importlib.resources.files("powerio")`.
 Upstream review changes do not alter an installed release's schema. A new
 schema interpretation requires a reviewed PowerIO release; a PowerIO release
 does not establish Task Force acceptance.
 
 ### Energy prices
 
-Draft BMOPF 0.2 uses `energy_cost_rate` in $/kWh. Generator entries follow phase
+BMOPF uses `energy_cost_rate` in $/kWh. Generator entries follow phase
 order, as do voltage-source entries. Neutral terminals have no price entry. PowerIO retains source prices in `VoltageSource.energy_cost_rate` and
-in IR version 2. C and Julia expose `energy_cost_rate_per_kwh`; Python's
+in PowerIO IR. C and Julia expose `energy_cost_rate_per_kwh`; Python's
 voltage-source records expose `energy_cost_rate`.
 
-The reader also accepts the deprecated per-phase `cost` spelling. Explicit
-0.1.0 output keeps generator `cost` and relocates source prices to
-`extras.voltage_source`, with a diagnostic. Only a consumer that reads that
-overlay can use the retained source prices. PowerIO stores the coefficients;
-the selected solver determines whether and how they enter its objective.
+The reader also accepts the deprecated per-phase `cost` spelling; output
+always writes `energy_cost_rate`. PowerIO stores the coefficients; the
+selected solver determines whether and how they enter its objective.
 
 ## LinDist3Flow bindings
 
@@ -1145,7 +1234,7 @@ Transformer/regulator lowering and their thermal checks remain unsupported;
 the preparation report records any selected omission rather than presenting
 an incomplete report as comprehensive.
 
-C ABI 7 adds `pio_value_lindist3flow_opf_instance`,
+The C ABI adds `pio_value_lindist3flow_opf_instance`,
 `pio_value_lindist3flow_opf_solution`, and
 `pio_module_to_lindist3flow_opf_instance`. The generic calculation accessors
 read the instance, network, objective, constraints, termination, and solution
@@ -1153,12 +1242,12 @@ columns. `pio_lindist3flow_opf_instance_node_at` and
 `pio_lindist3flow_opf_instance_conductor_at` return borrowed typed axis views.
 Their strings stay valid while the instance handle remains alive.
 Sparse conic preparation and solver adapters remain Rust APIs.
-The fixed-dispatch types add no ABI 7 symbols; they remain available through
-Rust, Python, and IR version 2 until a future C ABI revision can add a
+The fixed-dispatch types add no C ABI symbols; they remain available through
+Rust, Python, and PowerIO IR until a future C ABI revision can add a
 fixed symbol set deliberately.
 
-PowerIO 0.11.1 writes the OPF pair in IR version 2, and 0.11.4 adds the
-fixed-dispatch pair under the same version. Readers without those structural types
+PowerIO 0.11.1 added the OPF pair to PowerIO IR, and 0.11.4 added the
+fixed-dispatch pair. Readers without those structural types
 reject them, while existing network and calculation records keep their
 representation.
 

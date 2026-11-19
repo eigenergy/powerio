@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -49,14 +50,20 @@ def data(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))["value"]["data"]
 
 
+def rating(value: float | str) -> float:
+    """A stated rating; the IR spells an unlimited one as "Infinity"."""
+    return float(value)
+
+
 def assert_diagnosed_losses(
     original: dict, restored: dict, diagnostics: list[dict]
 ) -> None:
     expected_voltage_losses = sum(
         abs(gen["vg"] - 1.0) > 1e-12 for gen in original["generators"]
     )
+    # An unlimited third rating has nothing to lose; only a finite one does.
     expected_rating_losses = sum(
-        branch["rate_c"] != 0.0 for branch in original["branches"]
+        math.isfinite(rating(branch["rate_c"])) for branch in original["branches"]
     )
     messages = [
         entry["message"]
@@ -77,7 +84,8 @@ def assert_diagnosed_losses(
     # any value in the two fields excluded from direct-native equality.
     if any(gen["vg"] != 1.0 for gen in restored["generators"]):
         raise AssertionError("review the declared RAVENS generator setpoint recovery")
-    if any(branch["rate_c"] != 0.0 for branch in restored["branches"]):
+    # The profile has no third rating, so the reader states it as unlimited.
+    if any(math.isfinite(rating(branch["rate_c"])) for branch in restored["branches"]):
         raise AssertionError("review the declared RAVENS third-rating recovery")
 
 

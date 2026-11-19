@@ -388,8 +388,10 @@ fn iidm_1_0_legacy_injection_forms_map_to_the_current_tables() {
         .iter()
         .find(|item| item.uid.as_deref() == Some("BAT2"))
         .unwrap();
-    assert_close(second.ps, 100.0);
-    assert_close(second.qs, 200.0);
+    // IIDM 1.0's `p0` and `q0` are the later `targetP` and `targetQ`: power
+    // the battery injects. Storage `ps` and `qs` are withdrawn (#700).
+    assert_close(second.ps, -100.0);
+    assert_close(second.qs, -200.0);
 }
 
 /// The IIDM 1.0 forms of three winding transformers, inline tie lines, and

@@ -3,8 +3,9 @@
 
 The reference decks are committed OpenDSS fixtures and hand-stated regulator
 nameplates, never output from PowerIO's DSS parser. Both sides use the same
-controlled source/load circuit. This covers the supported clock convention;
-other clocks and disconnected/inactive tank states must refuse conversion.
+controlled source/load circuit. This covers both clock conventions (clock 1,
+the high voltage winding leading, and clock 11, read as leadlag=euro); other
+clocks and disconnected/inactive tank states must refuse conversion.
 """
 
 import argparse
@@ -106,6 +107,29 @@ def run(powerio, *args):
     return subprocess.run([powerio, *map(str, args)], capture_output=True, text=True)
 
 
+def with_dy_clock(source, clock):
+    start = source.index('<cim:TransformerEndInfo rdf:ID="_dy_info_e2">')
+    end = source.index('</cim:TransformerEndInfo>', start)
+    block = source[start:end].replace("phaseAngleClock>1<", f"phaseAngleClock>{clock}<")
+    return source[:start] + block + source[end:]
+
+
+def clock_eleven(powerio, work, reference):
+    """A Dyn11 tank (clock 11) converts with leadlag=euro and stamps as the
+    native leadlag=lead unit does."""
+    xml, out = work / "clock11.xml", work / "clock11.dss"
+    xml.write_text(with_dy_clock(TANKS.read_text(), "11"))
+    done = run(powerio, "convert", xml, "--to", "dss", "-o", out)
+    assert done.returncode == 0, done.stderr
+    block = transformer_block(out.read_text(), "dy_tank")
+    assert re.search(r"leadlag=euro", block, re.I), block
+    got = native(block, "dy_tank", load_fraction=0)
+    np.testing.assert_allclose(got[0], reference[0], rtol=1e-10, atol=1e-8, err_msg="clock 11 grounded YPrim")
+    np.testing.assert_allclose(got[1], reference[1], rtol=1e-9, atol=1e-6, err_msg="clock 11 coil phasors")
+    assert abs(got[3] + 30) < 1e-4
+    print("PASS clock 11 reads as leadlag=euro: grounded YPrim and phasors match native leadlag=lead")
+
+
 def refusals(powerio, work):
     source = TANKS.read_text()
     variants = []
@@ -120,11 +144,8 @@ def refusals(powerio, work):
         terminal = re.search(r'TransformerEnd.Terminal rdf:resource="#([^\"]+)"', source[end:]).group(1)
         tag = f'<cim:Terminal rdf:ID="{terminal}">'
         variants.append(source.replace(tag, f"{tag}<cim:ACDCTerminal.connected>false</cim:ACDCTerminal.connected>", 1))
-    start = source.index('<cim:TransformerEndInfo rdf:ID="_dy_info_e2">')
-    end = source.index('</cim:TransformerEndInfo>', start)
-    for clock in ("11", "1.5"):
-        block = source[start:end].replace("phaseAngleClock>1<", f"phaseAngleClock>{clock}<")
-        variants.append(source[:start] + block + source[end:])
+    for clock in ("5", "1.5"):
+        variants.append(with_dy_clock(source, clock))
     for i, text in enumerate(variants):
         xml, out = work / f"refuse{i}.xml", work / f"refuse{i}.dss"
         xml.write_text(text)
@@ -167,6 +188,7 @@ def main():
         assert abs(clock1[3] - 30) < 1e-4 and abs(clock11[3] + 30) < 1e-4
         assert not np.allclose(clock1[0], clock11[0]), "clock control did not change the native stamp"
         print("PASS independent clock control: lag=clock 1; lead=clock 11 has a different native stamp")
+        clock_eleven(powerio, work, clock11)
         refusals(powerio, work)
     print(f"OpenDSSDirect.py {dss.__version__}; {dss.Basic.Version()}")
 

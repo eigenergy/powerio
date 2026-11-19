@@ -1,7 +1,7 @@
 //! Sparse matrix and graph projections from PowerIO networks.
 //!
 //! Outputs include signed incidence, weighted bus Laplacian, MATPOWER Bp/Bpp,
-//! Y bus, PTDF, LODF, adjacency, LACPF, and petgraph views. Calculations take the
+//! Y bus, PTDF, LODF, adjacency, and LACPF views. Calculations take the
 //! dense [`IndexedNetwork`] view of a [`BalancedNetwork`]. Parsing and emitting
 //! belong to the top level `powerio` facade; this crate owns derived matrix and
 //! graph calculations.
@@ -33,7 +33,10 @@
 //! magnitudes and phase shifts. Branch
 //! terminal admittance is stored per unit. The default public DC formula is
 //! `b = -x/(r² + x²)`. [`BranchSusceptanceFormula::TapAdjustedReactance`] uses
-//! `b = -1/(x·τ)`; both carry phase shift injection. The full reference is in
+//! `b = -1/(x·τ)`; both carry phase shift injection.
+//! [`BranchSusceptanceFormula::TapAdjustedSeriesSusceptance`] divides the series
+//! coefficient by the tap; [`BranchSusceptanceFormula::SeriesSusceptanceNoPhaseShift`]
+//! ignores taps and shifts to match PowerModels DCP. The full reference is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 // Re-export the balanced model types used by matrix signatures. Parsing,
@@ -60,8 +63,9 @@ mod ac_jacobian;
 mod acopf;
 mod mcopf;
 pub use mcopf::{
-    BoundedLoadLawPolicy, McAcOpfAssemblyOptions, McAcOpfPreparation, McOpfAngleLimit, McOpfBranch,
-    McOpfCoil, McOpfComplexRow, McOpfDevice, McOpfDeviceKind, McOpfDroop, McOpfLoadLaw,
+    BoundedLoadLawPolicy, MC_OPF_DROOP_SMOOTHING, McAcOpfAssemblyOptions, McAcOpfPreparation,
+    McOpfAngleLimit, McOpfBranch, McOpfCoil, McOpfComplexRow, McOpfDevice, McOpfDeviceKind,
+    McOpfDroop, McOpfDroopHinge, McOpfDroopTerms, McOpfDroopValue, McOpfLoadLaw,
     McOpfLoadLawProjection, McOpfShunt, McOpfTerminal, McOpfTransformer, McOpfTransformerCoil,
     McOpfTransformerPort, McOpfVoltageLimit, build_mc_ac_opf_preparation,
 };
@@ -79,18 +83,24 @@ pub mod pipeline;
 mod stated_state;
 pub mod synth;
 
-pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
-pub use acopf::{
-    AcBranchData, AcBusData, AcGeneratorData, AcOpfAssemblyOptions, AcOpfPreparation,
-    AcPfAssemblyOptions, AcPfBusData, AcPfGeneratorData, AcPfPreparation, AcStorageData,
-    NodalAcGeneratorData, PreparedAcBusSpecification, build_ac_opf_preparation,
-    build_ac_pf_preparation,
+pub use ac_jacobian::{
+    BusPowerInjection, PowerFlowJacobian, VoltageCoordinates, calc_bus_power_injection,
+    calc_power_flow_jacobian,
 };
-pub use dc_operators::{DcOperatorOptions, DcOperators, ReferenceConstrainedSystem};
+pub use acopf::{
+    AcBranchData, AcBranchFlows, AcBusData, AcGeneratorData, AcOpfAssemblyOptions,
+    AcOpfPreparation, AcPfAssemblyOptions, AcPfBusData, AcPfGeneratorData, AcPfPreparation,
+    AcStorageData, NodalAcGeneratorData, PreparedAcBusSpecification, build_ac_opf_preparation,
+    build_ac_pf_preparation, calc_prepared_bus_specifications,
+};
+pub use dc_operators::{
+    DcOperatorOptions, DcOperators, ReferenceConstrainedSystem, calc_reference_constrained_system,
+};
 pub use dcopf::{
     DcBranchParameters, DcGeneratorParameters, DcOpfAssemblyOptions, DcOpfBundleMetadata,
     DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs, DcOpfPreparation, NodalGeneratorParameters,
-    Units, build_dc_opf_preparation, calc_dc_opf_matrices, emit_dcopf_bundle,
+    SynthesizedLimitWindow, Units, build_dc_opf_preparation, calc_bus_hosts, calc_bus_totals,
+    calc_dc_opf_matrices, emit_dcopf_bundle,
 };
 pub use lindist3flow::{
     AffineScalarCoefficients, ConnectionPowerMap, CrossVoltageCoefficients, LinDist3FlowLineData,
@@ -126,17 +136,24 @@ pub use lindist3flow_standard::{
 pub use opf::{AnalysisBranchSource, PiecewiseLinearCost, PreparedObjective};
 
 pub use matrix::multiconductor::{
-    AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
-    calc_multiconductor_admittance_matrix,
+    AugmentedSystem, DistNode, GroundedNeutral, MulticonductorAdmittance, MulticonductorNodeIndex,
+    NetworkPrimitives, NodeRef, PassiveFamily, PassivePrimitive, TransformerLeakageBase,
+    TransformerPrimitive, assemble_multiconductor_admittance, calc_capacitor_primitive_admittance,
+    calc_line_primitive_admittance, calc_multiconductor_admittance_matrix, calc_passive_primitives,
+    calc_shunt_primitive_admittance, calc_transformer_leakage_impedances,
+    calc_transformer_primitive_admittance, calc_transformer_winding_admittance,
+    scatter_primitive_admittance,
 };
 pub use matrix::{
-    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, IslandPtdf, MatrixStats, Scheme,
-    SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
-    SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
-    calc_adjacency_matrix, calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix,
-    calc_diagonal, calc_lacpf_matrix, calc_lodf, calc_lodf_columns, calc_ptdf, calc_ptdf_by_island,
-    calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options, calc_ptdf_rows,
-    calc_reference_indicator, calc_susceptance_diagonal, calc_unit_vector, calc_weighted_laplacian,
+    BranchSusceptanceFormula, BuildOptions, GroundedIndexMap, GroundedLaplacianFactor, Grounding,
+    IslandPtdf, MatrixStats, Scheme, SensitivityMatrices, SensitivityMatrixMetadata,
+    SensitivityMetadata, SensitivityOptions, SensitivitySolver, SensitivitySolverPath,
+    ZeroImpedanceRule, ZeroImpedanceSkips, calc_adjacency_matrix, calc_admittance_matrix,
+    calc_bdoubleprime_matrix, calc_bprime_matrix, calc_diagonal, calc_edge_flows,
+    calc_edge_laplacian_product, calc_lacpf_matrix, calc_lodf, calc_lodf_columns, calc_ptdf,
+    calc_ptdf_by_island, calc_ptdf_columns, calc_ptdf_lodf, calc_ptdf_lodf_with_options,
+    calc_ptdf_rows, calc_reference_indicator, calc_solver_branch_flow_matrix,
+    calc_susceptance_diagonal, calc_unit_vector, calc_weighted_laplacian,
     calc_zero_impedance_skips, check_sddm, ground_at, ground_at_each,
 };
 pub use pipeline::{

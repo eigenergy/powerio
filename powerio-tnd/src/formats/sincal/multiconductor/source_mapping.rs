@@ -1,8 +1,6 @@
 //! Ideal positive/negative-sequence boundary with an explicit zero-sequence
 //! circuit. Finite positive-sequence impedance still requires separate mapping.
 
-use std::f64::consts::TAU;
-
 use num_complex::Complex64;
 
 use super::{
@@ -167,7 +165,10 @@ impl InfeederInput {
         // With zero positive-sequence internal drop, both regulation
         // locations give the same prescribed line-line voltage. Floating
         // common-mode voltage is determined by the external circuit.
-        let magnitude = resolve_voltage(voltage, nominal_ll_volts)? / 3.0_f64.sqrt();
+        let magnitude = powerio_core::electrical::calc_wye_phase_voltage(resolve_voltage(
+            voltage,
+            nominal_ll_volts,
+        )?);
         if magnitude <= 0.0 || !angle_rad.is_finite() {
             return Err(format_error("invalid source phase voltage"));
         }
@@ -184,7 +185,8 @@ impl InfeederInput {
             terminals: ["1", "2", "3"].map(str::to_owned),
             reference,
             magnitudes: [magnitude; 3],
-            angles: [angle_rad, angle_rad - TAU / 3.0, angle_rad + TAU / 3.0],
+            angles: [0, 1, 2]
+                .map(|k| angle_rad + powerio_dist::sequence::calc_balanced_phase_angle(k, 3)),
         };
         let switch = DistSwitch::new(
             format!("sincal:terminal:{}", self.terminal.id),

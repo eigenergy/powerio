@@ -117,7 +117,7 @@ const ORDER_CODES: &str = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0_-.";
 /// The busbar characters fresh output tries when a derived node code collides.
 const BUSBARS: &str = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const PLANT_TYPES: &str = "HNLCGOWF";
-const SQRT_3: f64 = 1.732_050_807_568_877_2;
+use powerio_core::electrical::SQRT_3;
 
 fn country_iso(letter: char) -> Option<&'static str> {
     COUNTRIES

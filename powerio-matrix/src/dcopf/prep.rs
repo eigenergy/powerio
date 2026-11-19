@@ -5,7 +5,8 @@ use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, HvdcTreatment
 use crate::{AnalysisBranchSource, Error, Result};
 use powerio_prob::ReferenceBuses;
 
-use super::{limits, nodal};
+use super::limits::{self, SynthesizedLimitWindow};
+use super::nodal;
 use crate::{PiecewiseLinearCost, PreparedObjective};
 
 /// Unit system for power and generator cost data.
@@ -62,7 +63,10 @@ pub struct DcOpfOptions {
     /// Formula used to calculate each branch susceptance.
     pub formula: BranchSusceptanceFormula,
     pub units: Units,
-    /// Skip non-self-loop branches with zero reactance. Off by default:
+    /// Skip non-self-loop branches with an unusable formula denominator.
+    /// Series-admittance formulas bound `hypot(r, x)`; reciprocal-reactance
+    /// formulas bound `abs(x)`. Purely resistive branches remain as zero-weight
+    /// rows for series-admittance formulas. Off by default:
     /// zero impedance branches are preserved in networks and instances, so
     /// assembly refuses them with [`powerio_tx::Error::ZeroImpedance`] until
     /// the caller resolves them explicitly
@@ -70,11 +74,14 @@ pub struct DcOpfOptions {
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
-    /// states. If false, `rate_a <= 0` reaches `f_max` as zero, which reads as
-    /// unlimited. `#[serde(default)]`: documents serialized before the field
+    /// states. If false, positive infinity is preserved in `f_max`.
+    /// A stated finite zero is always kept. `#[serde(default)]`: documents serialized before the field
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval a synthesized limit spans.
+    #[serde(default)]
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Which angle difference bounds the prepared arrays carry.
     #[serde(default = "default_angle_difference_bounds")]
     pub angle_difference_bounds: powerio_tx::AngleDifferenceBounds,
@@ -96,6 +103,7 @@ impl Default for DcOpfOptions {
             units: Units::default(),
             skip_zero_impedance: false,
             synthesize_unrated_limits: false,
+            synthesized_limit_window: SynthesizedLimitWindow::Stated,
             angle_difference_bounds: default_angle_difference_bounds(),
             hvdc_treatment: HvdcTreatment::default(),
             objective: PreparedObjective::default(),
@@ -150,12 +158,14 @@ pub struct DcBranchParameters {
     /// Phase shift in radians. Zero unless the formula carries phase shift
     /// injections.
     pub shift: Vec<f64>,
-    /// Thermal limit in the selected power unit. Zero means unlimited.
+    /// Thermal limit in the selected power unit. Zero is a finite bound;
+    /// positive infinity is unlimited. Check `thermal_limit_active`.
+    #[serde(with = "crate::opf::nonfinite_vec")]
     pub f_max: Vec<f64>,
     /// Selected branch angle bounds in radians; absent sides are infinities.
-    #[serde(with = "crate::opf::angle_bounds_serde")]
+    #[serde(with = "crate::opf::nonfinite_vec")]
     pub angle_min: Vec<f64>,
-    #[serde(with = "crate::opf::angle_bounds_serde")]
+    #[serde(with = "crate::opf::nonfinite_vec")]
     pub angle_max: Vec<f64>,
     /// Branch column to row in the star-lowered analysis network.
     pub analysis_rows: Vec<usize>,
@@ -211,6 +221,11 @@ pub struct DcOpfPreparation {
     /// their limits retain the old unsynthesized meaning.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
+    /// The angle difference interval those limits span. Omitted from a
+    /// document when it is the stated one, so earlier documents read the
+    /// window they were built with.
+    #[serde(default, skip_serializing_if = "SynthesizedLimitWindow::is_stated")]
+    pub synthesized_limit_window: SynthesizedLimitWindow,
     /// Whether PowerModels' angle difference correction was applied.
     pub correct_angle_difference_bounds: bool,
     /// Which angle difference bounds `angle_min` and `angle_max` carry.
@@ -276,12 +291,27 @@ impl DcOpfPreparation {
     /// With `A` oriented from bus to bus and
     /// `L = A diag(b) A^T`, the DC balance is
     /// `L theta = Cg pg - (p_d + g_s + p_shift - p_hvdc)`.
+    /// It is [`calc_device_withdrawal`](Self::calc_device_withdrawal) plus
+    /// the phase shift withdrawal `p_shift`.
     #[must_use]
     pub fn calc_fixed_nodal_withdrawal(&self) -> Vec<f64> {
+        let mut withdrawal = self.calc_device_withdrawal();
+        for (value, shift) in withdrawal.iter_mut().zip(&self.p_shift) {
+            *value += shift;
+        }
+        withdrawal
+    }
+
+    /// The withdrawal of the bus devices in dense bus order,
+    /// `p_d + g_s - p_hvdc`: the fixed nodal withdrawal without the phase
+    /// shift term, which the branch flows carry rather than the bus. Net
+    /// generation less this is the bus injection a solution reports.
+    #[must_use]
+    pub fn calc_device_withdrawal(&self) -> Vec<f64> {
         (0..self.n_buses)
             .map(|bus| {
                 let p_hvdc = self.p_hvdc.get(bus).copied().unwrap_or(0.0);
-                self.p_d[bus] + self.g_s[bus] + self.p_shift[bus] - p_hvdc
+                self.p_d[bus] + self.g_s[bus] - p_hvdc
             })
             .collect()
     }
@@ -297,11 +327,35 @@ impl DcOpfPreparation {
     /// of the public one.
     #[must_use]
     pub fn calc_branch_flow_offset(&self) -> Vec<f64> {
-        (0..self.n_branches())
-            .map(|branch| {
-                -self.branches.susceptance_magnitude[branch] * self.branches.shift[branch]
-            })
+        self.branches
+            .susceptance_magnitude
+            .iter()
+            .zip(&self.branches.shift)
+            .map(|(&weight, &shift)| crate::matrix::calc_dc_flow_offset(weight, shift))
             .collect()
+    }
+
+    /// The nodal phase shift withdrawal `A branch_flow_offset` of this
+    /// preparation's branch columns, in dense bus order and the
+    /// preparation's power unit: each branch's
+    /// [`calc_branch_flow_offset`](Self::calc_branch_flow_offset) leaves at
+    /// its from bus and arrives at its to bus. This is the calculation behind
+    /// [`Self::p_shift`]; a caller that edits the branch weights or shifts
+    /// recomputes `p_shift` with it.
+    #[must_use]
+    pub fn calc_phase_shift_withdrawal(&self) -> Vec<f64> {
+        let branches = &self.branches;
+        crate::matrix::calc_dc_phase_shift_withdrawal(
+            self.n_buses,
+            branches
+                .from_bus
+                .iter()
+                .copied()
+                .zip(branches.to_bus.iter().copied())
+                .zip(branches.susceptance_magnitude.iter().copied())
+                .zip(branches.shift.iter().copied())
+                .map(|((endpoints, weight), shift)| (endpoints, weight, shift)),
+        )
     }
 
     /// Project generator cost and bounds to bus space.
@@ -326,9 +380,9 @@ impl DcOpfPreparation {
             q: costs.q,
             c: costs.c,
             c0: costs.c0,
-            pmax: nodal::sum_by_bus(n, bus_of_gen, &generators.pmax),
-            pmin: nodal::sum_by_bus(n, bus_of_gen, &generators.pmin),
-            has_gen: nodal::buses_with_generators(n, bus_of_gen),
+            pmax: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmax),
+            pmin: nodal::calc_bus_totals(n, bus_of_gen, &generators.pmin),
+            has_gen: nodal::calc_bus_hosts(n, bus_of_gen),
         })
     }
 }
@@ -351,6 +405,7 @@ pub(crate) fn preparation_from_view(
     let (p_scale, b_scale) = options.units.power_scales(base);
     let thermal = limits::ThermalLimits {
         synthesize_unrated: options.synthesize_unrated_limits,
+        window: options.synthesized_limit_window,
         power_scale: p_scale,
         admittance_scale: b_scale,
     };
@@ -421,7 +476,6 @@ pub(crate) fn preparation_from_view(
     let mut angle_max = Vec::new();
     let mut branch_rows = Vec::new();
     let mut skipped_zero_impedance = Vec::new();
-    let mut p_shift = vec![0.0; n_buses];
     // Dense bus order is the position order of `network().buses`.
     let buses = &case.network().buses();
 
@@ -449,38 +503,21 @@ pub(crate) fn preparation_from_view(
             // DC flow, and its shift injection cancels at its own bus.
             continue;
         }
-        // The reactance the DC matrix builders bound, on the same rule: an
-        // `x = 1e-300` gives a finite `b = 1e300` that annihilates every real
-        // branch sharing a bus with it. Exact zero used to be the whole test.
-        if branch.x.abs() < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE {
+        // The one DC column rule. A purely resistive branch keeps its
+        // zero-weight row under the series formulas.
+        let Some(column) =
+            options
+                .formula
+                .calc_dc_column(branch, source_row, case.network().is_normalized())?
+        else {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
             return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
-        }
-        // Only the tap-reading formula can be bounded by a tap (#324).
-        let tap = if options.formula.reads_tap() {
-            branch.calc_divisible_tap(source_row)?
-        } else {
-            1.0
         };
-        let branch_b = options
-            .formula
-            .calc_solver_edge_weight(branch.r, branch.x, tap)
-            * b_scale;
-        if !branch_b.is_finite() {
-            return Err(powerio_tx::Error::NonFiniteSusceptance { row: source_row }.into());
-        }
-        let shift_rad = if options.formula.includes_phase_shifts() {
-            case.to_radians(branch.shift)
-        } else {
-            0.0
-        };
-        if shift_rad != 0.0 {
-            p_shift[from] -= branch_b * shift_rad;
-            p_shift[to] += branch_b * shift_rad;
-        }
+        let branch_b = column.weight * b_scale;
+        let shift_rad = column.shift;
         let source_amin = case.to_radians(branch.angmin);
         let source_amax = case.to_radians(branch.angmax);
         let (amin, amax) =
@@ -498,11 +535,11 @@ pub(crate) fn preparation_from_view(
         shift.push(shift_rad);
         f_max.push(thermal.of(
             branch,
-            source_amin,
-            source_amax,
+            (source_amin, source_amax),
+            (amin, amax),
             &buses[from_analysis],
             &buses[to_analysis],
-        ));
+        )?);
         angle_min.push(amin);
         angle_max.push(amax);
         branch_rows.push(source_row);
@@ -510,6 +547,19 @@ pub(crate) fn preparation_from_view(
 
     let n_active_generators = q.len();
     let n_active_branches = b.len();
+    // The flow offset of every branch leaves at its from bus and arrives at
+    // its to bus, as a withdrawal.
+    let p_shift = crate::matrix::calc_dc_phase_shift_withdrawal(
+        n_buses,
+        from_bus
+            .iter()
+            .copied()
+            .zip(to_bus.iter().copied())
+            .zip(b.iter().copied())
+            .zip(shift.iter().copied())
+            .map(|((endpoints, weight), shift)| (endpoints, weight, shift)),
+    );
+    let thermal_limit_active = f_max.iter().map(|limit| limit.is_finite()).collect();
     let bus_analysis_rows = active_buses.analysis_rows;
     let p_d = bus_analysis_rows
         .iter()
@@ -540,6 +590,7 @@ pub(crate) fn preparation_from_view(
         objective: options.objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
+        synthesized_limit_window: options.synthesized_limit_window,
         correct_angle_difference_bounds: options.angle_difference_bounds.is_padded(),
         angle_difference_bounds: Some(options.angle_difference_bounds),
         bus_ids: active_buses.bus_ids,
@@ -580,7 +631,7 @@ pub(crate) fn preparation_from_view(
                 .map(|row| AnalysisBranchSource::Branch { row })
                 .collect(),
             skipped_zero_impedance,
-            thermal_limit_active: vec![true; n_active_branches],
+            thermal_limit_active,
             angle_bound_active: vec![true; n_active_branches],
         },
     })
@@ -655,7 +706,7 @@ pub(crate) fn apply_instance_semantics(
         .iter_mut()
         .zip(&preparation.branches.f_max)
     {
-        *active &= *limit > 0.0;
+        *active &= limit.is_finite();
     }
     preparation.branches.angle_bound_active = crate::opf::constraint_mask(
         "branch angle bounds",

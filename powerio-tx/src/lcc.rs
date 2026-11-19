@@ -161,8 +161,12 @@ impl Bridge {
         let q = if denominator.abs() > 1e-12 {
             p * (2.0 * mu + (2.0 * theta).sin() - (2.0 * (theta + mu)).sin()) / denominator
         } else {
-            // No overlap: the fundamental lags by the angle itself.
-            p * theta.tan()
+            // No overlap: the fundamental lags by the angle itself,
+            // `Q / P = tan(acos cos θ)`.
+            p * powerio_core::electrical::calc_reactive_ratio(
+                cos_theta,
+                powerio_core::electrical::ReactiveRatioForm::Sine,
+            )
         };
         q.is_finite().then(|| LccConverterState {
             dc_voltage_kv: vd,

@@ -91,37 +91,36 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The `schema` discriminator of every PowerIO IR document.
 pub const IR_SCHEMA_NAME: &str = "pio-ir";
 
-/// The PowerIO IR version this build writes.
+/// The release whose PowerIO IR schema this build writes, stated as the
+/// `version` of every document it serializes.
 ///
-/// The IR version is an integer that advances only when the serialized
-/// representation changes incompatibly for an existing value type. It is
-/// independent of the PowerIO release, which the `producer` record of a
-/// document names, and of the C ABI version.
+/// Compatibility follows the release series as Cargo defines it: one minor
+/// release before 1.0 (0.12.x) and one major release from 1.0 on. A reader accepts a document from any release in its own series,
+/// including a later one, and refuses a structural type it does not
+/// implement, one type at a time. A change that existing readers cannot read
+/// starts a new series. This build also reads the integer version `2` that
+/// every 0.11 release wrote.
 ///
-/// | IR version | First release | Change |
-/// |---|---|---|
-/// | 1 | v0.10.0 | the `PioModule` serialization, under the identity `powerio.module` |
-/// | 2 | v0.11.0 | the identity `pio-ir`; the producer release recorded apart from the IR version; retained source bytes left out |
-///
-/// Additive structural types keep the IR version unchanged. A reader accepts
-/// the types it implements; an unknown type requires a newer reader.
-/// [`IR_MIN_VERSION`] is the oldest IR version this build reads.
-pub const IR_VERSION: u64 = 2;
+/// The constant names a release at or after the workspace version, and
+/// equals it in a published release. `producer.version` names the software
+/// that wrote a document, which need not be PowerIO.
+pub const IR_VERSION: &str = "0.12.3";
 
-/// The oldest PowerIO IR version this build reads.
-///
-/// The floor rises only at a minor release boundary. PowerIO 0.11 writes and
-/// reads IR version 2.
-pub const IR_MIN_VERSION: u64 = 2;
-
-/// The `$id` of the schema snapshot describing this build's structural types.
-/// The release in the path identifies the catalog, not a new IR version.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/2/0.11.8/schema.json";
+/// The `$id` of the schema describing this build's document:
+/// `pio-ir/<IR_VERSION>/schema.json` beneath `https://powerio.dev/schema/`.
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.3/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{
     DynamicCase, DynamicRecord, DynamicStudy, DyrError, UnresolvedBusReference, parse_dyr,
     parse_dyr_bytes,
+};
+/// Typed PSS/E DYR model views and model-aware generator linking.
+pub use powerio_tx::dynamic_models::{
+    DynamicModel, Esac1a, Exst1, Gast, Gencls, Hygov, Ieeest, LinkIssue, LinkedModel,
+    MachineDynamics, MachineLinking, ModelError, ModelRole, RoundRotor, SUPPORTED_MODELS,
+    SalientPole, Sexs, Tgov1, generator_source_impedance, link_machines, psse_machine_ids,
+    typed_model,
 };
 
 use powerio_tx::format;
@@ -133,16 +132,16 @@ pub use powerio_tx::{
     CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, ElementKey, Expanded, Extras, GenCaps, GenCost,
     Generator, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta, GeoParsed, GeoTarget,
     Hvdc, Impedance, IndexCore, IndexedNetwork, InterfaceMember, JSON_CLASSES, JoinName, JsonClass,
-    Load, LoadVoltageModel, Location, MonitorScope, MonitorStatement, MonitoredParsed,
-    MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay, PwdSubstation, ResolvedCase,
-    ResolvedComponent, ResolvedInterface, ResolvedVoltageScope, RetainedStatement, Selector,
-    SelectorGroup, SharedPsseEquipmentIndex, Shunt, ShuntBlock, SkipRule, SolverParams,
-    SourceFormat, Storage, Subsystem, SubsystemParsed, SubsystemSelector, SubsystemSet, Switch,
-    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
-    TransformerControlMode, UnresolvedAction, UnresolvedMonitor, UnresolvedMonitorReason,
-    UnresolvedReason, Winding, apply_substation_points, calc_series_admittance_of,
-    classify_json_bytes, classify_json_text, repair_values, to_geo_layer_from_pwd,
-    to_lonlat_from_pwd_mercator,
+    Load, LoadVoltageModel, Location, MagnetizingConnection, MonitorScope, MonitorStatement,
+    MonitoredParsed, MonitoredResolution, MonitoredSet, PsseEquipmentIndex, PwdDisplay,
+    PwdSubstation, ResolvedCase, ResolvedComponent, ResolvedInterface, ResolvedVoltageScope,
+    RetainedStatement, Selector, SelectorGroup, SharedPsseEquipmentIndex, Shunt, ShuntBlock,
+    SkipRule, SolverParams, SourceFormat, Storage, Subsystem, SubsystemParsed, SubsystemSelector,
+    SubsystemSet, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, UnresolvedAction, UnresolvedMonitor,
+    UnresolvedMonitorReason, UnresolvedReason, Winding, apply_substation_points,
+    calc_series_admittance_of, classify_json_bytes, classify_json_text, repair_values,
+    to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
 };
 /// Balanced network records and the public network and geographic submodules.
 /// Derived indexes, normalization data, solver tables, and component error
@@ -151,6 +150,9 @@ pub use powerio_tx::{
 pub use powerio_tx::{contingency, dynamic, geo, network, version};
 
 pub use powerio_core::diagnostic_codes;
+/// The scalar electrical formulas both network families share: the per unit
+/// impedance base, the power factor relations and the voltage power law.
+pub use powerio_core::electrical;
 /// The common module records and containers. These explicit facade exports
 /// keep ordinary callers out of the component crate paths.
 pub use powerio_core::{
@@ -158,8 +160,8 @@ pub use powerio_core::{
     DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, EmitResult,
     EmittedOutput, Fidelity, FormatId, HistoryEntry, HistoryId, HistoryKind, MemoryArtifact,
     OutputLayout, PioModule, Producer, Scenario, ScenarioId, ScenarioSet, Source, SourceBuffer,
-    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, StagedEdit, TimePoint,
-    TimeSeries,
+    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, SourceTree,
+    SourceTreeLimits, StagedEdit, TimePoint, TimeSeries,
 };
 
 /// The facade error covers source acquisition, routing, stored modules, and
@@ -190,9 +192,9 @@ pub mod dist {
     }
 }
 pub use powerio_dist::{
-    BmopfEmitOptions, BmopfSchemaVersion, ConductorMatrix, DistComponentLocation, DistGeoMeta,
-    DistGeographicPoint, DistGraphEdgeKind, DistLocationTarget, MulticonductorNetwork,
-    NeutralKronOptions, NeutralKronReport,
+    BmopfEmitOptions, ConductorMatrix, DistComponentLocation, DistGeoMeta, DistGeographicPoint,
+    DistGraphEdgeKind, DistLocationTarget, MulticonductorNetwork, NeutralKronOptions,
+    NeutralKronReport,
 };
 
 pub use powerio_prob::solution::{SocwrOpfDuals, SocwrOpfSolution, SocwrOpfValues};
@@ -230,6 +232,8 @@ pub use powerio_matrix as matrix;
 #[path = "gridfm.rs"]
 pub mod __gridfm;
 pub mod codes;
+pub mod collection;
+pub use collection::{Collection, CollectionLimits, CollectionSelection};
 mod formats;
 pub use formats::{FormatInfo, GridFormatInfo, NetworkFamily, grid_formats, resolve_format};
 #[cfg(feature = "gridfm")]
@@ -253,10 +257,10 @@ pub use transform::{
     ac_ots_instance_from_base, ac_ots_solution, apply_geo_layer, fix_ac_ots_topology,
     materialize_ac_ots_solution, network_with_operating_point, neutral_kron,
     neutral_kron_with_options, to_ac_opf_instance, to_ac_ots_instance,
-    to_ac_ots_instance_with_options, to_ac_pf_instance, to_dc_opf_instance, to_dc_pf_instance,
-    to_lindist3flow_opf_instance, to_lindist3flow_opf_instance_with_options,
-    to_lindist3flow_pf_instance, to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance,
-    to_mc_ac_pf_instance,
+    to_ac_ots_instance_with_options, to_ac_pf_instance, to_balanced, to_balanced_report,
+    to_dc_opf_instance, to_dc_pf_instance, to_lindist3flow_opf_instance,
+    to_lindist3flow_opf_instance_with_options, to_lindist3flow_pf_instance,
+    to_lindist3flow_pf_instance_with_options, to_mc_ac_opf_instance, to_mc_ac_pf_instance,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -439,6 +443,9 @@ pub struct ParseOptions {
     /// The directory beneath which a format may refer to further files,
     /// widening the default of the input file's own directory.
     pub acquisition_root: Option<std::path::PathBuf>,
+    /// The limits an OpenDSS read works under, for a case too large for the
+    /// defaults. `None` keeps the defaults. No effect on any other format.
+    pub dss_limits: Option<powerio_dist::DssReadLimits>,
 }
 
 impl ParseOptions {
@@ -462,6 +469,25 @@ impl ParseOptions {
     #[must_use]
     pub fn acquisition_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
         self.acquisition_root = Some(root.into());
+        self
+    }
+
+    /// Set the limits an OpenDSS read works under. A case with several
+    /// hundred thousand lines and loads needs more than the defaults allow.
+    ///
+    /// ```no_run
+    /// use powerio::dist::DssReadLimits;
+    ///
+    /// let limits = DssReadLimits::default()
+    ///     .max_include_bytes(1 << 30)
+    ///     .max_properties(1 << 26);
+    /// let options = powerio::ParseOptions::default().dss_limits(limits);
+    /// let module = powerio::parse_with_options("region/Master.dss", &options)?;
+    /// # Ok::<(), powerio::Error>(())
+    /// ```
+    #[must_use]
+    pub fn dss_limits(mut self, limits: powerio_dist::DssReadLimits) -> Self {
+        self.dss_limits = Some(limits);
         self
     }
 }
@@ -595,7 +621,7 @@ pub fn parse_with_options(
                 return powerio_dist::pmd::parse_multinetwork(source)
                     .map(|module| module.map_value(PioValue::from));
             }
-            dist::parse(source).map(|module| module.map_value(PioValue::from))
+            parse_distribution(source, options).map(|module| module.map_value(PioValue::from))
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
         #[cfg(feature = "gridfm")]
@@ -616,6 +642,32 @@ pub fn parse_with_options(
                 Ok(module.map_value(PioValue::from))
             }
         },
+        // A three-phase pandapower network reads as multiconductor and any
+        // other as balanced, by the tables the document fills.
+        RoutedFamily::Pandapower => match powerio_tnd::formats::pandapower::parse(source)? {
+            powerio_tnd::formats::pandapower::PandapowerModule::Balanced(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+            powerio_tnd::formats::pandapower::PandapowerModule::Multiconductor(module) => {
+                Ok(module.map_value(PioValue::from))
+            }
+        },
+    }
+}
+
+/// The distribution parse under the caller's OpenDSS limits, which apply to
+/// an OpenDSS source alone.
+fn parse_distribution(
+    source: powerio_core::Source,
+    options: &ParseOptions,
+) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    let dss = source.format().is_some_and(|f| {
+        format::routing::parse_distribution_format(f.as_str())
+            == Some(format::routing::DistributionFormat::Dss)
+    });
+    match options.dss_limits {
+        Some(limits) if dss => powerio_dist::parse_with_dss_limits(source, limits),
+        _ => dist::parse(source),
     }
 }
 
@@ -895,6 +947,9 @@ enum RoutedFamily {
     /// the family, follows the document; `powerio_tnd::formats::ravens`
     /// decides.
     Ravens,
+    /// A pandapower document, by token or by content. Its tables select the
+    /// family. `powerio_tnd::formats::pandapower` decides.
+    Pandapower,
     Goc3,
     OpfData,
     PypsaDirectory,
@@ -1171,6 +1226,9 @@ fn json_family(
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(
             TransmissionFormat::EgretJson,
         ))) => Ok(RoutedFamily::Egret),
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::PandapowerJson,
+        ))) => Ok(RoutedFamily::Pandapower),
         // Either MG-RAVENS classification: the header classifier sees only
         // the top level tables, and the adapter spanning both models reads
         // the profile from the whole document.
@@ -1225,6 +1283,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
         Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
+        Some(TargetFormat::PandapowerJson) => RoutedFamily::Pandapower,
         _ => RoutedFamily::Balanced(None),
     }
 }
@@ -1252,6 +1311,45 @@ mod tests {
 
     fn assert_value_type(module: &powerio_core::PioModule<PioValue>, expected: &str) {
         assert_eq!(module.value().type_name(), expected);
+    }
+
+    #[test]
+    fn dss_limits_in_the_options_reach_the_opendss_read() {
+        // One byte of include budget admits the first include and refuses
+        // the second; the defaults follow both.
+        let source = || {
+            memory(
+                "Master.dss",
+                "new circuit.c\nredirect a.dss\nredirect b.dss\n",
+            )
+            .with_named_buffer("a.dss", b"new load.a bus1=sourcebus.1 kv=1 kw=1\n".to_vec())
+            .unwrap()
+            .with_named_buffer("b.dss", b"new load.b bus1=sourcebus.1 kv=1 kw=1\n".to_vec())
+            .unwrap()
+        };
+        let module = parse_with_options(source(), &ParseOptions::default()).expect("dss parses");
+        assert_value_type(&module, "powerio.MulticonductorNetwork");
+
+        let limits = powerio_dist::DssReadLimits::default().max_include_bytes(1);
+        let options = ParseOptions::default().dss_limits(limits);
+        let error = parse_with_options(source(), &options).expect_err("the second include");
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.DSS.INCLUDE_BUDGET"),
+            "{error}"
+        );
+
+        // The limits belong to the OpenDSS read alone.
+        let case = "function mpc = case\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;];\n\
+                    mpc.gen = [1 0 0 10 -10 1 100 1 10 0;];\n\
+                    mpc.branch = [];\n";
+        let module = parse_with_options(memory("case.m", case), &options).expect("matpower");
+        assert_value_type(&module, "powerio.BalancedNetwork");
     }
 
     #[test]
@@ -1816,3 +1914,6 @@ mod tests {
         assert_value_type(&module, "powerio.BalancedNetwork");
     }
 }
+
+#[cfg(feature = "schema")]
+mod schema_units;

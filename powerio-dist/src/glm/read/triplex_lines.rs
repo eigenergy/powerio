@@ -150,7 +150,7 @@ impl Reader<'_> {
             wires.push(self.geometry_reference(config, field, "triplex_line_conductor")?);
         }
         let f = self.net.base_frequency();
-        let earth = (100.0 / f).ln() / 2.0 + 7.6786;
+        let earth = crate::glm::line_physics::carson_earth(f);
         let mut r = vec![vec![0.0; 3]; 3];
         let mut x = r.clone();
         for (i, &wire) in wires.iter().enumerate() {
@@ -167,10 +167,9 @@ impl Reader<'_> {
                         self.error(config, "triplex conductor spacing overflows or underflows")
                     );
                 }
-                let z = Complex64::new(
-                    0.001_588_36 * f + if i == j { resistance } else { 0.0 },
-                    0.002_022_37 * f * (earth - distance.ln()),
-                ) / METERS_PER_MILE;
+                let z = (crate::overhead::calc_carson_impedance(distance, earth)
+                    + if i == j { resistance } else { 0.0 })
+                    / METERS_PER_MILE;
                 if !z.re.is_finite() || !z.im.is_finite() {
                     return Err(self.error(config, "triplex impedance is nonfinite"));
                 }

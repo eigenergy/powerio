@@ -87,6 +87,15 @@ pub enum Error {
     #[error("base MVA must be a positive, finite number, got {base}")]
     InvalidBaseMva { base: f64 },
 
+    #[error("a finite thermal limit must be nonnegative and finite, got {magnitude}")]
+    InvalidThermalLimit { magnitude: f64 },
+
+    #[error("the voltage-dependent load at bus {bus} {reason}")]
+    InvalidLoadVoltageModel {
+        bus: BusId,
+        reason: crate::load_voltage::LoadVoltageError,
+    },
+
     #[error("invalid normalize option `{field}`: {value}")]
     InvalidNormalizeOption { field: &'static str, value: f64 },
 
@@ -194,6 +203,8 @@ impl Error {
             Error::NoReferenceBus => &codes::CANONICALIZE_NORMALIZE_NO_REFERENCE_BUS,
             Error::ReferenceBusCount { .. } => &codes::BUILD_INDEX_REFERENCE_BUS_COUNT,
             Error::InvalidBaseMva { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_BASE_MVA,
+            Error::InvalidThermalLimit { .. } => &codes::VALIDATE_THERMAL_LIMIT_INVALID,
+            Error::InvalidLoadVoltageModel { .. } => &codes::VALIDATE_LOAD_VOLTAGE_INVALID,
             Error::InvalidNormalizeOption { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_OPTION,
             Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
             Error::ClosedSwitch { .. } => &codes::BUILD_SWITCH_CLOSED,
@@ -241,6 +252,8 @@ impl Error {
             | Error::NoReferenceBus
             | Error::ReferenceBusCount { .. }
             | Error::InvalidBaseMva { .. }
+            | Error::InvalidThermalLimit { .. }
+            | Error::InvalidLoadVoltageModel { .. }
             | Error::InvalidNormalizeOption { .. }
             | Error::UngroundedComponent { .. }
             | Error::ClosedSwitch { .. }
@@ -315,6 +328,7 @@ mod tests {
             Error::NoReferenceBus,
             Error::reference_bus_count(2),
             Error::InvalidBaseMva { base: 0.0 },
+            Error::InvalidThermalLimit { magnitude: -1.0 },
             Error::InvalidNormalizeOption {
                 field: "angle_bound_pad",
                 value: 0.0,

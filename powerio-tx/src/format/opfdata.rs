@@ -822,9 +822,18 @@ fn parse_opfdata_document(
         let mut branch = Branch::new(BusId(from + 1), BusId(to + 1), grid.r(), grid.x());
         branch.b = grid.b_fr() + grid.b_to();
         branch.charging = Some(BranchCharging::new(0.0, grid.b_fr(), 0.0, grid.b_to()));
-        branch.rate_a = grid.rate_a() * base;
-        branch.rate_b = grid.rate_b() * base;
-        branch.rate_c = grid.rate_c() * base;
+        branch.rate_a = crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(grid.rate_a())?,
+            base,
+        )?;
+        branch.rate_b = crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(grid.rate_b())?,
+            base,
+        )?;
+        branch.rate_c = crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(grid.rate_c())?,
+            base,
+        )?;
         branch.angmin = grid.angmin() * RAD_TO_DEG;
         branch.angmax = grid.angmax() * RAD_TO_DEG;
         branch.solution = Some(solution.to_network(base));
@@ -841,9 +850,18 @@ fn parse_opfdata_document(
         .zip(&document.solution.edges.transformer.features)
     {
         let mut branch = Branch::new(BusId(from + 1), BusId(to + 1), grid.r(), grid.x());
-        branch.rate_a = grid.rate_a() * base;
-        branch.rate_b = grid.rate_b() * base;
-        branch.rate_c = grid.rate_c() * base;
+        branch.rate_a = crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(grid.rate_a())?,
+            base,
+        )?;
+        branch.rate_b = crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(grid.rate_b())?,
+            base,
+        )?;
+        branch.rate_c = crate::thermal_limit::scaled(
+            crate::thermal_limit::from_zero_unlimited(grid.rate_c())?,
+            base,
+        )?;
         branch.tap = grid.tap();
         branch.shift = grid.shift() * RAD_TO_DEG;
         branch.b = grid.b_fr() + grid.b_to();

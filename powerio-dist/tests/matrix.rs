@@ -807,6 +807,20 @@ fn diagonal_byte_identity() {
         } else {
             &echoed.text
         };
+        // PowerIO writes one BMOPF. The vendored examples are older drafts,
+        // so a BMOPF write restates them in the current schema instead of
+        // echoing.
+        if matches!(case.fmt, Fmt::Bmopf) {
+            let doc: serde_json::Value = serde_json::from_str(retained).unwrap();
+            assert_eq!(
+                doc["meta"]["schema_version"],
+                powerio_dist::BMOPF_SCHEMA_ID.rsplit('/').nth(1).unwrap(),
+                "{}: a legacy document is written in the current schema",
+                case.label
+            );
+            assert!(doc["meta"].get("$schema").is_none(), "{}", case.label);
+            continue;
+        }
         assert_eq!(*retained, original, "{}: diagonal echo", case.label);
         assert!(echoed.warnings.is_empty(), "{}: echo warns", case.label);
     }

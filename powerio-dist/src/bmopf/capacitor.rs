@@ -1,6 +1,7 @@
 //! Normalize per-coil capacitor arrays into the existing terminal shunt model.
 //! No source-only metadata carries electrical coefficients into downstream solvers.
 use crate::{
+    Configuration,
     collect::Diagnostics,
     diagnostics::codes,
     error::{Error, Result},
@@ -14,6 +15,37 @@ fn invalid(name: &str) -> Error {
             "capacitor {name}: expected finite nonnegative per-coil ratings, positive coil voltage, and matching WYE/DELTA/SINGLE_PHASE terminals"
         ),
     }
+}
+
+/// A WYE coil returns through the bank's one mapped terminal that is not a
+/// phase of its bus (the one WYE neutral rule over the bus's
+/// `terminal_names` and the document's `terminal_conventions`, the map
+/// itself standing in for an undeclared bus), or, when every mapped terminal
+/// is a phase, through the last terminal.
+fn wye_neutral(
+    doc: &Map<String, Value>,
+    capacitor: &Value,
+    map: &[String],
+) -> std::result::Result<Option<usize>, String> {
+    let bus_terminals: Vec<String> = capacitor
+        .get("bus")
+        .and_then(Value::as_str)
+        .and_then(|bus| doc.get("bus")?.get(bus)?.get("terminal_names"))
+        .and_then(Value::as_array)
+        .map_or_else(
+            || map.to_vec(),
+            |names| {
+                names
+                    .iter()
+                    .filter_map(|t| t.as_str().map(str::to_owned))
+                    .collect()
+            },
+        );
+    crate::connection::calc_mapped_neutral_position(
+        &bus_terminals,
+        map,
+        doc.get("terminal_conventions"),
+    )
 }
 
 pub(super) fn lower(doc: &mut Map<String, Value>, diagnostics: &mut Diagnostics) -> Result<()> {
@@ -42,34 +74,35 @@ pub(super) fn lower(doc: &mut Map<String, Value>, diagnostics: &mut Diagnostics)
         {
             return Err(invalid(&name));
         }
-        let pairs: Vec<(usize, Option<usize>)> = match (capacitor["configuration"].as_str(), n) {
-            (Some("WYE"), 1) => vec![(0, None)],
-            (Some("WYE"), 2..) => (0..n - 1).map(|k| (k, Some(n - 1))).collect(),
-            (Some("SINGLE_PHASE" | "DELTA"), 2) => vec![(0, Some(1))],
-            (Some("DELTA"), 3) => (0..3).map(|k| (k, Some((k + 1) % 3))).collect(),
+        let configuration = match capacitor["configuration"].as_str() {
+            Some("WYE") => Configuration::Wye,
+            Some("DELTA") => Configuration::Delta,
+            Some("SINGLE_PHASE") => Configuration::SinglePhase,
             _ => return Err(invalid(&name)),
         };
+        let map: Vec<String> = terminals
+            .iter()
+            .filter_map(|t| t.as_str().map(str::to_owned))
+            .collect();
+        let neutral = if configuration == Configuration::Wye {
+            wye_neutral(doc, capacitor, &map).map_err(|_| invalid(&name))?
+        } else {
+            None
+        };
+        let coils = crate::connection::calc_connection_channels(configuration, n, q.len(), neutral)
+            .map_err(|_| invalid(&name))?;
         let voltage = capacitor["v_nom"].as_f64().ok_or_else(|| invalid(&name))?;
-        if !voltage.is_finite()
-            || voltage <= 0.0
-            || q.len() != pairs.len()
-            || q.iter().any(|q| !q.is_finite() || *q < 0.0)
-        {
+        if !voltage.is_finite() || voltage <= 0.0 || q.iter().any(|q| !q.is_finite() || *q < 0.0) {
             return Err(invalid(&name));
         }
-        let mut b = vec![vec![0.0; n]; n];
-        for (q, (p, m)) in q.iter().zip(pairs) {
-            let value = q / voltage.powi(2);
-            if !value.is_finite() {
-                return Err(invalid(&name));
-            }
-            b[p][p] += value;
-            if let Some(m) = m {
-                b[m][m] += value;
-                b[p][m] -= value;
-                b[m][p] -= value;
-            }
+        let susceptance: Vec<f64> = q
+            .iter()
+            .map(|&q| crate::electrical::calc_rated_admittance(q, voltage))
+            .collect();
+        if susceptance.iter().any(|value| !value.is_finite()) {
+            return Err(invalid(&name));
         }
+        let b = crate::connection::calc_coil_susceptance_matrix(n, &coils, &susceptance);
         if b.iter().flatten().any(|value| !value.is_finite()) {
             return Err(invalid(&name));
         }

@@ -31,6 +31,12 @@ use crate::model::{
     MulticonductorNetworkTables, UntypedObject, VoltageSource,
 };
 
+/// The neutral terminal of a PowerModelsDistribution MATHEMATICAL bus:
+/// conductor `4`, the `kr_neutral` its Kron reduction removes. The reader
+/// names the neutral it restores so, and states it as the network's
+/// neutral ([`crate::calc_terminal_role`] reads that statement).
+const KRON_NEUTRAL: &str = "4";
+
 const FMT: &str = "PMD MATHEMATICAL";
 
 /// A generator's `pmin`, `pmax`, `qmin`, and `qmax`, each when stated.
@@ -628,7 +634,8 @@ impl<'a> Reader<'a> {
             return 1.0;
         }
         let vbase = self.vbase.get(bus_key).copied().unwrap_or(1.0);
-        vbase * vbase / self.sbase * self.voltage_scale_factor
+        powerio_core::electrical::calc_impedance_base(vbase, self.sbase).unwrap_or(f64::NAN)
+            * self.voltage_scale_factor
     }
 
     /// Amperes of a per unit current at a bus.
@@ -648,16 +655,16 @@ impl<'a> Reader<'a> {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if let Some(b) = self.net.buses_mut().iter_mut().find(|b| b.id == bus) {
-            if !b.terminals.iter().any(|t| t == "4") {
-                b.terminals.push("4".to_owned());
+            if !b.terminals.iter().any(|t| t == KRON_NEUTRAL) {
+                b.terminals.push(KRON_NEUTRAL.to_owned());
             }
-            if kron && !b.grounded.iter().any(|t| t == "4") {
-                b.grounded.push("4".to_owned());
+            if kron && !b.grounded.iter().any(|t| t == KRON_NEUTRAL) {
+                b.grounded.push(KRON_NEUTRAL.to_owned());
             }
         }
         self.net.extras_mut().insert(
             "bmopf_terminal_conventions".into(),
-            json!({"neutral": ["4"]}),
+            json!({"neutral": [KRON_NEUTRAL]}),
         );
     }
 
@@ -774,11 +781,11 @@ impl<'a> Reader<'a> {
             bus.connections("terminals")
                 .iter()
                 .zip(bus.bools("grounded"))
-                .any(|(terminal, grounded)| terminal == "4" && grounded)
+                .any(|(terminal, grounded)| terminal == KRON_NEUTRAL && grounded)
         }) {
             self.net.extras_mut().insert(
                 "bmopf_terminal_conventions".into(),
-                json!({"neutral": ["4"]}),
+                json!({"neutral": [KRON_NEUTRAL]}),
             );
         }
     }
@@ -872,7 +879,7 @@ impl<'a> Reader<'a> {
                 extras,
                 ..DistBus::default()
             };
-            let phases = out.phase_indices(self.net.extras().get("bmopf_terminal_conventions"));
+            let phases = out.phase_indices(self.net.terminal_conventions());
             let bound = |key: &str, open: f64| -> (Option<f64>, Option<Vec<f64>>) {
                 let values = bus.floats(key);
                 let phase_values: Vec<f64> = phases
@@ -1004,8 +1011,9 @@ impl<'a> Reader<'a> {
 
     // ----- transformers -----------------------------------------------------------
 
-    #[allow(clippy::too_many_lines)] // one transformer folds back in one pass: windings, loss model, tests
-    #[allow(clippy::too_many_lines, clippy::many_single_char_names)] // PMD's loss model inverted in one pass, in its own names
+    // One transformer folds back in one pass (windings, loss model, tests), and
+    // PMD's loss model is inverted in its own names.
+    #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
     fn map_transformer(&mut self, entry: &MapEntry) {
         let what = format!("transformer {}", entry.from);
         let mut units: Vec<Obj<'a>> = Vec::new();
@@ -1106,7 +1114,7 @@ impl<'a> Reader<'a> {
                 // Choose the to bus base and recover the from voltage on it.
                 to_kv
             } else if conn == DistWindingConn::Delta {
-                ratio_kv / 3f64.sqrt()
+                crate::electrical::calc_wye_phase_voltage(ratio_kv)
             } else {
                 ratio_kv
             };
@@ -1115,7 +1123,7 @@ impl<'a> Reader<'a> {
             let bus = self.bus_id(bus_key, &what);
             if conn == DistWindingConn::Wye
                 && self.doc.get("is_kron_reduced").and_then(Value::as_bool) == Some(true)
-                && !map.iter().any(|t| t == "4")
+                && !map.iter().any(|t| t == KRON_NEUTRAL)
             {
                 // Native PMD removes the first (grounded) terminal of the
                 // reversed center-tap half, retaining its -1 polarity. Put
@@ -1127,13 +1135,13 @@ impl<'a> Reader<'a> {
                     && map.len() == 1
                     && unit.int("polarity") == Some(-1)
                 {
-                    map.insert(0, "4".to_owned());
+                    map.insert(0, KRON_NEUTRAL.to_owned());
                 } else {
-                    map.push("4".to_owned());
+                    map.push(KRON_NEUTRAL.to_owned());
                 }
                 self.restore_neutral(&bus);
             }
-            let hot = crate::model::n_winding_phase_count(conn, &map);
+            let hot = crate::transformer::calc_winding_phase_count(conn, &map);
             phases = phases.max(hot);
             // The direct unit's tap and polarity act once, on its from
             // winding. Applying them to both synthesized windings cancels them.
@@ -1259,8 +1267,7 @@ impl<'a> Reader<'a> {
                         b.index("f_bus")
                     };
                     star.push(other.unwrap_or_else(|| t_bus.clone()));
-                    let z_w =
-                        crate::model::n_winding_impedance_base(1, windings[w].v_ref, s_rating);
+                    let z_w = crate::electrical::calc_impedance_base(windings[w].v_ref, s_rating);
                     if let Some(z_w) = z_w {
                         windings[w].r_pct = r_int * ratios[w] * ratios[w] / z_w * 100.0;
                     }
@@ -1295,8 +1302,7 @@ impl<'a> Reader<'a> {
                 zbr.insert((i.min(j), j.max(i)), Complex64::new(r, x));
             }
             let zsc = br2sc_impedance(&zbr, nrw);
-            if let Some(z1) = crate::model::n_winding_impedance_base(1, windings[0].v_ref, s_rating)
-            {
+            if let Some(z1) = crate::electrical::calc_impedance_base(windings[0].v_ref, s_rating) {
                 for (k, pair) in crate::model::pair_keys(nrw).iter().enumerate() {
                     if let Some(z) = zsc.get(pair) {
                         xsc_pct[k] = z.im * ratios[0] * ratios[0] / z1 * 100.0;
@@ -1307,8 +1313,8 @@ impl<'a> Reader<'a> {
                 let v1 = windings[0].v_ref;
                 let g_sh = y_sh.re / (ratios[0] * ratios[0]);
                 let b_sh = y_sh.im / (ratios[0] * ratios[0]);
-                let noloadloss = g_sh * v1 * v1 / s_rating;
-                let cmag = -b_sh * v1 * v1 / s_rating;
+                let noloadloss = crate::electrical::calc_rated_power(g_sh, v1) / s_rating;
+                let cmag = crate::electrical::calc_rated_power(-b_sh, v1) / s_rating;
                 if noloadloss.abs() > 0.0 {
                     extras.insert("%noloadloss".into(), json!(noloadloss * 100.0));
                 }
@@ -1505,7 +1511,7 @@ impl<'a> Reader<'a> {
         // the neutral the reduction eliminated, restored at the bus.
         let pd_len = first.floats("pd").len().max(1);
         if first.str("configuration") != Some("DELTA") && connections.len() == pd_len {
-            connections.push("4".to_owned());
+            connections.push(KRON_NEUTRAL.to_owned());
             self.restore_neutral(&bus);
         }
         let n = connections.len().max(1);
@@ -1671,7 +1677,7 @@ impl<'a> Reader<'a> {
         let bus_key = g.index("gen_bus").unwrap_or_default();
         let bus = self.bus_id(&bus_key, &what);
         let map = g.connections("connections");
-        let hot = map.iter().filter(|t| *t != "4").count().max(1);
+        let hot = map.iter().filter(|t| *t != KRON_NEUTRAL).count().max(1);
         let (p_min, p_max, q_min, q_max) = self.gen_bounds(&g);
         let s_max = p_max.clone().unwrap_or_else(|| vec![0.0; hot]);
         let mut ibr = DistIbr::new(
@@ -1896,7 +1902,7 @@ pub(super) fn br2sc_impedance(
         y[j][j] += yij;
     }
     let reduced: Vec<Vec<Complex64>> = (1..n).map(|i| (1..n).map(|j| y[i][j]).collect()).collect();
-    let Some(zb) = invert(&reduced) else {
+    let Some(zb) = super::invert(&reduced) else {
         return zbr.clone();
     };
     let mut out = BTreeMap::new();
@@ -1907,47 +1913,4 @@ pub(super) fn br2sc_impedance(
         }
     }
     out
-}
-
-/// Gauss-Jordan inverse of a small complex matrix; `None` when singular.
-fn invert(a: &[Vec<Complex64>]) -> Option<Vec<Vec<Complex64>>> {
-    let n = a.len();
-    let mut m: Vec<Vec<Complex64>> = a
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut r = row.clone();
-            r.extend((0..n).map(|j| {
-                if i == j {
-                    Complex64::new(1.0, 0.0)
-                } else {
-                    Complex64::default()
-                }
-            }));
-            r
-        })
-        .collect();
-    for col in 0..n {
-        let pivot = (col..n).max_by(|&a, &b| m[a][col].norm().total_cmp(&m[b][col].norm()))?;
-        if m[pivot][col].norm() < 1e-300 {
-            return None;
-        }
-        m.swap(col, pivot);
-        let p = m[col][col];
-        for v in &mut m[col] {
-            *v /= p;
-        }
-        for row in 0..n {
-            if row != col {
-                let factor = m[row][col];
-                if factor != Complex64::default() {
-                    let pivot_row = m[col].clone();
-                    for (v, pv) in m[row].iter_mut().zip(&pivot_row) {
-                        *v -= factor * pv;
-                    }
-                }
-            }
-        }
-    }
-    Some(m.into_iter().map(|row| row[n..].to_vec()).collect())
 }

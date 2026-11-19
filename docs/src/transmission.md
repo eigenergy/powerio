@@ -24,8 +24,10 @@ A few conventions hold across the accessors. Bus identifiers are the source's
 own; dense zero based indices exist only in matrix results, which include the
 mapping. Powers are MW and MVAr as the source gives them, and angles are
 degrees; `to_normalized` derives a per unit, radian, in service only copy
-when a solver wants one. A branch `tap` of `0` means `1`, and a `rate_a` of
-`0` means unrated.
+when a solver wants one. A branch `tap` of `0` means `1`. Thermal ratings use
+ordinary floating-point numbers: zero is a zero bound and positive infinity
+means no bound. Neither changes branch status. Readers and writers translate
+formats such as MATPOWER, whose file value zero means no bound.
 
 Sources that describe more than the balanced calculation view, such as XIIDM,
 CGMES, and PSS/E RAW 35, also fill in the detailed connectivity: substations,

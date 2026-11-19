@@ -7,6 +7,1112 @@
   It used to write a zero impedance line, which OpenDSS rejects with error 183
   (#862).
 
+## 0.12.3
+
+- OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.
+
+- `McAcOpfSolution` can carry the generator active dispatch per coil, the layout of generator cost
+  and bounds (`with_generator_coil_active_powers`, `generator_coil_active_powers`, IR field and C
+  quantity `generator_coil_active_power`). `generator_active_power` stays per terminal. The IR schema is 0.12.3.
+
+- OpenDSS: `DssReadLimits` raises the include byte limit (64 MiB) and the retained property limit (4,194,304) for a case too large for the defaults, such as a SMART-DS region. Set it with `ParseOptions::dss_limits` or `powerio_dist::parse_with_dss_limits` in Rust, `dss_max_include_bytes` and `dss_max_properties` in Python's `powerio.parse`, or `--dss-max-include-bytes` and `--dss-max-properties` in the CLI. The defaults are unchanged.
+
+- OpenDSS: a second `New` for an existing general object (a linecode, a loadshape, wire data and the like) edits it without a message in OpenDSS. The reader now reports it as one `READ.DSS.OBJECT_REDEFINED` remark per class with a count, not one `PARSE.DSS.SOURCE_MALFORMED` warning per statement. A duplicate circuit element keeps its warning.
+
+- OpenDSS: lines that fetched the same state of a linecode share one evaluation of it. A region whose feeders each declare the same linecodes again read in 2 s where it took 16 s.
+
+- `MulticonductorNetwork::bus` finds a bus through a name index it builds after repeated lookups, where every lookup searched the whole bus table. A pass over the transformers of a 224,389 bus OpenDSS region took 3.4 s in that search; one pass over 10,000 transformers on 50,000 buses now takes 24 ms where it took 335 ms. Results, case insensitive matching and the first match among equal names are unchanged.
+
+## 0.12.2
+
+- Retained OpenDSS regulator controls have a distinct diagnostic from invalid property values. Missing transformer references still report a dropped reference. This lets snapshot consumers explicitly use written taps while keeping control records.
+
+- Distribution transformer admittances support finite three-winding units and apply stated OpenDSS small grounding admittances, including nondefault coefficients. Synthetic OpenDSS comparisons cover winding connections, taps and floating neutrals. Single-phase DSS regulators keep their nameplate leakage calculation; BMOPF stated-ohm regulators retain their existing primitive.
+
+## 0.12.1
+
+**Matrices and preparations**
+
+- `DcOpfPreparation::calc_bus_branch_incidence`, `calc_generator_bus_incidence`, `calc_matrices`
+  and `calc_branch_flow` derive the incidence, the generator to bus map, every DC OPF matrix and
+  the branch flows from a preparation already in hand, and `calc_solver_branch_flow_matrix` is
+  public. Every incidence matrix in `powerio-matrix` (the sensitivity factor, `DcOperators`, the
+  preparation) is now one counting sort straight into CSR, and every DC flow from angles and flow
+  offset is one calculation, so `calc_branch_flow` and `DcOperators::calc_branch_flow_dc` agree on
+  shared columns.
+- `Grounding` (sorted, distinct references and the reduced index map of `ground_at_each`, with
+  `reduced`, `full` and `full_of_reduced`) is public. `GroundedIndexMap`, its single-reference
+  case, now reads the same index map and stays for compatibility through 0.12.x.
+- `AcOpfPreparation::calc_admittance_matrix` and `AcPfPreparation::calc_admittance_matrix` stamp
+  `Y` in dense bus order with every diagonal stored; `AcBranchData::calc_branch_admittance`,
+  `calc_branch_flows` and `clear_jumper_charging` give the pi model blocks, terminal flows at given
+  voltages, and the jumper charging rule over the prepared columns. The pi model block, its
+  scatter into `Y` and the self-loop fold are each formed once, for `calc_admittance_matrix`, `Bp`,
+  `Bpp` and both preparations; a self-loop folded into a preparation's bus shunt can move in the
+  last place.
+- `PowerFlowJacobian::from_admittance` and `update_from_voltages` build and refresh the Jacobian
+  from `(G, B, vm, va)`. `PowerFlowJacobian::calc_bus_power_injection` returns a
+  `BusPowerInjection` (`S = V conj(Y V)` with the currents behind it) and `update_from_injection`
+  refreshes the Jacobian from it, so a Newton step forms the injection once for its mismatch and
+  its Jacobian; the free `calc_bus_power_injection` is the same calculation. The Jacobian fill no
+  longer searches or evaluates trigonometry per entry: on a 78,484 bus case a build takes 6 ms
+  instead of 73 ms and a refresh 1.4 ms instead of 7 ms.
+- `DcOpfPreparation::calc_phase_shift_withdrawal` recomputes `p_shift` (`A` times the branch flow
+  offsets) from the preparation's branch columns, so a caller that edits a weight or a shift keeps
+  the nodal phase shift in step. The preparation's `p_shift` and
+  `DcOperators::calc_bus_phase_shift_injection` are that one scatter.
+- `AcBranchData::calc_branch_admittance_series_derivative` gives the derivatives of a branch's pi
+  model block with respect to its series conductance and susceptance: the same block formula at a
+  unit series admittance with no charging.
+- `calc_line_primitive_admittance`, `calc_shunt_primitive_admittance` and
+  `calc_capacitor_primitive_admittance` give a multiconductor line's, shunt's and capacitor bank's
+  primitive admittance over its terminals; `calc_multiconductor_admittance_matrix` scatters exactly
+  these. A line's series and shunt halves now enter the nodal sum together, which can move an
+  entry in the last place. `calc_passive_primitives` lists every line, shunt and capacitor bank
+  with its primitive and `(bus, terminal)` rows, `scatter_primitive_admittance` is the one scatter
+  of a primitive into a nodal system, and `MulticonductorNodeIndex::terminals` and
+  `resolve_position` expose the flat terminal index underneath the node index.
+- `powerio_dist::calc_capacitor_susceptance(network, capacitor)` is the one capacitor bank stamp
+  (`q_rated / coils / V²` over the coils of `calc_element_connection`):
+  `calc_capacitor_primitive_admittance` is `j` times it, and the PMD and PMD MATHEMATICAL writers
+  and the LinDist3Flow preparation read it where each kept its own. Behaviour changes in those
+  three: a WYE bank's return is the bus's neutral (`calc_wye_neutral_position`) and a WYE bank
+  that maps no neutral returns each phase through ground, where they took the last mapped
+  terminal as the neutral; a refused bank is reported with the stamp's reason; LinDist3Flow's
+  three terminal DELTA bank is `q_rated / 3 / V²` (it was `q_rated / (3 V²)`), which can move it
+  in the last place. `calc_coil_susceptance_matrix` (each coil's susceptance on its terminal's
+  diagonal and, for a coil with a return terminal, that diagonal and less between them) is the
+  one coil stamp (it panics unless given one susceptance per coil): the capacitor stamp, the
+  BMOPF per coil capacitor lowering, the OpenDSS capacitor and reactor bank reader and the OpenDSS
+  common return capacitor bank read it, each coil's susceptance from
+  `powerio_core::electrical::calc_rated_admittance`, and `calc_mapped_neutral_position` (the
+  WYE neutral among an element's mapped terminals for given bus terminals and conventions) is the
+  rule `calc_wye_neutral_position` applies over a network. Behaviour changes in the BMOPF per coil
+  capacitor lowering (a `q_rated` array): a WYE bank returns through the one mapped terminal its
+  bus (by `terminal_names` and the document's `terminal_conventions`) does not call a phase,
+  where it took the last mapped terminal, and through the last terminal only when every mapped
+  terminal is a phase; two non-phase terminals are refused as ambiguous. Its coils are those of
+  `calc_connection_channels` for one rating per coil, so a WYE or single phase bank with one
+  rating per terminal (each coil to ground), a DELTA bank of terminal pairs and a DELTA ring of
+  more than three terminals now read, where only a WYE bank with one more terminal than ratings
+  (or one terminal), a two terminal DELTA or single phase bank and a three terminal DELTA ring
+  did. The OpenDSS common return bank's values are unchanged.
+- `calc_transformer_primitive_admittance(network, transformer)` gives a finite leakage
+  transformer's primitive admittance over its physical terminals (`TransformerPrimitive`), the
+  OpenDSS `CalcY_Terminal` path: WYE and DELTA windings, fixed taps, the magnetizing branch and
+  finite neutral impedances, for two winding units of one to three phases, the BMOPF centre tap
+  and the BMOPF single phase autotransformer, with each solidly grounded neutral listed.
+  `calc_multiconductor_admittance_matrix` now stamps every transformer that states leakage instead
+  of refusing it, and writes a solidly grounded neutral as an exact zero voltage row of the
+  augmented system; a two winding unit that states no leakage is an ideal constraint as before. A
+  single phase autotransformer stating its series impedance in its extras now stamps that
+  impedance; it was read as an ideal ratio. A source row that already fixes a grounded neutral at
+  zero settles it (no second, rank deficient row), and a nonzero source voltage there is refused
+  (`GroundedNeutral::needs_zero_voltage_row`, the one rule for that meeting).
+- `calc_passive_primitives` returns `NetworkPrimitives`: every line, shunt, capacitor bank and
+  leakage transformer (`PassiveFamily::Transformer`) with its primitive, the solidly grounded
+  neutrals (`GroundedNeutral`) and the ideal transformers left for exact constraints, the one
+  element list `calc_multiconductor_admittance_matrix` scatters.
+  `calc_capacitor_primitive_admittance` takes the network, reads the bank's coils from the one
+  connection rule and states a one terminal WYE bank's coil voltage as its nameplate; the
+  multiconductor OPF writes this same stamp per unit. A WYE bank whose terminals the bus
+  conventions all call phases has coils to ground, as the OPF read it.
+- `calc_transformer_leakage_impedances` takes a `TransformerLeakageBase`: OpenDSS nameplate
+  percentages, a BMOPF n-winding unit's phase bases, or a regulator's stated ohms. It is the one
+  leakage derivation behind `calc_transformer_winding_admittance`, the transformer primitive, the
+  multiconductor OPF transformer descriptor and the multiconductor to balanced lowering, whose
+  n-winding, regulator and lowered leakage can move in the last place. A regulator's stated series
+  resistance or reactance must be nonnegative.
+- The multiconductor OPF transformer descriptor reads every winding quantity from
+  `powerio_dist::transformer`, the same as the primitive, so the power flow and the OPF stamp the
+  same unit: coil voltage and turns (`calc_coil_voltage`), the reduced leakage
+  (`calc_reduced_leakage`, against the first winding), the delta orientation, the magnetizing
+  branch, the neutral grounding and a regulator's stated ohms. Visible changes: a canonical
+  (OpenDSS) mixed WYE/DELTA unit takes OpenDSS's orientation (a DELTA high voltage winding with the
+  default `leadlag` is `-1`; it was `+1`); `leadlag`, `%noloadloss` and `%imag` are read rather
+  than refused; a negative `r_neutral` is OpenDSS's floating neutral rather than a refusal; a solid
+  neutral (both impedances zero) on a terminal the network does not ground is refused rather than
+  left floating; and a stated `no_load_shunt` on the rated winding of a single phase or centre tap
+  unit enters that port's current as `g_no_load` did. `McOpfTransformer::calc_physical_tap`,
+  `calc_tap_multiplier` and their derivatives state the one tap multiplier convention.
+- `AcOpfAssemblyOptions::with_synthesized_limit_window` and the same on `DcOpfAssemblyOptions`
+  take a `SynthesizedLimitWindow`: `Stated` (the default, as before) or `SelectedBounds`, which
+  synthesizes an unrated branch's limit over the selected angle difference bounds, PowerModels'
+  order (pad, then `calc_thermal_limits!`). The preparations record it as
+  `synthesized_limit_window`, written only when it is not `Stated`.
+- `build_ac_opf_preparation` no longer scans every bus identity per prepared bus: case78484 builds
+  in 32 ms instead of 3.8 s. A constraint selection naming elements is matched through a set.
+- `BranchSusceptanceFormula::calc_susceptance_sensitivity_to_series_susceptance`,
+  `IndexedNetwork::is_analysis_branch`, `calc_dense_island_labels` (the islands of
+  `IndexedNetwork::calc_island_labels`, numbered `0..k` by first bus, over any edge list such as a
+  preparation's branch columns), `correct_angle_difference_bounds_with_pad`,
+  `IslandReferencePolicy::DesignateMissing` (keep every stated reference, designate only where an
+  island has none), `IslandReferencePolicy::DesignateMissingSupplied` (the same, counting only
+  references that host an in-service generator and demoting the others to PQ) and
+  `IslandReferenceReport::de_energized_islands` (with each island's unserved load). Island
+  partitions, island labels, the preparations' reference coverage check and the multiconductor node
+  merge share one component labeling.
+- Fix: the `CANONICALIZE.ISLAND.DE_ENERGIZED` and `CANONICALIZE.ISLAND.HVDC_FED_DE_ENERGIZED`
+  findings of a normalized network printed its per unit unserved load and HVDC infeed labelled
+  MW (0.25 MW for 25 MW on a 100 MVA base); they now state MW, `base_mva` over
+  `per_unit_base`. `DeEnergizedIsland`'s unserved load keeps the network's own unit. Shipped in
+  0.12.0.
+
+**Shared formulas**
+
+- `powerio_core::electrical` (re-exported as `powerio::electrical`, `powerio_tx::electrical` and
+  `powerio_dist::electrical`) holds the scalar formulas both network families share:
+  `calc_impedance_base` (`V² / S`, `None` for an unusable base) and `calc_admittance_base`
+  (`S / (V · V)`, the same refusals), `calc_power_factor_sine`,
+  `calc_reactive_ratio` (with `ReactiveRatioForm`: `Sine`, `√(1 − pf²)/pf`, or `OpenDss`,
+  OpenDSS's `√(1/pf² − 1)` signed as `pf`) and `calc_power_factor_coefficients` with
+  `calc_reactive_ratio_derivative` and `calc_power_factor_coefficients_derivative`, and the
+  voltage power law term `calc_voltage_power_term` (and `calc_voltage_power_terms`) with its
+  ratio floor `LOAD_VOLTAGE_RATIO_FLOOR`. The per unit bases of the BMOPF, PMD, CGMES, UCTE,
+  XIIDM, Sienna, balanced MG-RAVENS, SINCAL, OpenDSS (source, motor), GridLAB-D (regulator) and
+  multiconductor OPF code, every `Q = P tan(acos pf)` of the OpenDSS (load, generator, storage),
+  GridLAB-D, SINCAL, PSS/E (VSC converter) and multiconductor OPF code, and every load law
+  evaluation call it. The OpenDSS load, generator and storage readers take the `OpenDss` form,
+  the pinned engine's arithmetic, and every other caller the `Sine` form. Behaviour changes,
+  each in the last place: a GridLAB-D regulator's resistance, an OpenDSS no-load percentage
+  written from a terminal coil shunt, an OpenDSS generator's reactive power from `kW` and `pf`
+  (`tan(acos pf)` became the engine's `√(1/pf² − 1)`) and a PSS/E VSC converter's reactive
+  power. OpenDSS load and storage reactive power is unchanged. The admittance bases of the CGMES reader and writer, the balanced MG-RAVENS reader and
+  writer, the Sienna reader (`NATURAL_UNITS`), the BMOPF writer's no-load shunt and the
+  GridLAB-D FBS default core call `calc_admittance_base`, bit for bit as before.
+  A base formed over a zero, negative or nonfinite voltage or power (or whose quotient
+  overflows) is no longer a number: where 0.12.0 formed `V² / S` directly, a zero voltage gave
+  a zero base, a zero power an infinite one and a negative power a negative one. The CGMES and
+  XIIDM writers and the SINCAL balanced writer now refuse a network whose base MVA is not
+  positive and finite (`check_base_mva`), where they wrote the values that base gave; an OpenDSS
+  `VSource` whose impedance base is unusable is refused by name rather than as a nonfinite
+  recalculation; the BMOPF writer omits a transformer's no-load shunt whose admittance base
+  underflows to zero or overflows, as it omits one over a non-positive base. Elsewhere such a
+  base makes the converted value `NaN`, which a later finiteness check refuses where the reader
+  or writer has one: a PMD MATHEMATICAL bus or winding with a zero base voltage or power, a GridLAB-D regulator
+  with a zero rating or voltage, a SINCAL multiconductor transformer or equivalent with a zero
+  rated voltage, the multiconductor to balanced lowering at a zero base voltage, and a UCTE,
+  CGMES or XIIDM reader's element at a zero nominal voltage (each wrote or read zero or an
+  infinity before).
+- `powerio_core::electrical::calc_branch_impedance_base` (`V₁ V₂ / S`, the base of a branch
+  between two voltage bases; `calc_impedance_base` is its case `V₁ = V₂`, bit for bit as before)
+  is the XIIDM line reader's and writer's two sided base. The XIIDM reader states a line's
+  per unit impedance as `r / (V₁ V₂ / S)` where it formed `r · (S / (V₁ V₂))`, and the writer
+  `r · (V₁ V₂ / S)` where it formed `((r V₁) V₂) / S`; both can move in the last place.
+- These inline `V² / S`, `S / V²`, `P / V²` and `Y · V²` call `powerio_core::electrical` (the
+  entries below name further ones):
+  the XIIDM shunt reader (`calc_rated_power`, `g · (V · V)` where it formed `(g · V) · V`, which
+  can move a shunt's or section's admittance in the last place) and writer
+  (`calc_rated_admittance`, unchanged); the Sienna `NATURAL_UNITS` shunt (unchanged); the PMD
+  MATHEMATICAL reader's `%noloadloss` and `%imag` (`calc_rated_power(g, V) / S`, where it formed
+  `((g · V) · V) / S`, which can move them in the last place: the `ut_trans_2w_yy_math` example's
+  `%noloadloss` reads `3.333333333333334` where it read `3.3333333333333335`) and its writer's
+  no-load conductance and susceptance (PMD's `noloadloss · snom / vnom²` through
+  `calc_rated_admittance`), whose per unit values, iterated to the fixed point of that read and
+  rewrite, can move in the last place (the CIM `tank_feeder` example's magnetizing susceptance); the LinDist3Flow constant
+  impedance load coefficients (unchanged); the OpenDSS capacitor and reactor bank reader (each
+  coil's `calc_rated_admittance` stamped by `calc_coil_susceptance_matrix`, unchanged except that
+  a WYE bank of zero rated `kvar` now stamps `+0.0` where a reactor stamped `−0.0`) and writers
+  (the shunt writer's `kvar` is `calc_rated_power(b, V) · coils / 1e3`, where it formed
+  `b · V · V`, which can move it in the last place; the common return bank's is unchanged), all
+  reading one OpenDSS bank coil voltage rule (`kv / √3` for a WYE bank of two or three phases,
+  `kv` otherwise); the GridLAB-D DELTA_DELTA scale (unchanged); the OpenDSS writer's one ohm
+  cancellation leakage of an ideal transformer (`100 / Z_base` where it formed
+  `100 S / (V t)²`, which can move it in the last place); the GridLAB-D regulator's winding
+  resistance (unchanged, except that a regulator whose nominal voltage squares past the `f64`
+  range is now refused even with zero resistance, as it was with a positive one); the SINCAL
+  balanced transformer's series impedance rebase (`Z_base(Un2, Sn) / Z_base(V_bus, S_base)`),
+  core admittance (`calc_rated_admittance` at the tapped winding voltage times the bus impedance
+  base) and capacitor (`calc_rated_power(calc_rated_admittance(P, Un), V_bus)`), each of which can
+  move in the last place; and the SINCAL multiconductor transformer's impedance base and core
+  admittance (unchanged; a base that overflows or underflows is refused as `transformer impedance
+  base overflows or underflows`, where the message was `impedance base: arithmetic overflow` or
+  `transformer impedance base underflows`).
+- `powerio_core::electrical` also holds the rating conversions: `calc_rated_admittance`
+  (`P / (V · V)`, the susceptance of a rated reactive power or conductance of an active one,
+  which `calc_admittance_base` and the capacitor stamps read) and its inverse `calc_rated_power`;
+  `SQRT_3` with `calc_wye_phase_voltage` (`V_LL / √3`) and `calc_wye_line_voltage` (`√3 V_LN`);
+  `calc_line_apparent_power` (`factor · V · I` with `ApparentPowerOrder`: `FactorFirst`, or
+  `CurrentFirst` for PowSybl's `convertToMva`) and its inverse `calc_line_current`;
+  `calc_quadrature` (`√(m² − r²)` as `√((m − |r|)(m + |r|))`, and as `m √((1 − q)(1 + q))` where
+  that product overflows; `calc_power_factor_sine` is its unit magnitude case); and `calc_impedance_from_ratio` with `calc_impedance_ratio_divisor`
+  (an impedance from its magnitude and an `R / X` ratio, or an `X / R` ratio split as OpenDSS
+  `VSource` splits it, `ImpedanceRatioForm`). The CGMES and PSS/E shunt and SVC conversions, the
+  CGMES, UCTE, PowSybl PSS/E and SINCAL current ratings, the multiconductor to balanced
+  lowering's current limit, the OpenDSS source's short circuit levels and Thevenin writer, every
+  OpenDSS, MG-RAVENS, PMD, GridLAB-D, pandapower, SINCAL multiconductor and transmission to
+  distribution line to neutral conversion, the SINCAL transformer, source and rated shunt
+  impedance splits and the OpenDSS source's short circuit impedance read them, with unchanged
+  values. `powerio_tx::lcc` takes a converter's no overlap reactive power as
+  `P · calc_reactive_ratio(cos θ, Sine)`, where it formed `P tan(acos cos θ)`. Behaviour changes,
+  each in the last place: that LCC reactive power; the SINCAL multiconductor transformer's
+  short circuit reactance and magnetizing current (`m √((1 − q)(1 + q))` before), which moves its
+  port admittances in the last place and turns cancellation residues (such as `−3.7e-17`) into
+  exact zeros, so the OpenDSS writer can choose another equivalent for such a SINCAL element (the
+  `synthetic-multiconductor` example's shunt 33 is now written as 15 coupled two-port blocks,
+  where it was reciprocal branches such as `r1=-10808639105689190`) and the GridLAB-D writer's
+  refusal text for it changes; the CIM and
+  MG-RAVENS `NoLoadTest` magnetizing current read (`√(i² − p²)` before) and with it the exciting
+  current the writers state so that it reads back exactly (the MG-RAVENS `IEEE13_Assets.dss`
+  transformer now writes `1.252996408614167`, the exporter's own value, where it wrote
+  `1.2529964086141667`); and the PSS/E `CZ=3` winding
+  reactance and `CM=2` magnetizing susceptance (a fused multiply add before; a resistance or
+  conductance above the magnitude still gives zero reactance or a substituted zero
+  susceptance). The SINCAL balanced transformer reactance, magnetizing power and capacitor
+  reactive power are unchanged, and are now finite where the product of the sum and difference
+  overflowed (magnitudes above about `1.3e154`).
+- `powerio_tx::load_voltage`: `LoadVoltageTerm` (`new`, `calc_power`, `is_below_floor`),
+  `Load::calc_voltage_terms` and `Load::calc_power_at` (`LoadPowerAtVoltage`),
+  `calc_load_nominal_voltage` and `LoadVoltageError` evaluate a balanced load's voltage model with
+  its derivative. `powerio_tx::pi_model::PiModel` (`new`, `calc_block`, `calc_folded`) is a
+  branch's pi model, `DcBranchColumn` with `BranchSusceptanceFormula::calc_dc_column` and
+  `calc_phase_shift_radians` a branch's DC column, `Branch::calc_current_bound` its current bound
+  over an angle window, `BalancedNetwork::per_unit_base` and `IndexedNetwork::per_unit_base` the
+  power base a normalized network divides by, and `DeEnergizedIsland` one island an island
+  reference report finds without supply.
+- More of the shared conversions have one implementation in `powerio_core::electrical`.
+  `calc_squared_voltage_impedance` (`V² / S` over a stated squared voltage, real or complex, also
+  the power an impedance draws) and `calc_squared_voltage_admittance` (`S / V²`, real or complex)
+  are the one quotient each: `calc_branch_impedance_base` and `calc_rated_admittance` read them,
+  and so do the distribution ZIP conversions and `calc_load_nominal_admittance`, which formed
+  their own complex quotients, the rated OpenDSS `Reactor`'s reactance (`kV² · 1000 / (kvar /
+  phases)`, its coil voltage by the one OpenDSS bank coil voltage rule) and the transformer
+  magnetizing admittance base (`S / (phases · V · V)`, behind the transformer primitive and the
+  multiconductor OPF descriptor), all bit for bit as before. `calc_impedance_rebase` (with
+  `RebaseOrder`) is the one per unit rebase of a value by `Z_base(from) / Z_base(to)` (its swap
+  for an admittance), in the operation order each reader formed, so all are unchanged:
+  `BaseQuotient` (the two bases by `calc_impedance_base`, `NaN` for an unusable one) for the
+  SINCAL balanced transformer's series impedance, `PowerRatio`
+  (`value · (S_to / S_from) · (V_from / V_to)²`) for the PSS/E `CM=2` exciting current and the
+  integrated transmission and distribution transformer lowering's impedance scale, and
+  `InversePowerRatio` (`value / (S_from / S_to) · (V_from / V_to)²`) for the PSS/E `CM=2` no load
+  loss. `calc_log_voltage_power_term` is the one load law term over a log voltage ratio
+  (`c e^{γ ℓ}` with its derivative), for a model that lifts voltage to its log. Further callers of
+  `calc_rated_admittance` and `calc_rated_power`: the balanced MG-RAVENS shunt reader and writer
+  (unchanged), and the GridLAB-D capacitor reader (`rating / (V · V)` where it formed
+  `rating / V / V`) and writer (`b · (V · V)` where it formed `(b · V) · V`), which can move in
+  the last place.
+
+**Matrices for callers**
+
+- `GroundedLaplacianFactor::from_edges` grounds the given buses (and every bus no edge touches)
+  and factors the reduced weighted Laplacian of an edge list once, with the PTDF builder's sparse
+  factorization; `solve` gives the DC angles, `calc_edge_flows` the edge flows and `solver_path`
+  the factorization used. `calc_edge_laplacian_product` is the matrix free `L x`, and
+  `calc_edge_flows` the edge flows at any angles (those of an iterative solve over that product).
+- `McOpfLoadLaw::calc_power` gives a load law's per unit power and voltage slope, and
+  `McOpfLoadLaw::calc_impedance_admittance` the constant admittance `conj(Σ P + j Σ Q) / nominal²`
+  of a law whose every exponent is two (`calc_load_nominal_admittance`).
+  `McOpfDroop::calc_terms` states a volt-var or volt-watt curve as `McOpfDroopTerms` (a constant
+  and its softplus corners, `McOpfDroopHinge`: coefficient, knot, width), the one statement of the
+  curve a symbolic model builds its expression from; `McOpfDroop::calc_control`
+  (`McOpfDroopValue`) sums those terms, which can move its value in the last place, and
+  `calc_parameter_derivative` and `calc_monitored_voltage` give its parameter sensitivities and
+  monitored voltage. `MC_OPF_DROOP_SMOOTHING` is the curve's softplus width as a share of its mean
+  knot voltage, the rule the preparation sets and those sensitivities differentiate. `McOpfTransformer::calc_physical_tap_derivative` and
+  `calc_tap_multiplier_derivative` are the tap convention's derivatives.
+- `calc_bus_totals` and `calc_bus_hosts` sum an element column onto buses and mark the buses
+  that host one; `calc_prepared_bus_specifications` converts an instance's bus specifications to
+  preparation units; `calc_reference_constrained_system` is the DC operators' grounded system
+  with each reference at its stated angle; `AcOpfPreparation::calc_banded_vm_setpoints` gives the
+  voltage setpoints inside their bands; `AcBranchData::calc_branch_flow_partials`, `len` and
+  `is_empty` and `AcBranchFlows` the AC branch flows and their partials;
+  `DcOpfPreparation::calc_angle_difference`, `calc_branch_flow_weight_derivative` and
+  `calc_device_withdrawal` the DC angle difference, flow weight derivative and device
+  withdrawal; `SynthesizedLimitWindow::is_stated` whether a window is the default;
+  `Grounding::new`, `len` and `is_empty` build and size a grounding; and `PassivePrimitive` (with
+  `PassiveFamily::noun`) is one element of `NetworkPrimitives`.
+- `assemble_multiconductor_admittance(network, primitives)` assembles the multiconductor nodal
+  system from a `calc_passive_primitives` list the caller already holds (one that also reads each
+  element's primitive for its port currents lists them once); `calc_multiconductor_admittance_matrix`
+  is that list followed by this assembly. A source terminal that is its own reference (earth, a
+  terminal its bus grounds, or the stated reference terminal) with a nonzero prescribed voltage is
+  now refused; without a stated reference such a terminal was skipped silently. Zero there is
+  still accepted and writes no row.
+- Three phase pandapower: `powerio_tnd::formats::pandapower::{parse, PandapowerModule, TOKEN,
+  unmapped_connections}` and `powerio_tx::format::is_three_phase_pandapower`.
+
+**Distribution**
+
+- `powerio_dist::transformer` is the one home of transformer winding physics:
+  `calc_transformer_leakage_impedances` and `TransformerLeakageBase`, `calc_reduced_leakage`,
+  `calc_transformer_winding_admittance`, `calc_coil_voltage`, `calc_delta_direction`,
+  `calc_transformer_phase_shift`, `calc_winding_connection`, `calc_transformer_magnetizing`
+  (`TransformerMagnetizing`), `calc_winding_neutral_grounding` (`WindingNeutralGrounding`),
+  `calc_coil_shunt_primitive`, `calc_regulator_series_ohms`, `transformer_extra_number`,
+  `transformer_states_no_leakage`, `is_transformer_regulator` and
+  `calc_transformer_primitive_admittance` (`TransformerPrimitive`), which `powerio-matrix`
+  re-exports. Its failures carry `BUILD.DIST.TRANSFORMER_INVALID` and
+  `BUILD.DIST.TRANSFORMER_UNSUPPORTED` (category data). The primitive reads `leadlag` (Lead or
+  Euro reverses the delta orientation) instead of refusing it, finds a WYE winding's neutral by the
+  bus terminal conventions, and places BMOPF `g_no_load`/`b_no_load` on the second winding (the
+  first of a regulator), divided across the phases of a `single_phase`, `wye_delta` or `delta_wye`
+  unit, as the OPF did. The multiconductor to balanced lowering takes its leakage and its
+  connection shift from the same module, so a `leadlag` of Lead or Euro and the BMOPF
+  orientations lower with their own shift, and a two winding unit stating more than one short
+  circuit reactance is refused rather than truncated. The SINCAL writer's expected transformer
+  primitive is this primitive.
+- `calc_element_connection` (with `calc_wye_neutral_position` and `orient_delta_ring`) is the one
+  rule for the coils of a load, capacitor, inverter, source or winding connection: a WYE neutral
+  is the one mapped terminal the bus conventions do not call a phase.
+  `lindist3flow_carries_connection` is the one LinDist3Flow connection rule.
+- `powerio_dist::voltage_zones::calc_voltage_zone_labels` is the one network voltage zone
+  partition (lines and the switches its `ZoneSwitches` admits: `Closed` or `All`), read over
+  closed switches by the multiconductor to balanced lowering, the GridLAB-D writer and the load
+  nominal voltage inference and over every switch by the MG-RAVENS writer's bus base voltages,
+  whose own fixed point flood is removed: the bases are unchanged, except that a network with a
+  line or switch naming a bus it does not declare (which `calc_voltage_zone_labels` refuses)
+  now leaves every bus on its own seed, where the flood still carried bases across the other
+  lines and switches, and
+  `calc_flooded_zone_bases` the one zone base flood across transformers, read by the lowering
+  and the PMD MATHEMATICAL writer.
+- `DistLoadVoltageModel::power_scale_in_voltage_bands` evaluates any load law inside an OpenDSS style
+  set of voltage bands (`u²` at or below `v_low_pu`, the constant power current transition up to
+  `v_min_pu`, `(u/max)²` above `v_max_pu`); a bounded exponential law is its exponential law in
+  those bands and the bounded ZIP law reads the same bands, so a bounded exponential factor can
+  move in the last place. The bounded exponential law's middle band evaluates each exponent with
+  the one term evaluation (`calc_voltage_power_term`), so a non-integer exponent below one follows
+  its tangent below a voltage ratio of `1e-3`. `calc_load_nominal_admittance` is a branch's
+  `conj(S) / V²`. `calc_zip_nominal_power` and its inverse `calc_zip_coefficient` (with `ZipLaw`
+  and `ZipVoltage`, a real magnitude or a phasor) are the one GridLAB-D ZIP conversion between a
+  constant current or impedance coefficient and its power at nominal voltage (`S = V conj(I)`,
+  `S = |V|² / conj(Z)` and their inverses, the impedance coefficient being the reciprocal of
+  `calc_load_nominal_admittance`): the GridLAB-D load, explicit connection and triplex readers
+  and writers read them, with unchanged values.
+- `powerio_core::union_find` (the workspace's one union-find and component labeling:
+  `UnionFind` with `new`, `find`, `union`, `union_keep_smaller` and `into_labeling`, and
+  `calc_component_labels`) is public, re-exported as `powerio_tx::union_find`, and
+  `powerio_tx::geo::calc_haversine_km` with `EARTH_RADIUS_KM` is the one great circle distance.
+  `UnionFind::union` keeps its first argument's representative.
+- `powerio_core::dense::invert_dense_matrix` (re-exported as `powerio_dist::dense`) is the one
+  small dense inverse (real `f64` or complex `Complex64`, the `DenseScalar` trait with
+  `magnitude`, `unscaled_magnitude`, `is_finite`, `reciprocal` and `ratio_quotient`), and
+  `powerio_core::dense::eliminate_dense_matrix` the same elimination stating why it refused
+  (`DenseRefusal`: `Singular` or `NonFinite`). Its `DensePivot` states the elimination order:
+  `Partial` (Gauss-Jordan with row pivoting, every inverse the model uses) or
+  `OpenDssDiagonal` (OpenDSS's `TcMatrix.Invert` sweep on the largest unused diagonal entry,
+  with its `Cabs` magnitude and ratio complex division). The OpenDSS source and Line primitive
+  check (errors 325 and 183) is that elimination in `OpenDssDiagonal` order, with exactly the
+  refusals of 0.12.0. Of these, the pinned engine (DSS C-API 0.14.5 `Ucmatrix.pas`) makes one:
+  no unused diagonal entry is nonzero (so a zero self impedance with nonzero mutuals is
+  refused). The other is PowerIO's own guard, which the engine does not have: an unused entry
+  that turns nonfinite during the elimination is refused (`Line primitive elimination became
+  nonfinite`), where `TcMatrix.Invert` raises no error and returns a NaN primitive, so the
+  engine's solve does not converge (`rmatrix=[1|1e200 1] xmatrix=[1|0 1]`). A pivot left at
+  rounding noise is accepted, and so is a pivot whose unscaled `Cabs` magnitude overflows to infinity (a finite
+  self impedance above about `1.34e154`, on a one or a multi conductor element), as the engine
+  takes it (`RMY = inf` is a nonzero pivot); a NaN entry is never a pivot. And
+  `powerio_dist::kron::calc_kron_reduced_impedance` the one Kron reduction, behind the line and
+  switch series admittances, the open line Schur complement, both geometry readers, the PMD
+  leakage round trip, neutral Kron reduction and the multiconductor to balanced lowering.
+  `powerio_dist::overhead::calc_carson_impedance` (over a `CarsonEarth`, the earth return terms
+  of a frequency and resistivity) and `calc_potential_coefficient` are the one simplified Carson
+  equation and Maxwell coefficient behind the OpenDSS and GridLAB-D geometry, and
+  `calc_earth_return_log_depth` the one earth return depth, its `EarthDepthForm` stating the
+  spelling: `OpenDss` (`ln(658.5 √(ρ / f))` metres) behind the OpenDSS geometry's Carson earth
+  and the OpenDSS line's earth return coefficient `Kxg`, and `GridLabD` (GridLAB-D's rounded
+  `ln(ρ / f) / 2 + 7.6786` feet) behind the GridLAB-D Carson earth, bit for bit as before. The
+  OpenDSS line code and line correct their matrices for frequency (`Rg (f/f₀ − 1)`,
+  `½ Kxg ln(f/f₀)`) in one place. A whole line's susceptance is scaled `(b · length) · f/f₀`, the
+  order of `Line.CalcYPrim` (`YValues.im * LengthMultiplier * FreqMultiplier`), where it was
+  `b · (length · f/f₀)`: identical at the base frequency, it can move in the last place off it.
+  The GridLAB-D overhead, underground and triplex readers and the triplex writer build its
+  Carson coefficients in one place, the underground reader eliminates its cable returns through
+  the one Kron reduction, and the concentric neutral ring, its equivalent GMR and distance, the
+  tape shield radius and the cable capacitance are each one calculation behind the OpenDSS
+  `CNData` and `TSData` line constants and the GridLAB-D underground reader. The OpenDSS
+  overhead and cable line constants form each conductor's internal impedance, the conductors'
+  self and mutual block and the reduction to line matrices in one place. Geometry, cable,
+  Kron and lowered impedances can move in the last place.
+- `powerio_dist::dense::invert_dense_matrix(matrix, pivot, singular_pivot, relative_pivot)`
+  refuses, in `DensePivot::Partial` order, a pivot that is NaN or infinite (the one by one case
+  included), `singular_pivot` or smaller, or
+  `relative_pivot` times its column's largest original magnitude or smaller. The dense PTDF
+  fallback calls it with `relative_pivot = n ε`, its own rule (a column cancelled to rounding
+  noise is singular); the transmission bus merge's recovery of the flows on a meshed component
+  of zero impedance links calls it with `singular_pivot` `1e-13` times the system's largest
+  entry, its own floor, and multiplies the inverse into the injections, where it kept a second
+  Gaussian elimination: those link flows can move in the last place, and of equal pivot
+  candidates the first is taken where the last was. Every other caller passes zero, so only
+  exact singularity is refused. The
+  OpenDSS source and Line primitive check stays the native engine's refusal predicate (the
+  diagonal pivot order of `TcMatrix.Invert`, errors 325 and 183), not an inverse: a primitive with
+  a zero self impedance and nonzero mutuals is refused as OpenDSS refuses it, and one whose pivot
+  is left at rounding noise is accepted as OpenDSS accepts it.
+- `calc_terminal_role` (`TerminalRole`: phase, neutral, earth) is the one terminal
+  classification: BMOPF terminal conventions when stated, else `n`/`N` and the fourth of exactly
+  `1` to `4` neutral, and ground `0` earth. `DistBus::phase_indices`, the new
+  `DistBus::terminal_role` and `neutral_indices`, `calc_wye_neutral_position`, the BMOPF
+  validator's neutral check and centre tap common terminal, the BMOPF writer's neutral bound
+  check and authored terminal conventions, the PMD MATHEMATICAL writer's delta pair and Kron
+  reduction checks, and the multiconductor to balanced lowering read it. The BMOPF writer lists
+  an earth `0` under `earth` in the conventions it authors (it was listed as `neutral`) and no
+  longer counts it as the neutral a `vng_max`, `vpn_min` or `vpn_max` bound needs; the PMD
+  writer calls a `4` neutral only in an exact `1` to `4` set and no longer pairs an earth `0`
+  as a phase, and `MulticonductorNetwork::terminal_conventions` returns the stated
+  conventions. Behaviour changes: `phase_indices` no longer counts a terminal `0` as a phase; the
+  lowering reads the network's terminal conventions and the four wire `4`; a BMOPF centre tap
+  whose secondary maps a `4` its bus neither grounds nor calls neutral takes its last terminal as
+  common. The multiconductor node index (`MulticonductorNodeIndex`, behind the nodal admittance
+  and power flow) and the multiconductor OPF's terminal grounding read `DistBus::terminal_role`
+  as well, so a terminal the network's BMOPF conventions list under `earth` is grounded there as
+  `0` is, where only `0` and a terminal the bus grounds were.
+- The distribution CIM and MG-RAVENS readers state their terminal convention: every neutral they
+  read is terminal `4` (`powerio_core::cim::NEUTRAL_TERMINAL`, the terminal of the CIM letter `N`),
+  so `MulticonductorNetwork::terminal_conventions` of a network read from either returns the CIM
+  wire convention (`4`, `n` or `N` is the neutral on every bus) unless the network states BMOPF
+  conventions. The CIM and MG-RAVENS writers' neutral tests and the readers' own neutral tests
+  are `calc_terminal_role` over that convention, unchanged for networks read from CIM, MG-RAVENS
+  or OpenDSS. Behaviour change (a fix): the writers' tank phase clock now takes a winding whose
+  first terminal is `n` or `N` as neutral first, as it took `4`, so a GridLAB-D
+  `SINGLE_PHASE_CENTER_TAPPED` transformer (windings `[3, n]`, `[1, n]`, `[n, 2]`) writes its third
+  end with `TransformerEndInfo.phaseAngleClock` 6 and `PowerTransformer.vectorGroup` `YNyn0yn6yn0`,
+  where it wrote clock 0 and `YNyn0yn0yn0`, which PowerIO's own MG-RAVENS reader refused (`end 3
+  phaseAngleClock 0 is not represented by its winding layout`) so the written feeder did not
+  convert onward; it now round trips. The CIM reader's private
+  copy of `phase_terminal` is `powerio_core::cim::phase_terminal`. The PMD MATHEMATICAL reader
+  names the Kron neutral it restores once. Behaviour change (a fix, present in 0.12.0): a single
+  phase bus `[1, 4]` (or `[2, 4]`, `[1, 2, 4]`) read from CIM or MG-RAVENS has its `4` classified
+  as the neutral by `phase_indices`, `neutral_indices` and every reader of the network's
+  conventions (the BMOPF writer's authored `terminal_conventions`, phase arrays and neutral
+  bounds, the PMD and PMD MATHEMATICAL writers, Kron reduction, the WYE neutral of a load,
+  capacitor, source or winding connection, the multiconductor admittance, OPF and power flow,
+  and the multiconductor to balanced lowering), where it was counted as a phase because only an
+  exact `1` to `4` set made `4` neutral. The BMOPF writer's authored conventions classify each
+  label over the network's conventions (they read none). A network read from any other format
+  is classified as before.
+- `powerio_dist::transformer::calc_coil_voltage_ratio`, `calc_winding_phase_count` and
+  `calc_winding_impedance_base` (a winding's coil voltage squared over its per phase power) are
+  the one coil voltage, base phase count and winding impedance base: the BMOPF n-winding reader
+  and writer, the PMD MATHEMATICAL reader and the multiconductor OPF descriptor read them. A
+  BMOPF n-winding unit reads every WYE winding's rated voltage over the unit's phase count, as
+  `calc_coil_voltage` divides it (a single phase WYE winding of a polyphase unit read a coil
+  voltage `√3` below its `v_nom`), and the OPF counts a WYE winding's base phases from its
+  terminal map. The OPF tells a regulator by `is_transformer_regulator`. The MG-RAVENS reader and
+  writer and the PMD MATHEMATICAL reader form a winding's own base with `calc_impedance_base`,
+  and the BMOPF writer's no-load shunt and the OpenDSS no-load percentages take the tapped coil
+  voltage as `calc_coil_voltage` times the tap (it was the rated voltage times the tap over the
+  coil ratio), which can move them in the last place for a tapped polyphase WYE winding.
+- `DistLoadVoltageModel::calc_power_terms` states every unbounded load law (constant power,
+  current and impedance, exponential, ZIP) as power law terms and `nominal_voltage` reads a
+  channel's nominal; `power_scale` and `power_scale_where` evaluate those terms with the one term
+  evaluation, and the multiconductor OPF load law is the same terms in per unit. Behaviour
+  changes: the multiconductor OPF refuses a load law with a missing ZIP fraction or exponent, or
+  a single entry for several coils, which it defaulted (`alpha_p = 1` when every alpha was
+  absent, a missing exponent `0`) or broadcast, as the BMOPF schema requires every coefficient
+  per sub-load; a non-integer exponent below one follows its tangent below a voltage ratio of
+  `1e-3` (`LOAD_VOLTAGE_RATIO_FLOOR`).
+- `powerio_dist::sequence` is the one symmetrical component transform pair:
+  `calc_phase_from_sequence` (with `calc_sequence_self` and `calc_sequence_mutual`, each taking a
+  `SequenceThird`), `calc_sequence_from_phase`, `calc_sequence_matrix` and
+  `calc_sequence_components` with its inverse `calc_phase_components` (the GridLAB-D sequence
+  voltage substation reads it; its phase b and c voltages can move in the last place, `a²` being `a · a`
+  where it was `conj(a)`), each over a `SequenceRotation`: `Fortescue` (`e^{j 2π/3}` from its
+  polar form, every reader that follows no engine), `Rectangular` (`−½ + j √3/2`, the SINCAL
+  multiconductor transformer port expansion) or `OpenDssMathutil` (upstream OpenDSS
+  `mathutil.pas`'s truncated `−½ + j 0.866025403` with the closed form inverse of that matrix,
+  which the IndMach012a user model reads; `mathutil.pas` inverts it numerically with
+  `TcMatrix.Invert`, which differs from the closed form in the last place, so these values match
+  the engine's to within that rounding). `calc_phase_matrix_from_sequence` (`A diag(d₀, d₁, d₂) A⁻¹`)
+  is the one sequence diagonal to phase expansion: the SINCAL multiconductor transformer ports and
+  the OpenDSS IndMach012a motor, which kept their own transforms, read it with unchanged values
+  (a motor admittance entry that was `−0.0` can now be `+0.0`). For OpenDSS's unequal sequence
+  (`Z1 ≠ Z2`) source there are its rounded rotation `OPENDSS_ALPHA` with
+  `calc_circulant_phase_entry` and its inverse `calc_circulant_sequence_from_phase`. The
+  circulant entry now sums in `VSource.RecalcElementData`'s order, `(α² z + α z′) + z₀`, where
+  it summed `(z₀ + α z₁) + α² z₂`: an unequal sequence source's mutual impedances can move in
+  the last place and now match the engine bit for bit (with `Z1 = [0.1234567, 1.2345678]`,
+  `Z2 = [0.3456789, 0.9876543]`, `Z0 = [0.5678901, 3.4567891]` one mutual resistance is
+  `0.18238521672667643`, where it was `0.18238521672667649`, and one mutual reactance
+  `0.717742919995242`, where it was `0.7177429199952421`). The OpenDSS line code, line, source reader, source writer
+  and Thevenin code, the pandapower reader, the SINCAL multiconductor writer and the
+  multiconductor to balanced lowering read them. `SequenceThird` states how the reference engine
+  takes the third: OpenDSS `LineCode` multiplies by its rounded `OneThird` (`Reciprocal`), its
+  `Line` and `VSource` divide by three (`Divide`), a `VSource` given its sequence impedances
+  takes the mutual reactance as the self reactance less `X1` (`SelfLessPositive`), and the
+  SINCAL multiconductor line and rated shunt readers divide each sequence value before
+  combining them so a large finite value does not overflow (`DivideFirst`). The line code, line,
+  source, pandapower and SINCAL line values are unchanged; a SINCAL three phase rated shunt's
+  self admittance was the mutual `(Y0 − Y1) / 3` plus `Y1` and is now `2 (Y1 / 3) + Y0 / 3`, its
+  mutual `Y0 / 3 − Y1 / 3`, which can move them in the last place. The rated shunt's reactive
+  factor is `calc_power_factor_sine`.
+  `VoltageSource::calc_line_to_line_voltage(phases, form)` is the one source line to line base,
+  its `LineVoltageForm` naming the phasors it reads: `PositiveSequence` (`√3 |V₁|` for three
+  phases, the phasor difference for a split phase pair), which the multiconductor to balanced
+  lowering reads, or `FirstPhase` (the first phase's magnitude times the polygon chord, the form
+  an `EnergySource` stating one magnitude takes), which the MG-RAVENS writer reads for a source's
+  `nominalVoltage` and its bus's `BaseVoltage` seed where it kept its own chord helper. One phase
+  is its magnitude `|V|` under `PositiveSequence`, as before, and `√3 |V|` under `FirstPhase`, an
+  `EnergySource` magnitude being line to neutral. `calc_polygon_chord`
+  (`2 sin(π / n)`) is the one line to line over line to neutral ratio of `n` evenly spaced
+  phasors, behind the OpenDSS source's per phase magnitude, the Thevenin writer, and the CIM and
+  MG-RAVENS source readers and writers (unchanged values). The MG-RAVENS writer states a source's
+  `nominalVoltage` without `basekv` at the fixed point of the reader's `basekv` round trip
+  (`(v / 1e3) · 1e3`, the one its `basekv` path took), where it took the fixed point of dividing
+  and multiplying by the chord, and seeds its bus's `BaseVoltage` with that same stated value,
+  where it seeded the unrounded product; either can move in the last place (no matrix fixture
+  changes).
+  `powerio_dist::sequence::calc_balanced_phase_angle(phase, phases)` is the one balanced phase
+  rotation (`0`, `−2π/3`, `+2π/3` for three phases, stated in `(−π, π]`): the GridLAB-D nominal
+  phasors and sequence voltage substation reference phase, the SINCAL multiconductor source writer
+  and source mapping and the integrated transmission and distribution coupling read it with
+  unchanged values, and the multiconductor OPF's start point, whose third phase started at
+  `−4π/3` and now starts at `+2π/3`, so its start can move in the last place. The multiconductor
+  OPF's sequence voltage bound rows are the columns of `calc_sequence_components` (Fortescue),
+  where it formed `cos`, `sin` of `k s 2π/3` over three, which can move them in the last place. The
+  CIM and MG-RAVENS readers and writers expand a source's or line's sequence values through
+  `calc_phase_from_sequence` and form a winding's base with `calc_impedance_base` (unchanged
+  values; a base whose square overflows is now refused as unusable).
+- More distribution rules have one implementation. The phase to sequence inverse of the OpenDSS
+  switch writer's sequence overrides and the CIM source writer is
+  `powerio_dist::sequence::calc_sequence_from_phase` (unchanged values).
+  `powerio_dist::transformer::calc_stated_neutral_grounding` is the one reading of a winding's
+  `r_neutral` and `x_neutral` (unstated, floating for a negative resistance, solid for zeros, else
+  an impedance): `calc_winding_neutral_grounding` checks it, and the MG-RAVENS writer's grounded
+  end and vector group, the BMOPF writer's open neutral, the multiconductor ideal transformer
+  profile, the OpenDSS ideal transformer projection and the GridLAB-D transformer, service,
+  coil bank and regulator writers' solid neutral tests read it (unchanged).
+  `powerio_core::cim::NEUTRAL_TERMINAL_NAMES` is the one list of terminals the CIM letter `N`
+  names: `terminal_phase` and the distribution CIM and MG-RAVENS wire conventions read it. The PMD
+  MATHEMATICAL reader and writer share one dense inverse. The OpenDSS source's `Isc3`, `Isc1` and
+  zero sequence quadratic share one short circuit relation (`kV · 1000 / factor / x`, the engine's
+  order), the Thevenin writer's short circuit level candidates read `V² / Z` from
+  `calc_squared_voltage_impedance`, and the OpenDSS geometry's Deri and full Carson loop term is
+  `powerio_dist::overhead::calc_conductor_loop_reactance`, the free space term of
+  `calc_carson_impedance` (all unchanged). `McOpfLoadLaw::new` constructs a load law.
+  Behaviour changes: the GridLAB-D writer finds a load's, inverter's and transformer winding's
+  WYE neutral by `calc_wye_neutral_position` and a load's phases by `calc_terminal_role` over the
+  network's terminal conventions, where it matched the literal `n`. It now refuses such an element
+  unless the conventions make the last terminal of its map the only terminal of that map that is
+  not a phase, and a neutral (not an earth) the bus carries. So a network whose BMOPF conventions
+  do not call `n` a neutral, or also call another terminal of the element's map (`1`, `2` or `3`)
+  a neutral or an earth, is refused where 0.12.0 matched `n` and wrote it (with
+  `{"neutral": ["n", "3"]}` a load mapped `[1, 2, 3, n]` has an ambiguous neutral), and such a
+  terminal is left out of a load's phases. A network whose conventions leave `n` the one terminal
+  of each such map that is not a phase writes as before;
+  `calc_balanced_phase_angle` returns `+0.0` for phase zero (and every multiple of `phases`),
+  where it returned `−0.0`, so a phasor built on it has a `+0.0` imaginary part there.
+- The conversion matrix baseline records the CIM wire convention's neutral above: MG-RAVENS
+  (multiconductor) to PMD MATHEMATICAL now Kron reduces 12 neutrals
+  (`TRANSFORM.DIST.NEUTRAL_KRON_REDUCED=12`, it was 9) and reports 4
+  `EMIT.PMD_MATH.VALUE_SUBSTITUTED` (it was 3).
+- The GridLAB-D writer's bus nominal voltages are the voltage zones seeded by each source's
+  phase magnitude and carried across transformers by `calc_flooded_zone_bases`.
+- `calc_connection_channels` (`ConnectionChannel`) is the one channel rule of a typed connection,
+  and `MulticonductorTerminalIndex` (`TerminalIndexError`, with `build`, `resolve`,
+  `bus_terminals`, `len` and `is_empty`) the one flat terminal index.
+  `MulticonductorNetwork::identifier_key` is the key a network's source identifies an element
+  by (ASCII lowercase for OpenDSS). `powerio_prob::McAcPfInstance::calc_inferred_load_nominal_voltages` reports the load
+  nominal voltages the instance infers.
+- Fix: the BMOPF writer states a DELTA winding's `delta_roll` from the one
+  delta orientation (`calc_delta_direction`). An n-winding unit that stated
+  no roll was written with `-1` and read back with that roll, against the
+  `+1` BMOPFTools default the model used, so a round trip reversed the ring;
+  it is now written `+1`, and an invalid stated roll is no longer written.
+- BMOPF reads an older draft's lowercase enum values (`constant_power`, `wye`, `pv`, ...) as the
+  schema's tokens before any check, so a `constant_power` load without `v_nom` is no longer
+  `READ.BMOPF.SEMANTIC_INVALID` and lowercase capacitor, inverter and regulator tokens read.
+- OpenDSS tape-shielded cables: `TSData` and the `tscable` and `tscables` properties of
+  `LineGeometry` and `Line` are read, and the geometry line constants calculate the tape shield
+  (resistance from its diameter, thickness and lap, GMR to the middle of the tape) as OpenDSS's
+  `TSLineConstants` does, beside the overhead and concentric-neutral models. A geometry mixing
+  `CNData` and `TSData` cables is refused. A line on a tape-shielded geometry was
+  `READ.DSS.GEOMETRY_UNRESOLVED` before.
+- Distribution CIM and MG-RAVENS segments without a `PerLengthImpedance` that name a
+  `WireSpacingInfo` take the impedance of their wire catalog entries (`OverheadWireInfo`,
+  `WireInfo`, `ConcentricNeutralCableInfo`, `TapeShieldCableInfo`) on their `WirePosition`s,
+  calculated by the same OpenDSS line constants under OpenDSS's default earth (Deri, 100 ohm-m).
+  A neutral phase the segment's terminals do not state is Kron reduced. A position no phase
+  names a wire for leaves the impedance unknown, so the segment stays refused
+  (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or untyped in MG-RAVENS), now with the position named.
+  The MG-RAVENS `IEEE13_Assets` example names no neutral wire on nine of its eleven segments
+  (650632, 632670, 670671, 671680, 632633, 632645, 671684, 684611, 684652), which stay refused;
+  its complete concentric neutral segment 692675 matches OpenDSS to 2e-5 (the exporter's
+  1609.3 m mile), 645646 states a `PerLengthImpedance`, and the same conductors stated
+  completely match to 1e-13 of each matrix's largest entry.
+- Transformer phase clocks in distribution CIM and MG-RAVENS are the vector group shift the
+  physics stamps (the delta orientation of `powerio_dist::transformer`), read and written. A
+  delta–wye unit is clock 1 when the high voltage winding leads (OpenDSS's default `leadlag`)
+  and clock 11 when the low voltage winding leads: a source stating `leadlag=euro` or `lead`
+  (Dy11), or a step-up unit whose first winding is the low voltage delta, was written as clock
+  1. Both readers read clock 11 on a delta–wye unit as `leadlag` euro, where they refused it,
+  and refuse any other clock with the represented clock named; a unit with an unknown `leadlag`
+  is refused by both writers. MG-RAVENS reads `phaseAngleClock` instead of reporting it
+  unmapped, its writer states each end's clock where it wrote 0, and its vector group carries
+  each winding's clock (`Dyn1`, `Dyn11`) instead of a fixed `0`. The CIM `PowerTransformerEnd`
+  form states its clocks whenever OpenDSS's default convention does not represent them: the
+  European ones, and clocks neither convention represents (a Y-D-D unit whose deltas roll
+  opposite ways), which the reader then refuses with the winding named.
+- Fix: MG-RAVENS reads and writes a `NoLoadTest` as distribution CIM does, through one
+  function. CIM100, which MG-RAVENS profiles, types `NoLoadTest.loss` as `KiloActivePower` and
+  `excitingCurrent` as the whole exciting current, which the MG-RAVENS exporter writes as
+  `sqrt(%imag² + %noloadloss²)`. The MG-RAVENS reader took the loss in W (1000 times low) and the
+  whole exciting current as the magnetizing `%imag`, and its writer stated the loss in W and the
+  magnetizing current; it shipped in 0.12.0. A 500 kVA unit with `%noloadloss=0.6 %imag=1.1`
+  now writes a 3 kW test exciting 1.253 percent and reads back as stated. The `IEEE13_Assets`
+  example's `fdrxfmr` test states a 0.03 kW loss where its source's `%noloadloss=0.6` is 3 kW,
+  though its exciting current (1.253) carries the 0.6, so it reads as the test states:
+  `%noloadloss` 0.006 and `%imag` 1.253, not the source's 0.6 and 1.1.
+- The distribution CIM reader names why it drops a transformer tank or end: an end that states
+  the misspelt `TranformerTankEnd.TransformerTank` (which no CIM or MG-RAVENS profile defines,
+  so it is still not read) or no `TransformerEnd.Terminal`, and a tank that states its catalog
+  as `TransformerTank.TransformerTankInfo` rather than through an `Asset`, as the MG-RAVENS
+  `IEEE13_Assets.xml` example does for every tank. A `RatioTapChanger.stepVoltageIncrement` of
+  100 percent or more (that example states 106.875) is reported and the nominal tap used, where
+  it was read as a percent step.
+- MG-RAVENS equipment the reader keeps untyped while the document states it in service (a
+  segment whose wires cannot be calculated, a switch or segment with fewer than two terminals, a
+  tank without a datasheet, ends or a clock either convention represents, a delta load with
+  unresolvable branches, an X/Y phase) is blocked as
+  `READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`: numerical use and conversion to another format
+  refuse it, as they refuse a CIM segment without impedance, instead of writing the feeder
+  without it. In 0.12.0, which calculated no wire catalog segment, converting the MG-RAVENS
+  `IEEE13_Assets` example to OpenDSS succeeded with ten of its eleven segments missing. The MG-RAVENS round trip keeps the equipment.
+- Fix: `powerio convert` reports the reader's findings before the error when the conversion is
+  refused, in text and in the `--diagnostics-format json` array; it printed only the error, so
+  converting the CIM `IEEE13_Assets` example to OpenDSS showed `BUILD.DIST.ELECTRICAL_INCOMPLETE`
+  without the `READ.CIM_DIST.IMPEDANCE_UNRESOLVED` finding naming each segment's missing wire.
+- MG-RAVENS reports a single phase wye load stating `grounded` false whose neutral no
+  equipment but such loads reaches (`READ.RAVENS_DIST.VALUE_CONFLICT`): its neutral floats, so
+  it does not draw its stated power. The load is kept as stated; the CIM reader grounds such a
+  load with its own finding.
+- Read three-phase pandapower networks, those with `asymmetric_load`,
+  `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
+  under the `pandapower-json` token (#846). A three-phase network with rows
+  in a table only the balanced reader maps (`trafo`, `shunt`, `gen`,
+  `storage`, `dcline`) still reads balanced, as in 0.12.0, when that reader
+  accepts it. The balanced reader warns that it drops the per-phase detail.
+  `powerio batch` skips a three-phase network read without a transformer or
+  switch that joins or splits its buses, and `corpus ingest` reads three-phase
+  networks by the same route. Writing such a network to pandapower JSON
+  returns the retained source bytes of the unchanged module. Any other
+  multiconductor network fails with `EMIT.DIST.PANDAPOWER_UNSUPPORTED`. The reader reports elements it does not
+  map through the `READ.DIST.PANDAPOWER_*` codes. A duplicate index in any
+  mapped table is refused. The 0.12.1 IR schema adds `pandapower-json` to the
+  distribution source formats. This step maps buses, lines, external grids,
+  loads and static generators. Transformers, shunts and switches are reported
+  as unsupported until their steps land, and a report names the
+  connectivity a dropped transformer or switch changes. An element on an
+  out-of-service bus is kept with `in_service` false.
+
+## 0.12.0
+
+PowerIO 0.12.0 starts the 0.12.x release series. Before 1.0, the public
+numerical types and the outstanding conventions and milestone work need a
+maintainer decision. See [From 0.11 to 0.12](docs/src/migration-0.12.md) for
+every change that needs action.
+
+**Dynamics**
+
+- Typed PSS/E DYR model views (`typed_model`) for 12 machine, exciter,
+  governor and stabilizer models, linked to generators by `(bus, machine id)`
+  with `DynamicStudy::machines()`. As in PSS/E, a later record of one role for
+  a unit replaces the earlier one (`LinkIssue::Replaced`); machine ids match
+  exactly, then case-insensitively when one generator on the bus matches
+  (#871, @sebeich).
+
+**DC formulations**
+
+- Explicit tap-adjusted series-susceptance and PowerModels DCP conventions
+  across DC matrices, instances and bindings; the default is unchanged
+  (#820, @frederikgeth).
+- Behaviour change: DC OPF preparation with the default `series_susceptance`
+  formula (and the other series-admittance formulas) keeps a purely resistive
+  branch (r > 0, x = 0) as a zero-weight row, matching the DC operator
+  builders; it is no longer reported as `ZeroImpedance` or skipped by
+  `skip_zero_impedance` (#820).
+
+**Interoperability**
+
+- Share repeated CGMES class and property names during parsing through a bounded
+  per-document cache, reducing temporary allocations while keeping uncommon
+  and long extension names accepted. The cache changes no public model or API.
+- Reuse parsed CGMES property buffers, preserve duplicate-property ordering and
+  conflict errors, and release temporary growth capacity before constructing
+  the electrical network. Source replay, diagnostics and canonical output are
+  unchanged.
+- Reuse a recognized CIM namespace during CGMES parsing with a bounded
+  per-document cache, preserving namespace rebinding, mixed-version checks,
+  and acceptance of long namespace URIs.
+- Build the Python balanced network's derived analysis index on its first
+  topology or matrix query. Counts and metadata no longer allocate that index;
+  subsequent analysis queries reuse it. Updated and derived handles retain
+  their own immutable network and index state.
+- `reduce_passthrough_buses` keeps the sections' named rating sets on the
+  equivalent branch instead of dropping them: a set both sections state takes
+  the smaller rating, and an invalid one stays invalid, so validation still
+  refuses it after the fold.
+- Combine Exact and Lossless as Preserved in the conversion-matrix overview,
+  explain representation changes, adjustments, omitted data and incomplete
+  checks, and retain the original JSON grades and byte-replay evidence.
+- Preserve pandapower native bus voltage magnitudes and angles through IR and
+  canonical output, indexed independently of generator voltage targets.
+  Report unavailable states and unsupported result columns without claiming
+  convergence. Canonical output uses the 3.2.1 package profile and its 3.1.0
+  data format, with modern split P/Q ZIP-load fields instead of an invalid
+  mixture of legacy and modern columns. Default native imports and power-flow
+  execution are checked by the validation suite.
+- Egret keeps shunt service flags and diagnoses omitted component identities.
+  Foreign result extras cannot fill native PowerModels fields in the wrong
+  units. Operating-point columns clear inherited branch results. Time-series
+  emission accumulates varying fields incrementally, applies scalar loss checks
+  and deduplicates identical findings. Nested non-finite extension values remain
+  diagnosed. The reviewed CIM frequency and XfmrCode selector fixes from 0.11.10
+  are included.
+- CGMES active limits take precedence over equipment defaults, and transformer
+  current limits use their own terminal voltage. Distinct defaults lost during
+  canonical output are diagnosed. Imported ratio/phase tap-changer identities
+  and names survive canonical output, including older IR metadata.
+- Preserve two-winding CGMES transformer circuits across different rated/bus
+  voltage bases and secondary ratio taps using the common parameter base and
+  primary-shunt L model. Diagnose nonconforming source conventions, secondary
+  shunt projection loss and active phase magnitudes or tap-step deviations
+  omitted by the calculation projection. Reject invalid active ratios and
+  arithmetic overflow while retaining detailed tap records.
+- Preserve native Egret branch results and canonically emit electrical time
+  series after IR round trips, including labels and optional durations.
+  Reject unsupported variation and invalid time axes. C and Julia expose
+  time metadata without serializing networks; the native Egret ModelData
+  oracle checks emitted snapshot values.
+- Publish exact-commit conversion evidence and a ranked findings backlog from
+  the same graded cells as the PR matrix. Baseline changes remain reviewed;
+  independent native-consumer evidence is stated separately.
+
+- Read and write SiennaSchemas SystemDocument 0.1 through 0.4 through the
+  shared module API, CLI, and bindings. Preserve source identifiers and report
+  fields outside the electrical mapping.
+- Read native PowerSystems.jl data formats 4 and 5, and write format 5.
+  Resolve UUID references and device units independently of display settings.
+- Retain bounded Sienna JSON/HDF5 bundles through PowerIO IR, including
+  association records, array shapes, and stored values. Map switched-shunt
+  blocks and voltage or reactive control bands in each schema release.
+- Add optional Python PyPSA NetCDF/HDF5 transports and TransitionZero source
+  and sink entry points, with electrical time series and IR retention of
+  pipeline extension records and companion series.
+- Python `PioModule.extension_keys`, `extension(namespace)`, and
+  `with_extension(namespace, value)` read and attach module extensions
+  without serializing the typed value. The Sienna bundle and TransitionZero
+  transports use them instead of round-tripping the module through IR text.
+- A two-winding transformer's secondary-terminal charging written to Sienna
+  as a `FixedAdmittance` carries an `ext` marker that the reader folds back
+  into the branch, so a round trip adds no bus shunt. The reader folds it
+  back only while the shunt and its transformer share one status; a native
+  edit that disables the generated shunt leaves a disabled bus shunt and an
+  uncharged branch, in Sienna documents and in PowerSystems JSON.
+- The Sienna reader indexes `TransformerCircuit` rows by id, and canonical
+  emission of an edited document indexes its retained rows and source
+  generator rows by id, so parsing and re-emission stay linear in the
+  component count.
+- Reuse parsed Sienna and PowerSystems documents for module retention, and
+  decode the native adapter's intermediate document directly. Full source
+  extensions and same-format fidelity are unchanged (review by @MohamedNumair).
+- Annotate the current PowerIO IR schema with physical units, per-unit bases,
+  and sign conventions. The schema and the field documentation state the
+  converter setpoint conventions as their sources do: a reduced-model
+  `HvdcConverter::reactive_power_setpoint_mvar` is injected into the AC bus
+  (PowSybl `vscConverterStation`), and the detailed
+  `VoltageSourceConverter::reactive_power_setpoint_mvar` and its reactive
+  limits use load convention at the point of common coupling (PowSybl
+  `voltageSourceConverter`, CGMES `VsConverter.targetQpcc`).
+- Correct the contributor IR compatibility guidance and canonical HVDC format
+  descriptions.
+
+**Breaking changes**
+
+- PowerIO IR documents state the release whose schema they follow: the
+  header's `"version"` is now `"0.12.0"` instead of the integer `2`.
+  `powerio::IR_VERSION` becomes that release as a string, `IR_MIN_VERSION` is
+  removed, and `IR_SCHEMA_ID` names `pio-ir/0.12.0/schema.json`. A reader
+  accepts documents from its own release series (any 0.12.z) and the
+  `"version": 2` documents every 0.11 release wrote, with their meaning;
+  0.11 readers refuse 0.12 documents. Every release now publishes its own
+  `docs/schema/pio-ir/<release>/schema.json`, and the files under `pio-ir/2/`
+  keep their bytes. `powerio.versions()["powerio_ir"]["version"]` and the
+  `powerio_ir.version` that `pio_schema_report` returns are now the release
+  string (#701).
+- Replace the C ABI number with the PowerIO release (#701). `PIO_ABI_VERSION`,
+  `pio_abi_version()`, and the `abi` key of `pio_schema_report` are removed
+  with no alias. The header states the release it was generated from as
+  `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and
+  `pio_version_numbers()` returns the release of the loaded library. A
+  program compiled against the header of release 0.12.Z works with any
+  0.12.x library at 0.12.Z or newer; within a release series the C ABI only gains
+  symbols, which `scripts/check-capi-header.py` checks against the latest
+  release header. `scripts/check-capi-v7.sh` is now `scripts/check-capi.sh`.
+- `Transformer3W` gains `magnetizing_connection` (`StarPoint` or
+  `Winding1Terminal`). The PSS/E readers state `Winding1Terminal`, and the
+  star lowering connects that admittance from winding 1's bus to ground
+  outside its ratio, where PSS/E connects `MAG1 + jMAG2`; 0.11 placed it at
+  the star point, off by about `|Ym|` in `Y_bus` for an off-nominal winding 1
+  (#741). The IR states the field only when it is not the star point, so 0.11
+  documents keep their meaning. Writers that cannot place it where the source
+  did report `VALUE_SUBSTITUTED`. The C view and Julia row end with the new
+  field.
+- XIIDM and JIIDM batteries read their generation-positive `targetP`,
+  `targetQ`, and reactive limits as negated storage withdrawal (`ps`, `qs`,
+  `qmin`, `qmax`), and a converter station's terminal `q` as the negated HVDC
+  injection `qf`/`qt`; the writers state the inverse (#700).
+- Remove the Python `parse_display`, `DisplayData`, `PwdDisplay`, and
+  `PwdSubstation` and the MCP server's `display` tool. `parse` reads a `.pwd`
+  display to a `GeoLayer` under the input byte limits (#612). The Rust
+  `parse_pwd_file` helper is gone; `PwdDisplay` and `to_geo_layer_from_pwd`
+  remain.
+- Remove the inert `arrow` Cargo feature of `powerio-capi`; a build command
+  that names it no longer resolves (#673).
+- Remove `IndexedNetwork::to_petgraph`, and with it `powerio-tx`'s petgraph
+  dependency, so no pre-1.0 graph crate type is in the public API.
+  `IndexedNetwork::branch_edges()` yields `(branch, from, to)` for each
+  in-service branch over dense bus indices; build a graph with any library
+  from it.
+- `powerio-prob`'s SOCWR solution names its branch flows as the other
+  solutions do: the `SocwrOpfValues` fields and the `SocwrOpfSolution`
+  accessors `branch_from_active_power`, `branch_from_reactive_power`,
+  `branch_to_active_power`, and `branch_to_reactive_power` are now
+  `branch_from_active_flow`, `branch_from_reactive_flow`,
+  `branch_to_active_flow`, and `branch_to_reactive_flow`, with no alias. The
+  PowerIO IR keys and the quantity names the C ABI's solution value accessor
+  takes follow; the IR reader still accepts the 0.11 keys.
+  `SocwrOpfSolution::bus_order` and `branch_order` return a `Vec`, as every
+  other solution's do, instead of an iterator, and are `#[must_use]`. See
+  [Renamed for consistency](docs/src/migration-0.12.md#renamed-for-consistency).
+- `powerio-dist` removes every version-bearing BMOPF name:
+  `BmopfSchemaVersion`, `BmopfEmitOptions::schema_version`,
+  `with_schema_version` and `sideload_coordinates`, and
+  `BMOPF_SCHEMA_VERSION`; `BMOPF_PROPOSAL_URL` becomes the function
+  `bmopf_proposal_url()`. The `bmopf-json@<version>` output tokens are refused.
+  **BMOPF** below gives the details.
+- Use numeric zero for a zero flow bound and positive infinity for no bound
+  across the balanced Rust, Python, C, and Julia APIs. Translate format-specific
+  conventions at import/export and preserve 0.11 IR meanings on read (#841).
+  Sienna and PowerSystems JSON state an unlimited required rating as
+  PowerSystems' `INFINITE_BOUND` and read it back as unlimited. See
+  [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings).
+- The PyPSA readers bound a line or transformer's flow by `s_nom * s_max_pu`,
+  as PyPSA does. 0.11 read `s_nom` alone, ignored `s_max_pu`, and read an
+  absent or zero `s_nom` as no bound; 0.12 reads it as a zero bound and
+  reports the in service branches it holds at zero with
+  `READ.PYPSA.THERMAL_BOUND_ZERO`. An extendable branch
+  (`s_nom_extendable`) is bounded by `s_nom_max * s_max_pu`, unbounded by
+  default, and reported with `READ.PYPSA.VALUE_APPROXIMATED`.
+- Python table rows state a nonfinite value as a float in every table. The
+  `hvdc`, `storage`, `static_var_compensators`, `areas`, and distribution
+  rows carried the IR's `"Infinity"` and `"-Infinity"` strings in 0.11, while
+  branch and winding ratings were already floats.
+- The Rust MSRV is 1.89, as in 0.11.10.
+
+**Collections**
+
+- Add bounded collection manifests, explicit source-bundle scopes, deterministic rebuilt ZIP packaging, and structured collection/selection origins separate from electrical values.
+- Add explicit nested collection ZIP inspection with isolated namespaces, shared cumulative entry and expansion budgets for admitted content, a per-operation input and decompression work bound, native ZIP layer accounting, and cooperative cancellation.
+- Add owned C collection handles, bounded folder/ZIP/memory acquisition, metadata inspection, and selected parsing into typed modules, with a matching Julia companion.
+- Python `Collection` inspects bounded ZIP/folder/memory inventories and parses
+  independent selections with typed modules, dependencies and explicit lifetime.
+- The converter uses shared collection selections for overlapping masters and
+  mixed cases, defers parsing until requested, and reuses bounded worker input.
+  ZIP upload scopes remain independent when display names collide, XML-only
+  network batches stay selectable, and empty directory records are verified.
+- `powerio collection inspect/parse` lists ZIP/folder inputs and processes
+  explicit entries, dataset roots, or document groups with independent results.
+- Collection selections can explicitly group CIM/CGMES documents and GO
+  problem/solution roles without merging unrelated inputs.
+- Collection inspection discovers separate PyPSA and GridFM dataset roots;
+  explicit directory selections preserve internal time/scenario values.
+- Inspect bounded ZIP/folder collections and explicitly select independent
+  standalone inputs or OpenDSS masters over shared immutable companions.
+- The public `powerio::collection` structs and enums, and the
+  `powerio-archive` `EndRecordRefusal` and `DeclaredSizeFailure` enums, are
+  `#[non_exhaustive]`, so 0.12.x can add fields and variants. Build options
+  from `Default` (or `CollectionCase::new`) and set fields.
+- Add shared `SourceTree` file and directory views with explicit admission limits
+  and independent successful-read dependency tracking for each selection (#774).
+- CGMES and SINCAL share bounded ZIP acquisition primitives while preserving
+  their format-specific namespace, diagnostic, and source replay policies.
+- Add `powerio-archive`: bounded ZIP indexing and verified member reads with
+  explicit limits and namespace checks, as shared infrastructure for #774.
+- Parse explicitly selected SINCAL MDB inputs with acquired-table companions
+  through collections, preserving root confinement and work budgets.
+- Python `Collection.parse` raises `TypeError` when `sincal_multiconductor` or
+  `sincal_balanced` is given the wrong options type, instead of reading the
+  wrong family's options or failing with an `AttributeError` (#845, by
+  @BurhanAbdullah).
+
+**Distribution**
+
+- OpenDSS Transformer and XfmrCode winding arrays now leave the last winding
+  selected, matching native scalar-property replay and preserving the intended
+  winding resistance and neutral grounding (#813).
+- Reject nonzero RAVENS transformer impedance or no-load loss when its input
+  voltage, rating or test power base is unusable, instead of reading it as an
+  ideal transformer. Name the affected tank, winding and field in the error.
+- Reject an explicitly invalid balanced RAVENS `baseMVA` before per-unit
+  conversion, and diagnose skipped loads, shunts, generators, sources, lines
+  and transformer windings that lack usable terminals.
+- Project Kron-reduced PMD delta loads onto three phase coordinates, preserving
+  each conductor pair and ZIP part. Keep the explicit-conductor model when a
+  three-phase basis is unavailable. Refuse RAVENS transformer impedance
+  emission when a nonpositive or nonfinite winding rating makes its base
+  undefined.
+- The `cim-dist` reader reads CIM16 LV feeders stated with sequence
+  impedances and no per phase class. A header-less CIM document with the
+  IEC 61968 customer classes (`ServiceLocation`, `UsagePoint`) now routes to
+  `cim-dist` instead of failing as CGMES. Enumerations written as text
+  (`<cim:Terminal.phases>A</cim:Terminal.phases>`) read like references, so
+  a single phase fuse is no longer read as a three phase switch. A segment
+  takes its ampacity from the `WireInfo.ratedCurrent` its `AssetDatasheet`
+  names, with a finding for a stated value that is no positive current. The
+  Diagram Layout gives segment routes and bus locations in the coordinate
+  reference system the diagram names, taking a node's or terminal's own
+  drawing first and reporting a drawing that places nothing. A CIM16 document
+  set without a `BaseFrequency` reads at 50 Hz. `Circuit`, `CompositeSwitch`,
+  and `PSRType` are reported as context.
+- Forward `powerio-prob/schema` to the distribution model so standalone schema builds include the LinDist3Flow preparation policy.
+
+**BMOPF**
+
+- There is one BMOPF. PowerIO reads and writes the schema proposed in
+  [dsopt-schema#2](https://github.com/distribution-system-opt/dsopt-schema/pull/2),
+  vendored from the Task Force repository at commit
+  [`6796394`](https://github.com/distribution-system-opt/dsopt-schema/commit/6796394f6a4326b61c7fcf5ab5c0d55181b67d25):
+  the proposal reconciled with the Task Force's schema, the Task Force review
+  answers (`vng_max`, geometry for every located element) and the review
+  fixes to dsopt-schema#2. The pin moves to the release tag the schema's
+  `$id` names once the Task Force ratifies it (#844).
+- Multiconductor IVR preparation follows the schema's inverter power factor
+  sign, the OpenDSS PVSystem and Storage convention: `pf > 0` puts Q on the
+  same side as P. Preparation used the opposite sign, so an OpenDSS `pf=0.9`
+  inverter absorbed reactive power where OpenDSS injects it; the coefficient
+  row is now `a*P - pf*Q = 0`.
+- A type-A regulator's `tap_ratio` is the regulated over source voltage ratio,
+  as for type B; `regulator_type` records the hardware only. IVR preparation
+  read a type-A ratio inverted.
+- IVR preparation prices an inverter from its `energy_cost_rate`. It priced
+  only from `cost` and refused `energy_cost_rate` as an uninterpreted field,
+  so an inverter price read from BMOPF was never honoured.
+- The schema removed `voltage_source.cost` and `ibr.cost`. A document that
+  still states them reads them as `energy_cost_rate`, and a write states only
+  `energy_cost_rate`. A writer drops a negative or nonfinite n-winding neutral
+  field with `EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED`, and drops an inverter
+  `dc_bus` that states no `dc_terminal_map`, which the schema requires beside
+  it; the semantic check names the missing map.
+- Output names the bus phase to ground bounds `vpg_min`/`vpg_max` and the
+  neutral to ground cap `vng_max` (earlier `vn_max`), and writes geometry in
+  the schema's typed slots, `bus.*.geo`, `line.*.geo` and
+  `meta.crs`, instead of the `extras.geojson` layer.
+- Component locations travel as the `geo` Point of the voltage source, load,
+  generator, IBR, shunt, capacitor, switch or transformer they attach to, in
+  a WGS84 document, and read back as component locations. A switch or
+  transformer `geo` LineString reads as the midpoint of its end positions.
+  BMOPF output no longer reports line routes it writes as dropped.
+- Output states `meta.schema_version`, which the schema requires, as the
+  document's one version identifier and no `meta.$schema`, which the schema
+  removed; a PowerIO archive URL no longer appears
+  ([BMOPFTools #487](https://github.com/frederikgeth/BMOPFTools.jl/issues/487)).
+  The schema's `$id`, the commit, digest and retrieval permalink stay in
+  `meta.provenance`. The reader identifies a document by
+  `meta.schema_version` (any patch release of the schema's line) and falls
+  back to the older drafts' `meta.$schema` classification; a current
+  document still carrying `$schema` reads, counted in the one legacy warning.
+- An absent `meta.crs` means `OGC:CRS84`, and coordinates are always longitude
+  then latitude; `EPSG:4326` reads the same way, and the writer leaves the CRS
+  out for WGS84.
+- The schema renamed tokens, which the writer follows and the reader takes
+  in either spelling: UPPER_SNAKE `wire_data.kind`, `line_geometry.earth_model`
+  and `dc_control` (`DROOP`), `STATCOM` for `DSTATCOM`, `PU` for
+  `VA_FRACTION`, and the regulators' `voltage_ratio` (with `_min`/`_max` and
+  `time_series` keys) for `tap_ratio`.
+- Line and linecode `s_max` have one entry per conductor. A per-phase line
+  `s_max` from an older document reads per conductor with the neutral
+  unbounded; the writer drops an `s_max` of any other length.
+- The writer never states a value the schema rejects: a non-positive rating,
+  nominal voltage, tap or ratio, a control law of the wrong shape or without a
+  `voltage_reference`, or a bus bound the bus cannot carry is dropped with a
+  finding, and a record whose required rating or nominal voltage is not
+  positive is dropped whole. The reader checks the schema's semantic rules
+  (neutral and phase-count bounds, frequency consistency, control
+  breakpoints, Volt-Watt and Volt-VAr limits, per-conductor `s_max`, wire
+  and load requirements).
+- A document from an older BMOPF draft (including the `bmopf-report` drafts
+  and the early draft PowerIO 0.11 wrote) reads as BMOPF and is reported once
+  with the new `READ.BMOPF.SCHEMA_LEGACY` warning. A current document that
+  uses the `v_min`/`v_max` or `vn_max` spelling gets the same single warning.
+  Writing a legacy document produces the current schema; only a source that
+  states it is echoed byte for byte.
+- Removed every version-bearing BMOPF name: the `bmopf-json@<version>`
+  output tokens (a token naming a version is refused with a pointer to
+  `bmopf-json`), `BmopfSchemaVersion`, `BmopfEmitOptions::schema_version` and
+  `with_schema_version`, `BMOPF_SCHEMA_VERSION`, and
+  `BmopfEmitOptions::sideload_coordinates`. `BMOPF_PROPOSAL_URL` is now the
+  function `bmopf_proposal_url()`, and `BMOPF_SCHEMA_ID` moved from the writer
+  to the schema pin; the version reports of the C ABI (`pio_schema_report`)
+  and Python (`powerio.versions()`) state the schema's `$id` as
+  `bmopf_schema`. The Rust crate and the Python package ship the one schema
+  at `schemas/bmopf/bmopf.schema.json`.
+
+**Conversion fidelity**
+
+- PowerModels JSON and egret JSON carry, as keys those tools leave alone and
+  PowerIO reads back, what their standard fields cannot: area records, case
+  metadata, system frequency (egret), source element identities, branch
+  rating sets beyond the three ratings, each element's untyped fields, the
+  detailed connectivity hierarchy, bus locations and branch routes with their
+  coordinate reference, transformer and switched shunt controls, generator
+  regulation and active power control, IIDM HVDC line detail, and for egret
+  MATPOWER's generator capability columns and the dcline cost.
+- The MATPOWER reader reads a solved case's branch flow columns `PF`, `QF`,
+  `PT`, and `QT`, which it used to discard, and the writer states them when
+  every branch has a solution.
+- The PMD ENGINEERING writer writes back a generator control mode the source
+  stated instead of always writing `FREQUENCYDROOP`.
+- With these and the format fixes above, the conversion matrix has 25 more
+  lossless cells than 0.11, 26 fewer dropped ones, and no cell is worse.
+
+**Carried from 0.11.10**
+
+- Everything in [0.11.10](#01110): the OpenDSS helper line nodes (#765),
+  absent line ampacity (#762), names OpenDSS cannot carry (#770), BMOPF
+  provenance (#763), the libsqlite3-sys advisory fix through rusqlite 0.41
+  with the Rust 1.89 MSRV, and the dependency bumps (#749, #751, #752,
+  #753, #754, #760, #793).
+
+**Carried from 0.11.11**
+
+- Everything in [0.11.11](#01111): XIIDM terminals for static var
+  compensators and for equipment without a stated terminal in partial
+  substation data (#831, #832), Egret `null` points for unlimited branch
+  ratings (#828), the winding reactance base of a generated CGMES phase tap
+  changer (#829), letter-case fallback for OpenDSS companions supplied as
+  named buffers (#812), absolute include detection on every platform for
+  GridLAB-D and OpenDSS, the Python classifier cleanup, and the Windows
+  architecture map check (#833, #834).
+- Unlike 0.11.11, which still reads a native Egret numeric `0` rating as
+  unlimited, 0.12 reads it as the zero thermal limit Egret enforces, since
+  0.12 ratings use zero for a zero bound and positive infinity for no bound.
+  See [Numeric thermal ratings](docs/src/migration-0.12.md#numeric-thermal-ratings)
+  (#828, #841).
+
+**Carried from 0.11.12**
+
+- Everything in [0.11.12](#01112): XIIDM and JIIDM extensions for equipment
+  that is not written (#837, #839), the native pandapower piecewise cost
+  anchor (#840), Python table getters that read only the requested table
+  (#842), and the pandapower 3.5.6 validation oracles (#851).
+
+**Contributor credit**
+
+- @frederikgeth authored the collection/archive stack (#775, #776,
+  #802 through #812, #814) and identified the shunt-status, scaling, typing,
+  naming, and switch-rating review follow-ups.
+- @MohamedNumair authored the CIM16/layout and OpenDSS safe-name changes
+  (#768, #770), fixed PyPSA HDF5 metadata handling, and contributed the
+  convention and retained-document reviews in #821.
+- @BurhanAbdullah authored the absent OpenDSS ampacity correction (#790)
+  and the collection SINCAL option type check (#845).
+- @qian-harvard preserved foreign PowerModels/Egret extension-key values and
+  strengthened refusal of executable HDF5 attribute metadata in #821.
+- @samtalki integrated the release, compatibility migration, adapters, and
+  review follow-ups in #821 and #823. Original contributor commits and
+  coauthor attribution are retained.
+
 ## 0.11.12
 
 **XIIDM**

@@ -101,14 +101,6 @@ pub(crate) struct ActiveBusIndex {
     pub reference_buses: ReferenceBuses,
 }
 
-fn find(parent: &mut [usize], mut node: usize) -> usize {
-    while parent[node] != node {
-        parent[node] = parent[parent[node]];
-        node = parent[node];
-    }
-    node
-}
-
 /// Select non-isolated buses and check reference coverage on the topology that
 /// the OPF preparation will actually contain. In-service branches touching an
 /// isolated bus are excluded with that bus, matching PowerIO normalization.
@@ -130,37 +122,23 @@ pub(crate) fn active_bus_index(case: &IndexedNetwork<'_>) -> Result<ActiveBusInd
         }
     }
 
-    let mut parent: Vec<usize> = (0..analysis_rows.len()).collect();
-    for (_, branch) in case.in_service_branches() {
-        let Some(from_analysis) = case.bus_index(branch.from) else {
-            continue;
-        };
-        let Some(to_analysis) = case.bus_index(branch.to) else {
-            continue;
-        };
-        let (Some(from), Some(to)) = (
-            dense_by_analysis[from_analysis],
-            dense_by_analysis[to_analysis],
-        ) else {
-            continue;
-        };
-        let from_root = find(&mut parent, from);
-        let to_root = find(&mut parent, to);
-        if from_root != to_root {
-            parent[to_root] = from_root;
-        }
-    }
-
-    let mut grounded = vec![false; parent.len()];
+    // The islands of the dense buses over the in-service branches between
+    // them, by the one island labeling in powerio-tx.
+    let (from_bus, to_bus): (Vec<usize>, Vec<usize>) = case
+        .in_service_branches()
+        .filter_map(|(_, branch)| {
+            let from = dense_by_analysis[case.bus_index(branch.from)?]?;
+            let to = dense_by_analysis[case.bus_index(branch.to)?]?;
+            Some((from, to))
+        })
+        .unzip();
+    let labels = powerio_tx::calc_dense_island_labels(analysis_rows.len(), &from_bus, &to_bus);
+    let islands = labels.iter().max().map_or(0, |&last| last + 1);
+    let mut grounded = vec![false; islands];
     for &reference in &reference_rows {
-        let root = find(&mut parent, reference);
-        grounded[root] = true;
+        grounded[labels[reference]] = true;
     }
-    let mut roots = std::collections::HashSet::with_capacity(parent.len());
-    for bus in 0..parent.len() {
-        roots.insert(find(&mut parent, bus));
-    }
-    let ungrounded = roots.iter().filter(|&&root| !grounded[root]).count();
+    let ungrounded = grounded.iter().filter(|&&grounded| !grounded).count();
     if ungrounded > 0 {
         return Err(powerio_tx::Error::UngroundedComponent {
             components: ungrounded,
@@ -193,25 +171,32 @@ pub(crate) fn constraint_mask(
             });
         }
     }
-    if let ConstraintSelection::Only(selected) = selection {
-        for identity in selected {
-            if !declared.contains(identity.as_str()) {
-                return Err(Error::UnknownConstraintIdentity {
-                    family,
-                    identity: identity.clone(),
-                });
-            }
+    let ConstraintSelection::Only(selected) = selection else {
+        return Ok(active_identities
+            .iter()
+            .map(|identity| selection.selects(identity))
+            .collect());
+    };
+    for identity in selected {
+        if !declared.contains(identity.as_str()) {
+            return Err(Error::UnknownConstraintIdentity {
+                family,
+                identity: identity.clone(),
+            });
         }
     }
+    // `ConstraintSelection::selects` scans the list per identity; a set
+    // gives the same membership in time linear in the element count.
+    let selected: HashSet<&str> = selected.iter().map(String::as_str).collect();
     Ok(active_identities
         .iter()
-        .map(|identity| selection.selects(identity))
+        .map(|identity| selected.contains(identity.as_str()))
         .collect())
 }
 
-// Keep prepared angle infinities round-trippable without changing finite JSON
+// Keep prepared numeric bounds round-trippable without changing finite JSON
 // numbers or the binary representation. Use the shared PowerIO spelling.
-pub(crate) mod angle_bounds_serde {
+pub(crate) mod nonfinite_vec {
     use powerio_core::__implementation::nonfinite::{NonFiniteDe, NonFiniteSer};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

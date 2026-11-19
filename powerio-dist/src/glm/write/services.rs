@@ -157,8 +157,11 @@ fn center<'a>(
                 || !w.s_rating.is_finite()
                 || w.s_rating <= 0.0
                 || w.s_rating != primary_winding.s_rating
-                || w.r_neutral.is_some_and(|r| r != 0.0)
-                || w.x_neutral.is_some_and(|x| x != 0.0)
+                || !matches!(
+                    crate::transformer::calc_stated_neutral_grounding(w),
+                    crate::transformer::WindingNeutralGrounding::Unstated
+                        | crate::transformer::WindingNeutralGrounding::Solid
+                )
         })
     {
         return Err(fail());
@@ -296,7 +299,13 @@ impl Writer<'_> {
             }
             for (i, channel) in channels.into_iter().enumerate() {
                 let power = Complex::new(load.p_nom[i], load.q_nom[i]);
-                let value = power.conj() / v_nom[i];
+                // Triplex current takes a zero angle reference.
+                let value = crate::load_voltage::calc_zip_coefficient(
+                    crate::load_voltage::ZipLaw::Current,
+                    power,
+                    1.0,
+                    v_nom[i],
+                );
                 if !value.re.is_finite()
                     || !value.im.is_finite()
                     || (power != Complex::default() && value == Complex::default())
@@ -443,11 +452,17 @@ impl Writer<'_> {
         self.coordinates(target, &load.name);
         for (i, channel) in channels.iter().enumerate() {
             let power = Complex::new(load.p_nom[i], load.q_nom[i]);
-            let value = match law {
-                "power" => power,
-                _ if power == Complex::default() => Complex::default(),
-                _ => v[i] * v[i] / power.conj(),
-            };
+            let value = crate::load_voltage::calc_zip_coefficient(
+                if law == "power" {
+                    crate::load_voltage::ZipLaw::Power
+                } else {
+                    crate::load_voltage::ZipLaw::Impedance
+                },
+                power,
+                1.0,
+                // A constant power law states no nominal voltage.
+                v.get(i).copied().unwrap_or(f64::NAN),
+            );
             if power != Complex::default() && value == Complex::default() {
                 return Err(unsupported("triplex load coefficient underflows"));
             }
@@ -586,9 +601,8 @@ fn triplex_geometry(code: &DistLineCode, f: f64) -> Result<Geometry, Error> {
     if code.n_conductors != 3 {
         return Err(fail());
     }
-    let earth = (100.0 / f).ln() / 2.0 + 7.6786;
-    let r_earth = 0.001_588_36 * f;
-    let x_scale = 0.002_022_37 * f;
+    let carson = crate::glm::line_physics::carson_earth(f);
+    let (earth, r_earth, x_scale) = (carson.log_depth, carson.resistance, carson.reactance);
     if (0..3).any(|i| {
         (0..3).any(|j| {
             code.r_series[i][j] != code.r_series[j][i]
@@ -637,8 +651,12 @@ fn triplex_geometry(code: &DistLineCode, f: f64) -> Result<Geometry, Error> {
     ];
     for (i, row) in distances.iter().enumerate() {
         for (j, distance) in row.iter().enumerate() {
-            let r = (r_earth + if i == j { resistance[i] } else { 0.0 }) / METERS_PER_MILE;
-            let x = x_scale * (earth - distance.ln()) / METERS_PER_MILE;
+            // The reader's forward equation, so the round trip compares like
+            // with like.
+            let z = (crate::overhead::calc_carson_impedance(*distance, carson)
+                + if i == j { resistance[i] } else { 0.0 })
+                / METERS_PER_MILE;
+            let (r, x) = (z.re, z.im);
             for (a, b) in [(r, code.r_series[i][j]), (x, code.x_series[i][j])] {
                 if (a - b).abs() > 8.0 * f64::EPSILON * a.abs().max(b.abs()) {
                     return Err(fail());

@@ -113,6 +113,30 @@ fn round_trip(value: PioValue, label: &str) -> String {
         text,
         "{label} is not byte stable"
     );
+    // These cases exercise each balanced instance and solution envelope. The
+    // three-winding-only fixture has no branch for this migration control.
+    let path = match type_name.as_str() {
+        "powerio.DcPfInstance"
+        | "powerio.AcPfInstance"
+        | "powerio.DcOpfInstance"
+        | "powerio.AcOpfInstance"
+        | "powerio.AcScucInstance" => Some("/value/data/network"),
+        "powerio.DcPfSolution"
+        | "powerio.AcPfSolution"
+        | "powerio.DcOpfSolution"
+        | "powerio.AcOpfSolution"
+        | "powerio.SocwrOpfSolution"
+        | "powerio.AcScucSolution" => Some("/value/data/instance/network"),
+        _ => None,
+    };
+    if let Some(path) = path
+        && !raw.pointer(path).unwrap()["branches"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    {
+        helpers::thermal_migration::check(&text, &[path]);
+    }
     text
 }
 
@@ -568,6 +592,29 @@ fn three_winding_network() -> BalancedNetwork {
     generator.cost = Some(GenCost::new(2, 0.0, 0.0, vec![0.01, 10.0, 0.0]));
     net.generators_mut().push(generator);
     net
+}
+
+#[test]
+fn socwr_solution_keeps_legacy_network_rating_meanings() {
+    let instance = Arc::new(AcOpfInstance::from_network(network()).unwrap());
+    let mut values = powerio_prob::solution::SocwrOpfValues::default();
+    values.bus_voltage_magnitude_squared = vec![1.0; 2];
+    values.branch_voltage_product_real = vec![1.0];
+    values.branch_voltage_product_imaginary = vec![0.0];
+    values.generator_active_power = vec![40.0];
+    values.generator_reactive_power = vec![10.0];
+    values.branch_from_active_flow = vec![40.0];
+    values.branch_from_reactive_flow = vec![10.0];
+    values.branch_to_active_flow = vec![-40.0];
+    values.branch_to_reactive_flow = vec![-10.0];
+    let solution = powerio_prob::solution::SocwrOpfSolution::new(
+        instance,
+        Termination::Converged,
+        values,
+        400.0,
+    )
+    .unwrap();
+    round_trip(PioValue::SocwrOpfSolution(solution), "socwr legacy ratings");
 }
 
 #[test]
@@ -1360,7 +1407,7 @@ fn every_multiconductor_quantity_round_trips() {
 }
 
 #[test]
-fn existing_and_additive_values_keep_generation_two() {
+fn existing_and_added_values_name_the_release() {
     for value in [
         PioValue::BalancedNetwork(network()),
         PioValue::McAcOpfInstance(McAcOpfInstance::from_network(mc_network()).unwrap()),
@@ -1374,7 +1421,106 @@ fn existing_and_additive_values_keep_generation_two() {
     ] {
         let text = serialize(&PioModule::new(value)).unwrap();
         let document: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(document["version"], 2);
+        assert_eq!(document["version"], powerio::IR_VERSION);
         assert!(deserialize(&document.to_string()).is_ok());
     }
+}
+
+/// The `calc-mc` network with a WYE generator on the three phases and a
+/// DELTA generator on the same terminals: six mapped terminals, six coils.
+fn mc_generator_network() -> powerio_dist::MulticonductorNetwork {
+    let mut net = mc_network();
+    for (name, configuration) in [
+        ("wye", powerio_dist::Configuration::Wye),
+        ("delta", powerio_dist::Configuration::Delta),
+    ] {
+        net.generators_mut().push(powerio_dist::DistGenerator::new(
+            name,
+            "src",
+            vec!["1".into(), "2".into(), "3".into()],
+            configuration,
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+    net
+}
+
+fn mc_generator_solution() -> McAcOpfSolution {
+    McAcOpfSolution::new(
+        Arc::new(McAcOpfInstance::from_network(mc_generator_network()).unwrap()),
+        Termination::Converged,
+        vec![240.0, 239.9, 240.1],
+        vec![0.0, -2.094, 2.094],
+        vec![1000.0, 1000.0, 1000.0],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+        12.5,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_mc_ac_opf_solution_keeps_its_per_coil_dispatch_through_ir() {
+    let coils = vec![11.0, 21.0, 31.0, 90.0, 0.0, -4.0];
+    let solution = mc_generator_solution()
+        .with_generator_coil_active_powers(coils.clone())
+        .unwrap();
+    let text = round_trip(
+        PioValue::McAcOpfSolution(solution),
+        "mc_ac_opf_coil_dispatch",
+    );
+    let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        raw["value"]["data"]["generator_coil_active_power"],
+        serde_json::json!(coils)
+    );
+    let PioValue::McAcOpfSolution(back) = deserialize(&text).unwrap().into_value() else {
+        panic!("expected a multiconductor AC OPF solution");
+    };
+    assert_eq!(back.generator_coil_active_powers(), Some(&coils[..]));
+    assert_eq!(
+        back.generator_active_powers(),
+        &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0][..]
+    );
+
+    // A column that disagrees with the generators' coils is refused.
+    let mut short = raw;
+    short["value"]["data"]["generator_coil_active_power"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let error = deserialize(&short.to_string()).unwrap_err().to_string();
+    assert!(error.contains("6 coils"), "{error}");
+}
+
+#[test]
+fn a_mc_ac_opf_document_without_per_coil_dispatch_reads_as_before() {
+    // A solution with no per coil dispatch writes the document every 0.12
+    // release wrote: the field is not stated.
+    let text = round_trip(
+        PioValue::McAcOpfSolution(mc_generator_solution()),
+        "mc_ac_opf_no_coil_dispatch",
+    );
+    let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        raw["value"]["data"]
+            .as_object()
+            .unwrap()
+            .get("generator_coil_active_power")
+            .is_none()
+    );
+    let PioValue::McAcOpfSolution(back) = deserialize(&text).unwrap().into_value() else {
+        panic!("expected a multiconductor AC OPF solution");
+    };
+    assert_eq!(back.generator_coil_active_powers(), None);
+
+    // The same document under the header a 0.12.2 build wrote still reads.
+    let mut earlier = raw;
+    earlier["version"] = serde_json::json!("0.12.2");
+    let PioValue::McAcOpfSolution(back) = deserialize(&earlier.to_string()).unwrap().into_value()
+    else {
+        panic!("expected a multiconductor AC OPF solution");
+    };
+    assert_eq!(back.generator_coil_active_powers(), None);
+    assert_eq!(back.generator_active_powers().len(), 6);
 }

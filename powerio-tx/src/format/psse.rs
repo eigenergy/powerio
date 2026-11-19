@@ -83,7 +83,10 @@ fn read_extra_branch_ratings(
     for slot in 0..PSSE_EXTRA_BRANCH_RATINGS {
         let rate_mva = num_at(fields, rating_start + 3 + slot, 0.0)?;
         if rate_mva.abs() > f64::EPSILON {
-            ratings.push(BranchRatingSet::new(psse_extra_rating_name(slot), rate_mva));
+            ratings.push(BranchRatingSet::new(
+                psse_extra_rating_name(slot),
+                crate::thermal_limit::from_zero_unlimited(rate_mva)?,
+            ));
         }
     }
     Ok(ratings)
@@ -105,7 +108,7 @@ fn psse_extra_rating_slots(
         if let Some(slot) = psse_extra_rating_slot(&rating.name)
             && !used[slot]
         {
-            values[slot] = rating.rate_mva;
+            values[slot] = crate::thermal_limit::to_zero_unlimited(rating.rate_mva);
             used[slot] = true;
             continue;
         }
@@ -115,7 +118,7 @@ fn psse_extra_rating_slots(
     for rating in deferred {
         let slot = used.iter().position(|is_used| !*is_used);
         if let Some(slot) = slot {
-            values[slot] = rating.rate_mva;
+            values[slot] = crate::thermal_limit::to_zero_unlimited(rating.rate_mva);
             used[slot] = true;
         }
         report(rating, slot);
@@ -841,8 +844,8 @@ fn shunt_facts_record(
     let float = |key: &str, default: f64| extra_f64(&svc.extras, key).unwrap_or(default);
     let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
     let shmx = extra_f64(&svc.extras, "psse_shmx")
-        .filter(|shmx| shmx / (kv * kv) == limit)
-        .unwrap_or(limit * (kv * kv));
+        .filter(|shmx| powerio_core::electrical::calc_rated_admittance(*shmx, kv) == limit)
+        .unwrap_or(powerio_core::electrical::calc_rated_power(limit, kv));
     let fields = [
         float("psse_pdes", 0.0),
         float("psse_qdes", 0.0),
@@ -1399,9 +1402,9 @@ fn write_psse_rev_inner(
                 num(br.x),
                 num(b_total),
                 name,
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
                 num(extra_ratings[0]),
                 num(extra_ratings[1]),
                 num(extra_ratings[2]),
@@ -1436,9 +1439,9 @@ fn write_psse_rev_inner(
                 num(br.r),
                 num(br.x),
                 num(b_total),
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
                 num(charging.g_fr),
                 num(bi),
                 num(charging.g_to),
@@ -1672,9 +1675,9 @@ fn write_psse_rev_inner(
                 "{}, 0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {control}",
                 num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
                 num(extra_ratings[0]),
                 num(extra_ratings[1]),
                 num(extra_ratings[2]),
@@ -1691,9 +1694,9 @@ fn write_psse_rev_inner(
                 "{}, 0, {}, {}, {}, {}, {control}",
                 num(br.calc_effective_tap() * ratio2),
                 num(br.shift),
-                num(br.rate_a),
-                num(br.rate_b),
-                num(br.rate_c),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_a)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_b)),
+                num(crate::thermal_limit::to_zero_unlimited(br.rate_c)),
             );
         }
         let _ = writeln!(s, "{}, 0", num(ratio2));
@@ -1742,6 +1745,15 @@ fn write_psse_rev_inner(
             );
             0
         });
+        if t.magnetizing_differs_from(crate::network::MagnetizingConnection::Winding1Terminal) {
+            warnings.push(
+                &F.value_substituted,
+                format!(
+                    "PSS/E three winding transformer {}-{}-{} magnetizing admittance stated at the star point was written as MAG1/MAG2, which PSS/E connects from winding 1's bus to ground: the two placements are different circuits",
+                    t.windings[0].bus, t.windings[1].bus, t.windings[2].bus
+                ),
+            );
+        }
         let mut main = vec![
             t.windings[0].bus.to_string(),
             t.windings[1].bus.to_string(),
@@ -1879,9 +1891,9 @@ fn write_psse_rev_inner(
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
-                    num(w.rate_a),
-                    num(w.rate_b),
-                    num(w.rate_c),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_a)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_b)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_c)),
                     num(extra_ratings[0]),
                     num(extra_ratings[1]),
                     num(extra_ratings[2]),
@@ -1899,9 +1911,9 @@ fn write_psse_rev_inner(
                     num(w.tap),
                     num(w.nominal_kv),
                     num(w.shift),
-                    num(w.rate_a),
-                    num(w.rate_b),
-                    num(w.rate_c),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_a)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_b)),
+                    num(crate::thermal_limit::to_zero_unlimited(w.rate_c)),
                 );
             }
         }
@@ -4030,10 +4042,9 @@ fn convert_transformer_impedance(
             }
             let r_pair = (r / 1_000_000.0) / sbase;
             let z_pair = x.abs();
-            let x_pair = (z_pair.mul_add(z_pair, -(r_pair * r_pair)))
-                .max(0.0)
-                .sqrt()
-                .copysign(x);
+            // A resistance at or above the impedance leaves no reactance.
+            let x_pair = powerio_core::electrical::calc_quadrature(z_pair, r_pair);
+            let x_pair = if x_pair.is_nan() { 0.0 } else { x_pair }.copysign(x);
             let scale = system_base / sbase;
             (r_pair * scale, x_pair * scale)
         }
@@ -4121,17 +4132,33 @@ fn convert_transformer_magnetizing_admittance(
                 return (mag_g, mag_b);
             }
 
-            let voltage_scale = (bus_base_kv / nominal).powi(2);
-            let g = mag_g / (1_000_000.0 * system_base) * voltage_scale;
-            let y = mag_b * (winding_base / system_base) * voltage_scale;
-            let b_squared = y.mul_add(y, -(g * g));
-            if b_squared >= 0.0 {
-                (g, -b_squared.sqrt())
-            } else {
+            // An admittance rebase from the winding base at the nominal
+            // voltage (MAG1's watts are per unit on one watt) to the system
+            // base at the bus voltage.
+            let g = powerio_core::electrical::calc_impedance_rebase(
+                mag_g,
+                bus_base_kv,
+                1_000_000.0 * system_base,
+                nominal,
+                1.0,
+                powerio_core::electrical::RebaseOrder::InversePowerRatio,
+            );
+            let y = powerio_core::electrical::calc_impedance_rebase(
+                mag_b,
+                bus_base_kv,
+                system_base,
+                nominal,
+                winding_base,
+                powerio_core::electrical::RebaseOrder::PowerRatio,
+            );
+            let b = powerio_core::electrical::calc_quadrature(y.abs(), g);
+            if b.is_nan() {
                 warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
                     "PSS/E transformer {label}: CM=2 exciting current magnitude {y} is below conductance {g}; set magnetizing susceptance to 0"
                 ));
                 (g, 0.0)
+            } else {
+                (g, -b)
             }
         }
         other => {
@@ -5270,7 +5297,11 @@ fn read_shunt_facts(
     let mode = int_at(f, 3, 1)?;
     let shmx = num_at(f, 7, 9999.0)?;
     let vset = num_at(f, 6, 1.0)?;
-    let mut svc = StaticVarCompensator::new(bus, -shmx / (kv * kv), shmx / (kv * kv));
+    let mut svc = StaticVarCompensator::new(
+        bus,
+        powerio_core::electrical::calc_rated_admittance(-shmx, kv),
+        powerio_core::electrical::calc_rated_admittance(shmx, kv),
+    );
     svc.in_service = mode != 0;
     svc.regulating = true;
     let regulated = id_at(f, 19, 0)?;
@@ -5295,7 +5326,7 @@ fn read_shunt_facts(
     let mut extras = Extras::new();
     // Converting back to p.u. and MVA can land an ulp away; the stated field
     // is kept wherever it would, so a written record restates it.
-    if svc.b_max_siemens * (kv * kv) != shmx {
+    if powerio_core::electrical::calc_rated_power(svc.b_max_siemens, kv) != shmx {
         extras.insert("psse_shmx".into(), jnum(shmx));
     }
     if svc.voltage_setpoint_kv / regulated_kv != vset {
@@ -5634,9 +5665,9 @@ fn read_branch(f: &[Cow<'_, str>], raw_rev: u32) -> Result<Branch> {
             g_to,
             b_to,
         }),
-        rate_a: num_at(f, rating, 0.0)?,
-        rate_b: num_at(f, rating + 1, 0.0)?,
-        rate_c: num_at(f, rating + 2, 0.0)?,
+        rate_a: crate::thermal_limit::from_zero_unlimited(num_at(f, rating, 0.0)?)?,
+        rate_b: crate::thermal_limit::from_zero_unlimited(num_at(f, rating + 1, 0.0)?)?,
+        rate_c: crate::thermal_limit::from_zero_unlimited(num_at(f, rating + 2, 0.0)?)?,
         rating_sets: read_extra_branch_ratings(f, rating, named_record)?,
         current_ratings: None,
         tap: 0.0,
@@ -5893,9 +5924,9 @@ fn read_transformer(
                 g_to: 0.0,
                 b_to: 0.0,
             }),
-            rate_a: num_at(l3, 3, 0.0)?,
-            rate_b: num_at(l3, 4, 0.0)?,
-            rate_c: num_at(l3, 5, 0.0)?,
+            rate_a: crate::thermal_limit::from_zero_unlimited(num_at(l3, 3, 0.0)?)?,
+            rate_b: crate::thermal_limit::from_zero_unlimited(num_at(l3, 4, 0.0)?)?,
+            rate_c: crate::thermal_limit::from_zero_unlimited(num_at(l3, 5, 0.0)?)?,
             rating_sets: read_extra_branch_ratings(l3, 3, modern)?,
             current_ratings: None,
             tap,
@@ -6139,9 +6170,9 @@ fn read_transformer_3w(
                     tap,
                     shift: num_at(w, 2, 0.0)?,
                     nominal_kv: num_at(w, 1, 0.0)?,
-                    rate_a: num_at(w, 3, 0.0)?,
-                    rate_b: num_at(w, 4, 0.0)?,
-                    rate_c: num_at(w, 5, 0.0)?,
+                    rate_a: crate::thermal_limit::from_zero_unlimited(num_at(w, 3, 0.0)?)?,
+                    rate_b: crate::thermal_limit::from_zero_unlimited(num_at(w, 4, 0.0)?)?,
+                    rate_c: crate::thermal_limit::from_zero_unlimited(num_at(w, 5, 0.0)?)?,
                     control,
                 },
                 node,
@@ -6178,6 +6209,7 @@ fn read_transformer_3w(
         star_va: num_at(l2, 10, 0.0)?,
         mag_g,
         mag_b,
+        magnetizing_connection: crate::network::MagnetizingConnection::Winding1Terminal,
         in_service,
         name: l1
             .get(10)
@@ -6815,7 +6847,9 @@ fn calc_vsc_reactive_power(converter: &VscConverter, p: f64) -> f64 {
     if pf == 0.0 {
         return 0.0;
     }
-    p.abs() * (1.0 - pf * pf).sqrt() / pf * converter.acset.signum()
+    p.abs()
+        * crate::electrical::calc_reactive_ratio(pf, crate::electrical::ReactiveRatioForm::Sine)
+        * converter.acset.signum()
 }
 
 /// Read one VSC DC line record into the neutral [`Hvdc`]: the control line
@@ -7689,9 +7723,9 @@ Q
                 g_to: 0.03,
                 b_to: 0.05,
             }),
-            rate_a: 100.0,
-            rate_b: 110.0,
-            rate_c: 120.0,
+            rate_a: (100.0),
+            rate_b: (110.0),
+            rate_c: (120.0),
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
@@ -7716,9 +7750,9 @@ Q
             x: 0.1,
             b: 0.0,
             charging: Some(charging),
-            rate_a: 100.0,
-            rate_b: 110.0,
-            rate_c: 120.0,
+            rate_a: (100.0),
+            rate_b: (110.0),
+            rate_c: (120.0),
             rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.05,
@@ -8495,6 +8529,7 @@ Q
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Complete native header and named-rating fixture assertions.
     fn reads_comment_headers_system_wide_block_and_named_branch_records() {
         let raw = r#"@!IC, SBASE,REV,XFRRAT,NXFRAT,BASFRQ
 0, 100.00, 34, 0, 0, 60.00 / synthetic v34 export
@@ -9479,7 +9514,7 @@ Q
         let net = parse_psse(raw).unwrap();
 
         assert_eq!(net.branches().len(), 1);
-        close(net.branches()[0].rate_a, 0.0);
+        assert_eq!(net.branches()[0].rate_a, f64::INFINITY);
         close(net.branches()[0].rate_b, 90.0);
         close(net.branches()[0].rate_c, 80.0);
         assert!(net.branches()[0].in_service);

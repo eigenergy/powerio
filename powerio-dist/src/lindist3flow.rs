@@ -387,58 +387,44 @@ fn lower_switches(
     Ok(())
 }
 
-fn capacitor_matrix(capacitor: &DistCapacitor) -> Result<Vec<Vec<f64>>> {
+/// The capacitor's susceptance matrix: the one capacitor stamp
+/// ([`crate::calc_capacitor_susceptance`]) over the connections this
+/// preparation carries (WYE, a two terminal single phase bank, a three
+/// terminal DELTA ring).
+fn capacitor_matrix(
+    network: &MulticonductorNetwork,
+    capacitor: &DistCapacitor,
+) -> Result<Vec<Vec<f64>>> {
+    let n = capacitor.terminal_map.len();
     if !capacitor.q_rated.is_finite()
         || !capacitor.v_nom.is_finite()
         || capacitor.v_nom <= 0.0
-        || capacitor.terminal_map.is_empty()
+        || n == 0
     {
         return Err(fail(format!(
             "capacitor `{}` has invalid rating, nominal voltage, or terminal map",
             capacitor.name
         )));
     }
-    let n = capacitor.terminal_map.len();
-    let mut matrix = zero_matrix(n);
-    let mut couple = |a: usize, b: usize, value: f64| {
-        matrix[a][a] += value;
-        matrix[b][b] += value;
-        matrix[a][b] -= value;
-        matrix[b][a] -= value;
+    let carried = match capacitor.configuration {
+        Configuration::Wye => true,
+        Configuration::SinglePhase => n == 2,
+        Configuration::Delta => n == 3,
     };
-    match capacitor.configuration {
-        // A lone wye terminal is a phase-to-ground unit rated across itself.
-        Configuration::Wye if n == 1 => {
-            matrix[0][0] = capacitor.q_rated / capacitor.v_nom.powi(2);
-        }
-        // Phase terminals to the last (neutral) terminal at line-to-line
-        // nameplate voltage, matching the Y-bus and PMD conventions.
-        Configuration::Wye => {
-            let phases = n - 1;
-            let v_ln = capacitor.v_nom / 3f64.sqrt();
-            #[allow(clippy::cast_precision_loss)]
-            let value = capacitor.q_rated / (phases as f64) / v_ln.powi(2);
-            for phase in 0..phases {
-                couple(phase, phases, value);
-            }
-        }
-        Configuration::SinglePhase if n == 2 => {
-            couple(0, 1, capacitor.q_rated / capacitor.v_nom.powi(2));
-        }
-        Configuration::Delta if n == 3 => {
-            let value = capacitor.q_rated / (3.0 * capacitor.v_nom.powi(2));
-            for pair in 0..3 {
-                couple(pair, (pair + 1) % 3, value);
-            }
-        }
-        _ => {
-            return Err(fail(format!(
+    if !carried {
+        return Err(fail(format!(
+            "capacitor `{}` {:?} connection with {n} terminals is not supported",
+            capacitor.name, capacitor.configuration
+        )));
+    }
+    crate::calc_capacitor_susceptance(network, capacitor)
+        .map_err(fail)?
+        .ok_or_else(|| {
+            fail(format!(
                 "capacitor `{}` {:?} connection with {n} terminals is not supported",
                 capacitor.name, capacitor.configuration
-            )));
-        }
-    }
-    Ok(matrix)
+            ))
+        })
 }
 
 fn lower_capacitors(
@@ -453,7 +439,7 @@ fn lower_capacitors(
         .map(|shunt| shunt.name.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();
     for capacitor in capacitors {
-        let matrix = capacitor_matrix(&capacitor)?;
+        let matrix = capacitor_matrix(network, &capacitor)?;
         let name = unique_name(&format!("__l3f-capacitor-{}", capacitor.name), &mut names);
         network.shunts_mut().push(DistShunt::new(
             &name,

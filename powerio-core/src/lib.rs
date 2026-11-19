@@ -2,13 +2,17 @@
 //!
 //! This crate owns source buffers, diagnostics, operation errors, the generic
 //! [`PioModule`], repeated value containers, and output destinations. It does
-//! not own electrical network, calculation, matrix, or dynamic value types.
+//! not own electrical network, calculation, matrix, or dynamic value types;
+//! [`electrical`] holds only the scalar formulas both network families share
+//! and [`dense`] the one small dense elimination kernel they share.
 
 mod bounded;
 pub mod cim;
 pub mod codes;
 mod component_id;
+pub mod dense;
 mod diagnostic;
+pub mod electrical;
 mod error;
 mod module;
 pub(crate) mod nonfinite;
@@ -17,6 +21,7 @@ mod records;
 mod scenario;
 mod source;
 mod time_series;
+pub mod union_find;
 mod validation;
 
 pub use codes::CORE_DIAGNOSTIC_CODES;
@@ -37,7 +42,9 @@ pub use records::{
     SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
 };
 pub use scenario::{SCENARIO_PROBABILITY_TOLERANCE, Scenario, ScenarioId, ScenarioSet};
-pub use source::{FormatId, IntoSource, MEMORY_SOURCE_NAME, Source, SourceBuffer};
+pub use source::{
+    FormatId, IntoSource, MEMORY_SOURCE_NAME, Source, SourceBuffer, SourceTree, SourceTreeLimits,
+};
 pub use time_series::{TimePoint, TimeSeries};
 
 /// Decode time record limits, shared by every PowerIO serialization.

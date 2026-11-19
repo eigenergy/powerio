@@ -272,7 +272,7 @@ pub struct RemovedBranch {
     /// Total line charging susceptance, per unit. [`MergedCharging`] decides
     /// whether it moves to the survivor or goes with the branch.
     pub b: f64,
-    /// Thermal ratings in MVA; `0` means unlimited.
+    /// Explicit thermal ratings in MVA, including finite zero bounds.
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
@@ -452,7 +452,7 @@ pub struct RemovedFlows {
 /// admitting it is deferred, so for now normalization refuses it with
 /// `BUILD.SWITCH.CLOSED`.
 struct MergeSets {
-    parent: Vec<usize>,
+    sets: crate::union_find::UnionFind,
     /// Per root, the three winding transformers with a winding in the set.
     windings: HashMap<usize, Vec<usize>>,
     /// Keep the first argument's root on a join, so the roots are the
@@ -470,24 +470,14 @@ enum Join {
 impl MergeSets {
     fn new(n: usize, windings: HashMap<usize, Vec<usize>>, keep_first: bool) -> Self {
         Self {
-            parent: (0..n).collect(),
+            sets: crate::union_find::UnionFind::new(n),
             windings,
             keep_first,
         }
     }
 
     fn root(&mut self, node: usize) -> usize {
-        let mut root = node;
-        while self.parent[root] != root {
-            root = self.parent[root];
-        }
-        let mut walk = node;
-        while self.parent[walk] != root {
-            let next = self.parent[walk];
-            self.parent[walk] = root;
-            walk = next;
-        }
-        root
+        self.sets.find(node)
     }
 
     fn join(&mut self, a: usize, b: usize) -> Join {
@@ -505,7 +495,7 @@ impl MergeSets {
         } else {
             (rb, ra)
         };
-        self.parent[gone] = keep;
+        self.sets.union(keep, gone);
         if let Some(moved) = self.windings.remove(&gone) {
             self.windings.entry(keep).or_default().extend(moved);
         }
@@ -625,21 +615,25 @@ fn fold_admittance(
         } else {
             branch.shift.to_radians()
         };
-        let (sin, cos) = shift.sin_cos();
-        // The squared norm avoids cancellation between the four Y entries
-        // for a near-unity tap. It is exactly zero for a nominal jumper.
-        let factor = (tap.recip() - cos).powi(2) + sin.powi(2);
-        let (mut g, mut b) = match branch.calc_series_admittance(removed.row)? {
-            Some((g, b)) => (g * factor, b * factor),
-            None if tap == 1.0 && shift == 0.0 => (0.0, 0.0),
+        let series = match branch.calc_series_admittance(removed.row)? {
+            Some((g, b)) => num_complex::Complex64::new(g, b),
+            None if tap == 1.0 && shift == 0.0 => num_complex::Complex64::new(0.0, 0.0),
             None => return Err(Error::ZeroImpedance { row: removed.row }),
         };
-        if charging == MergedCharging::FoldToShunt {
+        let zero = num_complex::Complex64::new(0.0, 0.0);
+        let (from_charging, to_charging) = if charging == MergedCharging::FoldToShunt {
             let terminal = branch.calc_terminal_charging();
-            let inverse_tap_squared = tap.recip().powi(2);
-            g += terminal.g_fr * inverse_tap_squared + terminal.g_to;
-            b += terminal.b_fr * inverse_tap_squared + terminal.b_to;
-        }
+            (
+                num_complex::Complex64::new(terminal.g_fr, terminal.b_fr),
+                num_complex::Complex64::new(terminal.g_to, terminal.b_to),
+            )
+        } else {
+            (zero, zero)
+        };
+        // The one self-loop fold of the pi model.
+        let folded =
+            crate::PiModel::new(series, from_charging, to_charging, tap, shift).calc_folded();
+        let (g, b) = (folded.re, folded.im);
         let (g, b) = (g * scale, b * scale);
         if !g.is_finite() || !b.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: removed.row });
@@ -1131,7 +1125,9 @@ impl BalancedNetwork {
             } else {
                 charged += usize::from(removed.b != 0.0);
                 rated += usize::from(
-                    removed.rate_a > 0.0 || removed.rate_b > 0.0 || removed.rate_c > 0.0,
+                    removed.rate_a.is_finite()
+                        || removed.rate_b.is_finite()
+                        || removed.rate_c.is_finite(),
                 );
             }
             removed_branches.push(removed);
@@ -1770,7 +1766,7 @@ fn solve_loop(
         .collect();
     let size = members.len() - 1;
     let mut matrix = vec![0.0; size * size];
-    let mut rhs: Vec<f64> = members[1..].iter().map(|&node| injection[node]).collect();
+    let rhs: Vec<f64> = members[1..].iter().map(|&node| injection[node]).collect();
     for &index in link_indices {
         let (from, to, x) = links[index];
         let conductance = 1.0 / x;
@@ -1786,7 +1782,7 @@ fn solve_loop(
             }
         }
     }
-    let angle = solve_dense(&mut matrix, &mut rhs, size)?;
+    let angle = solve_dense(&matrix, &rhs, size)?;
     let theta = |node: usize| match position[&node] {
         0 => 0.0,
         p => angle[p - 1],
@@ -1802,48 +1798,25 @@ fn solve_loop(
     )
 }
 
-/// Gaussian elimination with partial pivoting on a dense row major system.
-fn solve_dense(matrix: &mut [f64], rhs: &mut [f64], size: usize) -> Option<Vec<f64>> {
+/// The solution of a dense row major system through the one dense inverse
+/// ([`powerio_core::dense::invert_dense_matrix`], partial pivoting). `None`
+/// when a pivot is not finite or is at most `1e-13` times the system's
+/// largest entry.
+fn solve_dense(matrix: &[f64], rhs: &[f64], size: usize) -> Option<Vec<f64>> {
     let largest = matrix.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-    let floor = largest * 1e-13;
-    for column in 0..size {
-        let pivot = (column..size).max_by(|&a, &b| {
-            matrix[a * size + column]
-                .abs()
-                .total_cmp(&matrix[b * size + column].abs())
-        })?;
-        if matrix[pivot * size + column].abs() <= floor
-            || !matrix[pivot * size + column].is_finite()
-        {
-            return None;
-        }
-        if pivot != column {
-            for k in 0..size {
-                matrix.swap(pivot * size + k, column * size + k);
-            }
-            rhs.swap(pivot, column);
-        }
-        let diagonal = matrix[column * size + column];
-        for row in column + 1..size {
-            let factor = matrix[row * size + column] / diagonal;
-            if factor == 0.0 {
-                continue;
-            }
-            for k in column..size {
-                matrix[row * size + k] -= factor * matrix[column * size + k];
-            }
-            rhs[row] -= factor * rhs[column];
-        }
-    }
-    let mut solution = vec![0.0; size];
-    for row in (0..size).rev() {
-        let mut value = rhs[row];
-        for k in row + 1..size {
-            value -= matrix[row * size + k] * solution[k];
-        }
-        solution[row] = value / matrix[row * size + row];
-    }
-    Some(solution)
+    let rows: Vec<Vec<f64>> = matrix.chunks(size.max(1)).map(<[f64]>::to_vec).collect();
+    let inverse = powerio_core::dense::invert_dense_matrix(
+        &rows,
+        powerio_core::dense::DensePivot::Partial,
+        largest * 1e-13,
+        0.0,
+    )?;
+    Some(
+        inverse
+            .iter()
+            .map(|row| row.iter().zip(rhs).map(|(a, b)| a * b).sum())
+            .collect(),
+    )
 }
 
 #[cfg(test)]

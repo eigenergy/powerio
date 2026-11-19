@@ -46,12 +46,14 @@ def observe(entry):
     repo = entry['upstream_repository']
     number = entry['review_url'].rsplit('/', 1)[1]
     pr = public_api(f'repos/{repo}/pulls/{number}')
-    result = {'version': entry['version'], 'archived_sha256': entry['sha256'], 'review_url': entry['review_url']}
+    result = {'archived_sha256': entry['sha256'], 'review_url': entry['review_url']}
     if pr is None:
         return dict(result, status='unavailable')
     status = 'merged' if pr['merged'] else 'closed-unmerged' if pr['state'] == 'closed' else 'open'
     head = pr['head']['sha']
-    item = public_api(f"repos/{repo}/contents/{entry['upstream_path']}?ref={head}")
+    # The schema's path in the upstream repository follows the release tag in its $id.
+    upstream_path = entry['schema_id'].split(f'/{repo}/', 1)[1].split('/', 1)[1]
+    item = public_api(f"repos/{repo}/contents/{upstream_path}?ref={head}")
     if item is None:
         return dict(result, status=status, schema_status='unavailable')
     digest = sha256(base64.b64decode(item['content']))

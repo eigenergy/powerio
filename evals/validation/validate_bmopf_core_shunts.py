@@ -81,7 +81,7 @@ def run(powerio):
             after, _, _ = opendss_stamp(source)
             case, ir, output = root / (name + ".dss"), root / (name + ".pio.json"), root / (name + ".json")
             case.write_text(source)
-            for arguments in (("serialize", str(case), "-o", str(ir)), ("convert", str(ir), "--to", "bmopf-json@0.2.0", "-o", str(output))):
+            for arguments in (("serialize", str(case), "-o", str(ir)), ("convert", str(ir), "--to", "bmopf-json", "-o", str(output))):
                 completed = subprocess.run([powerio, *arguments], text=True, capture_output=True)
                 if completed.returncode:
                     raise RuntimeError(completed.stderr)

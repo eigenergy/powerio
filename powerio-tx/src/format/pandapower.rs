@@ -4,7 +4,7 @@
 //! `DataFrame` encoded inside a JSON string. This module implements that small
 //! table codec directly so the Rust core stays Python-free.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
@@ -22,7 +22,8 @@ use crate::{Error, Result};
 
 const FMT: &str = "pandapower JSON";
 const F_HZ: f64 = 50.0;
-const MAX_I_KA: f64 = 99_999.0;
+/// pandapower's marker for an unlimited line current (converter from_ppc MAX_VAL).
+pub const MAX_I_KA: f64 = 99_999.0;
 
 #[allow(clippy::too_many_lines)] // direct table-to-BalancedNetwork mapper; split helpers obscure column mapping
 pub(crate) fn parse_pandapower_source(
@@ -30,27 +31,17 @@ pub(crate) fn parse_pandapower_source(
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let content: &str = source;
-    let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
-    let root = root
-        .as_object()
-        .ok_or_else(|| bad("top level is not a JSON object"))?;
-    if root.get("_class").and_then(Value::as_str) != Some("pandapowerNet") {
-        return Err(bad("top level `_class` is not `pandapowerNet`"));
+    let obj = &network_object(source)?;
+    // 0.12.0 read a three-phase network here, and this reader keeps doing
+    // so. It names what it drops.
+    if has_three_phase_tables(obj) {
+        warnings.push(
+            &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
+            "the network carries asymmetric_load, asymmetric_sgen or res_bus_3ph rows, so it is \
+             a three-phase (runpp_3ph) network. The balanced reader drops the per-phase \
+             detail. powerio_tnd::formats::pandapower reads it into a MulticonductorNetwork",
+        );
     }
-    let object_from_string;
-    let obj = match root.get("_object") {
-        Some(Value::Object(obj)) => obj,
-        Some(Value::String(raw)) => {
-            object_from_string = serde_json::from_str::<Value>(raw)
-                .map_err(|e| bad(format!("top level `_object`: {e}")))?;
-            object_from_string
-                .as_object()
-                .ok_or_else(|| bad("top level `_object` string is not a network map"))?
-        }
-        Some(_) => return Err(bad("top level `_object` is not a network map")),
-        None => return Err(bad("missing `_object` network map")),
-    };
 
     // Present-but-unparseable would silently rescale the whole per unit
     // system (sn_mva) or every line charging value (f_hz), so both are errors;
@@ -128,6 +119,7 @@ pub(crate) fn parse_pandapower_source(
         });
     }
     let bus_pos: HashMap<BusId, usize> = buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
+    read_bus_results(obj, &mut buses, &bus_pos, warnings)?;
 
     let mut loads = Vec::new();
     if let Some(load_frame) = read_frame(obj, "load")? {
@@ -398,12 +390,15 @@ pub(crate) fn parse_pandapower_source(
                     b_to: b / 2.0,
                 }),
                 rate_a: if max_i_ka >= MAX_I_KA {
-                    0.0
+                    f64::INFINITY
                 } else {
-                    max_i_ka * v_from * 3.0_f64.sqrt() * par
+                    crate::thermal_limit::scaled(
+                        crate::thermal_limit::from_zero_unlimited(max_i_ka)?,
+                        powerio_core::electrical::calc_wye_line_voltage(v_from) * par,
+                    )?
                 },
-                rate_b: 0.0,
-                rate_c: 0.0,
+                rate_b: f64::INFINITY,
+                rate_c: f64::INFINITY,
                 rating_sets: Vec::new(),
                 // The line states one rating: `max_i_ka`, carried as `rate_a`
                 // through the file's own vn_kv (the writer inverts the same
@@ -566,9 +561,12 @@ pub(crate) fn parse_pandapower_source(
                     g_to: 0.0,
                     b_to: 0.0,
                 }),
-                rate_a: sn * par,
-                rate_b: 0.0,
-                rate_c: 0.0,
+                rate_a: crate::thermal_limit::scaled(
+                    crate::thermal_limit::from_zero_unlimited(sn)?,
+                    par,
+                )?,
+                rate_b: f64::INFINITY,
+                rate_c: f64::INFINITY,
                 rating_sets: Vec::new(),
                 current_ratings: None,
                 tap,
@@ -801,7 +799,105 @@ pub(crate) fn parse_pandapower_source(
     Ok(net)
 }
 
-/// Every `_object` table key the reader consumes or warns about by name; any
+#[derive(Default)]
+struct BusResultRows {
+    count: usize,
+    examples: Vec<usize>,
+}
+
+impl BusResultRows {
+    fn record(&mut self, index: usize) {
+        self.count += 1;
+        if self.examples.len() < 3 {
+            self.examples.push(index);
+        }
+    }
+}
+
+/// Native voltage results are indexed like `bus`, independently of the
+/// generator/ext_grid voltage targets. See pandapower's bus result definitions:
+/// <https://pandapower.readthedocs.io/en/v3.2.1/elements/bus.html#result-parameters>.
+fn read_bus_results(
+    obj: &Map<String, Value>,
+    buses: &mut [Bus],
+    bus_pos: &HashMap<BusId, usize>,
+    warnings: &mut Diagnostics,
+) -> Result<()> {
+    let Some(frame) = read_frame(obj, "res_bus")? else {
+        return Ok(());
+    };
+    let mut seen = HashSet::with_capacity(frame.data.len());
+    let mut unmapped = BTreeMap::<&str, usize>::new();
+    let mut unmatched = BusResultRows::default();
+    let mut unavailable = BTreeMap::<(&str, &str), BusResultRows>::new();
+    for row in frame.rows() {
+        let index = row.index_usize()?;
+        if !seen.insert(index) {
+            return Err(bad(format!("`res_bus` table: duplicate index {index}")));
+        }
+        let Some(&position) = bus_pos.get(&BusId(index + 1)) else {
+            unmatched.record(index);
+            continue;
+        };
+        let bus = &mut buses[position];
+        for (column, state) in [("vm_pu", &mut bus.vm), ("va_degree", &mut bus.va)] {
+            if let Some(value) = row.f_finite(column) {
+                *state = value;
+            } else {
+                let reason = match row.get(column) {
+                    None => "absent",
+                    Some(Value::Null) => "null",
+                    Some(_) => "non-numeric or non-finite",
+                };
+                unavailable
+                    .entry((column, reason))
+                    .or_default()
+                    .record(index);
+            }
+        }
+        for (column, value) in frame.columns.iter().zip(&frame.data[row.i]) {
+            if !matches!(column.as_str(), "vm_pu" | "va_degree") && !value.is_null() {
+                *unmapped.entry(column).or_default() += 1;
+            }
+        }
+    }
+    if unmatched.count > 0 {
+        warnings.push(
+            &codes::READ_PANDAPOWER_FIELD_DROPPED,
+            format!(
+                "`res_bus`: {} row(s) ignored with no matching `bus` index; examples {:?}",
+                unmatched.count, unmatched.examples
+            ),
+        );
+    }
+    for ((column, reason), rows) in unavailable {
+        let default = i32::from(column == "vm_pu");
+        warnings.push(
+            &codes::READ_PANDAPOWER_VALUE_INFERRED,
+            format!("`res_bus.{column}`: {} {reason} value(s); bus states keep default {default}; row examples {:?}", rows.count, rows.examples),
+        );
+    }
+    for (column, count) in unmapped {
+        warnings.push(
+            &codes::READ_PANDAPOWER_FIELD_DROPPED,
+            format!("`res_bus.{column}`: {count} value(s) have no typed bus result field"),
+        );
+    }
+    if !frame.data.is_empty() {
+        let missing = buses
+            .iter()
+            .filter(|bus| !seen.contains(&(bus.id.0 - 1)))
+            .count();
+        if missing > 0 {
+            warnings.push(
+                &codes::READ_PANDAPOWER_VALUE_INFERRED,
+                format!("`res_bus` has no row for {missing} bus(es); their voltage states keep the defaults vm = 1 and va = 0"),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The solved (p_mw, q_mvar) per row index of a result table, empty when the
 /// net carries no results. See the `res_gen`/`res_ext_grid` notes at the gen
 /// reader: pandapower states reactive output only here.
@@ -818,8 +914,9 @@ fn read_result_powers(obj: &Map<String, Value>, table: &str) -> Result<HashMap<u
     Ok(out)
 }
 
+/// Every `_object` table key the reader consumes or warns about by name; any
 /// other non-empty DataFrame gets the generic ignored-table warning.
-const HANDLED_TABLES: [&str; 20] = [
+const HANDLED_TABLES: [&str; 21] = [
     "bus",
     "load",
     "sgen",
@@ -840,6 +937,7 @@ const HANDLED_TABLES: [&str; 20] = [
     "pwl_cost",
     "res_gen",
     "res_ext_grid",
+    "res_bus",
 ];
 
 /// The pandapower tap changer kinds the trafo reader distinguishes: ratio
@@ -895,6 +993,7 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
     let (line, trafo, charging) = branch_frames(net, &kv_of, &mut warnings);
     warn_pandapower_charging_shunts(charging.len(), &mut warnings);
     object.insert("bus".into(), bus_frame(net, &mut warnings));
+    object.insert("res_bus".into(), res_bus_frame(net, &mut warnings));
     object.insert("load".into(), load_frame(net, &mut warnings));
     object.insert(
         "shunt".into(),
@@ -937,19 +1036,6 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
 }
 
 fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
-    let voltage_states = net
-        .buses()
-        .iter()
-        .filter(|bus| (bus.vm - 1.0).abs() > 1e-12 || bus.va.abs() > 1e-12)
-        .count();
-    if voltage_states > 0 {
-        warnings.push(
-            &F.field_dropped,
-            format!(
-                "{voltage_states} bus voltage state(s) (vm/va) dropped: this writer emits no bus result table, so a reparse starts at vm = 1 and va = 0"
-            ),
-        );
-    }
     if !net.transformers_3w().is_empty() {
         warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the pandapower JSON writer emits no trafo3w table",
@@ -1010,7 +1096,7 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
         .iter()
         // These fields read back as zero even when their source values equal
         // rate_a, so equal ratings still lose their separate assignments.
-        .filter(|b| b.rate_b != 0.0 || b.rate_c != 0.0)
+        .filter(|b| !b.rate_b.is_infinite() || !b.rate_c.is_infinite())
         .count();
     if rate_bc > 0 {
         warnings.push(&F.field_dropped, format!(
@@ -1081,6 +1167,19 @@ fn bus_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         ]);
     }
     frame("bus", &columns, index, data, warnings)
+}
+
+/// State already stored in the network, without claiming convergence or
+/// inventing the aggregate bus powers that `res_bus` can also carry.
+fn res_bus_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
+    let columns = ["vm_pu", "va_degree"];
+    let mut index = Vec::with_capacity(net.buses().len());
+    let mut data = Vec::with_capacity(net.buses().len());
+    for bus in net.buses() {
+        index.push(pp_bus(bus.id));
+        data.push(vec![jnum(bus.vm), jnum(bus.va)]);
+    }
+    frame("res_bus", &columns, index, data, warnings)
 }
 
 #[derive(Clone, Copy)]
@@ -1424,11 +1523,13 @@ fn branch_frames(
         // a pandapower line lives on one voltage level, so its ohmic values
         // would be rebased to the wrong vn on import.
         if br.is_transformer() || v_from != v_to {
-            let sn = if br.rate_a > 0.0 {
-                br.rate_a
+            let sn = if let Some(value) =
+                crate::thermal_limit::as_option(br.rate_a).filter(|value| *value > 0.0)
+            {
+                value
             } else {
                 warnings.push(&F.value_substituted, format!(
-                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: this writer uses the system base for an unrated transformer, so its unlimited rating is not preserved",
+                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: pandapower requires a positive impedance base; this rating is not preserved",
                     br.from, br.to, br.rate_a, net.base_mva()
                 ));
                 net.base_mva()
@@ -1513,11 +1614,15 @@ fn branch_frames(
                         * 1e9,
                 ),
                 jnum((terminal.g_fr + terminal.g_to) / zb * 1e6),
-                jnum(if br.rate_a == 0.0 {
-                    0.0
-                } else {
-                    br.rate_a / (v_from * 3.0_f64.sqrt())
-                }),
+                jnum(
+                    crate::thermal_limit::as_option(br.rate_a).map_or(0.0, |value| {
+                        powerio_core::electrical::calc_line_current(
+                            value,
+                            v_from,
+                            powerio_core::electrical::SQRT_3,
+                        )
+                    }),
+                ),
                 jnum(1.0),
                 Value::from(1_u64),
                 Value::Null,
@@ -1914,7 +2019,7 @@ fn dtype_for(column: &str) -> &'static str {
 }
 
 #[derive(Debug)]
-struct DataFrame {
+pub struct DataFrame {
     /// Table name, for error messages.
     name: String,
     columns: Vec<String>,
@@ -1923,7 +2028,7 @@ struct DataFrame {
 }
 
 impl DataFrame {
-    fn rows(&self) -> impl Iterator<Item = Row<'_>> {
+    pub fn rows(&self) -> impl Iterator<Item = Row<'_>> {
         (0..self.data.len()).map(|i| Row { frame: self, i })
     }
     fn col(&self, key: &str) -> Option<usize> {
@@ -1931,7 +2036,7 @@ impl DataFrame {
     }
 }
 
-struct Row<'a> {
+pub struct Row<'a> {
     frame: &'a DataFrame,
     i: usize,
 }
@@ -1941,7 +2046,7 @@ impl Row<'_> {
     /// ids live in the index, so a bad value is an error, never a default.
     /// The shared id ceiling keeps the float cast exact and lets the bus
     /// loop's `+ 1` never overflow.
-    fn index_usize(&self) -> Result<usize> {
+    pub fn index_usize(&self) -> Result<usize> {
         let v = &self.frame.index[self.i];
         value_usize(v)
             .or_else(|| {
@@ -1960,25 +2065,25 @@ impl Row<'_> {
     }
     /// Row label for error messages: the pandas index value verbatim, else the
     /// row position.
-    fn label(&self) -> String {
+    pub fn label(&self) -> String {
         match self.frame.index.get(self.i) {
             Some(Value::Number(n)) => n.to_string(),
             Some(Value::String(s)) => s.clone(),
             _ => format!("position {}", self.i),
         }
     }
-    fn get(&self, key: &str) -> Option<&Value> {
+    pub fn get(&self, key: &str) -> Option<&Value> {
         self.frame
             .col(key)
             .and_then(|c| self.frame.data.get(self.i).and_then(|r| r.get(c)))
     }
-    fn f_or(&self, key: &str, default: f64) -> f64 {
+    pub fn f_or(&self, key: &str, default: f64) -> f64 {
         self.get(key).and_then(value_f64).unwrap_or(default)
     }
     /// Required numeric column: a missing, null, or non-numeric cell is an
     /// error, never a default. For columns whose default would silently change
     /// the electrical model (`vn_kv` -> zbase 1.0 reads ohms as per unit).
-    fn req_f(&self, key: &str) -> Result<f64> {
+    pub fn req_f(&self, key: &str) -> Result<f64> {
         self.get(key).and_then(value_f64).ok_or_else(|| {
             bad(format!(
                 "`{}` row {}: required column `{key}` is missing or not numeric",
@@ -1987,16 +2092,16 @@ impl Row<'_> {
             ))
         })
     }
-    fn f_finite(&self, key: &str) -> Option<f64> {
+    pub fn f_finite(&self, key: &str) -> Option<f64> {
         self.get(key).and_then(value_f64).filter(|v| v.is_finite())
     }
     fn usize_or(&self, key: &str, default: usize) -> usize {
         self.get(key).and_then(value_usize).unwrap_or(default)
     }
-    fn bool_or(&self, key: &str, default: bool) -> bool {
+    pub fn bool_or(&self, key: &str, default: bool) -> bool {
         self.get(key).and_then(value_bool).unwrap_or(default)
     }
-    fn string(&self, key: &str) -> Option<String> {
+    pub fn string(&self, key: &str) -> Option<String> {
         self.get(key)
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
@@ -2009,7 +2114,7 @@ impl Row<'_> {
     /// behind them (`type`, `std_type`, `df`, ...), so a powerio-written file
     /// reads back extras-free. A null cell is pandas' "unset" marker, not
     /// source data, and is skipped.
-    fn extras_excluding(&self, known: &[&str]) -> Extras {
+    pub fn extras_excluding(&self, known: &[&str]) -> Extras {
         self.frame
             .columns
             .iter()
@@ -2042,7 +2147,7 @@ fn write_bus_geo(location: Option<crate::geo::Location>) -> Value {
 /// The bus `geo` cell: a GeoJSON Point, serialized as a string (pandapower 3)
 /// or carried as an object. Anything else (null, LineStrings, malformed
 /// JSON) reads as no location.
-fn read_bus_geo(cell: Option<&Value>) -> Option<crate::geo::Location> {
+pub fn read_bus_geo(cell: Option<&Value>) -> Option<crate::geo::Location> {
     let cell = cell?;
     let owned;
     let geometry = match cell {
@@ -2062,7 +2167,42 @@ fn read_bus_geo(cell: Option<&Value>) -> Option<crate::geo::Location> {
     (x.is_finite() && y.is_finite()).then_some(crate::geo::Location { x, y, kind: None })
 }
 
-fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>> {
+/// The `_object` network map of a `pandapowerNet` document. pandapower
+/// writes it as a JSON object or as a JSON string holding one.
+pub fn network_object(content: &str) -> Result<Map<String, Value>> {
+    let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
+    let Value::Object(mut root) = root else {
+        return Err(bad("top level is not a JSON object"));
+    };
+    if root.get("_class").and_then(Value::as_str) != Some("pandapowerNet") {
+        return Err(bad("top level `_class` is not `pandapowerNet`"));
+    }
+    match root.remove("_object") {
+        Some(Value::Object(obj)) => Ok(obj),
+        Some(Value::String(raw)) => match serde_json::from_str::<Value>(&raw) {
+            Ok(Value::Object(obj)) => Ok(obj),
+            Ok(_) => Err(bad("top level `_object` string is not a network map")),
+            Err(e) => Err(bad(format!("top level `_object`: {e}"))),
+        },
+        Some(_) => Err(bad("top level `_object` is not a network map")),
+        None => Err(bad("missing `_object` network map")),
+    }
+}
+
+/// Whether a pandapower document is a three-phase (`runpp_3ph`) network: its
+/// `asymmetric_load`, `asymmetric_sgen` or `res_bus_3ph` table has rows. Text
+/// that is not a pandapower document is not one.
+pub fn is_three_phase_pandapower(content: &str) -> bool {
+    network_object(content).is_ok_and(|obj| has_three_phase_tables(&obj))
+}
+
+pub fn has_three_phase_tables(obj: &Map<String, Value>) -> bool {
+    ["asymmetric_load", "asymmetric_sgen", "res_bus_3ph"]
+        .iter()
+        .any(|name| matches!(read_frame(obj, name), Ok(Some(frame)) if !frame.data.is_empty()))
+}
+
+pub fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>> {
     let Some(v) = root.get(name) else {
         return Ok(None);
     };
@@ -2631,6 +2771,163 @@ mod tests {
     }
 
     #[test]
+    fn bus_results_follow_indices_without_changing_voltage_targets_or_status() {
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            (
+                "bus",
+                pp_frame(
+                    &["vn_kv", "in_service", "vm_pu", "va_degree"],
+                    json!([42, 7, 19]),
+                    json!([[110, true, 9, 90], [110, true, 8, 80], [110, false, 7, 70]]),
+                ),
+            ),
+            (
+                "gen",
+                pp_frame(&["bus", "vm_pu"], json!([5]), json!([[42, 1.05]])),
+            ),
+            (
+                "ext_grid",
+                pp_frame(
+                    &["bus", "vm_pu", "va_degree"],
+                    json!([3]),
+                    json!([[7, 1.04, 4.0]]),
+                ),
+            ),
+            (
+                "res_bus",
+                pp_frame(
+                    &["vm_pu", "va_degree"],
+                    json!([19, 7, 42]),
+                    json!([[0.0, 0.0], [1.02, -3.5], [0.98, 2.5]]),
+                ),
+            ),
+        ]))
+        .unwrap();
+        let buses = parsed.network.buses();
+        assert_eq!((buses[0].vm, buses[0].va), (0.98, 2.5));
+        assert_eq!((buses[1].vm, buses[1].va), (1.02, -3.5));
+        assert_eq!((buses[2].vm, buses[2].va), (0.0, 0.0));
+        assert_eq!(buses[2].kind, BusType::Isolated);
+        assert_eq!(parsed.network.generators()[0].vg, 1.05);
+        assert_eq!(parsed.network.generators()[1].vg, 1.04);
+        assert_eq!(buses[0].extras.get("vm_pu"), Some(&json!(9)));
+        assert!(
+            !parsed
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("res_bus"))
+        );
+    }
+
+    #[test]
+    fn bus_result_gaps_are_reported_without_inventing_finite_results() {
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!([2, 8, 10])),
+            (
+                "res_bus",
+                pp_frame(
+                    &["vm_pu", "va_degree", "p_mw", "vendor_result"],
+                    json!([8, 2, 999]),
+                    json!([
+                        [null, "NaN", 0, null],
+                        [0.97, "inf", 3, "kept in source"],
+                        [1, 0, 9, null]
+                    ]),
+                ),
+            ),
+        ]))
+        .unwrap();
+        let buses = parsed.network.buses();
+        assert_eq!((buses[0].vm, buses[0].va), (0.97, 0.0));
+        assert_eq!((buses[1].vm, buses[1].va), (1.0, 0.0));
+        assert_eq!((buses[2].vm, buses[2].va), (1.0, 0.0));
+        let messages = parsed.render_diagnostics().join("\n");
+        for expected in [
+            "`res_bus.vm_pu`: 1 null value(s)",
+            "`res_bus.va_degree`: 2 non-numeric or non-finite value(s)",
+            "1 row(s) ignored with no matching `bus` index; examples [999]",
+            "no row for 1 bus(es)",
+            "`res_bus.p_mw`: 2 value(s)",
+            "`res_bus.vendor_result`: 1 value(s)",
+        ] {
+            assert!(messages.contains(expected), "{expected}: {messages}");
+        }
+    }
+
+    #[test]
+    fn unavailable_bus_results_have_bounded_diagnostics() {
+        let buses: Vec<_> = (0..100).collect();
+        let indices: Vec<_> = (0..200).collect();
+        let data = vec![json!([null, null]); indices.len()];
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!(buses)),
+            (
+                "res_bus",
+                pp_frame(&["vm_pu", "va_degree"], json!(indices), json!(data)),
+            ),
+        ]))
+        .unwrap();
+        let results: Vec<_> = parsed
+            .diagnostics
+            .iter()
+            .filter(|d| d.message().contains("res_bus"))
+            .collect();
+        assert_eq!(results.len(), 3);
+        for finding in results {
+            if finding.code() == codes::READ_PANDAPOWER_VALUE_INFERRED.code {
+                assert!(finding.message().contains("100 null value(s)"));
+                assert!(finding.message().contains("row examples [0, 1, 2]"));
+            } else {
+                assert!(finding.message().contains("100 row(s) ignored"));
+                assert!(finding.message().contains("examples [100, 101, 102]"));
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_bus_result_indices_are_rejected() {
+        let error = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!([0])),
+            (
+                "res_bus",
+                pp_frame(
+                    &["vm_pu", "va_degree"],
+                    json!([0, 0]),
+                    json!([[1, 0], [0.9, 5]]),
+                ),
+            ),
+        ]))
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`res_bus` table: duplicate index 0")
+        );
+    }
+
+    #[test]
+    fn empty_bus_results_keep_unsolved_defaults_without_result_warnings() {
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!([0])),
+            (
+                "res_bus",
+                pp_frame(&["vm_pu", "va_degree"], json!([]), json!([])),
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(
+            (parsed.network.buses()[0].vm, parsed.network.buses()[0].va),
+            (1.0, 0.0)
+        );
+        assert!(
+            !parsed
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("res_bus"))
+        );
+    }
+
+    #[test]
     fn unrecognized_columns_are_preserved_as_extras() {
         // The fidelity policy for handled tables: a column the reader has no
         // model slot for must survive as element extras. Consumed columns and
@@ -2684,6 +2981,42 @@ mod tests {
         let parsed = parse_pandapower_json(&root.to_string()).unwrap();
 
         assert_eq!(parsed.network.buses().len(), 2);
+    }
+
+    #[test]
+    fn a_three_phase_network_reads_balanced_with_a_warning() {
+        for (name, column) in [
+            ("asymmetric_load", "p_a_mw"),
+            ("asymmetric_sgen", "p_a_mw"),
+            ("res_bus_3ph", "vm_a_pu"),
+        ] {
+            let full = pp_frame(&["bus", column], json!([0]), json!([[0, 0.01]]));
+            let text = pp_net(vec![bus_table(json!([0])), (name, full)]);
+            assert!(is_three_phase_pandapower(&text), "{name}");
+            // 0.12.0 read it, so the balanced reader still does.
+            let parsed = parse_pandapower_json(&text).unwrap();
+            assert_eq!(parsed.network.buses().len(), 1, "{name}");
+            assert!(
+                parsed
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message().contains("three-phase (runpp_3ph) network")),
+                "{name}: {:?}",
+                parsed.diagnostics
+            );
+
+            // A table without rows does not make the network three-phase.
+            let empty = pp_frame(&["bus", column], json!([]), json!([]));
+            let text = pp_net(vec![bus_table(json!([0])), (name, empty)]);
+            assert!(
+                !is_three_phase_pandapower(&text),
+                "empty {name} must not count"
+            );
+            assert!(
+                parse_pandapower_json(&text).is_ok(),
+                "empty {name} must parse"
+            );
+        }
     }
 
     #[test]
@@ -3097,7 +3430,7 @@ mod tests {
         let x0 = (z0 * z0 - r0 * r0).sqrt();
         assert!((br.r - r0 / 2.0).abs() < 1e-12);
         assert!((br.x - x0 / 2.0).abs() < 1e-12);
-        assert_eq!(br.rate_a, 100.0);
+        assert_eq!(br.rate_a, (100.0));
     }
 
     #[test]
@@ -3652,9 +3985,9 @@ mod tests {
             x: 0.1,
             b: 0.0,
             charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
+            rate_a: f64::INFINITY,
+            rate_b: f64::INFINITY,
+            rate_c: f64::INFINITY,
             rating_sets: Vec::new(),
             current_ratings: None,
             tap,
@@ -3883,35 +4216,53 @@ mod tests {
     }
 
     #[test]
-    fn writer_reports_voltage_states_and_unrated_transformer_substitution() {
+    fn writer_preserves_voltage_states_and_reports_unrated_transformer_substitution() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
         net.buses_mut()[0].vm = 1.06;
         net.buses_mut()[1].va = -5.0;
         net.branches_mut().push(test_branch(1, 2, 1.05));
         let emitted = write_pandapower_json(&net);
-        for (code, message) in [
-            (
-                F.field_dropped.code,
-                "2 bus voltage state(s) (vm/va) dropped",
-            ),
-            (
-                F.value_substituted.code,
-                "rate_a = 0 replaced by sn_mva = 100",
-            ),
-        ] {
-            assert!(
-                emitted.diagnostics.iter().any(|finding| {
-                    finding.code() == code && finding.message().contains(message)
-                }),
-                "{:?}",
-                emitted.render_diagnostics()
-            );
-        }
+        assert!(emitted.diagnostics.iter().any(|finding| {
+            finding.code() == F.value_substituted.code
+                && finding
+                    .message()
+                    .contains("rate_a = inf replaced by sn_mva = 100")
+        }));
+        assert!(
+            !emitted
+                .diagnostics
+                .iter()
+                .any(|finding| finding.message().contains("bus voltage state(s)"))
+        );
         let restored = parse_pandapower_json(&emitted.text).unwrap();
-        for bus in restored.network.buses() {
-            assert!((bus.vm - 1.0).abs() < 1e-12 && bus.va.abs() < 1e-12);
-        }
+        assert_eq!(
+            (
+                restored.network.buses()[0].vm,
+                restored.network.buses()[0].va
+            ),
+            (1.06, 3.0)
+        );
+        assert_eq!(
+            (
+                restored.network.buses()[1].vm,
+                restored.network.buses()[1].va
+            ),
+            (1.02, -5.0)
+        );
         assert!((restored.network.branches()[0].rate_a - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_reports_nonfinite_bus_results() {
+        let mut net = test_net(vec![test_bus(1, BusType::Pq)]);
+        net.buses_mut()[0].vm = f64::NAN;
+        net.buses_mut()[0].va = f64::INFINITY;
+        let emitted = write_pandapower_json(&net);
+        assert!(emitted.diagnostics.iter().any(|finding| {
+            finding.code() == F.not_a_number.code
+                && finding.message().contains("`res_bus`")
+                && finding.message().contains("`vm_pu` (1), `va_degree` (1)")
+        }));
     }
 
     #[test]
@@ -3934,7 +4285,8 @@ mod tests {
         let restored = parse_pandapower_json(&emitted.text).unwrap();
         let branch = &restored.network.branches()[0];
         assert!((branch.rate_a - 250.0).abs() < 1e-9);
-        assert!(branch.rate_b.abs() < 1e-12 && branch.rate_c.abs() < 1e-12);
+        assert_eq!(branch.rate_b, f64::INFINITY);
+        assert_eq!(branch.rate_c, f64::INFINITY);
     }
 
     #[test]

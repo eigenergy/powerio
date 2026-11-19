@@ -14,10 +14,11 @@ all-features = true
 
 [features]
 default = []
-sincal = ["dep:zip", "dep:rusqlite", "dep:sha2"]
+sincal = ["dep:powerio-archive", "dep:zip", "dep:rusqlite", "dep:sha2"]
 schema = ["dep:schemars", "powerio-tx/schema", "powerio-dist/schema"]
 
 [dependencies]
+powerio-archive = { workspace = true, optional = true }
 powerio-tx.workspace = true
 powerio-dist.workspace = true
 num-complex.workspace = true

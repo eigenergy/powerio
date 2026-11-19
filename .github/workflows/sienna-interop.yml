@@ -1,0 +1,108 @@
+name: Sienna interoperability
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'powerio*/**'
+      - 'python/**'
+      - 'pyproject.toml'
+      - 'evals/validation/sienna/**'
+      - '.github/workflows/sienna-interop.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  releases:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Sienna-Platform/SiennaSchemas
+          ref: 59f9a751603f02b63e886976c4595875265c0a88
+          fetch-depth: 0
+          path: sienna-schema-oracle
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: transition-zero/tz-oss-interop
+          ref: 7bdd194590eea7f268cb4dd578fa0bf1e8b81311
+          path: tz-interop-oracle
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Export four schema releases
+        env:
+          POWERIO_SIENNA_OUTPUT_DIR: ${{ github.workspace }}/target/sienna-exports
+        run: cargo test --locked -p powerio-tx --test sienna
+      - name: Install the consumer oracles
+        run: |
+          python -m venv .venv-interop
+          .venv-interop/bin/python -m pip install maturin pytest jsonschema power-openapi-models==0.2.0 pypsa==1.4.0 netCDF4 h5py tables h5netcdf polars xarray dishka questionary pyyaml infrastore==0.14.1
+          VIRTUAL_ENV="$PWD/.venv-interop" .venv-interop/bin/maturin develop --features extension-module,gridfm
+      - name: Validate versioned documents and strict bundles
+        run: |
+          for version in 0.1.0 0.2.0 0.3.0 0.4.0; do
+            python sienna-schema-oracle/scripts/build_bundles.py --tag "v$version" --out "$PWD/target/sienna-bundles"
+          done
+          .venv-interop/bin/python evals/validation/sienna/validate.py sienna-schema-oracle target/sienna-exports --strict-bundles target/sienna-bundles
+      - name: Exercise Python transports and pipeline plugins
+        env:
+          PYTHONPATH: tz-interop-oracle
+          POWERIO_SIENNA_BUNDLES: ${{ github.workspace }}/target/sienna-bundles
+        run: .venv-interop/bin/python -m pytest python/tests/test_pypsa_files.py python/tests/test_interop.py python/tests/test_sienna_files.py -q
+      - name: Upload emitted documents
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sienna-versioned-exports
+          path: target/sienna-exports
+          if-no-files-found: ignore
+
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        powersystems: ['4.6.2', '5.9.0', '5.12.5']
+    env:
+      CARGO_BUILD_JOBS: 2
+      JULIA_NUM_THREADS: 1
+      JULIA_NUM_PRECOMPILE_TASKS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+        with:
+          version: '1.10'
+      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
+      - name: Install pinned native consumer
+        env:
+          POWERSYSTEMS_VERSION: ${{ matrix.powersystems }}
+        run: julia --project=target/sienna-julia -e 'using Pkg; Pkg.add([PackageSpec(name="PowerSystems", version=ENV["POWERSYSTEMS_VERSION"]), PackageSpec(name="PowerNetworkMatrices"), PackageSpec(name="JSON3")])'
+      - name: Emit documents through PowerIO
+        env:
+          POWERIO_SIENNA_OUTPUT_DIR: ${{ github.workspace }}/target/sienna-exports
+        run: cargo test --locked -p powerio-tx --test sienna
+      - name: Check native loading and generate independent input
+        run: julia --project=target/sienna-julia evals/validation/sienna/powersystems.jl target/sienna-exports tests/data target/sienna-input
+      - name: Check independent admittance and dispatch
+        env:
+          POWERIO_POWERSYSTEMS_INPUT_DIR: ${{ github.workspace }}/target/sienna-input
+        run: cargo test --locked -p powerio --test sienna_native_oracle

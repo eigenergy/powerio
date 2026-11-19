@@ -12,8 +12,11 @@
 //! Indices narrow to `i32` to match SciPy's default index width.
 //! `coo_triplets` checks the bound before conversion.
 
+mod collection;
+
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -25,7 +28,7 @@ use sprs::CsMat;
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use powerio::{BalancedNetwork, BranchSusceptanceFormula, PwdDisplay};
+use powerio::{BalancedNetwork, BranchSusceptanceFormula};
 use powerio_matrix::matrix::{
     BuildOptions, Scheme, SensitivityOptions, SensitivitySolver, calc_adjacency_matrix,
     calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix,
@@ -165,7 +168,8 @@ fn parse_formula(s: &str) -> PyResult<BranchSusceptanceFormula> {
     BranchSusceptanceFormula::from_formula_name(s).ok_or_else(|| {
         PyValueError::new_err(format!(
             "unknown branch susceptance formula {s:?}; expected \
-             'series_susceptance', 'tap_adjusted_reactance', or 'reactance_only'"
+             'series_susceptance', 'tap_adjusted_reactance', 'reactance_only', \
+             'tap_adjusted_series_susceptance', or 'series_susceptance_no_phase_shift'"
         ))
     })
 }
@@ -357,21 +361,25 @@ fn build_options(
 /// (pure Python) wraps this: the IO getters and topology methods delegate
 /// straight to it, and the matrix methods turn its COO tuples into scipy.
 ///
-/// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
-/// matrix calculations and topology getters reuse it instead of rebuilding the
-/// bus-id map per call.
+/// The derived [`IndexCore`] is built on the first matrix or topology query and
+/// cached alongside the immutable network. Metadata and table queries do not
+/// allocate the bus-id map or per-bus analysis vectors.
 #[pyclass(name = "_BalancedNetwork", module = "powerio._powerio")]
 pub struct PyBalancedNetwork {
     /// The parsed module: the typed network plus retained source and the
     /// reader's findings. Same format writes echo the retained bytes exactly;
     /// a handle built from a bare network writes canonically.
     module: powerio_core::PioModule<BalancedNetwork>,
-    core: IndexCore,
+    core: OnceLock<IndexCore>,
 }
 
 impl PyBalancedNetwork {
     fn inner(&self) -> &BalancedNetwork {
         self.module.value()
+    }
+
+    fn core(&self) -> &IndexCore {
+        self.core.get_or_init(|| IndexCore::build(self.inner()))
     }
 
     fn diagnostics(&self) -> &[powerio_core::Diagnostic] {
@@ -391,6 +399,22 @@ impl PyBalancedNetwork {
 /// Private transport for the Python SincalReadOptions fields.
 type SincalBalancedSelection = (Option<i64>, Option<f64>, Option<String>);
 type SincalSelection = (Option<i64>, Option<f64>, Option<String>, bool);
+/// Private transport for the OpenDSS limits: include bytes, properties.
+type DssLimits = (Option<usize>, Option<usize>);
+
+fn apply_dss_limits(options: &mut powerio::ParseOptions, limits: Option<DssLimits>) {
+    let Some((include_bytes, properties)) = limits else {
+        return;
+    };
+    let mut limits = powerio_dist::DssReadLimits::default();
+    if let Some(bytes) = include_bytes {
+        limits = limits.max_include_bytes(bytes);
+    }
+    if let Some(count) = properties {
+        limits = limits.max_properties(count);
+    }
+    options.dss_limits = Some(limits);
+}
 
 fn parse_options(
     format: Option<&str>,
@@ -469,11 +493,13 @@ fn ensure_line_classification(network: &BalancedNetwork) -> PyResult<()> {
     Ok(())
 }
 
-/// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
-/// and keeping the reader's findings on the handle.
+/// Wrap a parsed module as a `PyBalancedNetwork`, retaining the reader's findings
+/// and deferring the derived analysis index until a query needs it.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
-    let core = IndexCore::build(module.value());
-    PyBalancedNetwork { core, module }
+    PyBalancedNetwork {
+        core: OnceLock::new(),
+        module,
+    }
 }
 
 /// Wrap a bare network with findings: derived handles carry no retained
@@ -489,24 +515,6 @@ fn case_from_parts(
         let _ = module.add_diagnostic(diagnostic);
     }
     case_from_module(module)
-}
-
-fn pwd_display_to_dict<'py>(py: Python<'py>, display: &PwdDisplay) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("canvas_width", display.canvas_width)?;
-    d.set_item("canvas_height", display.canvas_height)?;
-    d.set_item("stamp", display.stamp)?;
-    let mut rows = Vec::with_capacity(display.substations.len());
-    for substation in &display.substations {
-        let row = PyDict::new(py);
-        row.set_item("number", substation.number)?;
-        row.set_item("name", &substation.name)?;
-        row.set_item("x", substation.x)?;
-        row.set_item("y", substation.y)?;
-        rows.push(row);
-    }
-    d.set_item("substations", PyList::new(py, rows)?)?;
-    Ok(d)
 }
 
 fn active_power_control_to_py<'py>(
@@ -724,20 +732,20 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn is_radial(&self) -> bool {
-        IndexedNetwork::with_core(self.inner(), &self.core).is_radial()
+        IndexedNetwork::with_core(self.inner(), self.core()).is_radial()
     }
 
     /// The number of connected components, in power system terminology.
     #[getter]
     fn n_islands(&self) -> usize {
-        IndexedNetwork::with_core(self.inner(), &self.core).calc_island_count()
+        IndexedNetwork::with_core(self.inner(), self.core()).calc_island_count()
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
     /// one reference bus is present; for the multi-reference case use
     /// :meth:`reference_bus_indices`.
     fn reference_bus_index(&self) -> PyResult<usize> {
-        IndexedNetwork::with_core(self.inner(), &self.core)
+        IndexedNetwork::with_core(self.inner(), self.core())
             .reference_bus_index()
             .map_err(core_pyerr)
     }
@@ -746,7 +754,7 @@ impl PyBalancedNetwork {
     /// empty (no reference) or hold several (a slack per island, or a normalized
     /// case that kept the file's multiple references).
     fn reference_bus_indices(&self) -> Vec<usize> {
-        IndexedNetwork::with_core(self.inner(), &self.core).reference_bus_indices()
+        IndexedNetwork::with_core(self.inner(), self.core()).reference_bus_indices()
     }
 
     // --- tables (the format-neutral BalancedNetwork, as dict rows) --------------
@@ -958,7 +966,7 @@ impl PyBalancedNetwork {
     }
 
     fn calc_connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let r = IndexedNetwork::with_core(self.inner(), &self.core).calc_connectivity_report();
+        let r = IndexedNetwork::with_core(self.inner(), self.core()).calc_connectivity_report();
         let d = PyDict::new(py);
         d.set_item("n_buses", r.n_buses)?;
         d.set_item("n_branches_in_service", r.n_branches_in_service)?;
@@ -1227,7 +1235,7 @@ impl PyBalancedNetwork {
             skip_zero_impedance,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_bprime_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1352,7 +1360,7 @@ impl PyBalancedNetwork {
         zero_resistance: bool,
         skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let mut skipped = Vec::new();
         let mut branch_ids = Vec::new();
         for (row, branch) in view.in_service_branches() {
@@ -1429,7 +1437,7 @@ impl PyBalancedNetwork {
             skip_zero_impedance,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_bdoubleprime_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1449,13 +1457,13 @@ impl PyBalancedNetwork {
             include_shifts,
             skip_zero_impedance,
         );
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_lacpf_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_adjacency_matrix(&view).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1476,7 +1484,7 @@ impl PyBalancedNetwork {
             include_shifts,
             skip_zero_impedance,
         );
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let yb = calc_admittance_matrix(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
         let b = coo_triplets(py, &yb.b)?;
@@ -1491,7 +1499,7 @@ impl PyBalancedNetwork {
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = sensitivity_options(formula, solver)?;
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.ptdf)
     }
@@ -1504,7 +1512,7 @@ impl PyBalancedNetwork {
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = sensitivity_options(formula, solver)?;
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), self.core());
         let m = calc_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.lodf)
     }
@@ -1610,31 +1618,6 @@ impl PyBalancedNetwork {
     }
 }
 
-/// Parse a display file from a path, inferring the format from the extension
-/// unless `from_` is given. Returns `(kind, payload)`.
-#[pyfunction]
-#[pyo3(signature = (path, from_=None))]
-fn parse_display<'py>(
-    py: Python<'py>,
-    path: &str,
-    from_: Option<&str>,
-) -> PyResult<Bound<'py, PyAny>> {
-    if let Some(from_) = from_
-        && !matches!(
-            from_.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
-            "pwd" | "powerworldpwd" | "powerworlddisplay"
-        )
-    {
-        return Err(PowerIOError::new_err(format!(
-            "unsupported display format: {from_}"
-        )));
-    }
-    let display = powerio_tx::format::powerworld::__parse_pwd_file(std::path::Path::new(path))
-        .map_err(core_pyerr)?;
-    let payload = pwd_display_to_dict(py, &display)?;
-    Ok(("powerworld", payload).into_pyobject(py)?.into_any())
-}
-
 /// Low-level handle around a parsed multiconductor distribution network in
 /// wire coordinates (OpenDSS, PMD ENGINEERING JSON, BMOPF JSON). The
 /// user-facing `powerio.dist.MulticonductorNetwork` wraps it.
@@ -1670,8 +1653,8 @@ impl PyMulticonductorNetwork {
     }
 
     /// Format the case was parsed from (`dss`, `pmd-json`, `pmd-math-json`,
-    /// `bmopf-json`, `ravens-json`, `cim-dist`); `None` for a network built
-    /// in code.
+    /// `bmopf-json`, `ravens-json`, `cim-dist`, `pandapower-json`); `None` for
+    /// a network built in code.
     fn source_format(&self) -> Option<&'static str> {
         self.inner().source_format().map(|f| f.name())
     }
@@ -1864,15 +1847,85 @@ fn json_value_to_py<'py>(
     })
 }
 
-/// Materialize only the requested table, with the network's nonfinite spelling.
-/// Serializing the entire network both scales with unrelated tables and exposes
-/// durable IR wrappers that are not part of Python's physical row interface.
-fn table_json<T: serde::Serialize + ?Sized>(table: &T) -> PyResult<serde_json::Value> {
-    table
-        .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
-            serde_json::value::Serializer,
-        ))
-        .map_err(serialize_pyerr)
+/// One table, serialized twice. JSON has no infinity: `spelled` writes a
+/// nonfinite float as the network's `"Infinity"`, `"-Infinity"`, or `"NaN"`,
+/// and `plain` writes it as `null`. A spelling that is `null` in `plain` was a
+/// float and reaches Python as one; text that reads the same stays text.
+struct TableJson {
+    spelled: serde_json::Value,
+    plain: serde_json::Value,
+}
+
+impl TableJson {
+    /// Python exposes physical table rows, not the tagged IR record: each
+    /// `{"type": tag, "value": row}` becomes its row.
+    fn untag_rows(&mut self, tag: &str) {
+        for value in [&mut self.spelled, &mut self.plain] {
+            for row in value.as_array_mut().into_iter().flatten() {
+                if row.get("type").and_then(serde_json::Value::as_str) == Some(tag) {
+                    *row = row.get_mut("value").expect("tagged row body").take();
+                }
+            }
+        }
+    }
+
+    fn into_py<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        table_json_to_py(py, &self.spelled, &self.plain)
+    }
+}
+
+/// Materialize only the requested table. Serializing the entire network both
+/// scales with unrelated tables and exposes durable IR wrappers that are not
+/// part of Python's physical row interface.
+fn table_json<T: serde::Serialize + ?Sized>(table: &T) -> PyResult<TableJson> {
+    Ok(TableJson {
+        spelled: table
+            .serialize(powerio_core::__implementation::nonfinite::NonFiniteSer(
+                serde_json::value::Serializer,
+            ))
+            .map_err(serialize_pyerr)?,
+        plain: serde_json::to_value(table).map_err(serialize_pyerr)?,
+    })
+}
+
+/// [`json_value_to_py`] over the two serializations in a [`TableJson`].
+fn table_json_to_py<'py>(
+    py: Python<'py>,
+    spelled: &serde_json::Value,
+    plain: &serde_json::Value,
+) -> PyResult<Bound<'py, PyAny>> {
+    use powerio_core::__implementation::nonfinite::{INFINITY, NAN, NEG_INFINITY};
+    use serde_json::Value as J;
+    match (spelled, plain) {
+        (J::String(text), J::Null) => {
+            let value = match text.as_str() {
+                INFINITY => f64::INFINITY,
+                NEG_INFINITY => f64::NEG_INFINITY,
+                NAN => f64::NAN,
+                _ => return json_value_to_py(py, spelled),
+            };
+            Ok(value.into_pyobject(py)?.into_any())
+        }
+        (J::Array(items), J::Array(plain)) if items.len() == plain.len() => {
+            let mut out = Vec::with_capacity(items.len());
+            for (item, plain) in items.iter().zip(plain) {
+                out.push(table_json_to_py(py, item, plain)?);
+            }
+            Ok(PyList::new(py, out)?.into_any())
+        }
+        (J::Object(map), J::Object(plain)) => {
+            let dict = PyDict::new(py);
+            for (key, value) in map {
+                let item = match plain.get(key) {
+                    Some(plain) => table_json_to_py(py, value, plain)?,
+                    None => json_value_to_py(py, value)?,
+                };
+                dict.set_item(key, item)?;
+            }
+            Ok(dict.into_any())
+        }
+        _ => json_value_to_py(py, spelled),
+    }
 }
 
 /// Return one balanced model field through that model's own serde surface.
@@ -1881,7 +1934,7 @@ fn balanced_field_to_py<'py>(
     model: &BalancedNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let mut value = match field {
+    let mut table = match field {
         "static_var_compensators" => table_json(model.static_var_compensators()),
         "storage" => table_json(model.storage()),
         "hvdc" => table_json(model.hvdc()),
@@ -1893,25 +1946,13 @@ fn balanced_field_to_py<'py>(
             )));
         }
     }?;
-    // Python exposes physical table rows, not the tagged IR representation.
     // Partial three-winding transformers keep the same dictionary fields as
     // ordinary transformers even though their durable IR must fail closed in
     // older readers that do not implement per-winding status.
-    if field == "transformers_3w"
-        && let Some(rows) = value.as_array_mut()
-    {
-        for row in rows {
-            if row.get("type").and_then(serde_json::Value::as_str)
-                == Some("powerio.PartialTransformer3W")
-            {
-                *row = row
-                    .get_mut("value")
-                    .expect("partial transformer body")
-                    .take();
-            }
-        }
+    if field == "transformers_3w" {
+        table.untag_rows("powerio.PartialTransformer3W");
     }
-    json_value_to_py(py, &value)
+    table.into_py(py)
 }
 
 /// Return one multiconductor model field through that model's own serde
@@ -1921,7 +1962,7 @@ fn dist_field_to_py<'py>(
     model: &powerio_dist::MulticonductorNetwork,
     field: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let mut value = match field {
+    let mut table = match field {
         "buses" => table_json(model.buses()),
         "linecodes" => table_json(model.line_codes()),
         "lines" => table_json(model.lines()),
@@ -1941,21 +1982,12 @@ fn dist_field_to_py<'py>(
             )));
         }
     }?;
-    // Python exposes physical source rows, not the tagged IR record: a
-    // referenced source keeps every earth-referenced field and adds
+    // A referenced source keeps every earth-referenced field and adds
     // `reference_terminal`, so `row["name"]` reads the same for both.
-    if field == "sources"
-        && let Some(rows) = value.as_array_mut()
-    {
-        for row in rows {
-            if row.get("type").and_then(serde_json::Value::as_str)
-                == Some("powerio.ReferencedVoltageSource")
-            {
-                *row = row.get_mut("value").expect("referenced source body").take();
-            }
-        }
+    if field == "sources" {
+        table.untag_rows("powerio.ReferencedVoltageSource");
     }
-    json_value_to_py(py, &value)
+    table.into_py(py)
 }
 
 /// [`json_value_to_py`] for a JSON object, kept separate so a diagnostic's
@@ -2354,7 +2386,7 @@ fn versions_json() -> PyResult<String> {
 }
 
 fn powerio_dist_bmopf_schema() -> &'static str {
-    powerio_dist::BMOPF_SCHEMA_VERSION
+    powerio_dist::BMOPF_SCHEMA_ID
 }
 
 #[pyclass(name = "ComponentId", module = "powerio._powerio", frozen, eq, hash)]
@@ -4205,6 +4237,37 @@ impl PyPioModule {
         })
     }
 
+    /// The namespaces of the extensions this module carries, in key order.
+    #[getter]
+    fn _extension_keys(&self) -> PyResult<Vec<String>> {
+        Ok(self.module()?.extensions().keys().cloned().collect())
+    }
+
+    /// One extension as JSON text, or `None` when the module has none under
+    /// `namespace`. Reading a key never serializes the value or the rest of
+    /// the module.
+    fn _extension_json(&self, namespace: &str) -> PyResult<Option<String>> {
+        self.module()?
+            .extensions()
+            .get(namespace)
+            .map(|value| serde_json::to_string(value).map_err(serialize_pyerr))
+            .transpose()
+    }
+
+    /// A copy of this module with `text`, a JSON document, stored under
+    /// `namespace`, replacing an extension already there. The copy keeps the
+    /// value, diagnostics, sources, and history; the original is unchanged.
+    fn _with_extension_json(&self, namespace: &str, text: &str) -> PyResult<Self> {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(serialize_pyerr)?;
+        let mut module = self.module()?.clone();
+        module
+            .insert_extension(namespace, value)
+            .map_err(|error| core_error_pyerr(&error))?;
+        Ok(Self {
+            module: Some(module),
+        })
+    }
+
     /// Construct one typed time series from owner rooted PowerIO values.
     #[staticmethod]
     fn _from_time_series(
@@ -4312,18 +4375,20 @@ impl PyPioModule {
 
     /// Private path acquisition used by the public `parse` function.
     #[staticmethod]
-    #[pyo3(signature = (path, format=None, sincal=None, acquisition_root=None, sincal_balanced=None))]
+    #[pyo3(signature = (path, format=None, sincal=None, acquisition_root=None, sincal_balanced=None, dss_limits=None))]
     fn _parse_path(
         path: &str,
         format: Option<&str>,
         sincal: Option<SincalSelection>,
         acquisition_root: Option<&str>,
         sincal_balanced: Option<SincalBalancedSelection>,
+        dss_limits: Option<DssLimits>,
     ) -> PyResult<Self> {
         let source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
         let mut options = parse_options(format, sincal, sincal_balanced)?;
         options.acquisition_root = acquisition_root.map(std::path::PathBuf::from);
+        apply_dss_limits(&mut options, dss_limits);
         powerio::parse_with_options(source, &options)
             .map(|module| Self {
                 module: Some(module),
@@ -4333,7 +4398,7 @@ impl PyPioModule {
 
     /// Private memory acquisition used for bytes-like and file-like sources.
     #[staticmethod]
-    #[pyo3(signature = (data, name, format=None, sincal=None, named_buffers=None, sincal_balanced=None))]
+    #[pyo3(signature = (data, name, format=None, sincal=None, named_buffers=None, sincal_balanced=None, dss_limits=None))]
     fn _parse_memory(
         data: &[u8],
         name: &str,
@@ -4341,6 +4406,7 @@ impl PyPioModule {
         sincal: Option<SincalSelection>,
         named_buffers: Option<Vec<(String, Vec<u8>)>>,
         sincal_balanced: Option<SincalBalancedSelection>,
+        dss_limits: Option<DssLimits>,
     ) -> PyResult<Self> {
         let mut source = powerio_core::Source::from_memory(name, data.to_vec())
             .map_err(|error| core_error_pyerr(&error))?;
@@ -4349,7 +4415,9 @@ impl PyPioModule {
                 .with_named_buffer(name, bytes)
                 .map_err(|error| core_error_pyerr(&error))?;
         }
-        powerio::parse_with_options(source, &parse_options(format, sincal, sincal_balanced)?)
+        let mut options = parse_options(format, sincal, sincal_balanced)?;
+        apply_dss_limits(&mut options, dss_limits);
+        powerio::parse_with_options(source, &options)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -5404,9 +5472,9 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PANIC_CODE", codes::BIND_PY_PANIC.code)?;
     m.add_class::<PyBalancedNetwork>()?;
     m.add_class::<PyBusMerge>()?;
-    m.add_function(wrap_pyfunction!(parse_display, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;
     m.add_class::<PyPioModule>()?;
+    m.add_class::<collection::PyCollection>()?;
     m.add_class::<PyComponentId>()?;
     m.add_class::<PyScucStartupCostAdjustment>()?;
     m.add_class::<PyScucStartupLimit>()?;
@@ -5455,6 +5523,121 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::module_with_records;
 
+    fn balanced_handle(bytes: &[u8], name: &str, format: &str) -> super::PyBalancedNetwork {
+        super::PyPioModule::_parse_memory(bytes, name, Some(format), None, None, None, None)
+            .unwrap()
+            .as_balanced_network()
+            .unwrap()
+    }
+
+    #[test]
+    fn balanced_metadata_defers_the_analysis_index() {
+        let network = balanced_handle(
+            include_bytes!("../../tests/data/case14.m"),
+            "case.m",
+            "matpower",
+        );
+        assert!(network.core.get().is_none());
+        assert_eq!(network.n_buses(), 14);
+        assert_eq!(network.n_branches(), 20);
+        assert_eq!(network.n_lines().unwrap(), 17);
+        assert_eq!(network.n_generators(), 5);
+        assert_eq!(network.n_loads(), 11);
+        assert_eq!(network.n_substations(), 0);
+        assert!(network.core.get().is_none());
+
+        // The source module has already been dropped; the owned handle keeps
+        // its tables alive and builds its analysis data only when requested.
+        assert_eq!(network.n_islands(), 1);
+        assert!(network.core.get().is_some());
+        assert!(std::ptr::eq(network.core(), network.core()));
+    }
+
+    #[test]
+    fn lazy_balanced_index_matches_fresh_matrix_and_topology_views() {
+        use super::{
+            BuildOptions, IndexedNetwork, Scheme, calc_admittance_matrix, calc_bprime_matrix,
+        };
+        for (bytes, name, format) in [
+            (
+                include_bytes!("../../tests/data/case14.m").as_slice(),
+                "case.m",
+                "matpower",
+            ),
+            (
+                include_bytes!("../../tests/data/psse/case3_3w_v33.raw").as_slice(),
+                "case.raw",
+                "psse",
+            ),
+        ] {
+            let network = balanced_handle(bytes, name, format);
+            assert!(network.core.get().is_none());
+            let fresh = IndexedNetwork::new(network.inner());
+            for scheme in [Scheme::Bx, Scheme::Xb] {
+                let options = BuildOptions {
+                    scheme,
+                    ..BuildOptions::default()
+                };
+                let lazy = IndexedNetwork::with_core(network.inner(), network.core());
+                assert_eq!(
+                    calc_bprime_matrix(&lazy, &options).unwrap(),
+                    calc_bprime_matrix(&fresh, &options).unwrap()
+                );
+                let actual = calc_admittance_matrix(&lazy, &options).unwrap();
+                let expected = calc_admittance_matrix(&fresh, &options).unwrap();
+                assert_eq!(actual.g, expected.g);
+                assert_eq!(actual.b, expected.b);
+                assert_eq!(network.n_islands(), fresh.calc_island_count());
+                assert_eq!(
+                    network.reference_bus_indices(),
+                    fresh.reference_bus_indices()
+                );
+            }
+            assert!(std::ptr::eq(network.core(), network.core()));
+        }
+    }
+
+    #[test]
+    fn replaced_and_derived_networks_do_not_reuse_an_old_index() {
+        let network = balanced_handle(
+            include_bytes!("../../tests/data/case14.m"),
+            "case.m",
+            "matpower",
+        );
+        assert_eq!(network.n_islands(), 1);
+        let mut changed = network.inner().clone();
+        for branch in changed.branches_mut() {
+            branch.in_service = false;
+        }
+        let changed = super::case_from_parts(changed, Vec::new());
+        assert!(changed.core.get().is_none());
+        assert_eq!(
+            changed.n_lines().unwrap(),
+            17,
+            "counts include out-of-service rows"
+        );
+        assert_eq!(changed.n_islands(), 14);
+        assert_eq!(network.n_islands(), 1);
+
+        let normalized = network.to_normalized().unwrap();
+        assert!(normalized.core.get().is_none());
+        assert!(normalized.n_lines().is_err());
+        assert!(
+            normalized.core.get().is_none(),
+            "a refused count does not build analysis data"
+        );
+        assert_eq!(normalized.n_islands(), 1);
+
+        let merge = network
+            .merge_buses(true, Some("exact"), None, "fold")
+            .unwrap();
+        assert!(merge.network().core.get().is_none());
+        assert_eq!(merge.network.n_islands(), 1);
+        let cloned = merge.network();
+        assert!(cloned.core.get().is_some());
+        assert_eq!(cloned.n_islands(), 1);
+    }
+
     #[test]
     fn sincal_multiconductor_reaches_the_existing_python_module_type() {
         let mut connection = rusqlite::Connection::open_in_memory().unwrap();
@@ -5468,6 +5651,7 @@ mod tests {
             &native,
             "case.db",
             Some("sincal-multiconductor"),
+            None,
             None,
             None,
             None,
@@ -5491,6 +5675,7 @@ mod tests {
             NATIVE,
             "case.sinx",
             Some("sincal-balanced"),
+            None,
             None,
             None,
             None,
