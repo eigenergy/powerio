@@ -16,18 +16,22 @@
 //! The multiconductor reading follows the `runpp_3ph` model of pandapower 3.5.
 //! Every bus has the phase terminals 1, 2 and 3 and an ideally earthed
 //! neutral, the grounded terminal 4. Lines turn their sequence data into
-//! phase matrices. The reader reports every table and row it does not map.
-//! Some of them act in `runpp_3ph`, such as `ward` and `impedance`.
+//! phase matrices. Transformers keep the winding model and add zero-sequence
+//! corrections, so their zero sequence matches pandapower's T model. The
+//! reader reports every table and row it does not map. Some of them act in
+//! `runpp_3ph`, such as `ward` and `impedance`.
 
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 
+use num_complex::Complex64;
 use powerio_core::{Diagnostic, DiagnosticInfo, Error, FormatId, PioModule, Source};
 use powerio_dist::diagnostics::codes;
 use powerio_dist::{
     ConductorMatrix, Configuration, CoordinateSpace, DistBus, DistCoordsKind, DistGenerator,
-    DistGeoMeta, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel, DistLocation,
-    DistSourceFormat, Extras, MulticonductorNetwork, VoltageSource,
+    DistGeoMeta, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel, DistLocation, DistShunt,
+    DistSourceFormat, DistTransformer, DistWinding, DistWindingConn, Extras, MulticonductorNetwork,
+    VoltageSource,
 };
 use powerio_tx::__internal::{DataFrame, MAX_I_KA, Row, network_object, read_bus_geo, read_frame};
 use powerio_tx::BalancedNetwork;
@@ -39,11 +43,16 @@ pub const TOKEN: &str = "pandapower-json";
 const PHASES: [&str; 3] = ["1", "2", "3"];
 const WYE: [&str; 4] = ["1", "2", "3", "4"];
 const EARTH: &str = "4";
+/// A zero-sequence correction smaller than this share of the winding
+/// admittance is rounding noise and is skipped.
+const NEGLIGIBLE: f64 = 1e-6;
 /// The element tables the reader maps. Every other non-empty table is
 /// reported.
-const MAPPED: [&str; 7] = [
+const MAPPED: [&str; 9] = [
     "bus",
     "line",
+    "trafo",
+    "trafo_characteristic_table",
     "ext_grid",
     "load",
     "asymmetric_load",
@@ -51,13 +60,34 @@ const MAPPED: [&str; 7] = [
     "asymmetric_sgen",
 ];
 
-/// Tables the balanced reader maps and this reading does not yet.
-const BALANCED_ONLY: [&str; 5] = ["trafo", "shunt", "gen", "storage", "dcline"];
+/// Tables the balanced reader maps and this reading does not yet. A `trafo`
+/// row counts too when its vector group has no winding mapping here.
+const BALANCED_ONLY: [&str; 4] = ["shunt", "gen", "storage", "dcline"];
 /// Branch tables whose in-service rows join buses in pandapower. This
-/// reading maps none of them yet.
-const CONNECTING: [&str; 3] = ["trafo", "trafo3w", "impedance"];
+/// reading maps none of them yet. In-service `trafo` rows count too when
+/// their vector group has no winding mapping here.
+const CONNECTING: [&str; 2] = ["trafo3w", "impedance"];
+
+/// Whether this reading maps a transformer of the pandapower vector group.
+/// pandapower compares the group without regard to case.
+fn maps_vector_group(group: &str) -> bool {
+    matches!(group.to_ascii_lowercase().as_str(), "dyn" | "ynyn")
+}
+
+/// Whether the document has `trafo` rows this reading does not map. With
+/// `in_service_only` only in-service rows count.
+fn unmapped_trafos(obj: &Map<String, Value>, in_service_only: bool) -> bool {
+    matches!(read_frame(obj, "trafo"), Ok(Some(frame)) if frame.rows().any(|row| {
+        (!in_service_only || row.bool_or("in_service", true))
+            && !maps_vector_group(&row.string("vector_group").unwrap_or_default())
+    }))
+}
 
 type Result<T> = std::result::Result<T, powerio_tx::Error>;
+
+/// The `vk_percent` and `vkr_percent` of each transformer characteristic
+/// per step, keyed by the bits of the characteristic id and the step.
+type TrafoCharacteristics = HashMap<(u64, u64), (Option<f64>, Option<f64>)>;
 
 /// A parsed pandapower document: the module of whichever network kind its
 /// tables select.
@@ -92,9 +122,10 @@ pub fn parse(source: Source) -> std::result::Result<PandapowerModule, Error> {
     // A table only the balanced reader maps keeps the 0.12.0 balanced
     // reading, unless that reader refuses the document.
     let balanced_only = object.as_ref().is_some_and(|obj| {
-        BALANCED_ONLY
-            .iter()
-            .any(|name| matches!(read_frame(obj, name), Ok(Some(frame)) if frame.rows().next().is_some()))
+        unmapped_trafos(obj, false)
+            || BALANCED_ONLY
+                .iter()
+                .any(|name| matches!(read_frame(obj, name), Ok(Some(frame)) if frame.rows().next().is_some()))
     });
     if balanced_only && let Ok(module) = powerio_tx::parse(source.clone()) {
         return Ok(PandapowerModule::Balanced(module));
@@ -116,13 +147,14 @@ pub fn unmapped_connections(content: &str) -> Vec<&'static str> {
 /// The connecting tables with rows, and the counts of closed bus-bus and
 /// open element switches.
 fn connections(obj: &Map<String, Value>) -> (Vec<&'static str>, usize, usize) {
-    let mut tables: Vec<&'static str> = CONNECTING
-        .into_iter()
-        .filter(|name| {
-            matches!(read_frame(obj, name), Ok(Some(frame))
-                if frame.rows().any(|row| row.bool_or("in_service", true)))
-        })
-        .collect();
+    let mut tables: Vec<&'static str> = Vec::new();
+    if unmapped_trafos(obj, true) {
+        tables.push("trafo");
+    }
+    tables.extend(CONNECTING.into_iter().filter(|name| {
+        matches!(read_frame(obj, name), Ok(Some(frame))
+            if frame.rows().any(|row| row.bool_or("in_service", true)))
+    }));
     let (mut joining, mut opening) = (0, 0);
     if let Ok(Some(frame)) = read_frame(obj, "switch") {
         for row in frame.rows() {
@@ -170,6 +202,10 @@ struct Reader {
     buses: HashMap<usize, (String, f64)>,
     /// The ids of the out-of-service buses.
     dead_buses: HashSet<String>,
+    /// The LV neutral terminals of YNyn windings, in transformer order.
+    winding_neutrals: Vec<String>,
+    /// Whether pandapower converts the file from a format before 3.0.
+    legacy_taps: bool,
 }
 
 impl Reader {
@@ -190,6 +226,22 @@ impl Reader {
             .insert("sn_mva".into(), positive(&obj, "sn_mva", 1.0)?.into());
         self.read_buses(&obj)?;
         self.read_lines(&obj, f_hz)?;
+        self.legacy_taps = legacy_taps(&obj);
+        self.read_trafos(&obj)?;
+        // A winding neutral is a fifth terminal. The roles keep it out of the
+        // phases.
+        if !self.winding_neutrals.is_empty() {
+            let mut neutral = vec![Value::from(EARTH)];
+            neutral.extend(
+                self.winding_neutrals
+                    .iter()
+                    .map(|n| Value::from(n.as_str())),
+            );
+            self.net.extras_mut().insert(
+                "bmopf_terminal_conventions".into(),
+                serde_json::json!({"phase": PHASES, "neutral": neutral}),
+            );
+        }
         self.read_ext_grids(&obj)?;
         for (table, asymmetric, generation) in [
             ("load", false, false),
@@ -430,6 +482,453 @@ impl Reader {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // one block per mapped transformer property
+    fn read_trafos(&mut self, obj: &Map<String, Value>) -> Result<()> {
+        let Some(frame) = read_frame(obj, "trafo")? else {
+            return Ok(());
+        };
+        unique_indices(&frame, "trafo")?;
+        // pandapower takes vk and vkr for a vector group whose vk0 or vkr0
+        // column is all zero or has a gap.
+        let mut largest = HashMap::new();
+        let mut with_no_load = 0usize;
+        for row in frame.rows() {
+            for key in ["vk0_percent", "vkr0_percent"] {
+                let entry = largest
+                    .entry((row.string("vector_group"), key))
+                    .or_insert(Some(0.0_f64));
+                *entry = entry.zip(row.f_finite(key)).map(|(a, b)| a.max(b.abs()));
+            }
+        }
+        // The vk and vkr of each characteristic per step.
+        let mut characteristics = HashMap::new();
+        if let Some(table) = read_frame(obj, "trafo_characteristic_table")? {
+            for row in table.rows() {
+                if let (Some(id), Some(step)) =
+                    (row.f_finite("id_characteristic"), row.f_finite("step"))
+                {
+                    characteristics.insert(
+                        (id.to_bits(), step.to_bits()),
+                        (row.f_finite("vk_percent"), row.f_finite("vkr_percent")),
+                    );
+                }
+            }
+        }
+        for row in frame.rows() {
+            let index = row.index_usize()?;
+            let name = format!("trafo_{index}");
+            let (hv, vn_hv_bus) = self.bus("trafo", &row, "hv_bus")?;
+            let (lv, vn_lv_bus) = self.bus("trafo", &row, "lv_bus")?;
+            let group = row.string("vector_group").unwrap_or_default();
+            if !maps_vector_group(&group) {
+                let effect = if row.bool_or("in_service", true) {
+                    ". The buses it joins in pandapower are not joined here, so the \
+                     connectivity differs"
+                } else {
+                    ""
+                };
+                self.note(
+                    &codes::READ_PANDAPOWER_ELEMENT_UNSUPPORTED,
+                    format!(
+                        "{name}: vector group `{group}` has no winding mapping. Only Dyn and \
+                         YNyn are mapped{effect}"
+                    ),
+                );
+                continue;
+            }
+            let wye_hv = group.eq_ignore_ascii_case("ynyn");
+            let sn = req_positive(&row, "trafo", "sn_mva")?;
+            let vn_hv = req_positive(&row, "trafo", "vn_hv_kv")?;
+            let vn_lv = req_positive(&row, "trafo", "vn_lv_kv")?;
+            let row_vk = row.req_f("vk_percent")?;
+            let row_vkr = row.req_f("vkr_percent")?;
+            let table_sc = match self.table_impedance(&row, &name, &characteristics) {
+                Ok(table_sc) => table_sc,
+                Err(e) => {
+                    self.unusable(&row, &name, e)?;
+                    continue;
+                }
+            };
+            let [vk, vkr] = table_sc.unwrap_or([row_vk, row_vkr]);
+            let parallel = if vkr.abs() > vk.abs() {
+                Err(bad(format!(
+                    "`trafo` row {}: `vkr_percent` ({vkr}) exceeds the magnitude of \
+                     `vk_percent` ({vk}), so the short-circuit reactance is not real",
+                    row.label()
+                )))
+            } else {
+                parallel(&row, "trafo")
+            };
+            let parallel = match parallel {
+                Ok(parallel) => parallel,
+                Err(e) => {
+                    self.unusable(&row, &name, e)?;
+                    continue;
+                }
+            };
+            let shift = row.f_or("shift_degree", 0.0);
+            let (hv_order, lv_order) = match winding_orders(wye_hv, shift) {
+                Some((hv_order, lv_order, true)) => (hv_order, lv_order),
+                Some((hv_order, lv_order, false)) => {
+                    self.note(
+                        &codes::READ_PANDAPOWER_APPROXIMATED,
+                        format!(
+                            "{name}: the YNyn shift of {shift} degrees is a rotation of the LV \
+                             terminals, which leaves the zero sequence unshifted. pandapower \
+                             shifts it as well"
+                        ),
+                    );
+                    (hv_order, lv_order)
+                }
+                None => {
+                    self.note(
+                        &codes::READ_PANDAPOWER_APPROXIMATED,
+                        format!(
+                            "{name}: no order of the winding terminals gives the {group} shift \
+                             of {shift} degrees. The transformer is mapped unrotated, with \
+                             `shift_degree` in extras"
+                        ),
+                    );
+                    (PHASES, PHASES)
+                }
+            };
+            let (tap_hv, tap_lv) = self.tap(&row, &name);
+            let s_rating = finite(&row, "trafo", "sn_mva", sn * parallel * 1e6)?;
+            let v_hv = finite(&row, "trafo", "vn_hv_kv", vn_hv * 1e3)?;
+            let v_lv = finite(&row, "trafo", "vn_lv_kv", vn_lv * 1e3)?;
+            let (hv_conn, hv_map) = if wye_hv {
+                (DistWindingConn::Wye, terminals(&WYE))
+            } else {
+                (DistWindingConn::Delta, terminals(&hv_order))
+            };
+            let mut hv_winding = DistWinding::new(hv.clone(), hv_map, hv_conn, v_hv, s_rating);
+            hv_winding.r_pct = vkr / 2.0;
+            hv_winding.tap = tap_hv;
+            let mut lv_map = terminals(&lv_order);
+            lv_map.push(EARTH.into());
+            let mut lv_winding =
+                DistWinding::new(lv.clone(), lv_map, DistWindingConn::Wye, v_lv, s_rating);
+            lv_winding.r_pct = vkr / 2.0;
+            lv_winding.tap = tap_lv;
+            let xsc = short_circuit_x(vk, vkr);
+            let mut trafo =
+                DistTransformer::new(name.clone(), vec![hv_winding, lv_winding], vec![xsc], 3);
+            let mut known = vec![
+                "hv_bus",
+                "lv_bus",
+                "sn_mva",
+                "vn_hv_kv",
+                "vn_lv_kv",
+                "pfe_kw",
+                "i0_percent",
+                "parallel",
+            ];
+            // The row's vk and vkr stay in extras when the table replaces them.
+            if table_sc.is_none() {
+                known.extend(["vk_percent", "vkr_percent"]);
+            }
+            trafo.extras = self.extras(&row, &name, &known, &[&hv, &lv]);
+            if table_sc.is_some() {
+                trafo
+                    .extras
+                    .insert("pandapower_table_vk_percent".into(), vk.into());
+                trafo
+                    .extras
+                    .insert("pandapower_table_vkr_percent".into(), vkr.into());
+            }
+            // OpenDSS no-load percentages on the rating, as the CIM reader
+            // derives them from a no-load test.
+            let loss = row.f_or("pfe_kw", 0.0) / (sn * 10.0);
+            let i0 = row.f_or("i0_percent", 0.0);
+            if loss != 0.0 || i0 != 0.0 {
+                with_no_load += 1;
+                // pandapower clamps the magnetizing share at zero (build_branch.py).
+                let imag = (i0 * i0 - loss * loss).max(0.0).sqrt();
+                trafo.extras.insert("%noloadloss".into(), loss.into());
+                trafo.extras.insert("%imag".into(), imag.into());
+            }
+            let stated = ["vk0_percent", "vkr0_percent"].map(|key| {
+                largest[&(row.string("vector_group"), key)].is_some_and(|max| max > 1e-8)
+            });
+            // pandapower refers a YNyn neutral impedance to the HV bus voltage.
+            let zn = Complex64::new(row.f_or("rn_ohm", 0.0), row.f_or("xn_ohm", 0.0))
+                * if wye_hv {
+                    (vn_lv_bus / vn_hv_bus).powi(2)
+                } else {
+                    1.0
+                };
+            // The zero-sequence impedances are on the tapped LV voltage.
+            let zb = (vn_lv * tap_lv).powi(2) / sn;
+            let sc = [vk, vkr];
+            let in_service = row.bool_or("in_service", true)
+                && !self.dead_buses.contains(&hv)
+                && !self.dead_buses.contains(&lv);
+            match ZeroSequence::of(&row, zb, parallel, sc, [row_vk, row_vkr], stated, zn) {
+                None => self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: a zero-sequence column is missing or not numeric, so the \
+                         winding model's own zero sequence applies"
+                    ),
+                ),
+                Some(zs) if !wye_hv => {
+                    let y = (zs.z1 + zs.z3) / zs.zt - 1.0 / zs.zw;
+                    self.correction_shunt(&name, in_service, "lv", &lv, y, 1.0 / zs.zw.norm());
+                }
+                Some(zs) => {
+                    let neutral = (zs.zt / zs.z3 - zs.zw) / 3.0;
+                    if !neutral.is_finite() {
+                        self.unusable_correction(&name);
+                    } else if neutral.norm() > NEGLIGIBLE * zs.zw.norm() {
+                        // The neutral impedance acts only on a terminal of its own.
+                        let terminal = format!("n{index}");
+                        let winding = &mut trafo.windings[1];
+                        winding.terminal_map[3].clone_from(&terminal);
+                        winding.r_neutral = Some(neutral.re);
+                        winding.x_neutral = Some(neutral.im);
+                        trafo
+                            .extras
+                            .insert("pandapower_zero_sequence_neutral".into(), true.into());
+                        if let Some(bus) = self.net.buses_mut().iter_mut().find(|b| b.id == lv) {
+                            bus.terminals.push(terminal.clone());
+                        }
+                        self.winding_neutrals.push(terminal);
+                        if neutral.re < 0.0 {
+                            self.nonpassive(
+                                &name,
+                                "LV neutral impedance",
+                                " A negative neutral resistance does not carry over to OpenDSS, \
+                                 which reads it as an open neutral",
+                            );
+                        }
+                    }
+                    // The HV correction is reflected through the tapped
+                    // ratio, as in pandapower.
+                    let ratio = (vn_hv * tap_hv / (vn_lv * tap_lv)).powi(2);
+                    self.correction_shunt(
+                        &name,
+                        in_service,
+                        "hv",
+                        &hv,
+                        zs.z2 / zs.zt / ratio,
+                        1.0 / (zs.zw.norm() * ratio),
+                    );
+                    self.correction_shunt(
+                        &name,
+                        in_service,
+                        "lv",
+                        &lv,
+                        zs.z1 / zs.zt,
+                        1.0 / zs.zw.norm(),
+                    );
+                }
+            }
+            self.net.transformers_mut().push(trafo);
+        }
+        if with_no_load > 0 {
+            self.note(
+                &codes::READ_PANDAPOWER_APPROXIMATED,
+                format!(
+                    "{with_no_load} transformer(s) state no-load losses or magnetizing current. \
+                     runpp_3ph places this branch between the two leakage halves (T model). \
+                     The mapped `%noloadloss` and `%imag` act at a winding terminal instead"
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    /// The vk and vkr that replace the row's when `tap_dependency_table` is
+    /// true. runpp_3ph takes them from the `trafo_characteristic_table` row
+    /// at `tap_pos` for the positive and negative sequence
+    /// (build_branch.py `_get_vk_values_from_table`). Without a matching row
+    /// pandapower takes 1 for both.
+    fn table_impedance(
+        &mut self,
+        row: &Row<'_>,
+        name: &str,
+        characteristics: &TrafoCharacteristics,
+    ) -> Result<Option<[f64; 2]>> {
+        if !row.bool_or("tap_dependency_table", false) {
+            return Ok(None);
+        }
+        let Some(id) = row.f_finite("id_characteristic_table") else {
+            if row.bool_or("in_service", true) {
+                return Err(bad(format!(
+                    "`trafo` row {}: `tap_dependency_table` is true without an \
+                     `id_characteristic_table`",
+                    row.label()
+                )));
+            }
+            self.note(
+                &codes::READ_PANDAPOWER_APPROXIMATED,
+                format!(
+                    "{name}: the impedance depends on a characteristic table, but no \
+                     `id_characteristic_table` names one. The transformer keeps `vk_percent` \
+                     and `vkr_percent`"
+                ),
+            );
+            return Ok(None);
+        };
+        let step = row.f_finite("tap_pos");
+        match step.and_then(|step| characteristics.get(&(id.to_bits(), step.to_bits()))) {
+            Some(&(Some(vk), Some(vkr))) => Ok(Some([vk, vkr])),
+            Some(_) => Err(bad(format!(
+                "`trafo` row {}: the `trafo_characteristic_table` row for characteristic {id} \
+                 at step {} has no numeric `vk_percent` or `vkr_percent`",
+                row.label(),
+                step.unwrap_or(f64::NAN)
+            ))),
+            None => {
+                let step = step.map_or_else(|| "null".to_owned(), |step| step.to_string());
+                self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: no `trafo_characteristic_table` row for characteristic {id} at \
+                         step {step}. runpp_3ph then takes 1 percent for `vk_percent` and \
+                         `vkr_percent`, as the mapping does"
+                    ),
+                );
+                Ok(Some([1.0, 1.0]))
+            }
+        }
+    }
+
+    /// The HV and LV tap factors of the ratio tap changers `tap` and `tap2`,
+    /// which pandapower multiplies. Other changers are reported and left at
+    /// the nominal ratio.
+    fn tap(&mut self, row: &Row<'_>, name: &str) -> (f64, f64) {
+        let mut factors = (1.0, 1.0);
+        for changer in ["tap", "tap2"] {
+            let column = |key: &str| format!("{changer}_{key}");
+            let step = row.f_or(&column("step_percent"), 0.0);
+            let degree = row.f_or(&column("step_degree"), 0.0);
+            let kind = row.get(&column("changer_type"));
+            // pandapower reads `tap_dependency_table` for both changers. It
+            // applies the table row at `tap_pos` even at the neutral position.
+            if kind.is_some()
+                && row.get(&column("dependency_table")).is_some()
+                && row.bool_or("tap_dependency_table", false)
+            {
+                self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: runpp_3ph takes the `{changer}` ratio and angle from the \
+                         `trafo_characteristic_table` row at `tap_pos`. Only its `vk_percent` \
+                         and `vkr_percent` are mapped. The changer is left at the nominal \
+                         ratio, with its columns in extras"
+                    ),
+                );
+                continue;
+            }
+            let ratio = match kind {
+                // A pandapower 2 file has no changer type. pandapower converts a
+                // changer with only a degree step to ideal and any other one to a
+                // ratio changer. From format 3.0 a missing type applies no tap.
+                None if self.legacy_taps => !(step == 0.0 && degree != 0.0),
+                None | Some(Value::Null) => continue,
+                // pandapower compares the type exactly.
+                Some(kind) => matches!(kind.as_str(), Some("Ratio" | "Symmetrical")),
+            };
+            // pandapower's tap_pos - tap_neutral is NaN for a missing cell.
+            // nan_to_num then applies no tap.
+            let (Some(pos), Some(neutral)) = (
+                row.f_finite(&column("pos")),
+                row.f_finite(&column("neutral")),
+            ) else {
+                continue;
+            };
+            let diff = pos - neutral;
+            if diff == 0.0 {
+                continue;
+            }
+            if (!ratio && (step != 0.0 || degree != 0.0)) || (ratio && step != 0.0 && degree != 0.0)
+            {
+                self.note(
+                    &codes::READ_PANDAPOWER_APPROXIMATED,
+                    format!(
+                        "{name}: only a ratio tap without a phase step is mapped. The \
+                         `{changer}` changer is left at the nominal ratio, with its columns in \
+                         extras"
+                    ),
+                );
+                continue;
+            }
+            // A ratio changer without a percent step changes nothing in pandapower.
+            if step == 0.0 {
+                continue;
+            }
+            let tap = 1.0 + diff * step / 100.0;
+            // pandapower applies a tap with any other side on neither side.
+            match row.string(&column("side")).as_deref() {
+                Some("hv") => factors.0 *= tap,
+                Some("lv") => factors.1 *= tap,
+                _ => {}
+            }
+        }
+        factors
+    }
+
+    /// A zero-sequence-only shunt `(y/3) * ones(3, 3)` at `bus`, tagged with
+    /// its transformer, unless `y` is negligible against `scale`. The shunt
+    /// of an out-of-service transformer keeps `in_service` false in extras.
+    /// The transformer's own finding covers both.
+    fn correction_shunt(
+        &mut self,
+        trafo: &str,
+        in_service: bool,
+        side: &str,
+        bus: &str,
+        y: Complex64,
+        scale: f64,
+    ) {
+        if !y.is_finite() {
+            self.unusable_correction(trafo);
+            return;
+        }
+        if y.norm() <= NEGLIGIBLE * scale {
+            return;
+        }
+        let third = y / 3.0;
+        let mut shunt = DistShunt::new(
+            format!("{trafo}_zero_sequence_{side}"),
+            bus,
+            terminals(&PHASES),
+            vec![vec![third.re; 3]; 3],
+            vec![vec![third.im; 3]; 3],
+        );
+        shunt
+            .extras
+            .insert("pandapower_zero_sequence_correction".into(), trafo.into());
+        if !in_service {
+            shunt.extras.insert("in_service".into(), false.into());
+        }
+        self.net.shunts_mut().push(shunt);
+        if y.re < 0.0 {
+            self.nonpassive(trafo, &format!("{} shunt", side.to_ascii_uppercase()), "");
+        }
+    }
+
+    fn nonpassive(&mut self, trafo: &str, what: &str, consequence: &str) {
+        self.note(
+            &codes::READ_PANDAPOWER_NONPASSIVE_CORRECTION,
+            format!(
+                "{trafo}: the zero-sequence correction's {what} has a negative real part. It is \
+                 an equivalent element with fictitious losses, not a device.{consequence}"
+            ),
+        );
+    }
+
+    fn unusable_correction(&mut self, trafo: &str) {
+        self.note(
+            &codes::READ_PANDAPOWER_APPROXIMATED,
+            format!(
+                "{trafo}: the zero-sequence data give no finite correction, so the winding \
+                 model's own zero sequence applies"
+            ),
+        );
+    }
+
     fn read_ext_grids(&mut self, obj: &Map<String, Value>) -> Result<()> {
         let Some(frame) = read_frame(obj, "ext_grid")? else {
             return Ok(());
@@ -658,6 +1157,103 @@ impl Reader {
     }
 }
 
+/// The zero-sequence T model of pandapower's `pd2ppc_zero.py` in ohms at the
+/// LV side. `z1` and `z2` are the HV and LV leakage. `z3` is the magnetizing
+/// branch. `zt` is their pairwise product sum. `zw` is the short-circuit
+/// impedance the winding model already has in its zero sequence.
+struct ZeroSequence {
+    z1: Complex64,
+    z2: Complex64,
+    z3: Complex64,
+    zt: Complex64,
+    zw: Complex64,
+}
+
+impl ZeroSequence {
+    /// `zb` is the impedance base in ohms. `sc` holds the vk and vkr the
+    /// winding model maps. `row_sc` holds the row's own, which
+    /// `pd2ppc_zero.py` reads even where a characteristic table replaces
+    /// them. `stated` says whether `vk0` and `vkr0` apply in place of the
+    /// row's vk and vkr. `zn` is the neutral impedance in LV ohms.
+    fn of(
+        row: &Row<'_>,
+        zb: f64,
+        parallel: f64,
+        [vk, vkr]: [f64; 2],
+        [row_vk, row_vkr]: [f64; 2],
+        stated: [bool; 2],
+        zn: Complex64,
+    ) -> Option<Self> {
+        let short = |vk: f64, vkr: f64| {
+            Complex64::new(vkr, short_circuit_x(vk, vkr)) / 100.0 * zb / parallel
+        };
+        // pandapower refuses a transformer table without these columns.
+        let zero = |key: &str, stated: bool, positive: f64| {
+            row.get(key)?;
+            if stated {
+                row.f_finite(key)
+            } else {
+                Some(positive)
+            }
+        };
+        let vk0 = zero("vk0_percent", stated[0], row_vk)?;
+        let vkr0 = zero("vkr0_percent", stated[1], row_vkr)?;
+        let mag0 = row.f_finite("mag0_percent")?;
+        let rx = row.f_finite("mag0_rx")?;
+        let si = row.f_finite("si0_hv_partial")?;
+        // pandapower counts the neutral impedance once, not three times.
+        let z0k = short(vk0, vkr0) + zn;
+        let z3 = vk0 / 100.0 * zb * mag0 / 100.0 * Complex64::new(rx, 1.0)
+            / (rx * rx + 1.0).sqrt()
+            / parallel;
+        let (z1, z2) = (si * z0k, (1.0 - si) * z0k);
+        Some(Self {
+            z1,
+            z2,
+            z3,
+            zt: z1 * z2 + z2 * z3 + z1 * z3,
+            zw: short(vk, vkr),
+        })
+    }
+}
+
+/// The HV and LV terminal orders that give `shift` degrees. The flag says
+/// whether the mapping is exact. A positive shift lags the LV side, as in OpenDSS. A
+/// cyclic rotation of the LV terminals adds 120 degrees of lag per step. A
+/// Dyn winding pair already lags by 30 degrees. Swapping two terminals on
+/// both windings reverses the sequence the core sees. The Dyn pair then
+/// leads by 30 degrees, which gives the 330 degree family. A YNyn rotation
+/// leaves the zero sequence unshifted, so only its zero shift is exact.
+fn winding_orders(
+    wye_hv: bool,
+    shift: f64,
+) -> Option<([&'static str; 3], [&'static str; 3], bool)> {
+    // The cyclic steps of 120 degrees from `base`, if `shift` is on that grid.
+    let steps = |base: f64| {
+        let steps = (shift - base).rem_euclid(360.0) / 120.0;
+        let k = steps.round();
+        ((steps - k).abs() <= 1e-9).then_some(k as u8 % 3)
+    };
+    let cyclic = |k: u8| match k {
+        0 => ["1", "2", "3"],
+        1 => ["3", "1", "2"],
+        _ => ["2", "3", "1"],
+    };
+    if wye_hv {
+        let k = steps(0.0)?;
+        return Some((PHASES, cyclic(k), k == 0));
+    }
+    if let Some(k) = steps(30.0) {
+        return Some((PHASES, cyclic(k), true));
+    }
+    let lv = match steps(330.0)? {
+        0 => ["1", "3", "2"],
+        1 => ["3", "2", "1"],
+        _ => ["2", "1", "3"],
+    };
+    Some((["1", "3", "2"], lv, true))
+}
+
 /// The phase matrix of a symmetric element from its zero and positive
 /// sequence values, times `scale`: self `(z0 + 2 z1)/3`, mutual `(z0 - z1)/3`.
 fn fortescue(zero: f64, positive: f64, scale: f64) -> ConductorMatrix {
@@ -680,6 +1276,12 @@ fn terminals(names: &[&str]) -> Vec<String> {
 /// nonpositive value is an error.
 fn parallel(row: &Row<'_>, table: &str) -> Result<f64> {
     positive_or(row, table, "parallel", 1.0)
+}
+
+/// The short-circuit reactance in percent with the sign of `vk`, as
+/// pandapower's `build_branch.py` and `pd2ppc_zero.py` compute it.
+fn short_circuit_x(vk: f64, vkr: f64) -> f64 {
+    vk.signum() * (vk * vk - vkr * vkr).sqrt()
 }
 
 /// An element index cell: a non-negative integer, possibly float encoded.
@@ -777,6 +1379,50 @@ fn positive(obj: &Map<String, Value>, key: &str, default: f64) -> Result<f64> {
     })
 }
 
+/// Whether pandapower converts the file from a format before 3.0. This
+/// follows pandapower's `convert_format`. It takes the smaller of
+/// `format_version` and `version`. A `version` that is not a string wins.
+/// pandapower raises on a version it cannot parse, so such a file counts as
+/// current.
+fn legacy_taps(obj: &Map<String, Value>) -> bool {
+    // pandapower's empty network supplies a missing key.
+    let format_version = obj
+        .get("format_version")
+        .cloned()
+        .unwrap_or_else(|| "3.3.0".into());
+    let version = obj
+        .get("version")
+        .cloned()
+        .unwrap_or_else(|| "3.5.6".into());
+    let format_version = if version.is_string() {
+        format_version
+    } else {
+        version.clone()
+    };
+    let (Some(format_version), Some(version)) =
+        (version_tuple(&format_version), version_tuple(&version))
+    else {
+        return false;
+    };
+    format_version.min(version) < (3, 0, 0)
+}
+
+/// A version cell as `(major, minor, patch)`, with missing parts zero. A
+/// number reads as its decimal text, as pandapower's `str` gives it.
+fn version_tuple(value: &Value) -> Option<(u64, u64, u64)> {
+    let text = match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => return None,
+    };
+    let text = text.split(".dev").next().unwrap_or_default();
+    let mut parts = [0; 3];
+    for (k, part) in text.split('.').enumerate() {
+        *parts.get_mut(k)? = part.trim().parse().ok()?;
+    }
+    Some((parts[0], parts[1], parts[2]))
+}
+
 fn bad(message: impl Into<String>) -> powerio_tx::Error {
     powerio_tx::Error::FormatRead {
         format: "pandapower JSON",
@@ -849,6 +1495,58 @@ mod tests {
         }
         json!({"_module": "pandapower.auxiliary", "_class": "pandapowerNet", "_object": object})
             .to_string()
+    }
+
+    /// `text` with the network's `format_version` set to `version`.
+    fn versioned(text: String, version: &str) -> String {
+        with_keys(text, &[("format_version", json!(version))])
+    }
+
+    /// `text` with the network keys `keys` set.
+    fn with_keys(text: String, keys: &[(&str, Value)]) -> String {
+        let mut root: Value = serde_json::from_str(&text).unwrap();
+        for (key, value) in keys {
+            root["_object"][*key] = value.clone();
+        }
+        root.to_string()
+    }
+
+    /// The HV and LV taps of the one transformer in `text`. The flag says
+    /// whether an approximation is reported.
+    fn taps_of(text: &str) -> ((f64, f64), bool) {
+        let module = read(text);
+        let w = &module.value().transformers()[0].windings;
+        (
+            (w[0].tap, w[1].tap),
+            codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+        )
+    }
+
+    /// A Dyn 20/0.4 kV transformer from bus 3 to bus 0 with `overrides`.
+    fn trafo(overrides: Value) -> Value {
+        table(json!([trafo_row(overrides)]))
+    }
+
+    /// Overrides that drop the default no-load data, so a test about
+    /// something else sees no T model note.
+    fn no_load_free(mut overrides: Value) -> Value {
+        overrides["pfe_kw"] = json!(0.0);
+        overrides["i0_percent"] = json!(0.0);
+        overrides
+    }
+
+    fn trafo_row(overrides: Value) -> Value {
+        let mut row = json!({
+            "hv_bus": 3, "lv_bus": 0, "sn_mva": 0.4, "vn_hv_kv": 20.0, "vn_lv_kv": 0.4,
+            "vk_percent": 4.0, "vkr_percent": 1.325, "pfe_kw": 0.95, "i0_percent": 0.2375,
+            "shift_degree": 150.0, "vector_group": "Dyn", "vk0_percent": 4.0,
+            "vkr0_percent": 1.325, "mag0_percent": 100.0, "mag0_rx": 0.0,
+            "si0_hv_partial": 0.9, "parallel": 1, "in_service": true
+        });
+        for (key, value) in overrides.as_object().unwrap() {
+            row[key] = value.clone();
+        }
+        row
     }
 
     fn read(text: &str) -> PioModule<MulticonductorNetwork> {
@@ -1136,6 +1834,20 @@ mod tests {
         assert_eq!(unmapped_connections("{}"), Vec::<&str>::new());
     }
 
+    #[test]
+    fn mapped_transformers_keep_the_three_phase_reading() {
+        // A Dyn or YNyn row is mapped, so it neither keeps the balanced
+        // reading nor counts as a connectivity change.
+        for group in ["Dyn", "ynyn"] {
+            let text = net(vec![("trafo", trafo(json!({"vector_group": group})))]);
+            assert_eq!(unmapped_connections(&text), Vec::<&str>::new());
+            assert!(!unmapped_trafos(&network_object(&text).unwrap(), false));
+        }
+        let yzn = net(vec![("trafo", trafo(json!({"vector_group": "Yzn"})))]);
+        assert_eq!(unmapped_connections(&yzn), vec!["trafo"]);
+        assert!(unmapped_trafos(&network_object(&yzn).unwrap(), false));
+    }
+
     fn one_line() -> Value {
         table(json!([{
             "from_bus": 0, "to_bus": 1, "length_km": 0.1, "r_ohm_per_km": 0.2,
@@ -1215,6 +1927,858 @@ mod tests {
         close(code.r_series[0][0], 0.2e-3);
         assert_eq!((code.r_series[0][1], code.x_series[0][1]), (0.0, 0.0));
         assert_eq!(codes(&module), vec!["READ.DIST.PANDAPOWER_APPROXIMATED"]);
+    }
+
+    #[test]
+    fn dyn_shifts_rotate_the_lv_terminals() {
+        const SWAPPED: [&str; 3] = ["1", "3", "2"];
+        for (shift, hv, order) in [
+            (30.0, PHASES, ["1", "2", "3"]),
+            (150.0, PHASES, ["3", "1", "2"]),
+            (270.0, PHASES, ["2", "3", "1"]),
+            (-210.0, PHASES, ["3", "1", "2"]),
+            // A rounding error off a step still rotates.
+            (150.0 + 1e-12, PHASES, ["3", "1", "2"]),
+            // Swapping two terminals on both windings gives the 330 family.
+            (330.0, SWAPPED, ["1", "3", "2"]),
+            (210.0, SWAPPED, ["2", "1", "3"]),
+            (90.0, SWAPPED, ["3", "2", "1"]),
+            (-30.0, SWAPPED, ["1", "3", "2"]),
+            (330.0 + 1e-12, SWAPPED, ["1", "3", "2"]),
+        ] {
+            let overrides = no_load_free(json!({"shift_degree": shift}));
+            let module = read(&net(vec![("trafo", trafo(overrides))]));
+            let t = &module.value().transformers()[0];
+            assert_eq!(t.windings[0].terminal_map, terminals(&hv), "{shift}");
+            let mut map = terminals(&order);
+            map.push(EARTH.into());
+            assert_eq!(t.windings[1].terminal_map, map, "{shift}");
+            assert!(
+                !codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+                "{shift}"
+            );
+        }
+    }
+
+    #[test]
+    fn dyn_maps_its_windings_and_no_load_data() {
+        let module = read(&net(vec![("trafo", trafo(json!({"vector_group": "dyn"})))]));
+        let t = &module.value().transformers()[0];
+        assert_eq!(t.name, "trafo_0");
+        assert_eq!(t.phases, 3);
+        let (hv, lv) = (&t.windings[0], &t.windings[1]);
+        assert_eq!((hv.bus.as_str(), lv.bus.as_str()), ("3", "0"));
+        assert_eq!(hv.conn, DistWindingConn::Delta);
+        assert_eq!(hv.terminal_map, terminals(&PHASES));
+        assert_eq!(lv.conn, DistWindingConn::Wye);
+        assert_eq!((hv.v_ref, lv.v_ref, hv.s_rating), (20e3, 400.0, 4e5));
+        assert_eq!((hv.r_pct, lv.r_pct), (0.6625, 0.6625));
+        close(t.xsc_pct[0], (16.0_f64 - 1.325 * 1.325).sqrt());
+        close(t.extras["%noloadloss"].as_f64().unwrap(), 0.2375);
+        assert_eq!(t.extras["%imag"], json!(0.0));
+        for key in [
+            "shift_degree",
+            "vector_group",
+            "vk0_percent",
+            "mag0_percent",
+            "si0_hv_partial",
+        ] {
+            assert!(t.extras.contains_key(key), "{key}");
+        }
+        assert!(!t.extras.contains_key("pfe_kw"));
+        // pandapower clamps the magnetizing share at zero when the loss share
+        // exceeds i0.
+        let no_load = |pfe_kw: f64| {
+            let overrides = json!({"vector_group": "dyn", "pfe_kw": pfe_kw, "i0_percent": 0.3});
+            let module = read(&net(vec![("trafo", trafo(overrides))]));
+            let extras = module.value().transformers()[0].extras.clone();
+            (
+                extras["%noloadloss"].as_f64().unwrap(),
+                extras["%imag"].as_f64().unwrap(),
+            )
+        };
+        let (loss, imag) = no_load(4.0);
+        close(loss, 4.0 / (0.4 * 10.0));
+        assert_eq!(imag, 0.0);
+        let (loss, imag) = no_load(-0.4);
+        close(loss, -0.1);
+        close(imag, (0.09_f64 - 0.01).sqrt());
+    }
+
+    #[test]
+    fn transformer_no_load_data_notes_the_t_model_placement() {
+        let t_model = |module: &PioModule<MulticonductorNetwork>| {
+            module.diagnostics().iter().any(|d| {
+                d.code() == "READ.DIST.PANDAPOWER_APPROXIMATED" && d.message().contains("T model")
+            })
+        };
+        assert!(t_model(&read(&net(vec![("trafo", trafo(json!({})))]))));
+        let overrides = json!({"pfe_kw": 0.0, "i0_percent": 0.0});
+        assert!(!t_model(&read(&net(vec![("trafo", trafo(overrides))]))));
+    }
+
+    #[test]
+    fn the_sign_of_vk_carries_to_the_reactance() {
+        let overrides = json!({"vk_percent": -4.0, "vkr_percent": 1.325});
+        let module = read(&net(vec![("trafo", trafo(overrides))]));
+        let xsc = module.value().transformers()[0].xsc_pct[0];
+        assert!(
+            (xsc + (16.0_f64 - 1.325 * 1.325).sqrt()).abs() <= 1e-9,
+            "{xsc}"
+        );
+        let overrides = json!({"vk_percent": 1.0, "vkr_percent": 2.0});
+        let error = parse_multiconductor(
+            Source::from_memory(
+                "case.json",
+                net(vec![("trafo", trafo(overrides))]).into_bytes(),
+            )
+            .unwrap(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("`vkr_percent`"), "{error}");
+    }
+
+    /// A stated vk0 sets both the short-circuit and the magnetizing branch.
+    #[test]
+    fn a_stated_vk0_sets_the_magnetizing_branch() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({"vk0_percent": 3.0, "vkr0_percent": 1.0})),
+        )]));
+        let shunt = &module.value().shunts()[0];
+        close(shunt.g[0][0], 8.793_951_745_914_345 / 3.0);
+        close(shunt.b[0][0], -81.768_858_594_581_91 / 3.0);
+    }
+
+    /// A column with only negative values is stated, as its largest
+    /// magnitude counts.
+    #[test]
+    fn a_negative_zero_sequence_column_counts_as_stated() {
+        let shunt_g = |vkr0: f64| {
+            let module = read(&net(vec![("trafo", trafo(json!({"vkr0_percent": vkr0})))]));
+            assert_eq!(module.value().shunts().len(), 1);
+            module.value().shunts()[0].g[0][0]
+        };
+        let stated = shunt_g(-0.5);
+        close(stated, -28.995_558_350_245_17 / 3.0);
+        assert!((stated - shunt_g(1.325)).abs() > 1e-9);
+    }
+
+    #[test]
+    fn parallel_transformers_scale_the_rating_and_the_correction() {
+        let module = read(&net(vec![("trafo", trafo(json!({"parallel": 2})))]));
+        let network = module.value();
+        assert_eq!(network.transformers()[0].windings[0].s_rating, 8e5);
+        close(
+            network.shunts()[0].g[0][0],
+            2.0 * 1.281_271_289_468_154_6 / 3.0,
+        );
+        close(
+            network.shunts()[0].b[0][0],
+            -2.0 * 46.627_267_161_819_18 / 3.0,
+        );
+    }
+
+    #[test]
+    fn shifts_without_a_rotation_stay_unrotated_with_a_warning() {
+        for (group, shift) in [
+            ("Dyn", 0.0),
+            ("Dyn", 60.0),
+            ("Dyn", 180.0),
+            ("YNyn", 180.0),
+            // Small offsets from a step are no rotation either.
+            ("Dyn", 150.5),
+            ("Dyn", 150.001),
+            ("YNyn", 120.5),
+        ] {
+            let module = read(&net(vec![(
+                "trafo",
+                trafo(json!({"vector_group": group, "shift_degree": shift})),
+            )]));
+            let t = &module.value().transformers()[0];
+            assert_eq!(
+                t.windings[1].terminal_map[..3],
+                terminals(&PHASES),
+                "{group} {shift}"
+            );
+            assert_eq!(
+                t.windings[0].terminal_map[..3],
+                terminals(&PHASES),
+                "{group} {shift}"
+            );
+            assert_eq!(t.extras["shift_degree"], json!(shift));
+            assert!(
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+                "{group} {shift}"
+            );
+        }
+    }
+
+    #[test]
+    fn ynyn_shifts_rotate_with_a_zero_sequence_warning() {
+        for (shift, order, exact) in [
+            (0.0, ["1", "2", "3"], true),
+            (120.0, ["3", "1", "2"], false),
+            (240.0, ["2", "3", "1"], false),
+        ] {
+            let module = read(&net(vec![(
+                "trafo",
+                trafo(no_load_free(
+                    json!({"vector_group": "YNyn", "shift_degree": shift}),
+                )),
+            )]));
+            let t = &module.value().transformers()[0];
+            assert_eq!(t.windings[0].conn, DistWindingConn::Wye);
+            assert_eq!(t.windings[0].terminal_map, terminals(&WYE));
+            assert_eq!(
+                t.windings[1].terminal_map[..3],
+                terminals(&order),
+                "{shift}"
+            );
+            assert_eq!(
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+                !exact,
+                "{shift}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_vector_groups_are_not_mapped() {
+        let module = read(&net(vec![("trafo", trafo(json!({"vector_group": "Yzn"})))]));
+        assert_eq!(module.value().transformers().len(), 0);
+        assert_eq!(module.value().shunts().len(), 0);
+        assert_eq!(
+            codes(&module),
+            vec!["READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED"]
+        );
+    }
+
+    /// Expected values from the formulas of pandapower's `pd2ppc_zero.py`,
+    /// evaluated in Python for the default transformer.
+    #[test]
+    fn the_dyn_zero_sequence_correction_matches_the_t_model() {
+        let module = read(&net(vec![("trafo", trafo(json!({})))]));
+        let shunts = module.value().shunts();
+        assert_eq!(shunts.len(), 1);
+        let shunt = &shunts[0];
+        assert_eq!(
+            (shunt.name.as_str(), shunt.bus.as_str()),
+            ("trafo_0_zero_sequence_lv", "0")
+        );
+        assert_eq!(shunt.terminal_map, terminals(&PHASES));
+        assert_eq!(
+            shunt.extras["pandapower_zero_sequence_correction"],
+            json!("trafo_0")
+        );
+        for (i, j) in [(0, 0), (0, 1), (2, 1)] {
+            close(shunt.g[i][j], 1.281_271_289_468_154_6 / 3.0);
+            close(shunt.b[i][j], -46.627_267_161_819_18 / 3.0);
+        }
+    }
+
+    #[test]
+    fn the_ynyn_zero_sequence_correction_matches_the_t_model() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({"vector_group": "YNyn", "shift_degree": 0.0})),
+        )]));
+        let network = module.value();
+        let t = &network.transformers()[0];
+        let lv = &t.windings[1];
+        assert_eq!(lv.terminal_map[3], "n0");
+        close(lv.r_neutral.unwrap(), 0.000_300_046_681_524_308_6);
+        close(lv.x_neutral.unwrap(), 0.000_374_662_499_999_999_9);
+        assert_eq!(t.extras["pandapower_zero_sequence_neutral"], json!(true));
+        assert!(network.buses()[0].terminals.contains(&"n0".to_string()));
+        assert!(!network.buses()[0].grounded.contains(&"n0".to_string()));
+        let shunts = network.shunts();
+        assert_eq!(shunts.len(), 2);
+        assert_eq!((shunts[0].bus.as_str(), shunts[1].bus.as_str()), ("3", "0"));
+        close(shunts[0].g[1][2], 6.327_265_627_003_232e-5 / 3.0);
+        close(shunts[0].b[1][2], -0.002_302_581_094_410_822_6 / 3.0);
+        close(shunts[1].g[0][0], 1.423_634_766_075_730_5 / 3.0);
+        close(shunts[1].b[0][0], -51.808_074_624_243_524 / 3.0);
+    }
+
+    #[test]
+    fn the_corrections_of_an_out_of_service_trafo_keep_its_status() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({"vector_group": "YNyn", "shift_degree": 0.0, "in_service": false})),
+        )]));
+        let network = module.value();
+        assert_eq!(network.transformers()[0].extras["in_service"], json!(false));
+        let shunts = network.shunts();
+        assert_eq!(shunts.len(), 2);
+        for shunt in shunts {
+            assert_eq!(shunt.extras["in_service"], json!(false), "{}", shunt.name);
+        }
+        let out_of_service = codes(&module)
+            .into_iter()
+            .filter(|code| *code == "READ.DIST.PANDAPOWER_OUT_OF_SERVICE")
+            .count();
+        assert_eq!(out_of_service, 1);
+        // An in-service transformer's corrections carry no status.
+        let module = read(&net(vec![("trafo", trafo(json!({})))]));
+        assert!(!module.value().shunts()[0].extras.contains_key("in_service"));
+    }
+
+    #[test]
+    fn a_ynyn_hv_tap_reflects_the_hv_correction_through_the_tapped_ratio() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({
+                "vector_group": "YNyn", "shift_degree": 0.0, "tap_side": "hv", "tap_neutral": 0,
+                "tap_pos": 2, "tap_step_percent": 2.5, "tap_changer_type": "Ratio"
+            })),
+        )]));
+        let shunts = module.value().shunts();
+        assert_eq!((shunts[0].bus.as_str(), shunts[1].bus.as_str()), ("3", "0"));
+        // An HV tap leaves the LV base and the LV shunt unchanged.
+        let tap2 = 1.05_f64.powi(2);
+        close(shunts[0].g[1][2], 6.327_265_627_003_232e-5 / 3.0 / tap2);
+        close(shunts[0].b[1][2], -0.002_302_581_094_410_822_6 / 3.0 / tap2);
+        close(shunts[1].g[0][0], 1.423_634_766_075_730_5 / 3.0);
+        close(shunts[1].b[0][0], -51.808_074_624_243_524 / 3.0);
+    }
+
+    #[test]
+    fn a_ynyn_winding_neutral_is_not_a_phase() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({"vector_group": "YNyn", "shift_degree": 0.0})),
+        )]));
+        let network = module.value();
+        let roles = network.extras().get("bmopf_terminal_conventions");
+        assert_eq!(
+            roles,
+            Some(&json!({"phase": ["1", "2", "3"], "neutral": ["4", "n0"]}))
+        );
+        assert_eq!(network.buses()[0].phase_indices(roles), vec![0, 1, 2]);
+        // Two neutral candidates on one bus refuse the Kron reduction.
+        let error = powerio_dist::neutral_kron_reduce(
+            network,
+            &powerio_dist::NeutralKronOptions::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("bus `0`") && error.contains("multiple candidate neutral terminals"),
+            "{error}"
+        );
+        // A BMOPF document keeps the roles.
+        let emitted = powerio_dist::emit(
+            &PioModule::new(network.clone()),
+            powerio_dist::DistTargetFormat::BmopfJson,
+            powerio_core::Destination::memory("case").unwrap(),
+        )
+        .unwrap();
+        let powerio_core::EmittedOutput::Memory { artifacts } = emitted.into_output() else {
+            panic!("memory output");
+        };
+        let document: Value = serde_json::from_slice(artifacts[0].bytes()).unwrap();
+        let phase = &document["terminal_conventions"]["phase"];
+        assert!(!phase.as_array().unwrap().contains(&json!("n0")), "{phase}");
+        // A Dyn network keeps the default roles.
+        let module = read(&net(vec![("trafo", trafo(json!({})))]));
+        assert!(
+            !module
+                .value()
+                .extras()
+                .contains_key("bmopf_terminal_conventions")
+        );
+    }
+
+    #[test]
+    fn an_lv_tap_sets_the_zero_sequence_base() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({
+                "tap_side": "lv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                "tap_changer_type": "Ratio"
+            })),
+        )]));
+        let shunt = &module.value().shunts()[0];
+        close(shunt.g[0][0], 1.162_150_829_449_569 / 3.0);
+        close(shunt.b[0][0], -42.292_305_815_708_98 / 3.0);
+    }
+
+    #[test]
+    fn a_ynyn_neutral_impedance_is_referred_to_the_hv_side() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({"vector_group": "YNyn", "shift_degree": 0.0, "xn_ohm": 0.5})),
+        )]));
+        let network = module.value();
+        let lv = &network.transformers()[0].windings[1];
+        close(lv.r_neutral.unwrap(), 0.000_304_021_681_524_308_74);
+        close(lv.x_neutral.unwrap(), 0.000_452_726_682_950_602_84);
+        close(network.shunts()[1].g[0][0], 1.420_689_112_925_420_7 / 3.0);
+        close(network.shunts()[1].b[0][0], -51.754_489_066_457_89 / 3.0);
+    }
+
+    #[test]
+    fn a_zero_vk0_column_takes_vk_as_pandapower_does() {
+        // A column whose largest magnitude is at most 1e-8 counts as zero.
+        for zero in [
+            json!({"vk0_percent": 0.0, "vkr0_percent": 0.0}),
+            json!({"vk0_percent": null}),
+            json!({"vk0_percent": 1e-9, "vkr0_percent": 1e-9}),
+        ] {
+            let module = read(&net(vec![("trafo", trafo(no_load_free(zero)))]));
+            let shunt = &module.value().shunts()[0];
+            close(shunt.g[0][0], 1.281_271_289_468_154_6 / 3.0);
+            close(shunt.b[0][0], -46.627_267_161_819_18 / 3.0);
+            assert!(codes(&module).is_empty(), "{:?}", codes(&module));
+        }
+        // A small stated vkr0 applies as stated. Values from the
+        // pd2ppc_zero.py formulas.
+        let module = read(&net(vec![("trafo", trafo(json!({"vkr0_percent": 0.3})))]));
+        let shunt = &module.value().shunts()[0];
+        close(shunt.g[0][0], -15.727_884_385_480_301 / 3.0);
+        close(shunt.b[0][0], -49.806_507_106_440_506 / 3.0);
+        // A transformer of the group states vk0, so the other keeps its zero.
+        let rows = json!([
+            trafo_row(json!({"vk0_percent": 0.0})),
+            trafo_row(json!({"vk0_percent": 4.0, "lv_bus": 1}))
+        ]);
+        let module = read(&net(vec![("trafo", table(rows))]));
+        assert_eq!(module.value().shunts().len(), 1);
+        assert_eq!(module.value().shunts()[0].bus, "1");
+        assert!(codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"));
+    }
+
+    #[test]
+    fn a_correction_without_a_finite_value_keeps_the_winding_model() {
+        for group in [
+            json!({}),
+            json!({"vector_group": "YNyn", "shift_degree": 0.0}),
+        ] {
+            let mut overrides = group.clone();
+            overrides["vk0_percent"] = json!(1.0);
+            overrides["vkr0_percent"] = json!(2.0);
+            let module = read(&net(vec![("trafo", trafo(overrides))]));
+            let network = module.value();
+            assert_eq!(network.shunts().len(), 0, "{group}");
+            assert_eq!(network.transformers()[0].windings[1].r_neutral, None);
+            assert!(
+                codes(&module)
+                    .iter()
+                    .all(|c| *c == "READ.DIST.PANDAPOWER_APPROXIMATED"),
+                "{group}"
+            );
+            assert!(!codes(&module).is_empty(), "{group}");
+        }
+    }
+
+    #[test]
+    fn a_negligible_correction_is_skipped() {
+        // With no HV share the T model is the winding model's own zero sequence.
+        let module = read(&net(vec![("trafo", trafo(json!({"si0_hv_partial": 0.0})))]));
+        assert_eq!(module.value().shunts().len(), 0);
+        // An almost infinite magnetizing impedance leaves only rounding noise.
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({"vector_group": "YNyn", "shift_degree": 0.0, "mag0_percent": 1e9})),
+        )]));
+        let network = module.value();
+        assert_eq!(network.shunts().len(), 0);
+        let lv = &network.transformers()[0].windings[1];
+        assert_eq!(lv.terminal_map[3], EARTH);
+        assert_eq!(lv.r_neutral, None);
+    }
+
+    #[test]
+    fn a_nonpassive_correction_has_its_own_finding() {
+        const NONPASSIVE: &str = "READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION";
+        let module = read(&net(vec![("trafo", trafo(json!({"xn_ohm": 0.01})))]));
+        assert!(module.value().shunts()[0].g[0][0] < 0.0);
+        assert!(codes(&module).contains(&NONPASSIVE));
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({
+                "vector_group": "YNyn", "shift_degree": 0.0, "vk0_percent": 3.0,
+                "vkr0_percent": 1.0
+            })),
+        )]));
+        let lv = &module.value().transformers()[0].windings[1];
+        assert!(lv.r_neutral.unwrap() < 0.0);
+        let finding = module
+            .diagnostics()
+            .iter()
+            .find(|d| d.code() == NONPASSIVE)
+            .unwrap();
+        assert!(
+            finding.message().contains("open neutral"),
+            "{}",
+            finding.message()
+        );
+        let module = read(&net(vec![("trafo", trafo(json!({})))]));
+        assert!(!codes(&module).contains(&NONPASSIVE));
+    }
+
+    #[test]
+    fn missing_zero_sequence_data_keep_the_winding_model() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(no_load_free(json!({"mag0_percent": null}))),
+        )]));
+        assert_eq!(module.value().shunts().len(), 0);
+        assert_eq!(module.value().transformers().len(), 1);
+        assert_eq!(codes(&module), vec!["READ.DIST.PANDAPOWER_APPROXIMATED"]);
+    }
+
+    #[test]
+    fn ratio_taps_set_the_winding_tap() {
+        let tapped = |side: &str, kind: Value| {
+            let module = read(&net(vec![(
+                "trafo",
+                trafo(no_load_free(json!({
+                    "tap_side": side, "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                    "tap_step_degree": 0.0, "tap_changer_type": kind
+                }))),
+            )]));
+            let w = &module.value().transformers()[0].windings;
+            (
+                (w[0].tap, w[1].tap),
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+            )
+        };
+        assert_eq!(tapped("lv", json!("Ratio")), ((1.0, 1.05), false));
+        assert_eq!(tapped("hv", json!("Symmetrical")), ((1.05, 1.0), false));
+        assert_eq!(tapped("hv", json!(null)), ((1.0, 1.0), false));
+        assert_eq!(tapped("hv", json!("Ideal")), ((1.0, 1.0), true));
+        // pandapower compares the changer type exactly.
+        assert_eq!(tapped("lv", json!("ratio")), ((1.0, 1.0), true));
+        assert_eq!(tapped("hv", json!("RATIO")), ((1.0, 1.0), true));
+        // pandapower applies a tap of no known side nowhere.
+        assert_eq!(tapped("both", json!("Ratio")), ((1.0, 1.0), false));
+        let taps = |overrides: Value| {
+            let module = read(&net(vec![("trafo", trafo(no_load_free(overrides)))]));
+            let w = &module.value().transformers()[0].windings;
+            (
+                (w[0].tap, w[1].tap),
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+            )
+        };
+        let ratio = json!({
+            "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+            "tap_changer_type": "Ratio"
+        });
+        let with = |key: &str, value: Value| {
+            let mut row = ratio.clone();
+            row[key] = value;
+            row
+        };
+        // A pandapower 2 file has no changer type column and applies ratio
+        // taps. From format 3.0 a changer without a type applies none.
+        let mut legacy = ratio.clone();
+        legacy.as_object_mut().unwrap().remove("tap_changer_type");
+        let legacy_net = net(vec![("trafo", trafo(no_load_free(legacy.clone())))]);
+        for (version, expected) in [("2.14.0", 1.05), ("3.0.0", 1.0), ("3.1.0", 1.0)] {
+            assert_eq!(
+                taps_of(&versioned(legacy_net.clone(), version)),
+                ((expected, 1.0), false),
+                "{version}"
+            );
+        }
+        // A file without a version applies no tap without a changer type.
+        assert_eq!(taps(legacy.clone()), ((1.0, 1.0), false));
+        // pandapower takes the smaller of the two keys. A version that is
+        // not a string wins.
+        for keys in [
+            [
+                ("format_version", json!("3.1.0")),
+                ("version", json!("2.14.0")),
+            ],
+            [("format_version", json!("3.0.0")), ("version", json!(2))],
+            [("format_version", json!(2)), ("version", json!("3.5.4"))],
+        ] {
+            assert_eq!(
+                taps_of(&with_keys(legacy_net.clone(), &keys)),
+                ((1.05, 1.0), false),
+                "{keys:?}"
+            );
+        }
+        assert_eq!(
+            taps_of(&with_keys(
+                legacy_net.clone(),
+                &[("version", json!("2.14.0"))]
+            )),
+            ((1.05, 1.0), false)
+        );
+        assert_eq!(taps(with("tap_side", json!(null))), ((1.0, 1.0), false));
+        // A missing cell makes pandapower's step count NaN, so no tap applies.
+        assert_eq!(taps(with("tap_neutral", json!(null))), ((1.0, 1.0), false));
+        assert_eq!(taps(with("tap_pos", json!(null))), ((1.0, 1.0), false));
+        assert_eq!(
+            taps(with("tap_step_percent", json!(null))),
+            ((1.0, 1.0), false)
+        );
+        // The step count runs from the neutral position.
+        let mut offset = ratio.clone();
+        offset["tap_neutral"] = json!(2);
+        offset["tap_pos"] = json!(4);
+        assert_eq!(taps(offset), ((1.05, 1.0), false));
+        assert_eq!(
+            taps(with("tap_step_degree", json!(1.0))),
+            ((1.0, 1.0), true)
+        );
+        // A second changer multiplies on its own side.
+        let mut both = ratio.clone();
+        for (key, value) in [
+            ("tap2_side", json!("lv")),
+            ("tap2_neutral", json!(1)),
+            ("tap2_pos", json!(0)),
+            ("tap2_step_percent", json!(1.0)),
+            ("tap2_changer_type", json!("Ratio")),
+        ] {
+            both[key] = value;
+        }
+        assert_eq!(taps(both.clone()), ((1.05, 0.99), false));
+        both["tap2_side"] = json!("hv");
+        let ((hv, lv), _) = taps(both);
+        close(hv, 1.05 * 0.99);
+        assert_eq!(lv, 1.0);
+    }
+
+    /// Characteristic 0 at steps 0 to 2 with unit ratio and `vk`, `vkr`.
+    fn trafo_characteristic(vk: f64, vkr: f64) -> Value {
+        let row = |step: u8| {
+            json!({
+                "id_characteristic": 0, "step": step, "voltage_ratio": 1.0, "angle_deg": 0.0,
+                "vk_percent": vk, "vkr_percent": vkr
+            })
+        };
+        table(json!([row(0), row(1), row(2)]))
+    }
+
+    #[test]
+    fn a_dependency_table_is_reported_at_any_tap_position() {
+        let table = |overrides: Value| {
+            let mut row = json!({
+                "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                "tap_changer_type": "Ratio", "tap_dependency_table": true,
+                "id_characteristic_table": 0
+            });
+            for (key, value) in overrides.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            net(vec![
+                ("trafo", trafo(no_load_free(row))),
+                (
+                    "trafo_characteristic_table",
+                    trafo_characteristic(4.0, 1.325),
+                ),
+            ])
+        };
+        assert_eq!(taps_of(&table(json!({}))), ((1.0, 1.0), true));
+        // pandapower applies the table row at the neutral position too.
+        assert_eq!(taps_of(&table(json!({"tap_pos": 0}))), ((1.0, 1.0), true));
+        assert_eq!(
+            taps_of(&table(json!({"tap_neutral": null}))),
+            ((1.0, 1.0), true)
+        );
+        // pandapower reads `tap_dependency_table` for the second changer too.
+        let module = read(&table(json!({
+            "tap2_dependency_table": false, "tap2_changer_type": "Ratio"
+        })));
+        assert!(
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.message().contains("`tap2` ratio")),
+            "{:?}",
+            module.diagnostics()
+        );
+    }
+
+    /// A Dyn transformer with row vk 6 and vkr 1 whose characteristic table
+    /// states vk 12 and vkr 2, with `overrides` on the row.
+    fn table_trafo(overrides: Value) -> String {
+        let mut row = json!({
+            "vk_percent": 6.0, "vkr_percent": 1.0, "vk0_percent": 0.0, "vkr0_percent": 0.0,
+            "tap_side": "hv", "tap_neutral": 0, "tap_pos": 0, "tap_step_percent": 2.5,
+            "tap_changer_type": "Ratio", "tap_dependency_table": true,
+            "id_characteristic_table": 0
+        });
+        for (key, value) in overrides.as_object().unwrap() {
+            row[key] = value.clone();
+        }
+        let row = row.as_object().unwrap();
+        let row: Map<String, Value> = row
+            .iter()
+            .filter(|(_, value)| !value.is_null())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        net(vec![
+            ("trafo", trafo(no_load_free(Value::Object(row)))),
+            (
+                "trafo_characteristic_table",
+                trafo_characteristic(12.0, 2.0),
+            ),
+        ])
+    }
+
+    #[test]
+    fn a_dependency_table_sets_the_short_circuit_impedance() {
+        let ratio_note = |module: &PioModule<MulticonductorNetwork>| {
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.message().contains("ratio and angle"))
+        };
+        // Without a changer type pandapower applies the table impedance but
+        // no table ratio.
+        for (overrides, with_ratio_note) in [
+            (json!({}), true),
+            (json!({"tap_changer_type": null}), false),
+        ] {
+            let module = read(&table_trafo(overrides));
+            let t = &module.value().transformers()[0];
+            assert_eq!((t.windings[0].r_pct, t.windings[1].r_pct), (1.0, 1.0));
+            assert_eq!(t.xsc_pct, vec![short_circuit_x(12.0, 2.0)]);
+            assert_eq!(t.extras["vk_percent"], json!(6.0));
+            assert_eq!(t.extras["pandapower_table_vk_percent"], json!(12.0));
+            assert_eq!(t.extras["pandapower_table_vkr_percent"], json!(2.0));
+            assert_eq!(ratio_note(&module), with_ratio_note);
+            assert!(
+                module
+                    .diagnostics()
+                    .iter()
+                    .all(|d| d.code() != "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED"),
+                "{:?}",
+                module.diagnostics()
+            );
+        }
+        // pandapower takes 1 for both without a row at `tap_pos`.
+        let module = read(&table_trafo(json!({"tap_pos": 5})));
+        let t = &module.value().transformers()[0];
+        assert_eq!((t.windings[0].r_pct, t.xsc_pct[0]), (0.5, 0.0));
+        assert!(
+            module.diagnostics().iter().any(|d| {
+                d.code() == "READ.DIST.PANDAPOWER_APPROXIMATED"
+                    && d.message().contains("characteristic 0 at step 5")
+            }),
+            "{:?}",
+            module.diagnostics()
+        );
+        // pandapower refuses a table dependency without a characteristic.
+        let text = table_trafo(json!({"id_characteristic_table": null}));
+        let error =
+            parse_multiconductor(Source::from_memory("case.json", text.into_bytes()).unwrap())
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("`id_characteristic_table`"),
+            "{error}"
+        );
+        // Out of service it keeps the row's impedance with a note.
+        let module = read(&table_trafo(json!({
+            "id_characteristic_table": null, "in_service": false
+        })));
+        let t = &module.value().transformers()[0];
+        assert_eq!(t.xsc_pct, vec![short_circuit_x(6.0, 1.0)]);
+        assert!(codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"));
+    }
+
+    /// The zero-sequence correction takes the winding impedance from the
+    /// table but the vk0 fallback from the row, as pd2ppc_zero.py does.
+    #[test]
+    fn a_dependency_table_leaves_the_zero_sequence_on_the_row() {
+        let module = read(&table_trafo(json!({})));
+        let shunt = &module.value().shunts()[0];
+        let zb = 0.4_f64.powi(2) / 0.4;
+        let short = |vk: f64, vkr: f64| Complex64::new(vkr, short_circuit_x(vk, vkr)) / 100.0 * zb;
+        let z0k = short(6.0, 1.0);
+        let z3 = Complex64::new(0.0, 6.0 / 100.0 * zb);
+        let (z1, z2) = (0.9 * z0k, 0.1 * z0k);
+        let zt = z1 * z2 + z2 * z3 + z1 * z3;
+        let y = (z1 + z3) / zt - 1.0 / short(12.0, 2.0);
+        close(shunt.g[0][0], y.re / 3.0);
+        close(shunt.b[0][0], y.im / 3.0);
+    }
+
+    #[test]
+    fn ideal_and_stepless_changers_follow_pandapower() {
+        let taps = |overrides: Value| {
+            let module = read(&net(vec![("trafo", trafo(no_load_free(overrides)))]));
+            let w = &module.value().transformers()[0].windings;
+            (
+                (w[0].tap, w[1].tap),
+                codes(&module).contains(&"READ.DIST.PANDAPOWER_APPROXIMATED"),
+            )
+        };
+        let with = |key: &str, value: Value| {
+            let mut row = json!({
+                "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2, "tap_step_percent": 2.5,
+                "tap_changer_type": "Ratio"
+            });
+            row[key] = value;
+            row
+        };
+        // An ideal changer with a degree step shifts the angle in pandapower.
+        let ideal = |overrides: Value| {
+            let mut row = json!({
+                "tap_changer_type": "Ideal", "tap_side": "hv", "tap_neutral": 0, "tap_pos": 2,
+                "tap_step_percent": 0.0, "tap_step_degree": 5.0
+            });
+            for (key, value) in overrides.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            row
+        };
+        assert_eq!(taps(ideal(json!({}))), ((1.0, 1.0), true));
+        assert_eq!(
+            taps(ideal(json!({"tap_step_percent": null}))),
+            ((1.0, 1.0), true)
+        );
+        let mut untyped = ideal(json!({}));
+        untyped.as_object_mut().unwrap().remove("tap_changer_type");
+        let untyped_net = net(vec![("trafo", trafo(no_load_free(untyped.clone())))]);
+        assert_eq!(
+            taps_of(&versioned(untyped_net.clone(), "2.14.0")),
+            ((1.0, 1.0), true)
+        );
+        // pandapower 3 applies neither tap nor shift without a changer type.
+        assert_eq!(
+            taps_of(&versioned(untyped_net, "3.1.0")),
+            ((1.0, 1.0), false)
+        );
+        // So does a file without a version.
+        assert_eq!(taps(untyped), ((1.0, 1.0), false));
+        // At its neutral position an ideal changer changes nothing.
+        assert_eq!(
+            taps(ideal(json!({"tap_pos": 0, "tap_step_degree": 30.0}))),
+            ((1.0, 1.0), false)
+        );
+        assert_eq!(
+            taps(ideal(json!({"tap_step_degree": 0.0}))),
+            ((1.0, 1.0), false)
+        );
+        // A ratio changer without a percent step changes nothing.
+        assert_eq!(
+            taps(ideal(json!({"tap_changer_type": "Ratio"}))),
+            ((1.0, 1.0), false)
+        );
+        assert_eq!(
+            taps(with("tap_step_percent", json!(0.0))),
+            ((1.0, 1.0), false)
+        );
+        let row = ideal(json!({
+            "tap_changer_type": "Ratio", "tap_step_degree": 0.0, "tap_dependency_table": true,
+            "id_characteristic_table": 0, "vk_percent": 4.0, "vkr_percent": 1.325
+        }));
+        assert_eq!(
+            taps_of(&net(vec![
+                ("trafo", trafo(no_load_free(row))),
+                (
+                    "trafo_characteristic_table",
+                    trafo_characteristic(4.0, 1.325)
+                ),
+            ])),
+            ((1.0, 1.0), true)
+        );
     }
 
     #[test]
@@ -1398,11 +2962,6 @@ mod tests {
     #[test]
     fn tables_without_a_mapping_are_reported_unsupported() {
         let module = read(&net(vec![
-            ("trafo", table(json!([{"hv_bus": 3, "lv_bus": 0}]))),
-            (
-                "trafo_characteristic_table",
-                table(json!([{"id_characteristic": 0}])),
-            ),
             ("shunt", table(json!([{"bus": 0}]))),
             (
                 "shunt_characteristic_table",
@@ -1427,11 +2986,6 @@ mod tests {
             format!("`shunt` {ignored}"),
             format!("`shunt_characteristic_table` {ignored}"),
             format!("`switch` {ignored}. None of them changes the connectivity"),
-            format!(
-                "`trafo` {ignored}. The buses it joins in pandapower are not joined here, so \
-                 the connectivity differs"
-            ),
-            format!("`trafo_characteristic_table` {ignored}"),
         ];
         expected.sort_unstable();
         assert_eq!(messages, expected);
@@ -1453,6 +3007,7 @@ mod tests {
                 .contains("`vn_kv` is not a positive number"),
             "{error}"
         );
+        assert!(parse(net(vec![("trafo", trafo(json!({"sn_mva": 0.0})))])).is_err());
     }
 
     #[test]
@@ -1464,6 +3019,7 @@ mod tests {
         });
         for (name, row) in [
             ("line", line),
+            ("trafo", trafo_row(json!({}))),
             (
                 "ext_grid",
                 json!({"bus": 3, "vm_pu": 1.0, "va_degree": 0.0}),
@@ -1563,6 +3119,7 @@ mod tests {
         for parallel in [json!(0), json!(-2), json!(null)] {
             refused("line", line("parallel", parallel), "parallel");
         }
+        refused("trafo", trafo_row(json!({"parallel": 0})), "parallel");
         refused(
             "load",
             json!({"bus": 0, "p_mw": 0.01, "scaling": null}),
@@ -1583,6 +3140,23 @@ mod tests {
     }
 
     const UNSUPPORTED: &str = "READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED";
+
+    #[test]
+    fn out_of_service_trafo_with_vkr_above_vk_is_skipped() {
+        let module = read(&net(vec![(
+            "trafo",
+            trafo(json!({"vkr_percent": 5.0, "in_service": false})),
+        )]));
+        assert_eq!(module.value().transformers().len(), 0);
+        assert_eq!(module.value().shunts().len(), 0);
+        assert!(codes(&module).contains(&UNSUPPORTED));
+        assert!(
+            module
+                .diagnostics()
+                .iter()
+                .all(|d| !d.message().contains("read error"))
+        );
+    }
 
     #[test]
     fn out_of_service_line_with_null_parallel_is_skipped() {
