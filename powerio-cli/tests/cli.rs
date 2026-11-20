@@ -996,11 +996,10 @@ fn pandapower_frame(columns: &[&str], data: &serde_json::Value) -> serde_json::V
 
 #[test]
 fn batch_reads_three_phase_pandapower_multiconductor() {
-    // The balanced reader refuses the fixture (its empty `res_shunt_3ph`),
-    // so it reads multiconductor. Its transformer and closed bus-bus switch
-    // have no three-phase mapping yet, which would leave the LV buses
-    // without their source, so batch skips it. A feeder whose connectivity
-    // the reading maps exports, after the Kron reduction batch reports.
+    // Every row of the fixture is mapped, so it reads multiconductor. The
+    // balanced lowering refuses to merge its rated closed switch, so batch
+    // skips it. A feeder without such a switch exports, after the Kron
+    // reduction batch reports.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let case = repo_file("tests/data/dist/pandapower/tiny_3ph.json");
@@ -1042,11 +1041,19 @@ fn batch_reads_three_phase_pandapower_multiconductor() {
     assert!(out_dir.join("case9_bprime.mtx").is_file(), "{stderr}");
     assert!(
         !out_dir.join("tiny_3ph_bprime.mtx").exists(),
-        "an islanded network was exported:\n{stderr}"
+        "the fixture with a rated switch was exported:\n{stderr}"
     );
     assert!(
-        stderr.contains("tiny_3ph.json") && stderr.contains("trafo, switch rows"),
+        stderr.contains("tiny_3ph.json") && stderr.contains("ampacity"),
         "no skip warning:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("would not connect"),
+        "the mapped switch was taken for a connectivity change:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("three-phase (runpp_3ph) network"),
+        "the balanced reader read the file:\n{stderr}"
     );
     assert!(out_dir.join("feeder_3ph_bprime.mtx").is_file(), "{stderr}");
     assert!(
@@ -1060,6 +1067,24 @@ fn batch_reads_three_phase_pandapower_multiconductor() {
         meta["matrices"][0]["sddm"],
         serde_json::json!(true),
         "{meta}"
+    );
+
+    let out = run(&[
+        "batch",
+        "-i",
+        case.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("lower") && stderr.contains("balanced") && stderr.contains("Kron"),
+        "expected the lowering diagnostic:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("three-phase (runpp_3ph) network"),
+        "the balanced reader read the file:\n{stderr}"
     );
 }
 

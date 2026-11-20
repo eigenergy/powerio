@@ -47,6 +47,8 @@ pub mod codes {
             "a pandapower element row has no three-phase mapping and remains only in source";
         READ_PANDAPOWER_APPROXIMATED = "READ.DIST.PANDAPOWER_APPROXIMATED", Warning,
             "a mapped pandapower element differs from the runpp_3ph model";
+        READ_PANDAPOWER_NONPASSIVE_CORRECTION = "READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION", Warning,
+            "a transformer zero-sequence correction has a negative real part";
         READ_PANDAPOWER_OUT_OF_SERVICE = "READ.DIST.PANDAPOWER_OUT_OF_SERVICE", Warning,
             "an out-of-service pandapower element is kept with its status in extras";
         READ_PANDAPOWER_RETAINED_SOURCE_ONLY = "READ.DIST.PANDAPOWER_RETAINED_SOURCE_ONLY", Remark,
