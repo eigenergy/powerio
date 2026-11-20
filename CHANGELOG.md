@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The three-phase pandapower reader maps `trafo` rows of vector group `Dyn`
+  or `YNyn` (#846). A correction in zero-sequence-only shunts makes their zero
+  sequence match the T model of pandapower. A `YNyn` LV winding whose
+  correction has a series part gets a neutral terminal of its own.
+  `READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION` reports a correction with a
+  negative real part. Such rows no longer keep the balanced reading and no
+  longer count as a connectivity change. A `trafo` row of another vector group
+  still does both. Every transformer keeps its nominal ratio. A stated tap
+  changer is reported with `READ.DIST.PANDAPOWER_APPROXIMATED`.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
