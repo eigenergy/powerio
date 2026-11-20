@@ -158,13 +158,14 @@ fn a_missing_input_exits_with_the_io_status_and_json_records() {
         .iter()
         .filter(|d| d["severity"] == "note")
         .collect();
+    // The reason is the platform's own text for a missing file.
+    let reason = std::fs::File::open("does-not-exist.m")
+        .unwrap_err()
+        .to_string();
     assert!(
-        notes.iter().any(|note| {
-            note["message"]
-                .as_str()
-                .unwrap()
-                .contains("No such file or directory")
-        }),
+        notes
+            .iter()
+            .any(|note| note["message"].as_str().unwrap().contains(&reason)),
         "{diagnostics:?}"
     );
     for note in &notes {
@@ -1297,16 +1298,17 @@ fn an_unreadable_include_is_a_warning_not_a_containment_refusal() {
     ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     #[cfg(unix)]
-    if !nix_running_as_root() {
-        assert!(
-            out.status.success(),
-            "an unreadable include is not an escape attempt:\n{stderr}"
-        );
-        assert!(
-            !stderr.contains("READ.DSS.INCLUDE_REFUSED"),
-            "stderr:\n{stderr}"
-        );
+    if nix_running_as_root() {
+        return;
     }
+    assert!(
+        out.status.success(),
+        "an unreadable include is not an escape attempt:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("READ.DSS.INCLUDE_REFUSED"),
+        "stderr:\n{stderr}"
+    );
 }
 
 /// Root reads a mode 000 file, so the permission case cannot be staged there.

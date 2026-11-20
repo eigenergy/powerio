@@ -361,6 +361,29 @@ fn switch_kron_uses_the_original_shared_linecode_and_keeps_limits() {
 }
 
 #[test]
+fn zero_pmd_switch_matrices_keep_an_ideal_switch_ideal_in_dss() {
+    // A PMD parse of an ideal switch carries six zero matrices. OpenDSS
+    // cannot invert a Line with r = x = 0 (error 183).
+    let zero = json!([[0, 0, 0], [0, 0, 0], [0, 0, 0]]);
+    let doc = json!({"data_model":"ENGINEERING","settings":{"vbases_default":{"a":0.23}},"bus":{"a":{"terminals":[1,2,3],"grounded":[]},"b":{"terminals":[1,2,3],"grounded":[]}},"switch":{"s":{"f_bus":"a","t_bus":"b","f_connections":[1,2,3],"t_connections":[1,2,3],"state":"CLOSED","status":"ENABLED","cm_ub":[100.0,100.0,100.0],"rs":zero,"xs":zero,"g_fr":zero,"g_to":zero,"b_fr":zero,"b_to":zero,"length":0.001}}});
+    let net = helpers::parse_str(&doc.to_string(), "pmd-json").unwrap();
+    let dss = helpers::emit_value(&net, DistTargetFormat::Dss);
+    assert!(
+        dss.warnings
+            .iter()
+            .any(|w| w.contains("IDEAL_SWITCH_EQUIVALENT")),
+        "{:?}",
+        dss.warnings
+    );
+    let line = dss
+        .text
+        .lines()
+        .find(|line| line.starts_with("New Line.s "))
+        .unwrap();
+    assert!(line.contains("r1=1 "), "{line}");
+}
+
+#[test]
 fn identity_metadata_keeps_an_ideal_switch_ideal_in_other_formats() {
     let input = json!({"ConnectivityNode":{"a":{"Ravens.cimObjectType":"ConnectivityNode"},"b":{"Ravens.cimObjectType":"ConnectivityNode"}},"Switch":{"s":{"Ravens.cimObjectType":"Switch","Switch.open":false,"ConductingEquipment.Terminals":[{"Ravens.cimObjectType":"Terminal","Terminal.ConnectivityNode":"ConnectivityNode::'a'","Terminal.phases":"PhaseCode.ABC"},{"Ravens.cimObjectType":"Terminal","Terminal.ConnectivityNode":"ConnectivityNode::'b'","Terminal.phases":"PhaseCode.ABC"}]}}});
     let net = helpers::parse_str(&input.to_string(), "ravens-json").unwrap();
