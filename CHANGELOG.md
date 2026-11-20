@@ -2,25 +2,15 @@
 
 ## Unreleased
 
-- Read three-phase pandapower networks, those with `asymmetric_load`,
-  `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
-  under the `pandapower-json` token (#846). A three-phase network with rows
-  in a table only the balanced reader maps (`trafo`, `shunt`, `gen`,
-  `storage`, `dcline`) still reads balanced, as in 0.12.0, when that reader
-  accepts it. The balanced reader warns that it drops the per-phase detail.
-  `powerio batch` skips a three-phase network read without a transformer or
-  switch that joins or splits its buses, and `corpus ingest` reads three-phase
-  networks by the same route. Writing such a network to pandapower JSON
-  returns the retained source bytes of the unchanged module. Any other
-  multiconductor network fails with `EMIT.DIST.PANDAPOWER_UNSUPPORTED`. The reader reports elements it does not
-  map through the `READ.DIST.PANDAPOWER_*` codes. A duplicate index in any
-  mapped table is refused. The 0.12.1 IR schema adds `pandapower-json` to the
-  distribution source formats. Transformer tap changers and the characteristic
-  table follow the pandapower model. This step maps buses, lines, external
-  grids, loads, static generators and transformers with their tap changers.
-  Shunts and switches are reported as unsupported until their steps land, and
-  a report names the connectivity a dropped transformer or switch changes. An
-  element on an out-of-service bus is kept with `in_service` false.
+- The three-phase pandapower reader maps `trafo` rows of vector group `Dyn`
+  or `YNyn` (#846). A correction in zero-sequence-only shunts makes their zero
+  sequence match the T model of pandapower. A `YNyn` LV winding whose
+  correction has a series part gets a neutral terminal of its own.
+  `READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION` reports a correction with a
+  negative real part. Such rows no longer keep the balanced reading and no
+  longer count as a connectivity change. A `trafo` row of another vector group
+  still does both. Every transformer keeps its nominal ratio. A stated tap
+  changer is reported with `READ.DIST.PANDAPOWER_APPROXIMATED`.
 
 ## 0.12.4
 
