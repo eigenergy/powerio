@@ -1501,6 +1501,9 @@ fn branch_frames(
         // pandapower 3.x only applies the tap when tap_changer_type is "Ratio";
         // without the column every written tap silently reads back as 1.0.
         "tap_changer_type",
+        // pandapower 3.0 warns, and may later fail, when the column is
+        // missing. No written transformer takes its tap from a table.
+        "tap_dependency_table",
         "parallel",
         "df",
         "in_service",
@@ -1583,6 +1586,7 @@ fn branch_frames(
                 jnum(0.0),
                 jnum(tap_delta.signum()),
                 Value::String("Ratio".into()),
+                Value::Bool(false),
                 Value::from(1_u64),
                 jnum(1.0),
                 Value::Bool(br.in_service),
@@ -2012,7 +2016,7 @@ fn frame(
 fn dtype_for(column: &str) -> &'static str {
     match column {
         "bus" | "from_bus" | "to_bus" | "hv_bus" | "lv_bus" | "parallel" | "element" => "uint32",
-        "in_service" | "slack" | "controllable" => "bool",
+        "in_service" | "slack" | "controllable" | "tap_dependency_table" => "bool",
         "name" | "type" | "std_type" | "geo" | "et" | "tap_side" | "tap_changer_type" => "object",
         _ => "float64",
     }
@@ -4073,6 +4077,8 @@ mod tests {
         let conv = write_pandapower_json(&net);
         let trafo = written_frame(&conv.text, "trafo");
         assert_eq!(col(&trafo, "tap_changer_type"), vec![json!("Ratio")]);
+        // pandapower 3.0 warns when the column is missing.
+        assert_eq!(col(&trafo, "tap_dependency_table"), vec![json!(false)]);
         let rt = parse_pandapower_json(&conv.text).unwrap();
         assert!((rt.network.branches()[0].tap - 1.05).abs() < 1e-12);
     }

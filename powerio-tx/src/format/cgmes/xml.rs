@@ -77,9 +77,9 @@ struct NamePool {
     names: HashSet<Rc<str>>,
     bytes: usize,
     // A document usually repeats one CIM URI on every class and property.
-    // Cache its raw bytes only after classification and namespace recording.
+    // Cache the URI only after classification and namespace recording.
     // At most 512 bytes; longer URIs keep the ordinary acceptance path.
-    cim_namespace: Option<Box<[u8]>>,
+    cim_namespace: Option<Box<str>>,
 }
 
 impl NamePool {
@@ -162,25 +162,24 @@ fn normalize_id(raw: &str) -> String {
 /// `<last-uri-segment>:` for anything else (vendor extensions).
 fn prefixed_name(
     resolve: &ResolveResult,
-    local: &[u8],
+    local: &str,
     cim_namespaces: &mut BTreeSet<String>,
     names: &mut NamePool,
 ) -> CimName {
-    let local = String::from_utf8_lossy(local);
     match resolve {
         ResolveResult::Bound(ns) => {
-            if names.cim_namespace.as_deref() == Some(ns.as_ref()) {
-                return names.intern(&local);
+            let uri: &str = ns.as_ref();
+            if names.cim_namespace.as_deref() == Some(uri) {
+                return names.intern(local);
             }
-            let uri = String::from_utf8_lossy(ns.as_ref());
             if uri.contains("CIM-schema-cim") || uri.contains("CIM100#") {
-                if !cim_namespaces.contains(uri.as_ref()) {
-                    cim_namespaces.insert(uri.into_owned());
+                if !cim_namespaces.contains(uri) {
+                    cim_namespaces.insert(uri.to_owned());
                 }
-                if ns.as_ref().len() <= 512 {
-                    names.cim_namespace = Some(ns.as_ref().into());
+                if uri.len() <= 512 {
+                    names.cim_namespace = Some(uri.into());
                 }
-                names.intern(&local)
+                names.intern(local)
             } else if uri == MD_NS {
                 names.intern(&format!("md:{local}"))
             } else if uri.contains("entsoe.eu") {
@@ -198,7 +197,7 @@ fn prefixed_name(
                 names.intern(&format!("{tag}:{local}"))
             }
         }
-        _ => names.intern(&local),
+        _ => names.intern(local),
     }
 }
 
@@ -315,12 +314,12 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
             }
             (_, Event::Text(t)) => {
                 if !current_prop_nested && current_prop.as_deref().is_some_and(|p| !p.is_empty()) {
-                    prop_text.push_str(&t.xml10_content().map_err(xml_err)?);
+                    prop_text.push_str(&t.xml10_content());
                 }
             }
             (_, Event::CData(t)) => {
                 if !current_prop_nested && current_prop.as_deref().is_some_and(|p| !p.is_empty()) {
-                    prop_text.push_str(&t.decode().map_err(xml_err)?);
+                    prop_text.push_str(&t);
                 }
             }
             // `&amp;`-style references arrive as their own events.
@@ -407,10 +406,10 @@ fn rdf_identity_attr<R>(
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
         let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
-        if is_rdf_attribute(&namespace, local.as_ref(), b"about")
-            || is_rdf_attribute(&namespace, local.as_ref(), b"ID")
+        if is_rdf_attribute(&namespace, local.as_ref(), "about")
+            || is_rdf_attribute(&namespace, local.as_ref(), "ID")
         {
-            return Ok(Some(normalize_id(&String::from_utf8_lossy(&attr.value))));
+            return Ok(Some(normalize_id(&attr.value)));
         }
     }
     Ok(None)
@@ -426,11 +425,11 @@ fn read_object<R>(
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
         let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
-        if is_rdf_attribute(&namespace, local.as_ref(), b"ID") {
+        if is_rdf_attribute(&namespace, local.as_ref(), "ID") {
             definition = true;
-            id = normalize_id(&String::from_utf8_lossy(&attr.value));
-        } else if is_rdf_attribute(&namespace, local.as_ref(), b"about") {
-            id = normalize_id(&String::from_utf8_lossy(&attr.value));
+            id = normalize_id(&attr.value);
+        } else if is_rdf_attribute(&namespace, local.as_ref(), "about") {
+            id = normalize_id(&attr.value);
         }
     }
     Ok(CimObject {
@@ -444,8 +443,8 @@ fn read_object<R>(
 /// Numeric character references resolve directly; the five XML predefined
 /// entities by name. Anything else (a DTD-defined entity, absent from CGMES
 /// practice) contributes nothing.
-fn is_rdf_attribute(resolve: &ResolveResult, local: &[u8], expected_local: &[u8]) -> bool {
-    matches!(resolve, ResolveResult::Bound(namespace) if namespace.as_ref() == RDF_NS.as_bytes())
+fn is_rdf_attribute(resolve: &ResolveResult, local: &str, expected_local: &str) -> bool {
+    matches!(resolve, ResolveResult::Bound(namespace) if namespace.as_ref() == RDF_NS)
         && local == expected_local
 }
 
@@ -456,8 +455,8 @@ fn resource_attr<R>(
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
         let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
-        if is_rdf_attribute(&namespace, local.as_ref(), b"resource") {
-            return Ok(Some(normalize_id(&String::from_utf8_lossy(&attr.value))));
+        if is_rdf_attribute(&namespace, local.as_ref(), "resource") {
+            return Ok(Some(normalize_id(&attr.value)));
         }
     }
     Ok(None)
@@ -551,19 +550,19 @@ mod tests {
     fn long_cim_namespace_is_recorded_without_growing_the_cache() {
         let mut names = NamePool::default();
         let mut namespaces = BTreeSet::new();
-        let short = b"http://iec.ch/TC57/CIM100#";
+        let short = "http://iec.ch/TC57/CIM100#";
         let long = format!("https://example.test/{}/CIM100#", "x".repeat(513));
-        for uri in [short.as_slice(), long.as_bytes(), short.as_slice()] {
+        for uri in [short, long.as_str(), short] {
             assert_eq!(
                 prefixed_name(
                     &ResolveResult::Bound(quick_xml::name::Namespace(uri)),
-                    b"BaseVoltage",
+                    "BaseVoltage",
                     &mut namespaces,
                     &mut names,
                 ),
                 "BaseVoltage"
             );
-            assert_eq!(names.cim_namespace.as_deref(), Some(short.as_slice()));
+            assert_eq!(names.cim_namespace.as_deref(), Some(short));
         }
         assert!(namespaces.contains(long.as_str()));
         assert_eq!(namespaces.len(), 2);

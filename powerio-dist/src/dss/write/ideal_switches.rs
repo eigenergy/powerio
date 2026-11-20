@@ -1,6 +1,7 @@
 //! Closed contacts without OpenDSS's default finite switch impedance.
 use super::{C, DssWriter, num};
 use crate::DistSwitch;
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
@@ -10,18 +11,22 @@ impl DssWriter {
         sw: &DistSwitch,
         used: &mut BTreeSet<String>,
     ) -> bool {
-        // Retained impedance declarations (including PMD matrices) follow
-        // the existing source-aware path. Open contacts need no cancellation.
+        // Retained impedance declarations (including nonzero PMD matrices)
+        // follow the existing source-aware path. All zero PMD matrices
+        // declare an ideal contact. Its length then has no effect.
+        // Open contacts need no cancellation.
         if sw.open
-            || sw.extras.keys().any(|key| {
-                !matches!(
-                    key.as_str(),
-                    "ravens_mrid"
-                        | "cim_mrid"
-                        | "ravens_switch_class"
-                        | "cim_class"
-                        | "ravens_normal_open"
-                )
+            || sw.extras.iter().any(|(key, value)| match key.as_str() {
+                "ravens_mrid"
+                | "cim_mrid"
+                | "ravens_switch_class"
+                | "cim_class"
+                | "ravens_normal_open"
+                | "pmd_length" => false,
+                "pmd_rs" | "pmd_xs" | "pmd_g_fr" | "pmd_g_to" | "pmd_b_fr" | "pmd_b_to" => {
+                    !all_zero(value)
+                }
+                _ => true,
             })
             || sw.terminal_map_from.is_empty()
             || sw.terminal_map_from.len() != sw.terminal_map_to.len()
@@ -110,4 +115,12 @@ pub(super) fn node_numbers(reference: &str, bus: &str) -> Vec<String> {
         .and_then(|rest| rest.strip_prefix('.'))
         .map(|nodes| nodes.split('.').map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+/// Whether a retained PMD matrix holds only zeros.
+fn all_zero(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().all(all_zero),
+        other => other.as_f64() == Some(0.0),
+    }
 }
