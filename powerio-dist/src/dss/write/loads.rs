@@ -90,9 +90,14 @@ pub(super) fn phase_model(model: &DistLoadVoltageModel, phase: usize) -> DistLoa
     model
 }
 
+/// Whether the per phase values differ. Any nonzero imbalance needs
+/// separate native single phase records.
+#[allow(clippy::float_cmp)]
+pub(super) fn nonuniform(xs: &[f64]) -> bool {
+    xs.windows(2).any(|pair| pair[0] != pair[1])
+}
+
 pub(super) fn needs_split(load: &DistLoad) -> bool {
-    #[allow(clippy::float_cmp)] // Any nonzero imbalance needs separate native loads.
-    let nonuniform = |xs: &[f64]| xs.windows(2).any(|pair| pair[0] != pair[1]);
     nonuniform(&load.p_nom)
         || nonuniform(&load.q_nom)
         || parameters(&load.voltage_model)
@@ -104,12 +109,29 @@ pub(super) fn branch_maps(
     load: &DistLoad,
     return_index: Option<usize>,
 ) -> Option<Vec<Vec<String>>> {
-    let n = load.p_nom.len();
-    let map = &load.terminal_map;
-    if n == 0 || load.q_nom.len() != n {
+    if load.q_nom.len() != load.p_nom.len() {
         return None;
     }
-    if load.configuration == Configuration::Delta {
+    phase_branch_maps(
+        load.configuration,
+        &load.terminal_map,
+        load.p_nom.len(),
+        return_index,
+    )
+}
+
+/// The terminal list of each of `n` single phase branches. A delta element
+/// gets its edges, any other element one hot terminal plus its return.
+pub(super) fn phase_branch_maps(
+    configuration: Configuration,
+    map: &[String],
+    n: usize,
+    return_index: Option<usize>,
+) -> Option<Vec<Vec<String>>> {
+    if n == 0 {
+        return None;
+    }
+    if configuration == Configuration::Delta {
         if !((n >= 3 && map.len() == n) || (n < 3 && map.len() == n + 1)) {
             return None;
         }

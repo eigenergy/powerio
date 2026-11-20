@@ -23,6 +23,28 @@
   bus is kept with `in_service` false. The OpenDSS writer now keeps a closed
   switch ideal when its extras also carry a `name` or `type`.
 
+## 0.12.4
+
+- `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
+
+- OpenDSS output writes one single phase generator per phase when a
+  generator's phase powers or reactive limits differ. OpenDSS splits a multi
+  phase generator equally over its phases. The writer used to sum the phase
+  powers into one balanced generator and report nothing (#861).
+
+- OpenDSS output writes a closed PMD switch with all zero impedance and shunt
+  matrices as the ideal switch pair with `EMIT.DSS.IDEAL_SWITCH_EQUIVALENT`.
+  It used to write a zero impedance line, which OpenDSS rejects with error 183
+  (#862).
+
+- pandapower JSON: the writer states `tap_dependency_table = false` for every transformer. pandapower 3.0 and later warned on `runpp` that the column was missing.
+
+- `AcPfInstance::from_network` gives a bus coded PV with no in service generator the PQ specification, as MATPOWER and pandapower give a bus with no generator. Only generators count as voltage controllers here; an HVDC line terminal does not. The bus was held at its stated voltage with reactive power no device supplies. `AcPfInstance::voltage_control_diagnostics` names those buses.
+
+- XIIDM: a document in a declared single-byte encoding is converted to UTF-8 once before it is read. The byte offset in a read error for such a document now counts bytes of the converted text. A byte that is invalid in the document's encoding is refused wherever it is, including in a comment or a skipped element, which read before.
+
+- quick-xml moves to 0.42. No API changes.
+
 ## 0.12.3
 
 - OpenDSS: a read that stops at the include or property limit states the limit and `DssReadLimits` in the error text.

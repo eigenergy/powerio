@@ -1239,7 +1239,7 @@ mod tests {
         let staged = base.join("staged.m");
         std::fs::write(&staged, b"staged").unwrap();
         let hostile: std::path::PathBuf =
-            std::ffi::OsString::from_wide(&[b'c' as u16, 0, b'x' as u16]).into();
+            std::ffi::OsString::from_wide(&[u16::from(b'c'), 0, u16::from(b'x')]).into();
         let error = rename_no_replace(&staged, &base.join(hostile)).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         // No file appeared at the truncated name.

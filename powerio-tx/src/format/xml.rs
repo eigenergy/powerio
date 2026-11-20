@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 
 use quick_xml::XmlVersion;
-use quick_xml::encoding::Decoder;
 use quick_xml::events::attributes::Attribute;
 
 /// The XML version whose attribute value normalization applies.
@@ -22,7 +21,7 @@ pub(crate) fn resolve_general_ref(reference: &quick_xml::events::BytesRef<'_>) -
     if let Ok(Some(character)) = reference.resolve_char_ref() {
         return Some(character.to_string());
     }
-    match reference.xml10_content().ok()?.as_ref() {
+    match reference.xml10_content().as_ref() {
         "amp" => Some("&".to_string()),
         "lt" => Some("<".to_string()),
         "gt" => Some(">".to_string()),
@@ -32,13 +31,9 @@ pub(crate) fn resolve_general_ref(reference: &quick_xml::events::BytesRef<'_>) -
     }
 }
 
-/// The text of one attribute: transcoded to UTF-8, the predefined entities
-/// expanded, and normalized under [`XML_VERSION`].
-pub(crate) fn attribute_value<'a>(
-    attribute: &Attribute<'a>,
-    decoder: Decoder,
-) -> quick_xml::Result<Cow<'a, str>> {
-    attribute.decoded_and_normalized_value(XML_VERSION, decoder)
+/// The text of one attribute: the predefined entities expanded, and normalized under [`XML_VERSION`].
+pub(crate) fn attribute_value<'a>(attribute: &Attribute<'a>) -> quick_xml::Result<Cow<'a, str>> {
+    attribute.normalized_value(XML_VERSION)
 }
 
 #[cfg(test)]
@@ -53,7 +48,7 @@ mod tests {
             panic!("the element did not read as one empty element");
         };
         let attribute = element.attributes().next().unwrap().unwrap();
-        let value = super::attribute_value(&attribute, reader.decoder()).unwrap();
+        let value = super::attribute_value(&attribute).unwrap();
         assert_eq!(value, "x y z\nw&v");
     }
 }
