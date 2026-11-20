@@ -274,6 +274,8 @@ fn local_layout_and_transport_features_are_checked_before_reads() {
     }
     refused(overlap, &codes::UNSAFE);
     let mut special = base;
+    // A Unix mode counts only for an entry made on Unix (host 3).
+    special[central + 5] = 3;
     put32(&mut special, central + 38, 0o060_000 << 16);
     refused(special, &codes::UNSAFE);
 }

@@ -3294,7 +3294,7 @@ mod tests {
     fn clear_does_not_disarm_the_include_containment() {
         let requested: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
         let mut loader = |p: &Path| {
-            requested.borrow_mut().push(p.display().to_string());
+            requested.borrow_mut().push(slashed(p));
             Err::<String, _>(std::io::Error::new(std::io::ErrorKind::NotFound, "x"))
         };
         let raw = parse_raw_with_confined(
@@ -3848,7 +3848,7 @@ mod tests {
         // assert a refused include never reaches the filesystem.
         let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let mut loader = |p: &Path| {
-            requested.borrow_mut().push(p.display().to_string());
+            requested.borrow_mut().push(slashed(p));
             Err::<String, _>(std::io::Error::new(std::io::ErrorKind::NotFound, "x"))
         };
         let raw = parse_raw_with_confined(
@@ -3884,6 +3884,12 @@ mod tests {
         );
     }
 
+    /// A loader path with `/` separators, as the tests state them on every
+    /// platform.
+    fn slashed(path: &Path) -> String {
+        path.display().to_string().replace('\\', "/")
+    }
+
     #[test]
     fn confined_parsing_with_an_empty_root_refuses_absolute_and_climbing_includes() {
         use std::cell::RefCell;
@@ -3893,7 +3899,7 @@ mod tests {
         // plain relative includes stay inside the working directory.
         let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let mut loader = |p: &Path| {
-            requested.borrow_mut().push(p.display().to_string());
+            requested.borrow_mut().push(slashed(p));
             Err::<String, _>(std::io::Error::new(std::io::ErrorKind::NotFound, "x"))
         };
         let raw = parse_raw_with_confined(
@@ -3923,7 +3929,7 @@ mod tests {
         // under that same directory are inside the case and must load.
         let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let mut loader = |p: &Path| {
-            requested.borrow_mut().push(p.display().to_string());
+            requested.borrow_mut().push(slashed(p));
             Ok(String::new())
         };
         let raw = parse_raw_with_confined(
@@ -4000,7 +4006,7 @@ mod tests {
         use std::cell::RefCell;
         let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let mut loader = |p: &Path| {
-            requested.borrow_mut().push(p.display().to_string());
+            requested.borrow_mut().push(slashed(p));
             Ok(String::new())
         };
         // A subdirectory include and an absolute path inside the root both load.
@@ -4024,7 +4030,7 @@ mod tests {
         use std::cell::RefCell;
         let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let mut loader = |p: &Path| {
-            requested.borrow_mut().push(p.display().to_string());
+            requested.borrow_mut().push(slashed(p));
             Ok(String::new())
         };
         // The shared sibling directory is inside the include root; a climb

@@ -12,10 +12,6 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # quick-xml 0.42 rewrites its API from bytes to str across the XIIDM and
-    # CGMES writers and moves in its own pull request.
-    ignore:
-      - dependency-name: quick-xml
     groups:
       cargo-minor-and-patch:
         patterns:

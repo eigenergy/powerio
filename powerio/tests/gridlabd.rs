@@ -208,6 +208,9 @@ fn widened_root_replay_keeps_relative_include_paths_and_entrypoint_location() {
     );
 }
 
+// A Windows absolute path holds `:` and `\`. The reader refuses both on
+// parse, before any emit.
+#[cfg(unix)]
 #[test]
 fn nonportable_absolute_include_fails_before_creating_output() {
     let input = tempfile::tempdir().unwrap();
