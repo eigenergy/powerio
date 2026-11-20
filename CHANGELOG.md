@@ -2,26 +2,31 @@
 
 ## Unreleased
 
-- Read three-phase pandapower networks, those with `asymmetric_load`,
-  `asymmetric_sgen` or `res_bus_3ph` rows, into a `MulticonductorNetwork`
-  under the `pandapower-json` token (#846). A three-phase network with rows
-  only the balanced reader maps (`gen`, `storage`, `dcline`, some `trafo`
-  and `shunt` rows) still reads balanced, as in 0.12.0, when that reader
-  accepts it. The balanced reader warns that it drops the per-phase detail.
-  `powerio batch` skips a three-phase network read without a transformer or
-  impedance that joins its buses, and `corpus ingest` reads three-phase
-  networks by the same route. Writing such a network to pandapower JSON
-  returns the retained source bytes of the unchanged module. Any other
-  multiconductor network fails with `EMIT.DIST.PANDAPOWER_UNSUPPORTED`. The reader reports elements it does not
-  map through the `READ.DIST.PANDAPOWER_*` codes. A duplicate index in any
-  mapped table is refused. The 0.12.1 IR schema adds `pandapower-json` to the
-  distribution source formats. Transformer tap changers, shunt steps and the
-  characteristic tables follow the pandapower model. This step maps buses,
-  lines, external grids, loads, static generators, transformers with their
-  tap changers, shunts and switches. A report names the connectivity a
-  dropped transformer or impedance changes. An element on an out-of-service
-  bus is kept with `in_service` false. The OpenDSS writer now keeps a closed
-  switch ideal when its extras also carry a `name` or `type`.
+- The three-phase pandapower reader maps the `trafo`, `shunt` and `switch`
+  tables (#846). Transformers of vector group `Dyn` or `YNyn` get a correction
+  in zero-sequence-only shunts. Their zero sequence then matches the T model of
+  pandapower. A `YNyn` LV winding whose correction has a series part gets a
+  neutral terminal of its own. `READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION`
+  reports a correction with a negative real part. Ratio and symmetrical tap
+  changers on the HV or LV side set the winding taps. A second changer `tap2`
+  multiplies the first, as in pandapower. With `tap_dependency_table` the
+  reader takes `vk_percent` and `vkr_percent` from `trafo_characteristic_table`
+  at `tap_pos`. Ideal and phase-shifting changers keep the nominal ratio. So do
+  the ratio and the angle of a characteristic row.
+  `READ.DIST.PANDAPOWER_APPROXIMATED` reports each of them. An in-service
+  transformer with `tap_dependency_table` and no `id_characteristic_table` is
+  refused, as pandapower refuses it. A shunt draws the power of its step. With
+  `step_dependency_table` that power comes from `shunt_characteristic_table`.
+  A bus-bus switch becomes a `DistSwitch`. A closed one with `z_ohm` becomes a
+  1 m line instead. An open line or transformer switch moves the element end
+  to an auxiliary bus. A three-phase network keeps the balanced reading for
+  fewer rows. These are `gen`, `storage` and `dcline` rows, a `trafo` row of
+  another vector group and a `shunt` row whose step has no characteristic row.
+  An in-service stepped `shunt` that names no table keeps it too. The balanced
+  reader must still accept the document. `powerio batch` names only in-service
+  `trafo3w`, `impedance` and unmapped `trafo` rows as a connectivity change. A
+  switch no longer counts. The OpenDSS writer keeps a closed switch ideal when
+  its extras also carry a `name` or `type`.
 
 ## 0.12.4
 
