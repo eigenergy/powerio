@@ -82,11 +82,14 @@ all five legacy text targets, each PowerWorld output is read back and bridged
 to PowerModels JSON, and the PMread leg covers the PowerModels JSON read side.
 pandapower JSON and PyPSA CSV folders have dedicated import validators, because
 pandapower has its own JSON schema and PyPSA is a directory format; both
-validate the write direction only, since the pandapower JSON and PyPSA readers
-have no external oracle. DOE GO Challenge 3 has a separate pinned reference
-job, described below. Surge JSON and the remaining source and target pairs
-(PowerModels JSON and PowerWorld sources into the targets other than
-PowerModels) rest on the Rust round trip suite.
+validate the write direction only, since the balanced pandapower JSON and PyPSA
+readers have no external oracle. The three-phase pandapower reader has one.
+`validate_pandapower_3ph.py` solves each case with pandapower `runpp_3ph`. It
+compares the phase voltages with OpenDSS solving PowerIO's converted deck. It
+runs by hand with pandapower 3.5.6 from `requirements.txt`. DOE GO Challenge 3
+has a separate pinned reference job, described below. Surge JSON and the
+remaining source and target pairs (PowerModels JSON and PowerWorld sources into
+the targets other than PowerModels) rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`) reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -101,7 +104,8 @@ PowerModels) rest on the Rust round trip suite.
 - **pandapower** (`validate_pandapower.py`, `validate_pandapower_converter.py`)
   cross checks the MATPOWER parse and \\(Y_{\mathrm{bus}}\\), then imports
   powerio's pandapower JSON output back into pandapower and compares counts and
-  \\(Y_{\mathrm{bus}}\\).
+  \\(Y_{\mathrm{bus}}\\). `validate_pandapower_3ph.py` checks the three-phase
+  reader per phase against `runpp_3ph`.
 - **PyPSA** (`validate_pypsa.py`) imports powerio's PyPSA CSV folder output and
   checks counts, totals, line r/x/b rebased from ohms on the bus0 voltage, and
   transformer r/x/tap_ratio/s_nom rebased from the transformer `s_nom` base. A
@@ -599,6 +603,10 @@ conductance, transformer magnetizing parameters, ratio/ideal and pandapower
 2.x tap changers, off-nominal `vn_hv_kv`/`vn_lv_kv`, lv-side taps, and shunt
 `vn_kv` scaling. Tabular or unrecognized tap changers, reactive cost
 coefficients, and unsupported nonempty tables are diagnosed with row counts.
+The three-phase profile is described in
+[Distribution networks](distribution.md#pandapower-three-phase-json). When the
+balanced reader reads a three-phase document, it warns that it drops the
+per-phase detail.
 
 The writer emits aggregate HVDC links in a `dcline` table. It reports
 unmapped sending-power floors, reactive flows, received powers that disagree

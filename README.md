@@ -153,9 +153,9 @@ transports. See [Sienna exchange and pipeline integration](docs/src/sienna.md).
 The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
 PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. A
 three-phase pandapower document (rows in `asymmetric_load`, `asymmetric_sgen`
-or `res_bus_3ph`) parses to `MulticonductorNetwork` too, unless it has rows in
-a table only the balanced reader maps yet (`trafo`, `shunt`, `gen`, `storage`,
-`dcline`) and that reader accepts it; see
+or `res_bus_3ph`) parses to `MulticonductorNetwork` too, unless it has rows
+only the balanced reader maps yet (`gen`, `storage`, `dcline`, some `trafo`
+and `shunt` rows) and that reader accepts it; see
 [pandapower three-phase JSON](docs/src/distribution.md#pandapower-three-phase-json). SINCAL
 holds both kinds of network in one project, so a parse names its profile:
 `sincal-balanced` gives a `BalancedNetwork` and `sincal-multiconductor` a
@@ -189,7 +189,7 @@ depend on just the layer they use.
 | `powerio-archive` | Bounded ZIP indexing and verified member reads |
 | `powerio-tx` | `BalancedNetwork` and balanced format readers and writers |
 | `powerio-dist` | `MulticonductorNetwork` and OpenDSS, PMD, BMOPF, CIM converters |
-| `powerio-tnd` | Integrated transmission/distribution models, cross-model transforms, SINCAL and MG-RAVENS dispatch |
+| `powerio-tnd` | Integrated transmission/distribution models, cross-model transforms, SINCAL, MG-RAVENS and pandapower three-phase dispatch |
 | `powerio-prob` | Operating points, updates, calculation instances and solutions |
 | `powerio-matrix` | Sparse matrices, sensitivities, DC OPF bundles and graph data |
 | `powerio-synth` | Synthetic network generators for tests and benchmarks |

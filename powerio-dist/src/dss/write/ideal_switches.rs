@@ -22,7 +22,9 @@ impl DssWriter {
                 | "ravens_switch_class"
                 | "cim_class"
                 | "ravens_normal_open"
-                | "pmd_length" => false,
+                | "pmd_length"
+                | "name"
+                | "type" => false,
                 "pmd_rs" | "pmd_xs" | "pmd_g_fr" | "pmd_g_to" | "pmd_b_fr" | "pmd_b_to" => {
                     !all_zero(value)
                 }
@@ -33,7 +35,7 @@ impl DssWriter {
         {
             return false;
         }
-        // Identity and normal-open metadata do not add electrical impedance.
+        // Identity, class and normal-open metadata do not add electrical impedance.
         // Report their omission just as the ordinary line path does.
         let _ = self.extras_tail("line", &sw.name, &sw.extras);
         let mut name = format!("_pio_switch_{}", sw.name);
