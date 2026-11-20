@@ -9,8 +9,14 @@
   `READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION` reports a correction with a
   negative real part. Such rows no longer keep the balanced reading and no
   longer count as a connectivity change. A `trafo` row of another vector group
-  still does both. Every transformer keeps its nominal ratio. A stated tap
-  changer is reported with `READ.DIST.PANDAPOWER_APPROXIMATED`.
+  still does both. Ratio and symmetrical tap changers on the HV or LV side set
+  the winding taps. A second changer `tap2` multiplies the first, as in
+  pandapower. With `tap_dependency_table` the reader takes `vk_percent` and
+  `vkr_percent` from `trafo_characteristic_table` at `tap_pos`. Ideal and
+  phase-shifting changers keep the nominal ratio. So do the ratio and the
+  angle of a characteristic row. `READ.DIST.PANDAPOWER_APPROXIMATED` reports
+  each of them. An in-service transformer with `tap_dependency_table` and no
+  `id_characteristic_table` is refused, as pandapower refuses it.
 
 ## 0.12.4
 
