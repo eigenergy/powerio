@@ -2289,18 +2289,11 @@ fn distribution_target_projection(
             }
         }
     }
-    if target == DistTargetFormat::Dss && label == "pandapower three-phase" {
-        // A known writer gap, tracked apart from this fixture: the DSS writer
-        // states an asymmetric generator as a balanced one and reports no
-        // finding. The exact balanced values stay checked.
-        let name = "asymmetric_sgen_0";
-        if let Some(generator) = held.generators_mut().iter_mut().find(|g| g.name == name) {
-            let stated = generator.p_nom.clone();
-            balance_phases(&mut generator.p_nom);
-            balance_phases(&mut generator.q_nom);
-            cell.verification_notes.push((label, format!("known DSS writer gap without a finding: generator {name} per-phase P {stated:?} -> {:?}; exact projected values checked; electrical equivalence is not claimed", generator.p_nom)));
-        }
-    }
+    // Fixed by #863: the DSS writer now splits a generator with unequal
+    // phase powers into one single phase generator per phase, the same
+    // allowance `core_survives` gives a split load (#266). `held` needs no
+    // adjustment for this target; its stated per-phase powers are compared
+    // exactly against the split result.
     if target == DistTargetFormat::Dss && label == "BMOPF IEEE 13" {
         // In these two buses the ungrounded named return conductor is bus-local;
         // DSS's diagnosed n -> 2 rename is bijective (the other conductor is
@@ -2604,11 +2597,12 @@ fn parse_distribution_text(
 ///
 /// Source-equivalent series pairs are already contracted after checking their
 /// exact cancellation and exclusive internal nodes. Everything else must match,
-/// with one allowance: a dss target splits a load whose
-/// phases carry different power into one single phase `Load` per phase (#266),
-/// because a dss `Load` divides its `kw` evenly and cannot state the profile
-/// otherwise. That grows the object count and nothing else — the power the
-/// loads carry is compared exactly, on this leg as on every other.
+/// with one allowance: a dss target splits a load, or a generator (#863),
+/// whose phases carry different power into one single phase record per phase
+/// (#266), because a dss `Load` or `Generator` divides its `kw` evenly and
+/// cannot state the profile otherwise. That grows the object count and
+/// nothing else, the power the loads and generators carry is compared
+/// exactly, on this leg as on every other.
 fn core_survives(
     before: &DistributionCore,
     after: &DistributionCore,
@@ -2620,7 +2614,7 @@ fn core_survives(
     target == DistTargetFormat::Dss
         && after.loads >= before.loads
         && after.buses == before.buses
-        && after.generators == before.generators
+        && after.generators >= before.generators
         && after.shunts == before.shunts
         && after.load_p == before.load_p
         && after.load_q == before.load_q
