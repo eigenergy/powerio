@@ -493,7 +493,7 @@ CASES = [
     ("wye_feeder_asym", feeder, None),
     ("balanced_load_scaling", balanced_scaled, None),
     ("delta_asym_load", delta_asym_load, None),
-    ("asym_sgen", asym_sgen, "DSS writer sums an asymmetric generator over its phases"),
+    ("asym_sgen", asym_sgen, None),
     ("sgen_wye_delta", sgen_types, None),
     ("dyn_30", lambda: with_trafo("Dyn", 30.0), None),
     ("dyn_150", lambda: with_trafo("Dyn", 150.0), None),
