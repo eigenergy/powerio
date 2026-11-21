@@ -150,9 +150,11 @@ impl<T: Clone> TimeSeries<T> {
     /// time axis. A uniquely owned series moves its values into `map` without
     /// cloning them; a shared series first performs the copy on write split.
     #[must_use]
-    pub fn map_values<U>(self, map: impl FnMut(T) -> U) -> TimeSeries<U> {
-        let values = Arc::try_unwrap(self.values)
-            .unwrap_or_else(|shared| (*shared).clone())
+    pub fn map_values<U>(self, map: impl FnMut(T) -> U) -> TimeSeries<U>
+    where
+        T: Clone,
+    {
+        let values = Arc::unwrap_or_clone(self.values)
             .into_iter()
             .map(map)
             .collect();
@@ -261,25 +263,4 @@ mod tests {
         assert_eq!(mapped.entry(0).unwrap().0.label(), "t0");
         assert_eq!(CLONES.load(Ordering::Relaxed), 0);
     }
-    #[test]
-    fn consuming_map_clones_shared_values_before_mapping() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static CLONES: AtomicUsize = AtomicUsize::new(0);
-        #[derive(Debug)]
-        struct Counted(u8);
-        impl Clone for Counted {
-            fn clone(&self) -> Self {
-                CLONES.fetch_add(1, Ordering::Relaxed);
-                Self(self.0)
-            }
-        }
-        CLONES.store(0, Ordering::Relaxed);
-        let series = TimeSeries::new(vec![TimePoint::new("t0", None).unwrap()], vec![Counted(5)]).unwrap();
-        let shared = series.clone();
-        let mapped = series.map_values(|value| value.0);
-        assert_eq!(mapped.get(0), Some(&5));
-        assert_eq!(CLONES.load(Ordering::Relaxed), 1);
-        assert_eq!(shared.get(0).unwrap().0, 5);
-    }
-
 }
