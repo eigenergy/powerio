@@ -150,7 +150,10 @@ impl<T: Clone> TimeSeries<T> {
     /// time axis. A uniquely owned series moves its values into `map` without
     /// cloning them; a shared series first performs the copy on write split.
     #[must_use]
-    pub fn map_values<U>(self, map: impl FnMut(T) -> U) -> TimeSeries<U> {
+    pub fn map_values<U>(self, map: impl FnMut(T) -> U) -> TimeSeries<U>
+    where
+        T: Clone,
+    {
         let values = Arc::unwrap_or_clone(self.values)
             .into_iter()
             .map(map)
