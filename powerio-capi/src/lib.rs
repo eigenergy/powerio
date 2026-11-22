@@ -20962,16 +20962,8 @@ mod tests {
     #[test]
     fn input_slice_rejects_lengths_that_cannot_form_rust_slices() {
         unsafe {
-            let error = input_bytes(
-                std::ptr::null(),
-                isize::MAX as usize + 1,
-                "data",
-            )
-            .unwrap_err();
-            assert_eq!(
-                error_code_text(error),
-                "BIND.CAPI.INVALID_ARGUMENT"
-            );
+            let error = input_bytes(std::ptr::null(), isize::MAX as usize + 1, "data").unwrap_err();
+            assert_eq!(error_code_text(error), "BIND.CAPI.INVALID_ARGUMENT");
         }
     }
 
