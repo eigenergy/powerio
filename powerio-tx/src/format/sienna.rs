@@ -1264,7 +1264,11 @@ pub(super) fn write_document(
     {
         warnings.push(&codes::EMIT_SIENNA.value_defaulted,"required Line sending-terminal flow fields use zero when no solved flow is supplied; ext marks those values as unavailable");
     }
-    let branches_with_rating_sets = net.branches().iter().filter(|b| !b.rating_sets.is_empty()).count();
+    let branches_with_rating_sets = net
+        .branches()
+        .iter()
+        .filter(|b| !b.rating_sets.is_empty())
+        .count();
     if branches_with_rating_sets > 0 {
         warnings.push(
             &codes::EMIT_SIENNA.field_dropped,
