@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Sienna emission aggregates named branch and three-winding rating-set loss warnings by affected component count.
+- Sienna emission aggregates named branch and three-winding rating-set loss warnings
+  by affected component count.
 
 ## 0.12.4
 
