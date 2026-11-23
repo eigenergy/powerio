@@ -1264,16 +1264,23 @@ pub(super) fn write_document(
     {
         warnings.push(&codes::EMIT_SIENNA.value_defaulted,"required Line sending-terminal flow fields use zero when no solved flow is supplied; ext marks those values as unavailable");
     }
-    for b in net.branches() {
-        if !b.rating_sets.is_empty() {
-            warnings.push(&codes::EMIT_SIENNA.field_dropped, "named branch rating sets are retained in ext without native Sienna constraint semantics");
-        }
+    let branches_with_rating_sets = net.branches().iter().filter(|b| !b.rating_sets.is_empty()).count();
+    if branches_with_rating_sets > 0 {
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!("{branches_with_rating_sets} branch(es) carry named rating sets; they are retained in ext without native Sienna constraint semantics"),
+        );
     }
-    for transformer in net.transformers_3w() {
-        if (0..3).any(|i| !transformer.winding_rating_sets(i).is_empty()) {
-            warnings.push(&codes::EMIT_SIENNA.field_dropped,
-                "named three-winding rating sets are retained in ext without native Sienna constraint semantics");
-        }
+    let transformers_with_rating_sets = net
+        .transformers_3w()
+        .iter()
+        .filter(|transformer| (0..3).any(|i| !transformer.winding_rating_sets(i).is_empty()))
+        .count();
+    if transformers_with_rating_sets > 0 {
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!("{transformers_with_rating_sets} three-winding transformer(s) carry named winding rating sets; they are retained in ext without native Sienna constraint semantics"),
+        );
     }
     let extras = net
         .transformers_3w()
