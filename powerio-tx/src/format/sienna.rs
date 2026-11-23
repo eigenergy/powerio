@@ -1272,7 +1272,10 @@ pub(super) fn write_document(
     if branches_with_rating_sets > 0 {
         warnings.push(
             &codes::EMIT_SIENNA.field_dropped,
-            format!("{branches_with_rating_sets} branch(es) carry named rating sets; they are retained in ext without native Sienna constraint semantics"),
+            format!(
+                "{branches_with_rating_sets} branch(es) carry named rating sets; \
+                 they are retained in ext without native Sienna constraint semantics"
+            ),
         );
     }
     let transformers_with_rating_sets = net
@@ -1283,7 +1286,10 @@ pub(super) fn write_document(
     if transformers_with_rating_sets > 0 {
         warnings.push(
             &codes::EMIT_SIENNA.field_dropped,
-            format!("{transformers_with_rating_sets} three-winding transformer(s) carry named winding rating sets; they are retained in ext without native Sienna constraint semantics"),
+            format!(
+                "{transformers_with_rating_sets} three-winding transformer(s) carry named winding rating sets; \
+                 they are retained in ext without native Sienna constraint semantics"
+            ),
         );
     }
     let extras = net
