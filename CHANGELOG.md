@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sienna emission aggregates named branch and three-winding rating-set loss warnings by affected component count.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
