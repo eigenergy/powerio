@@ -1,0 +1,30 @@
+name: Verify Parquet security update
+
+on:
+  push:
+    branches: [fix/parquet-60-2-security]
+
+permissions:
+  contents: read
+
+jobs:
+  patched-dependency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Update the affected dependency
+        run: cargo update -p parquet --precise 60.2.0
+      - name: Confirm patched Parquet resolves
+        run: cargo tree -i parquet@60.2.0
+      - name: Check workspace crates
+        run: cargo check --locked --workspace --exclude powerio-py --exclude powerio-capi
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.6.2
+        with:
+          name: parquet-security-lockfile
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 3
