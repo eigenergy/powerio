@@ -159,8 +159,7 @@ fn named_rating_set_warnings_are_aggregated_per_component() {
             rating_warnings
                 .iter()
                 .any(|d| d.message().contains("1 three-winding transformer(s)")),
-            "version {version}: {:?}",
-            rating_warnings
+            "version {version}: {rating_warnings:?}"
         );
     }
 }
