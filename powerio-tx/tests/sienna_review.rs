@@ -128,7 +128,7 @@ fn named_rating_set_warnings_are_aggregated_per_component() {
         branch.rating_sets = vec![BranchRatingSet::new("winter", 100.0)];
     }
     let mut transformer = Transformer3W::new(
-        [1, 2, 3].map(Winding::new),
+        [1, 2, 3].map(|bus| Winding::new(BusId::new(bus))),
         [Impedance::new(0.01, 0.1, 100.0); 3],
     );
     transformer.set_winding_rating_sets(0, vec![BranchRatingSet::new("winter", 80.0)]);
