@@ -3,7 +3,10 @@ mod helpers;
 use helpers::{emit_module, emit_value};
 use powerio_core::{FormatId, PioModule, Source};
 use powerio_tx::TargetFormat;
-use powerio_tx::network::{BalancedNetwork, BranchCharging, GenCost, GeneratorEnergySource};
+use powerio_tx::network::{
+    BalancedNetwork, BranchCharging, BranchRatingSet, BusId, GenCost, GeneratorEnergySource,
+    Impedance, Transformer3W, Winding,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -116,6 +119,51 @@ fn edited(
     module.value_mut().buses_mut()[0].vm += 0.001;
     let out = emit_module(module, format(version)).unwrap();
     (serde_json::from_str(&out.text).unwrap(), out.diagnostics)
+}
+
+#[test]
+fn named_rating_set_warnings_are_aggregated_per_component() {
+    let mut net = transformer_network();
+    for branch in net.branches_mut().iter_mut().take(3) {
+        branch.rating_sets = vec![BranchRatingSet::new("winter", 100.0)];
+    }
+    let mut transformer = Transformer3W::new(
+        [1, 2, 3].map(Winding::new),
+        [Impedance::new(0.01, 0.1, 100.0); 3],
+    );
+    transformer.set_winding_rating_sets(0, vec![BranchRatingSet::new("winter", 80.0)]);
+    transformer.set_winding_rating_sets(2, vec![BranchRatingSet::new("summer", 60.0)]);
+    net.transformers_3w_mut().push(transformer);
+
+    for version in [1, 4] {
+        let out = emit_value(&net, format(version)).unwrap();
+        let rating_warnings: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| {
+                d.code() == "EMIT.SIENNA.FIELD_DROPPED" && d.message().contains("rating sets")
+            })
+            .collect();
+        assert_eq!(
+            rating_warnings.len(),
+            2,
+            "version {version}: one counted warning for branches and one for three-winding transformers"
+        );
+        assert!(
+            rating_warnings
+                .iter()
+                .any(|d| d.message().contains("3 branch(es)")),
+            "version {version}: {:?}",
+            rating_warnings
+        );
+        assert!(
+            rating_warnings
+                .iter()
+                .any(|d| d.message().contains("1 three-winding transformer(s)")),
+            "version {version}: {:?}",
+            rating_warnings
+        );
+    }
 }
 
 #[test]
