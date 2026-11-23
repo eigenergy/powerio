@@ -4710,6 +4710,24 @@ impl PyPioModule {
         })
     }
 
+    fn _ac_ots_branch_order(&self) -> PyResult<Vec<String>> {
+        Ok(self
+            .ac_ots_instance()?
+            .branch_order()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    fn _ac_ots_initial_closed(&self) -> PyResult<Vec<bool>> {
+        Ok(self.ac_ots_instance()?.initial_closed())
+    }
+
+    fn _ac_ots_solution_ac_dispatch(&self) -> PyResult<Self> {
+        self.child(powerio::PioValue::AcOpfSolution(
+            self.ac_ots_solution()?.ac_solution().clone(),
+        ))
+    }
+
     /// The final branch statuses of an AC OTS solution, in branch table order.
     fn _ac_ots_solution_branch_closed(&self) -> PyResult<Vec<bool>> {
         Ok(self.ac_ots_solution()?.branch_closed().to_vec())
