@@ -1,8 +1,8 @@
 name: Verify Parquet security update
 
 on:
-  push:
-    branches: [fix/parquet-60-2-security]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
