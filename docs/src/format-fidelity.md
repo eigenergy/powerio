@@ -623,6 +623,14 @@ falling back to the numeric id when names collide (warned), and warns on
 dropped HVDC, q limits, mbase, transformer angle limits, rate B/C, isolated
 buses, nonfinite p limits, and slackless or normalized networks. Nonnumeric bus
 names read back as dense synthetic ids with the originals on `Bus.name`.
+A PV or slack bus's `v_mag_pu_set` is its first in service generator's Vg,
+because PyPSA holds those buses at the bus setpoint; a bus with a zero base
+voltage is written at `v_nom = 1` kV with its lines and shunts rebased on it
+(`EMIT.PYPSA.VALUE_SUBSTITUTED`); transformers state `model = pi`. The bus
+voltage state of the one snapshot goes to `buses-v_mag_pu.csv` and
+`buses-v_ang.csv` (radians), and the reader takes bus voltages and angles from
+them. A folder with one snapshot whose only series files are those two reads as
+one network rather than a sequence.
 
 ### DOE GO Challenge 3 JSON
 
