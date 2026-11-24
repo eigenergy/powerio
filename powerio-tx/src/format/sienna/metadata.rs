@@ -44,6 +44,7 @@ pub(super) const WRITTEN_FIELDS: &[&str] = &[
     "branch_flow_absent",
     "to_terminal_power",
     "transformer_circuit",
+    "voltage_level_line",
     "transformer_uuid",
     "implicit",
     "rmpct",

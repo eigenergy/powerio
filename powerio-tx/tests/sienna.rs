@@ -535,6 +535,37 @@ fn powersystems_writes_a_branch_across_voltage_levels_as_a_tap_transformer() {
 }
 
 #[test]
+fn powersystems_retained_edit_to_tap_one_keeps_the_tap() {
+    let source = Source::from_memory("case2kv.m", CASE2KV.as_bytes().to_vec()).unwrap();
+    let module = powerio_tx::parse(source).unwrap();
+    let out = emit_value(module.value(), TargetFormat::PowerSystemsJson).unwrap();
+    let mut module =
+        powerio_tx::parse(Source::from_memory("system.json", out.text.into_bytes()).unwrap())
+            .unwrap();
+    assert!(module.value().branches()[0].tap.abs() < f64::EPSILON);
+    // A deliberate tap of 1 makes the branch a transformer, so the writer no
+    // longer marks it, and the retained original must not bring the marker back.
+    module.value_mut().branches_mut()[0].tap = 1.0;
+    let edited = emit_module(&module, TargetFormat::PowerSystemsJson).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&edited.text).unwrap();
+    assert!(
+        doc["ext"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .all(|(_, ext)| ext["org.eigenergy.powerio"]
+                .get("voltage_level_line")
+                .is_none()),
+        "{}",
+        edited.text
+    );
+    let recovered =
+        powerio_tx::parse(Source::from_memory("system.json", edited.text.into_bytes()).unwrap())
+            .unwrap();
+    assert!((recovered.value().branches()[0].tap - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
 fn powersystems_writes_unconstrained_angle_limits_as_its_unconstrained_bound() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data");
     let module = powerio_tx::parse(Source::open(root.join("case9.m")).unwrap()).unwrap();
