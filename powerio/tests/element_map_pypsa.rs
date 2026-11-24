@@ -4,11 +4,34 @@
 
 mod common;
 
-use common::element_map::{Kind, ReadBack, Written, case, check_format, emit};
-use powerio::RowRef;
+use common::element_map::{Kind, ReadBack, Written, case, check_format, check_map, emit, network};
+use powerio::{BalancedNetwork, RowRef};
 
-/// One CSV table of the written folder: its header and data rows. The case's
-/// cells hold no quotes or commas, so a plain split reads them.
+/// Split one CSV record, honoring double quoted cells (a quoted cell may
+/// hold commas and doubled quotes). The written tables hold no line breaks
+/// inside a cell.
+fn split(line: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut quoted = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, quoted) {
+            ('"', true) if chars.peek() == Some(&'"') => {
+                cell.push('"');
+                chars.next();
+            }
+            ('"', _) => quoted = !quoted,
+            (',', false) => cells.push(std::mem::take(&mut cell)),
+            _ => cell.push(c),
+        }
+    }
+    assert!(!quoted, "an unterminated quoted cell in `{line}`");
+    cells.push(cell);
+    cells
+}
+
+/// One CSV table of the written folder: its header and data rows.
 fn table(written: &Written, file: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let bytes = written
         .artifacts
@@ -16,9 +39,7 @@ fn table(written: &Written, file: &str) -> (Vec<String>, Vec<Vec<String>>) {
         .find(|(name, _)| name == file)
         .map_or_else(|| panic!("no {file} written"), |(_, bytes)| bytes);
     let text = std::str::from_utf8(bytes).expect("the table is UTF-8");
-    assert!(!text.contains('"'), "{file}: unexpected quoted cell");
     let mut lines = text.lines();
-    let split = |line: &str| line.split(',').map(str::to_owned).collect::<Vec<_>>();
     let header = split(lines.next().expect("a header row"));
     (header, lines.map(split).collect())
 }
@@ -33,22 +54,26 @@ fn cell(written: &Written, file: &str, index: usize, column: &str) -> String {
     rows[index][at].clone()
 }
 
-/// The bus number a bus key in an element table names, looked up through
-/// `buses.csv` so a named bus resolves the same way PyPSA's join does.
-fn bus_number(written: &Written, key: &str) -> usize {
+/// The bus number a bus cell (a `buses.csv` name) refers to: the cell must
+/// name a row of `buses.csv`, and the map's bus entry keyed on that name
+/// gives the element, as PyPSA's own join by name does. A bus name need not
+/// be a number.
+fn bus_number(network: &BalancedNetwork, written: &Written, name: &str) -> usize {
     let (header, rows) = table(written, "buses.csv");
     assert_eq!(header[0], "name");
-    let row = rows
-        .iter()
-        .position(|row| row[0] == key)
-        .unwrap_or_else(|| panic!("buses.csv has no bus `{key}`"));
-    // case4par.m names no bus, so the writer keys each bus on its number.
-    rows[row][0]
-        .parse()
-        .expect("an unnamed bus is keyed on its number")
+    assert!(
+        rows.iter().any(|row| row[0] == name),
+        "buses.csv has no bus `{name}`"
+    );
+    let position = written
+        .map()
+        .bus()
+        .position(|(_, row)| row.and_then(|row| row.key.as_deref()) == Some(name))
+        .unwrap_or_else(|| panic!("no bus entry keyed `{name}`"));
+    network.buses()[position].id.0
 }
 
-fn read(written: &Written, kind: Kind, row: &RowRef) -> ReadBack {
+fn read(network: &BalancedNetwork, written: &Written, kind: Kind, row: &RowRef) -> ReadBack {
     let file = format!("{}.csv", row.table);
     let name = cell(written, &file, row.index, "name");
     assert_eq!(
@@ -57,10 +82,11 @@ fn read(written: &Written, kind: Kind, row: &RowRef) -> ReadBack {
         "{file} row {}: the key is the name column",
         row.index
     );
+    let bus = |column: &str| bus_number(network, written, &cell(written, &file, row.index, column));
     match kind {
         Kind::Bus => {
             assert_eq!(row.table, "buses");
-            ReadBack::Bus(bus_number(written, &name))
+            ReadBack::Bus(bus_number(network, written, &name))
         }
         Kind::Branch => {
             assert!(
@@ -68,21 +94,22 @@ fn read(written: &Written, kind: Kind, row: &RowRef) -> ReadBack {
                 "a branch row in {}",
                 row.table
             );
-            ReadBack::Branch(
-                bus_number(written, &cell(written, &file, row.index, "bus0")),
-                bus_number(written, &cell(written, &file, row.index, "bus1")),
-            )
+            ReadBack::Branch(bus("bus0"), bus("bus1"))
         }
         Kind::Generator => {
             assert_eq!(row.table, "generators");
-            ReadBack::Generator(bus_number(written, &cell(written, &file, row.index, "bus")))
+            ReadBack::Generator(bus("bus"))
         }
     }
 }
 
 #[test]
 fn pypsa_rows_read_back_as_their_elements() {
-    let written = check_format("pypsa-csv", read);
+    let module = case();
+    let network = network(&module);
+    let written = check_format("pypsa-csv", |written, kind, row| {
+        read(network, written, kind, row)
+    });
     let map = written.map();
     // The tap transformer 30-20 and the phase shifter 10-30 go to
     // transformers.csv; the five lines to lines.csv, in module order.
@@ -127,4 +154,26 @@ fn a_retained_pypsa_folder_echo_has_no_map() {
     let echo = emit(&reparsed, "pypsa-csv");
     assert_eq!(echo.result.fidelity(), powerio::Fidelity::ExactSameFormat);
     assert!(echo.result.element_map().is_none());
+}
+
+/// The PyPSA example names its buses (`north`, `south`, `east`): bus cells
+/// resolve through the map, not as numbers.
+#[test]
+fn named_pypsa_buses_read_back_through_the_map() {
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/data/pypsa/example");
+    let module = powerio::parse(path)
+        .expect("the example parses")
+        .sever_source();
+    let network = network(&module);
+    let written = emit(&module, "pypsa-csv");
+    check_map(network, &written, "pypsa-csv", |written, kind, row| {
+        read(network, written, kind, row)
+    });
+    let keys: Vec<Option<&str>> = written
+        .map()
+        .bus()
+        .map(|(_, row)| row.and_then(|row| row.key.as_deref()))
+        .collect();
+    assert_eq!(keys, [Some("north"), Some("south"), Some("east")]);
 }

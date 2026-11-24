@@ -4,7 +4,9 @@
 
 mod common;
 
-use common::element_map::{Kind, ReadBack, Written, check_format, check_retained_echo_has_no_map};
+use common::element_map::{
+    Kind, ReadBack, Written, check_format, check_map, check_retained_echo_has_no_map, emit, network,
+};
 use powerio::RowRef;
 use serde_json::Value;
 
@@ -39,7 +41,27 @@ fn bus_number(bus: &Value) -> usize {
 fn read(written: &Written, kind: Kind, row: &RowRef) -> ReadBack {
     let document: Value = serde_json::from_str(written.text()).unwrap();
     let record = component(&document, &row.table, row.index);
-    assert_eq!(row.key.as_deref(), record["name"].as_str());
+    let name = record["name"].as_str();
+    if let Some(key) = &row.key {
+        assert_eq!(Some(key.as_str()), name, "{} row {}", row.table, row.index);
+    } else {
+        // The writer leaves a row unkeyed only when another component of its
+        // type carries the same name.
+        let name = name.expect("an unkeyed component still has a name");
+        let same_name = document["data"]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|other| other["__metadata__"]["type"] == row.table.as_str())
+            .filter(|other| other["name"] == name)
+            .count();
+        assert!(
+            same_name > 1,
+            "{} row {} is unkeyed but its name `{name}` is unique",
+            row.table,
+            row.index
+        );
+    }
     match kind {
         Kind::Bus => {
             assert_eq!(row.table, "ACBus");
@@ -88,4 +110,24 @@ fn powersystems_rows_read_back_as_their_elements() {
         ]
     );
     check_retained_echo_has_no_map(&written, "powersystems-json");
+}
+
+/// IEEE_30_bus.raw names its buses: the map keys each component on its
+/// written name, and the rows still read back as their elements.
+#[test]
+fn named_psse_buses_read_back_as_powersystems_rows() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data/psse/IEEE_30_bus.raw");
+    let module = powerio::parse(path)
+        .expect("the case parses")
+        .sever_source();
+    let network = network(&module);
+    let written = emit(&module, "powersystems-json");
+    check_map(network, &written, "powersystems-json", read);
+    let named = written
+        .map()
+        .bus()
+        .filter(|(_, row)| row.is_some_and(|row| row.key.is_some()))
+        .count();
+    assert!(named > 0, "no bus row is keyed on its name");
 }

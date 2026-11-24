@@ -178,9 +178,11 @@ pub fn check_map(
         .map(|diagnostic| diagnostic.message().to_owned())
         .collect();
 
+    // A record without a uid is keyed on the uid `serialize` would assign,
+    // which this harness does not recompute; only stated uids are compared.
     let uids = |uids: Vec<Option<&String>>| {
         uids.into_iter()
-            .map(|uid| uid.expect("parsed records carry a uid").clone())
+            .map(Option::<&String>::cloned)
             .collect::<Vec<_>>()
     };
     let sections = [
@@ -211,8 +213,22 @@ pub fn check_map(
     let mut keys = BTreeSet::new();
     for (kind, expected, entries) in sections {
         // Rule 1: every uid once, in module order.
-        let actual: Vec<&str> = entries.iter().map(|(uid, _)| *uid).collect();
-        assert_eq!(actual, expected, "{format} {kind:?}: uids in module order");
+        assert_eq!(
+            entries.len(),
+            expected.len(),
+            "{format} {kind:?}: one entry per element"
+        );
+        for ((uid, _), stated) in entries.iter().zip(&expected) {
+            if let Some(stated) = stated {
+                assert_eq!(uid, stated, "{format} {kind:?}: uids in module order");
+            }
+        }
+        let distinct: BTreeSet<&str> = entries.iter().map(|(uid, _)| *uid).collect();
+        assert_eq!(
+            distinct.len(),
+            entries.len(),
+            "{format} {kind:?}: each uid once"
+        );
         for (position, (uid, row)) in entries.iter().enumerate() {
             let Some(row) = row else {
                 assert!(
