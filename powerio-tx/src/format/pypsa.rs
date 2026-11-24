@@ -229,22 +229,35 @@ fn read_pypsa_csv_static(
 
     let mut buses = Vec::with_capacity(bus_table.rows.len());
     let mut id_of_name = HashMap::with_capacity(bus_table.rows.len());
+    let mut v_nom_defaulted = 0usize;
     for (i, row) in bus_table.rows.iter().enumerate() {
         let (id, bus_name) = match &numeric {
             Some(ids) => (BusId(ids[i]), None),
             None => (BusId(i + 1), Some(raw_names[i].clone())),
         };
         id_of_name.insert(raw_names[i].clone(), id);
-        // v_nom drives every ohm <-> per unit conversion; defaulting it would
-        // silently read line ohms as per unit (the pandapower reader holds the
-        // same line for vn_kv). PyPSA omits the column only when every bus
-        // keeps the default v_nom = 1, and erroring there beats misreading.
-        let v_nom = row.f("v_nom").filter(|v| v.is_finite()).ok_or_else(|| {
-            bad(format!(
-                "buses.csv row {}: required column `v_nom` is missing or not numeric",
-                i + 1
-            ))
-        })?;
+        // v_nom drives every ohm <-> per unit conversion. PyPSA's exporter
+        // omits a static column whose values all equal the attribute default,
+        // and leaves a defaulted cell empty, so a missing or empty v_nom is
+        // PyPSA's own default of 1 kV, the value the writer substitutes for a
+        // base voltage that is not positive. A stated value that is not a
+        // finite number is still refused.
+        let v_nom = match row.get("v_nom") {
+            None => {
+                v_nom_defaulted += 1;
+                PYPSA_DEFAULT_V_NOM_KV
+            }
+            Some(text) => text
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| {
+                    bad(format!(
+                        "buses.csv row {}: column `v_nom` is not a finite number",
+                        i + 1
+                    ))
+                })?,
+        };
         buses.push(Bus {
             id,
             kind: BusType::Pq,
@@ -270,6 +283,11 @@ fn read_pypsa_csv_static(
             },
             extras: Extras::default(),
         });
+    }
+    if v_nom_defaulted > 0 {
+        warnings.push(&codes::READ_PYPSA_VALUE_DEFAULTED, format!(
+            "{v_nom_defaulted} bus(es) without a v_nom read at PyPSA's default of {PYPSA_DEFAULT_V_NOM_KV} kV; line and shunt ohms there are per-unitized on that value"
+        ));
     }
     let bus_pos: HashMap<BusId, usize> = buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
     let bus_vm_set: HashMap<BusId, f64> = buses.iter().map(|b| (b.id, b.vm)).collect();
@@ -951,7 +969,11 @@ fn nominal_voltages(net: &BalancedNetwork, warnings: &mut Diagnostics) -> HashMa
     kv_of
 }
 
-const SUBSTITUTE_V_NOM_KV: f64 = 1.0;
+/// PyPSA's default bus `v_nom`. The writer substitutes it for a base voltage
+/// that is not positive, and PyPSA then omits an all default `v_nom` column on
+/// export, so the reader takes a missing `v_nom` as this same value.
+const PYPSA_DEFAULT_V_NOM_KV: f64 = 1.0;
+const SUBSTITUTE_V_NOM_KV: f64 = PYPSA_DEFAULT_V_NOM_KV;
 
 /// The `buses.csv` `v_mag_pu_set` per bus. PyPSA holds a PV or slack bus at
 /// the bus's `v_mag_pu_set` and has no generator voltage setpoint, so a PV
