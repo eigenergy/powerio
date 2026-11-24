@@ -1082,7 +1082,7 @@ pub(crate) struct TextEmission {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) fidelity: powerio_core::Fidelity,
     /// The rows the writer recorded, finished when the emission commits.
-    pub(crate) element_map: Option<powerio_core::ElementMapBuilder>,
+    pub(crate) element_map: Option<powerio_core::__implementation::ElementMapBuilder>,
 }
 
 impl TextEmission {
@@ -1096,7 +1096,10 @@ impl TextEmission {
     }
 
     /// The same emission carrying the element map its writer recorded.
-    pub(crate) fn with_element_map(mut self, map: powerio_core::ElementMapBuilder) -> Self {
+    pub(crate) fn with_element_map(
+        mut self,
+        map: powerio_core::__implementation::ElementMapBuilder,
+    ) -> Self {
         self.element_map = Some(map);
         self
     }

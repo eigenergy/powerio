@@ -9,7 +9,8 @@
 
 use std::borrow::Cow;
 
-use powerio_core::{Diagnostic, ElementMap, ElementMapBuilder};
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::{Diagnostic, ElementMap};
 
 use crate::network::BalancedNetwork;
 

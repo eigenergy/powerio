@@ -13,7 +13,8 @@
 
 use std::collections::HashMap;
 
-use powerio_core::{ElementMapBuilder, RowRef};
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::RowRef;
 use serde_json::{Map, Value};
 
 use super::decode::lenient_table;

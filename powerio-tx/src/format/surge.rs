@@ -19,7 +19,8 @@ use crate::network::{
 };
 use crate::normalize;
 use crate::{Error, Result};
-use powerio_core::{ElementMapBuilder, RowRef};
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::RowRef;
 
 const FMT: &str = "Surge JSON";
 const FORMAT_VALUE: &str = "surge-json";

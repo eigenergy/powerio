@@ -11,7 +11,8 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
-use powerio_core::{ElementMapBuilder, RowRef};
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::RowRef;
 
 use super::{bus_kv, element_map, set_bus_kind, warn_extra_branch_rating_sets, zbase};
 use crate::diagnostics::codes::EMIT_PYPSA as F;

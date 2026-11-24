@@ -1,8 +1,9 @@
 //! PowerIO IR serialization and deserialization.
 
+use powerio_core::__implementation::ElementMapBuilder;
 use powerio_core::{
-    ArtifactPath, Diagnostic, ElementMap, ElementMapBuilder, EmitResult, Error, Fidelity,
-    MemoryArtifact, PioModule, RowRef,
+    ArtifactPath, Diagnostic, ElementMap, EmitResult, Error, Fidelity, MemoryArtifact, PioModule,
+    RowRef,
 };
 
 use crate::PioValue;

@@ -10,7 +10,8 @@ use std::fmt::Write as _;
 
 use crate::diagnostics::Diagnostics;
 use crate::format::{TargetFormat, TextEmission, element_map, warn_extra_branch_rating_sets};
-use powerio_core::{ElementMapBuilder, RowRef};
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::RowRef;
 
 /// The MATPOWER emission family, named once for the block below.
 use crate::diagnostics::codes::EMIT_MATPOWER as F;

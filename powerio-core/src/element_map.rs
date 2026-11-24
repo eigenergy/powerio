@@ -190,6 +190,11 @@ impl Kind {
 /// element's position in its module table, and hands the builder to the
 /// emission. Recording never fails; [`finish`](Self::finish) reports a
 /// violated rule.
+///
+/// This is an implementation hook for the PowerIO writers and dispatchers,
+/// not part of the user facing API: its signature may change in any release.
+/// Read maps through [`ElementMap`] and [`RowRef`].
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct ElementMapBuilder {
     format: String,

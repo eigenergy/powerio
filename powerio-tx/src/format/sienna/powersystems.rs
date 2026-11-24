@@ -6,8 +6,9 @@ use super::{
     power_scale, push, retained, rows,
 };
 use crate::format::{TargetFormat, element_map};
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::RowRef;
 use powerio_core::cim::deterministic_mrid;
-use powerio_core::{ElementMapBuilder, RowRef};
 
 pub(in crate::format) const EXTENSION: &str = "org.eigenergy.powerio.powersystems";
 /// Fields that refer to another component: its UUID in PowerSystems output
