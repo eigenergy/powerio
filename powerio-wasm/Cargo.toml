@@ -3,9 +3,16 @@ name = "powerio-wasm"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
-publish = false
 description = "Browser bindings for local PowerIO file conversion"
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://github.com/eigenergy/powerio/tree/main/powerio-wasm#readme"
+keywords = ["matpower", "power-systems", "wasm", "converter"]
+# Not on crates.io: the release publishes the wasm-pack build of this crate to
+# npm as `powerio-wasm` (.github/workflows/npm.yml).
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

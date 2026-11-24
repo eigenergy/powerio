@@ -1,0 +1,177 @@
+name: npm
+run-name: PowerIO npm ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+
+# Publishes the wasm-pack build of powerio-wasm to npm as `powerio-wasm`, at
+# the release version, on the same published release event as python.yml and
+# crates.yml. The package is built here rather than in release-binaries.yml,
+# so the draft release keeps its five C ABI assets and the PowerIO.jl gate
+# that checks them is unchanged. Manual dispatch is the recovery path for a
+# missed event; both paths deploy through the npm environment.
+#
+# Publishing uses npm trusted publishing (OIDC), with provenance; no token is
+# stored. npm accepts a trusted publisher only for a package that exists, so
+# the first version is published once from a maintainer's machine with
+# scripts/npm-bootstrap.sh, which then prints the trusted publisher settings.
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published release tag to retry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+  PACKAGE: powerio-wasm
+
+jobs:
+  build:
+    name: build powerio-wasm
+    # A GitHub prerelease never publishes through the release event, as in
+    # crates.yml; the verification step refuses a dispatched prerelease too.
+    if: github.event_name != 'release' || github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Read the workspace version
+        run: |
+          set -o pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "powerio-wasm") | .version')" \
+            || { echo "could not read the powerio-wasm version from cargo metadata" >&2; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Verify the immutable published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "$RELEASE_TAG" || { echo "an explicit release tag is required" >&2; exit 1; }
+          git check-ref-format "refs/tags/$RELEASE_TAG" >/dev/null \
+            || { echo "invalid release tag: $RELEASE_TAG" >&2; exit 1; }
+          git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null \
+            || { echo "$RELEASE_TAG is not an origin tag" >&2; exit 1; }
+          tag_commit="$(git rev-list -n1 "refs/tags/$RELEASE_TAG")"
+          head_commit="$(git rev-parse HEAD)"
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "checked out $head_commit, but $RELEASE_TAG names $tag_commit" >&2
+            exit 1
+          fi
+          if [ "v$VERSION" != "$RELEASE_TAG" ]; then
+            echo "release tag $RELEASE_TAG does not match workspace version $VERSION" >&2
+            exit 1
+          fi
+          release="$RUNNER_TEMP/release.json"
+          curl --fail --silent --show-error --retry 3 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            -o "$release"
+          jq -e '.draft == false and .prerelease == false' "$release" >/dev/null \
+            || { echo "$RELEASE_TAG is not a published stable GitHub release" >&2; exit 1; }
+      - name: Parity test
+        run: cargo test --locked -p powerio-wasm
+      # SQLite (the default sincal feature) compiles C for wasm32, so the
+      # runner's Clang must carry the WebAssembly backend, as in converter.yml.
+      - name: Require a Clang with the WebAssembly backend
+        run: |
+          clang --print-targets | grep -qw wasm32 \
+            || { echo "clang on this runner lacks the wasm32 backend that SQLite needs" >&2; exit 1; }
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.15.0 --locked
+      # The converter's build: --target web, release profile, default
+      # features. The script also checks the package name, version, license,
+      # repository, and contents before writing dist/powerio-wasm-X.Y.Z.tgz.
+      - name: Build and check the package
+        run: bash scripts/build-npm-package.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: powerio-wasm-npm
+          path: dist/*.tgz
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    # Deployment protection (required reviewers) lives on the npm environment
+    # in the repo settings, as for pypi and crates-io.
+    environment: npm
+    permissions:
+      id-token: write  # npm trusted publishing and provenance; no stored token
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: powerio-wasm-npm
+          path: dist
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - name: Install an npm with trusted publishing
+        run: npm install --global npm@11
+      - name: Check the tarball
+        run: |
+          version="${RELEASE_TAG#v}"
+          tarball="dist/$PACKAGE-$version.tgz"
+          test -f "$tarball" || { echo "the build artifact has no $tarball" >&2; ls dist >&2; exit 1; }
+          tar -xzOf "$tarball" package/package.json \
+            | jq -e --arg name "$PACKAGE" --arg version "$version" '.name == $name and .version == $version' >/dev/null \
+            || { echo "$tarball is not $PACKAGE $version" >&2; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+      - name: Publish
+        # A version already on npm is skipped, so a rerun after a publish that
+        # succeeded (or a bootstrap) passes without publishing again.
+        run: |
+          publisher="configure the trusted publisher of $PACKAGE on npmjs.com (owner eigenergy, repository powerio, workflow npm.yml, environment npm)"
+          bootstrap="Run scripts/npm-bootstrap.sh $RELEASE_TAG with your own npm login; it publishes this first version from the release tarball. Then $publisher."
+          if out="$(npm view "$PACKAGE@$VERSION" version 2>&1)"; then
+            if [ "$out" = "$VERSION" ]; then
+              echo "$PACKAGE $VERSION is already on npm; skipping"
+              exit 0
+            fi
+          elif ! grep -q E404 <<<"$out"; then
+            echo "npm view $PACKAGE@$VERSION failed; re-run once the registry is reachable:" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+          if ! out="$(npm view "$PACKAGE" name 2>&1)"; then
+            if grep -q E404 <<<"$out"; then
+              echo "::error::$PACKAGE is not on npm yet, and npm accepts a trusted publisher only for an existing package. $bootstrap"
+            else
+              echo "npm view $PACKAGE failed; re-run once the registry is reachable:" >&2
+              echo "$out" >&2
+            fi
+            exit 1
+          fi
+          npm publish "$TARBALL" --provenance --access public || {
+            echo "::error::npm refused the trusted publish of $PACKAGE $VERSION. If the package has no trusted publisher yet, $publisher, then re-run this job. No token fallback exists."
+            exit 1
+          }
+          for _ in 1 2 3 4 5 6; do
+            if [ "$(npm view "$PACKAGE@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+              echo "published $PACKAGE $VERSION"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "$PACKAGE $VERSION is not visible on npm a minute after publishing" >&2
+          exit 1

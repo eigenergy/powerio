@@ -127,6 +127,12 @@
   which PowerSystems.jl refuses to build. Reading the file back restores the
   zero-tap branch (#921).
 
+- Each release publishes the browser bindings to npm as `powerio-wasm`, at
+  the same version as the Python wheel and the crates. The package is the
+  converter's `wasm-pack --target web` build with SINCAL support, and
+  `npm install powerio-wasm` replaces building the Rust crate and a wasm32
+  Clang for SQLite locally (#917).
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
