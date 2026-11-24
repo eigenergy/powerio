@@ -7,8 +7,8 @@
   add to its admittance matrix, so a Surge solve of case14 or case118 ran with
   no shunts; it now writes each bus's in service shunt total on the bus record
   and keeps a `fixed_shunts` record only for equipment with an identity of its
-  own (a Surge or PSS/E shunt id, switching control, out of service status, or
-  a second shunt on one bus). The writer also repeated each end's half of the
+  own (a Surge or PSS/E shunt id, switching control, out of service status, a
+  second shunt on one bus, or a shunt on a bus whose shunts cancel). The writer also repeated each end's half of the
   line charging in `b_shunt_from` / `b_shunt_to`, which Surge adds on top of
   `b/2`; those fields now carry only charging beyond the even split, zero for a
   plain pi branch. The reader matches: it reads end charging as

@@ -186,7 +186,14 @@ fn has_own_identity(net: &BalancedNetwork, shunt: &Shunt) -> bool {
 /// anonymous in service shunt on a bus, such as a MATPOWER bus `GS`/`BS`, lives
 /// on the bus alone; [`resolve_shunts`] reads it back from what the bus total
 /// leaves over after the records.
+///
+/// A bus whose in service shunts sum to exactly zero states zero, so every
+/// shunt on it gets a record. Otherwise shunts that cancel could leave every
+/// bus in the document at zero with a nonzero record, which
+/// [`resolve_shunts`] takes for the 0.12.4 layout: the shunt left on the bus
+/// would be lost. With a record each, both readings give every shunt back.
 fn fixed_shunt_objs(net: &BalancedNetwork) -> Vec<Value> {
+    let totals = bus_shunt_totals(net);
     let mut on_bus: BTreeSet<BusId> = BTreeSet::new();
     net.shunts()
         .iter()
@@ -195,6 +202,9 @@ fn fixed_shunt_objs(net: &BalancedNetwork) -> Vec<Value> {
             // A zero shunt on the bus would leave nothing to read back.
             has_own_identity(net, shunt)
                 || (shunt.g == 0.0 && shunt.b == 0.0)
+                || totals
+                    .get(&shunt.bus)
+                    .is_some_and(|&(g, b)| g == 0.0 && b == 0.0)
                 || !on_bus.insert(shunt.bus)
         })
         .map(|(i, shunt)| shunt_obj(net, i, shunt))

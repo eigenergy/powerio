@@ -670,8 +670,9 @@ commutation impedance, a DC voltage schedule) is warned on the way in.
 Shunts and branch charging follow Surge's own model. A bus record states the
 bus's whole in service shunt admittance; a `fixed_shunts` record names
 equipment whose admittance is already in that total (a shunt with its own id,
-switching control, or out of service status, or a second shunt on one bus),
-and the reader keeps it as its own shunt with the bus holding the rest. A
+switching control, or out of service status, a second shunt on one bus, or
+any shunt on a bus whose shunts cancel to zero), and the reader keeps it as its
+own shunt with the bus holding the rest. A
 branch states its total charging as `b` and `g_pi`, half at each end, and
 `b_shunt_*` / `g_shunt_*` add any asymmetry on top, so a plain pi branch writes
 zero end shunts. Every branch has a circuit; parallel branches get distinct
@@ -680,7 +681,10 @@ ones. PowerIO 0.12.4 and earlier wrote every bus shunt only as a
 in that layout (all bus shunts zero with in service `fixed_shunts`, or every
 charged branch with `b_shunt_from + b_shunt_to == b`) reads with its old
 meaning and `READ.SURGE.LEGACY_LAYOUT`. A Surge document whose end shunt
-additions happen to sum to `b` on every charged branch reads the same way.
+additions happen to sum to `b` on every charged branch reads the same way. A
+fresh file whose only shunts cancel on their buses also states every bus at
+zero and reports the warning, but each such shunt has its own record, so both
+readings give the same shunts.
 
 ### DeepMind OPFData JSON
 
