@@ -2835,6 +2835,128 @@ fn surge_writer_round_trips_supported_core_fields() {
     );
 }
 
+/// Two parallel 10-20 lines and a reversed 20-10 line, from the #915
+/// reproducer: MATPOWER carries no circuit id.
+const CASE_PARALLEL_SURGE: &str = "function mpc = case4par
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t10\t3\t0\t0\t0\t0\t1\t1.0\t0\t230\t1\t1.1\t0.9;
+\t20\t2\t50\t10\t0\t0\t1\t1.0\t0\t230\t1\t1.1\t0.9;
+\t30\t1\t90\t30\t0\t0\t1\t1.0\t0\t115\t1\t1.1\t0.9;
+\t40\t1\t60\t20\t0\t5\t1\t1.0\t0\t115\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t10\t50\t0\t300\t-300\t1.04\t100\t1\t250\t10;
+\t20\t80\t0\t300\t-300\t1.02\t100\t1\t300\t10;
+];
+mpc.branch = [
+\t10\t20\t0.01\t0.085\t0.176\t250\t250\t250\t0\t0\t1\t-360\t360;
+\t10\t20\t0.01\t0.085\t0.176\t250\t250\t250\t0\t0\t1\t-360\t360;
+\t20\t10\t0.01\t0.085\t0.176\t250\t250\t250\t0\t0\t1\t-360\t360;
+\t30\t20\t0.0\t0.0586\t0\t0\t0\t0\t0.98\t0\t1\t-360\t360;
+\t30\t40\t0.017\t0.092\t0.158\t150\t150\t150\t0\t0\t1\t-360\t360;
+];
+";
+
+#[test]
+fn surge_writer_gives_parallel_branches_distinct_circuits() {
+    // #915: every branch used to be written with circuit "1", so the two
+    // parallel 10-20 lines shared one (from_bus, to_bus, circuit) key.
+    let net = parse_str(CASE_PARALLEL_SURGE, "matpower").unwrap().network;
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let keys: Vec<(u64, u64, String)> = doc["network"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|branch| {
+            (
+                branch["from_bus"].as_u64().unwrap(),
+                branch["to_bus"].as_u64().unwrap(),
+                branch["circuit"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            (10, 20, "1".to_owned()),
+            (10, 20, "2".to_owned()),
+            (20, 10, "3".to_owned()),
+            (30, 20, "1".to_owned()),
+            (30, 40, "1".to_owned()),
+        ]
+    );
+    let distinct: std::collections::BTreeSet<_> = keys.iter().collect();
+    assert_eq!(distinct.len(), keys.len());
+    // An unordered bus pair keeps the reversed line distinct even for a
+    // consumer that does not orient the key.
+    let unordered: std::collections::BTreeSet<_> = keys
+        .iter()
+        .map(|(from, to, circuit)| ((*from).min(*to), (*from).max(*to), circuit))
+        .collect();
+    assert_eq!(unordered.len(), keys.len());
+}
+
+#[test]
+fn surge_writer_keeps_a_captured_source_circuit() {
+    // A PSS/E source states its own CKT; the Surge writer keeps it and
+    // allocates around it.
+    let mut net = parse_str(CASE_PARALLEL_SURGE, "matpower").unwrap().network;
+    net.branches_mut()[1]
+        .extras
+        .insert("id".into(), Value::String("A".into()));
+    net.branches_mut()[2]
+        .extras
+        .insert("id".into(), Value::String("1".into()));
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let circuits: Vec<&str> = doc["network"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|branch| branch["circuit"].as_str().unwrap())
+        .collect();
+    // Branch 0 takes "1" first, so branch 2's captured "1" is taken and it
+    // gets the lowest free id.
+    assert_eq!(circuits, vec!["1", "A", "2", "1", "1"]);
+}
+
+#[test]
+fn surge_reader_keeps_a_stated_circuit_for_a_fresh_write() {
+    // The circuit a Surge file states is read into the branch, so a fresh
+    // write (and a PSS/E write) replays it instead of renumbering.
+    let net = parse_str(CASE_PARALLEL_SURGE, "matpower").unwrap().network;
+    let first = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let mut doc: Value = serde_json::from_str(&first.text).unwrap();
+    doc["network"]["branches"][1]["circuit"] = Value::String("B".into());
+    let surge = serde_json::to_string(&doc).unwrap();
+    let back = parse_str(&surge, "surge-json").unwrap();
+    let lines = back.render_diagnostics();
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("READ.SURGE.RETAINED_SOURCE_ONLY")),
+        "{lines:?}"
+    );
+    let back = back.network;
+    assert_eq!(
+        back.branches()[1].extras.get("id").and_then(Value::as_str),
+        Some("B")
+    );
+    assert_eq!(back.branches()[0].extras.get("id"), None);
+    let again = emit_value(&back, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&again.text).unwrap();
+    let circuits: Vec<&str> = doc["network"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|branch| branch["circuit"].as_str().unwrap())
+        .collect();
+    assert_eq!(circuits, vec!["1", "B", "3", "1", "1"]);
+}
+
 #[test]
 fn infers_surge_json_file() {
     let stamp = std::time::SystemTime::now()

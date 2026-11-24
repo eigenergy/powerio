@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Surge JSON output gives parallel branches distinct circuits. Every branch
+  was written with circuit `"1"`, so two branches between the same buses
+  shared one `(from_bus, to_bus, circuit)` key. A circuit the source states
+  (a PSS/E `CKT`, for example) is kept; otherwise each bus pair numbers its
+  branches `"1"`, `"2"`, ..., with a reversed branch counted on the same pair.
+  The Surge reader now reads a branch circuit other than `"1"`, so a fresh
+  Surge or PSS/E write keeps it, and no longer reports it as retained only in
+  the source text (#915).
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
