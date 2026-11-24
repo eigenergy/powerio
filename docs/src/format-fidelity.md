@@ -73,6 +73,59 @@ PowerModels and egret compute with their own fields only: a transformer or
 switched shunt control, a remote regulated bus, and an HVDC converter's detail
 ride along for PowerIO and do not change what either tool solves.
 
+## Element maps
+
+An emission to one of seven balanced targets returns an element map: for each
+bus, branch, and generator `uid`, in module order, the row the writer wrote
+for it. The writers that record one are `matpower`, `psse`, `pandapower-json`,
+`pypsa-csv`, `surge-json`, `egret-json`, and `powersystems-json`; `serialize`
+returns the identity map over the PowerIO IR network. Rust reads it with
+`EmitResult::element_map()` (its sections through `bus()`, `branch()`, and
+`generator()`), C with `pio_emit_result_element_map`, the CLI with
+`convert --id-map PATH`, and Python as `EmitResult.id_map`. The JSON is the
+same everywhere:
+
+```json
+{"format": "surge-json", "powerio": "0.12.5",
+ "bus":    {"10": {"table": "buses", "index": 0, "key": "10"}},
+ "branch": {"10-20": {"table": "branches", "index": 0, "flip": false}},
+ "gen":    {"bus-10": {"table": "generators", "index": 0, "key": "gen_10_1"}}}
+```
+
+The generator section is `"gen"` in JSON and `generator()` in Rust. `index`
+is the 0-based row position in `table` as written, and `key` is the target's
+own name for the row where it has one; `key` is always a JSON string, even
+when it spells a number. `flip`, on branches only, is true when the row's
+first end is the element's `to` bus; no writer in this release flips a row,
+so it is always `false`. An element the target writes no row for maps to
+`null` with an `EMIT.ELEMENT_MAP.UNMAPPED` diagnostic. Rows a writer adds
+with no element behind them (a pandapower `ext_grid`, a Surge generator
+written for a storage unit) are absent. No two elements share a `(table, index)` or a
+`(table, key)`.
+
+| Target | Tables (bus, branch, generator) | What `index` counts | `key` |
+| --- | --- | --- | --- |
+| `matpower` | `bus`, `branch`, `gen` | rows of the matrix | bus: `BUS_I`; branch and generator: none |
+| `psse` | `bus`, `branch` or `transformer`, `generator` | records of the section; a two winding transformer record spans four lines and counts once | bus: `I`; branch and transformer: `I,J,CKT`; generator: `I,ID` |
+| `pandapower-json` | `bus`, `line` or `trafo`, `gen` | rows of the frame as written | bus: the frame's index label (the bus number less one), omitted when two buses share a label; others: none |
+| `pypsa-csv` | `buses`, `lines` or `transformers`, `generators` (the CSV file stems) | data rows of the CSV | the `name` column: the bus name when it is unique, else the bus number; `line_N`, `transformer_N`, `gen_N` |
+| `surge-json` | `buses`, `branches`, `generators` | entries of the `network` array | bus: its number; generator: its `id`; branch: none |
+| `egret-json` | `bus`, `branch`, `generator` | position in the written key order, which sorts keys as strings (`"10"` before `"2"`) | the `elements` dictionary key: the bus number, or a 1-based ordinal for branches and generators |
+| `powersystems-json` | the component's `__metadata__.type` (`ACBus`, `Line`, `TapTransformer`, `ThermalStandard`, ...) | components of that type in `data.components` | the component `name`, omitted when another component of the type has the same name |
+| PowerIO IR (`serialize`) | `buses`, `branches`, `generators` | the element's own position | none |
+
+Look an egret or pandapower row up by its key: an egret `index` follows the
+sorted key order, not the module order, and a pandapower bus row is addressed
+by its index label. PSS/E keys follow the circuit id the writer allocates,
+which can repeat for a reversed parallel branch or for a line and a
+transformer on one bus pair; that allocation is tracked separately.
+
+An emission that returns the retained source bytes (an unchanged module
+written to its own format) runs no writer and has no map, because the source
+file's row order is not known in general. Emitting to another format, or
+emitting a changed module, runs a writer and returns a map. Other targets
+return no map.
+
 ## Validation
 
 The harness script `evals/validation/run_validation.sh` checks powerio against

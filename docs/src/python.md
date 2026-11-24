@@ -152,12 +152,16 @@ row position in that table as written, `key` the target's own name for the row
 when it has one (always a string), and `flip`, on branches only, is true when
 the row's first end is the element's `to` bus. An element the target writes no
 row for maps to `None`, with an `EMIT.ELEMENT_MAP.UNMAPPED` diagnostic. Rows a
-writer adds with no element behind them are absent. MATPOWER and Surge JSON
-record maps in this release, and `serialize` returns the identity map over the
-IR network's `buses`, `branches`, and `generators`. `id_map` is `None` for
-other targets and when the emission returned the retained source bytes (an
-unchanged module emitted to its own format runs no writer, and its source's
-row order is not known in general).
+writer adds with no element behind them are absent. The `matpower`, `psse`,
+`pandapower-json`, `pypsa-csv`, `surge-json`, `egret-json`, and
+`powersystems-json` writers record maps, and `serialize` returns the identity
+map over the IR network's `buses`, `branches`, and `generators`. `id_map` is
+`None` for other targets and when the emission returned the retained source
+bytes (an unchanged module emitted to its own format runs no writer, and its
+source's row order is not known in general). Python calls it `id_map`; Rust
+and C call the same JSON the element map. Look egret and pandapower rows up
+by `key` rather than `index`; [Element maps](format-fidelity.md#element-maps)
+gives each target's tables, indices, and keys.
 
 PowerIO IR has its own pair of functions:
 

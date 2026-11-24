@@ -57,11 +57,15 @@
   written, the target's own key for the row where it has one, and for a branch
   whether the row's first end is the element's `to` bus. The writer records
   each row as it writes it, so two parallel branches or two generators on one
-  bus no longer have to be told apart by position. This release records maps
-  for MATPOWER and Surge JSON output; `serialize` returns the identity map
-  over the IR network tables. Other targets, and an emission that returns the
-  retained source bytes, have no map. An element a writer writes no row for
-  maps to `null` with `EMIT.ELEMENT_MAP.UNMAPPED`. No written byte changes.
+  bus no longer have to be told apart by position. The `matpower`, `psse`,
+  `pandapower-json`, `pypsa-csv`, `surge-json`, `egret-json`, and
+  `powersystems-json` writers record maps, and `serialize` returns the
+  identity map over the IR network's `buses`, `branches`, and `generators`.
+  Other targets, and an emission that returns the retained source bytes, have
+  no map. An element a writer writes no row for maps to `null` with
+  `EMIT.ELEMENT_MAP.UNMAPPED`. `key` is always a string; look egret and
+  pandapower rows up by key. The guide's Element maps section gives each
+  target's tables, indices, and keys. No written byte changes.
 
 - Surge JSON output states bus shunts on the bus and branch charging once.
   The writer put every bus shunt only in `fixed_shunts`, which Surge does not

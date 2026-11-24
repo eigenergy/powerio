@@ -33,11 +33,12 @@ spellings only. The geographic layer, PowerWorld display, and PSS/E
 contingency file tokens are not `--from` values: the `geo` and `contingency`
 subcommands read those files.
 
-`convert --id-map PATH` also writes the element map JSON (which written row
-each bus, branch, and generator became; see `EmitResult.id_map` in
-[Python](python.md)). When the output is the retained source or the target's
-writer records no map, it writes nothing and reports
-`EMIT.CLI.ID_MAP_UNAVAILABLE`.
+`convert --id-map PATH` also writes the element map JSON: which written row
+each bus, branch, and generator became, for `--to` `matpower`, `psse`,
+`pandapower-json`, `pypsa-csv`, `surge-json`, `egret-json`, or
+`powersystems-json` ([Element maps](format-fidelity.md#element-maps) gives
+each target's tables and keys). When the output is the retained source or
+another target, it writes nothing and reports `EMIT.CLI.ID_MAP_UNAVAILABLE`.
 
 `convert`, `summary`, and `verify` take `--merge-buses SPEC`, which merges
 buses before the command runs (see

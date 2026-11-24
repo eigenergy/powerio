@@ -166,9 +166,12 @@ pio_destination_release(destination);
 
 `pio_emit_result_element_map` returns the element map as JSON: which written
 row each bus, branch, and generator became, keyed on element `uid`, in the
-shape [the Python guide](python.md) describes for `EmitResult.id_map`. The
-view is empty when the emission recorded no map (a retained source echo, or a
-target whose writer records none).
+shape [Element maps](format-fidelity.md#element-maps) describes (Python calls
+it `EmitResult.id_map`). The `matpower`, `psse`, `pandapower-json`,
+`pypsa-csv`, `surge-json`, `egret-json`, and `powersystems-json` writers
+record one, and an IR serialization carries the identity map. The view is
+empty when the emission recorded no map (a retained source echo, or another
+target).
 
 `pio_module_serialize` writes PowerIO IR and `pio_module_deserialize` reads
 it. The document header names the schema (`"schema": "pio-ir"`) and its
