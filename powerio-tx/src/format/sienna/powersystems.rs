@@ -5,7 +5,9 @@ use super::{
     Value, base, codes, error, integer, json, limits, minmax, number, optional, positive,
     power_scale, push, retained, rows,
 };
+use crate::format::{TargetFormat, element_map};
 use powerio_core::cim::deterministic_mrid;
+use powerio_core::{ElementMapBuilder, RowRef};
 
 pub(in crate::format) const EXTENSION: &str = "org.eigenergy.powerio.powersystems";
 /// Fields that refer to another component: its UUID in PowerSystems output
@@ -561,13 +563,16 @@ pub(in crate::format) fn write(
     original: Option<&Value>,
 ) -> Result<TextEmission> {
     let schema = original.map(to_schema).transpose()?;
-    let (mut doc, warnings) = super::write_document(net, 4, schema.as_ref(), true)?;
+    let mut written = super::WrittenIds::default();
+    let (mut doc, warnings) =
+        super::write_document(net, 4, schema.as_ref(), true, Some(&mut written))?;
     let mut output = TextEmission::new(String::new(), warnings);
     let mut winding_warnings = Diagnostics::new();
     super::powersystems_three_winding::prepare(&mut doc, net.base_mva(), &mut winding_warnings)?;
     output.diagnostics.extend(winding_warnings.into_records());
     deduplicate_arcs(&mut doc)?;
     let mut components = Vec::new();
+    let mut positions = Positions::default();
     let refs = component_refs(&doc)?;
     let parents: BTreeMap<_, _> = rows(&doc, "TwoWindingTransformer")?
         .iter()
@@ -808,6 +813,7 @@ pub(in crate::format) fn write(
                 row.as_object_mut().expect("row").remove(key);
             }
             metadata(&mut row, native_kind, "PowerSystems");
+            positions.record(id, native_kind, &row);
             components.push(row);
         }
     }
@@ -821,7 +827,67 @@ pub(in crate::format) fn write(
         "InfrastructureSystems",
     );
     output.text = serde_json::to_string_pretty(&root).map_err(|e| error(e.to_string()))?;
-    Ok(output)
+    Ok(output.with_element_map(positions.element_map(net, &written)))
+}
+
+/// Where each component landed in `data.components`: its `__metadata__.type`,
+/// its position among the components of that type, and its name.
+#[derive(Default)]
+struct Positions {
+    rows: BTreeMap<i64, (String, usize, Option<String>)>,
+    per_type: BTreeMap<String, usize>,
+    names: BTreeMap<(String, String), usize>,
+}
+
+impl Positions {
+    fn record(&mut self, id: i64, kind: &str, row: &Value) {
+        let index = self.per_type.entry(kind.to_owned()).or_default();
+        let name = row["name"].as_str().map(str::to_owned);
+        if let Some(name) = &name {
+            *self
+                .names
+                .entry((kind.to_owned(), name.clone()))
+                .or_default() += 1;
+        }
+        self.rows.insert(id, (kind.to_owned(), *index, name));
+        *index += 1;
+    }
+
+    /// The row a component id was written to. The key is the component name
+    /// when no other component of the same type carries it; PowerSystems
+    /// requires unique names per type, but the writer does not rename.
+    fn row(&self, id: i64) -> Option<RowRef> {
+        let (kind, index, name) = self.rows.get(&id)?;
+        let row = RowRef::new(kind.clone(), *index);
+        Some(match name {
+            Some(name) if self.names[&(kind.clone(), name.clone())] == 1 => {
+                row.with_key(name.clone())
+            }
+            _ => row,
+        })
+    }
+
+    fn element_map(&self, net: &BalancedNetwork, written: &super::WrittenIds) -> ElementMapBuilder {
+        let mut map = element_map::builder(net, TargetFormat::PowerSystemsJson);
+        for (position, id) in written.buses.iter().enumerate() {
+            if let Some(row) = self.row(*id) {
+                map.bus(position, row);
+            }
+        }
+        // Each branch's arc keeps its from and to buses: deduplication shares
+        // an arc only between devices with the same ordered pair.
+        for (position, id) in written.branches.iter().enumerate() {
+            if let Some(row) = self.row(*id) {
+                map.branch(position, row, false);
+            }
+        }
+        for (position, id) in written.generators.iter().enumerate() {
+            if let Some(row) = self.row(*id) {
+                map.generator(position, row);
+            }
+        }
+        map
+    }
 }
 
 // PowerSystems derives Arc names from endpoints, so parallel devices share one.
@@ -885,6 +951,29 @@ pub(super) fn clock_angle(row: &Value, field: &str) -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two buses that share a name are mapped by position alone: a key would
+    /// name two rows, and the writer does not rename them.
+    #[test]
+    fn a_shared_name_is_not_a_key() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case4par.m");
+        let mut net = crate::format::test_parse::parse_file(path, None)
+            .unwrap()
+            .network;
+        for bus in net.buses_mut().iter_mut().take(2) {
+            bus.name = Some("twin".into());
+        }
+        let written = write(&net, None).unwrap();
+        let mut diagnostics = Vec::new();
+        let map = element_map::finish(written.element_map, &mut diagnostics)
+            .unwrap()
+            .unwrap();
+        let keys: Vec<Option<&str>> = map
+            .bus()
+            .map(|(_, row)| row.unwrap().key.as_deref())
+            .collect();
+        assert_eq!(keys, [None, None, Some("30"), Some("40")]);
+    }
 
     #[test]
     fn fresh_component_uuid_does_not_collide_with_a_retained_uuid() {

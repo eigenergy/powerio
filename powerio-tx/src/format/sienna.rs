@@ -1010,7 +1010,7 @@ pub(super) fn write(
     requested: u8,
     original: Option<&Value>,
 ) -> Result<TextEmission> {
-    let (doc, warnings) = write_document(net, requested, original, false)?;
+    let (doc, warnings) = write_document(net, requested, original, false, None)?;
     let text = serde_json::to_string_pretty(&doc).map_err(|e| error(e.to_string()))?;
     Ok(TextEmission::new(text, warnings))
 }
@@ -1043,15 +1043,27 @@ fn crosses_voltage_levels(from_kv: f64, to_kv: f64) -> bool {
     (from_kv - to_kv).abs() / f64::midpoint(from_kv, to_kv) > 0.01
 }
 
+/// The Sienna component id each bus, branch, and generator of a network was
+/// written with, in module order.
+#[derive(Default)]
+pub(super) struct WrittenIds {
+    pub(super) buses: Vec<i64>,
+    pub(super) branches: Vec<i64>,
+    pub(super) generators: Vec<i64>,
+}
+
 /// The SystemDocument as a JSON value, for a writer that transforms it further.
 /// `powersystems` adapts branches to the checks PowerSystems.jl applies when
 /// it builds a `System`: angle limits and lines across voltage levels.
+/// `written`, when given, receives the component id of each bus, branch, and
+/// generator.
 #[allow(clippy::too_many_lines, clippy::float_cmp)] // One block for each emitted component table.
 pub(super) fn write_document(
     net: &BalancedNetwork,
     requested: u8,
     original: Option<&Value>,
     powersystems: bool,
+    mut written: Option<&mut WrittenIds>,
 ) -> Result<(Value, Diagnostics)> {
     net.check_base_mva()?;
     net.check_references(FMT)?;
@@ -1140,6 +1152,9 @@ pub(super) fn write_document(
     let [area_ids, zone_ids] = areas::write(net, &mut doc, &mut ids, &mut warnings, selected)?;
     for b in net.buses() {
         let id = ids.get(b.uid.as_deref());
+        if let Some(written) = written.as_deref_mut() {
+            written.buses.push(id);
+        }
         bus_ids.insert(b.id, id);
         metadata::record(&mut doc, id, b, &["uid", "name", "extras"])?;
         push(
@@ -1151,6 +1166,9 @@ pub(super) fn write_document(
     let bus_by_id: BTreeMap<BusId, &Bus> = net.buses().iter().map(|b| (b.id, b)).collect();
     for b in net.branches() {
         let id = ids.get(b.uid.as_deref());
+        if let Some(written) = written.as_deref_mut() {
+            written.branches.push(id);
+        }
         metadata::record(&mut doc, id, b, &["uid", "name", "extras", "rating_sets"])?;
         // PowerSystems refuses a Line whose ends differ in base voltage, so a
         // zero-tap branch across two voltage levels is written as a
@@ -1320,6 +1338,9 @@ pub(super) fn write_document(
     let original_generators = generators::by_id(original);
     for g in net.generators() {
         let id = ids.get(g.uid.as_deref());
+        if let Some(written) = written.as_deref_mut() {
+            written.generators.push(id);
+        }
         metadata::record(&mut doc, id, g, &["uid", "vg", "caps"])?;
         if (g.vg - bus_by_id[&g.bus].vm).abs() > 1e-12 || g.caps.iter().flatten().any(|x| *x != 0.0)
         {
@@ -1662,7 +1683,7 @@ mod tests {
         assert_eq!(back.branches()[0].rate_a, f64::INFINITY);
         net.branches_mut()[0].rate_a = 100.0;
         net.branches_mut()[0].r = f64::NAN;
-        assert!(write_document(&net, 4, None, false).is_err());
+        assert!(write_document(&net, 4, None, false, None).is_err());
     }
 
     #[test]
