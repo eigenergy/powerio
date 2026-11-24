@@ -49,6 +49,22 @@
   switch no longer counts. The OpenDSS writer keeps a closed switch ideal when
   its extras also carry a `name` or `type`.
 
+- Surge JSON output states bus shunts on the bus and branch charging once.
+  The writer put every bus shunt only in `fixed_shunts`, which Surge does not
+  add to its admittance matrix, so a Surge solve of case14 or case118 ran with
+  no shunts; it now writes each bus's in service shunt total on the bus record
+  and keeps a `fixed_shunts` record only for equipment with an identity of its
+  own (a Surge or PSS/E shunt id, switching control, out of service status, or
+  a second shunt on one bus). The writer also repeated each end's half of the
+  line charging in `b_shunt_from` / `b_shunt_to`, which Surge adds on top of
+  `b/2`; those fields now carry only charging beyond the even split, zero for a
+  plain pi branch. The reader matches: it reads end charging as
+  `b/2 + b_shunt_*` and `g_pi/2 + g_shunt_*`, so a Surge branch with `b` and
+  zero end shunts keeps its charging, and it no longer counts an in service
+  `fixed_shunts` record twice. Files written by PowerIO 0.12.4 and earlier
+  still read with their old meaning and report `READ.SURGE.LEGACY_LAYOUT`
+  (#919).
+
 - Surge JSON output gives parallel branches distinct circuits. Every branch
   was written with circuit `"1"`, so two branches between the same buses
   shared one `(from_bus, to_bus, circuit)` key. A circuit the source states

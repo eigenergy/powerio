@@ -334,6 +334,8 @@ pub mod codes {
             "Sienna data is retained in a module extension but has no typed electrical interpretation";
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
+        READ_SURGE_LEGACY_LAYOUT = "READ.SURGE.LEGACY_LAYOUT", Warning,
+            "a Surge document in the shunt or branch charging layout PowerIO 0.12.4 and earlier wrote was read with that layout's meaning";
 
         // READ.RAVENS: the balanced MG-RAVENS profile.
         READ_RAVENS_VALUE_DEFAULTED = "READ.RAVENS.VALUE_DEFAULTED", Warning,
