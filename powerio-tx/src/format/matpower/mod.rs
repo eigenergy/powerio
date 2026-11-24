@@ -13,7 +13,6 @@ mod conversion_tests;
 mod tests;
 
 #[cfg(test)]
-#[cfg(test)]
 pub(crate) use writer::write_matpower;
 pub(crate) use writer::write_matpower_conversion;
 
