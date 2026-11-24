@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Sienna emission aggregates named branch and three-winding rating-set loss warnings
-  by affected component count.
+
+- The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
 ## 0.12.4
 
