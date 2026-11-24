@@ -1742,6 +1742,29 @@ mod tests {
     }
 
     #[test]
+    fn a_pypsa_snapshot_with_bus_state_parses_to_a_balanced_network() {
+        // The writer's single case folder (#920): one snapshot whose only
+        // series siblings are the bus voltage state is one network with that
+        // state, not a one point operating point series.
+        let dir = pypsa_folder(&[
+            ("snapshots.csv", ",snapshot\n0,now\n"),
+            ("buses-v_mag_pu.csv", "snapshot,B1,B2\nnow,1.02,0.99\n"),
+            (
+                "buses-v_ang.csv",
+                "snapshot,B1,B2\nnow,0.0,-0.017453292519943295\n",
+            ),
+        ]);
+        let module =
+            parse(powerio_core::Source::open(dir.path()).unwrap()).expect("snapshot parses");
+        assert_value_type(&module, "powerio.BalancedNetwork");
+        let PioValue::BalancedNetwork(network) = module.value() else {
+            unreachable!();
+        };
+        assert!((network.buses()[0].vm - 1.02).abs() < 1e-12);
+        assert!((network.buses()[1].va + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn a_pypsa_input_series_parses_to_a_network_time_series() {
         let dir = pypsa_folder(&[
             ("snapshots.csv", ",snapshot\n0,now\n1,later\n"),

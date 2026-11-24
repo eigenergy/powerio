@@ -74,6 +74,22 @@
   Surge or PSS/E write keeps it, and no longer reports it as retained only in
   the source text (#915).
 
+- PyPSA CSV output describes the source case's power flow (#920). A PV or
+  slack bus's `v_mag_pu_set` in `buses.csv` is the Vg of its first in service
+  generator; PyPSA holds those buses at the bus setpoint and has no generator
+  voltage setpoint, so case9's slack bus was held at 1.0 instead of 1.04.
+  Generators on one bus with different Vg are reported. A bus with a zero base
+  voltage is written at `v_nom = 1` kV, and its lines and shunts are rebased
+  on the same value, with `EMIT.PYPSA.VALUE_SUBSTITUTED`; `v_nom = 0` made
+  PyPSA read every impedance there as infinite or zero. `transformers.csv`
+  states `model = pi`, the source's branch model, instead of leaving PyPSA's
+  T model default. The writer adds `buses-v_mag_pu.csv` and `buses-v_ang.csv`
+  (radians) with the case's bus voltages, which `pf(use_seed=True)` starts
+  from. The reader takes bus voltages and angles from these files, so a PyPSA
+  CSV round trip keeps them; a folder with one snapshot whose only series
+  files are these two still reads as one network. A generator without a
+  `v_mag_pu_set` column takes its bus's setpoint, as PyPSA does.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.

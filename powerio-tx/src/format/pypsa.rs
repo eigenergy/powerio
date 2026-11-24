@@ -91,7 +91,89 @@ pub(crate) fn read_pypsa_csv_source(
     let entries = source
         .entry_names()
         .map_err(|error| acquisition_error(&error))?;
-    read_pypsa_csv_static(source, entries, warnings, &HashSet::new())
+    let folder = PypsaFolder {
+        source,
+        entries: entries.clone(),
+    };
+    let state = single_snapshot_bus_state(&folder)?;
+    let consumed: HashSet<String> = state.iter().map(|(file, _)| (*file).to_string()).collect();
+    let mut net = read_pypsa_csv_static(source, entries, warnings, &consumed)?;
+    if !state.is_empty() {
+        apply_bus_state(&folder, &state, &mut net)?;
+    }
+    Ok(net)
+}
+
+/// The bus voltage state files of a single snapshot folder: present only
+/// when `snapshots.csv` declares exactly one snapshot, each with one row.
+/// A folder with more snapshots is the sequence reader's.
+fn single_snapshot_bus_state(folder: &PypsaFolder<'_>) -> Result<Vec<(&'static str, CsvTable)>> {
+    let mut state = Vec::new();
+    if !folder
+        .entries
+        .iter()
+        .any(|e| matches!(e.as_str(), BUS_VM_FILE | BUS_VA_FILE))
+    {
+        return Ok(state);
+    }
+    let snapshots = folder
+        .optional("snapshots.csv")?
+        .map(|table| table.rows.len());
+    if snapshots != Some(1) {
+        return Ok(state);
+    }
+    for file in [BUS_VM_FILE, BUS_VA_FILE] {
+        if let Some(table) = folder.optional(file)? {
+            if table.rows.len() != 1 {
+                return Err(bad(format!(
+                    "`{file}` states {} rows for 1 snapshot",
+                    table.rows.len()
+                )));
+            }
+            state.push((file, table));
+        }
+    }
+    Ok(state)
+}
+
+/// Take each bus's `vm` (per unit) and `va` (PyPSA radians, degrees on the
+/// bus) from the single snapshot state files. A column naming no bus or a
+/// value that is not a number is refused, as the sequence reader does.
+fn apply_bus_state(
+    folder: &PypsaFolder<'_>,
+    state: &[(&'static str, CsvTable)],
+    net: &mut BalancedNetwork,
+) -> Result<()> {
+    let bus_rows: HashMap<String, usize> = folder
+        .required("buses.csv")?
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| row.get("name").map(|n| (n.clone(), i)))
+        .collect();
+    for (file, table) in state {
+        let row = &table.rows[0];
+        for header in table.headers.iter().skip(1) {
+            if header.is_empty() {
+                continue;
+            }
+            let Some(&bus) = bus_rows.get(header) else {
+                return Err(bad(format!(
+                    "`{file}` column `{header}` names no element of its table"
+                )));
+            };
+            let value = row
+                .f(header)
+                .ok_or_else(|| bad(format!("`{file}` column `{header}` row 1: not a number")))?;
+            let target = &mut net.buses_mut()[bus];
+            if *file == BUS_VM_FILE {
+                target.vm = value;
+            } else {
+                target.va = value.to_degrees();
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The static read body; `entries` is the directory's one listing and
@@ -190,6 +272,7 @@ fn read_pypsa_csv_static(
         });
     }
     let bus_pos: HashMap<BusId, usize> = buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
+    let bus_vm_set: HashMap<BusId, f64> = buses.iter().map(|b| (b.id, b.vm)).collect();
 
     let mut loads = Vec::new();
     if let Some(table) = folder.optional("loads.csv")? {
@@ -251,7 +334,10 @@ fn read_pypsa_csv_static(
                 pmin,
                 qmax: f64::INFINITY,
                 qmin: f64::NEG_INFINITY,
-                vg: row.f("v_mag_pu_set").unwrap_or(1.0),
+                // PyPSA itself holds a PV or slack bus at the bus's
+                // v_mag_pu_set; the generator column (PowerIO's) wins when
+                // present.
+                vg: row.f("v_mag_pu_set").unwrap_or_else(|| bus_vm_set[&bus]),
                 mbase: base_mva,
                 in_service: row.bool("active").unwrap_or(true),
                 cost: match (c2, c1) {
@@ -800,15 +886,17 @@ pub(crate) fn pypsa_csv_artifacts(
         ));
     }
 
+    // The v_nom per bus, shared by buses.csv and the writers that rebase
+    // impedances, so a substituted base stays consistent across them.
+    let kv_of = nominal_voltages(net, &mut warnings);
+    let v_set = bus_voltage_setpoints(net, &mut warnings);
     write_file("network.csv", network_csv(net));
     write_file("snapshots.csv", ",snapshot\n0,now\n".to_owned());
-    write_file("buses.csv", buses_csv(net, &key_of));
+    write_file("buses.csv", buses_csv(net, &key_of, &kv_of, &v_set));
     write_file(
         "generators.csv",
         generators_csv(net, &key_of, &mut warnings),
     );
-    // The v_nom per bus, shared by the writers that rebase impedances.
-    let kv_of: HashMap<BusId, f64> = net.buses().iter().map(|b| (b.id, b.base_kv)).collect();
     write_file("loads.csv", loads_csv(net, &key_of));
     write_file("lines.csv", lines_csv(net, &key_of, &kv_of));
     let transformers = transformers_csv(net, &key_of);
@@ -821,7 +909,104 @@ pub(crate) fn pypsa_csv_artifacts(
     if !net.storage().is_empty() {
         write_file("storage_units.csv", storage_csv(net, &key_of));
     }
+    // The case's bus voltage state for the one snapshot, the files PyPSA's
+    // `pf(use_seed=True)` starts from and the reader takes vm/va from.
+    let (v_mag, v_ang) = bus_state_csvs(net, &key_of);
+    write_file(BUS_VM_FILE, v_mag);
+    write_file(BUS_VA_FILE, v_ang);
     (files, warnings.into_records())
+}
+
+/// The snapshot local bus voltage state files: magnitude per unit and angle
+/// in radians (PyPSA's unit for `v_ang`), one row for the writer's single
+/// snapshot.
+const BUS_VM_FILE: &str = "buses-v_mag_pu.csv";
+const BUS_VA_FILE: &str = "buses-v_ang.csv";
+
+/// The PyPSA bus nominal voltage per bus. PyPSA per-unitizes ohms on
+/// `v_nom^2 / s_base`, so a zero (or otherwise unusable) base voltage would
+/// make every line and shunt at that bus infinite or zero. Such a bus is
+/// written at a 1 kV substitute base, and the impedance writers rebase on the
+/// same value.
+fn nominal_voltages(net: &BalancedNetwork, warnings: &mut Diagnostics) -> HashMap<BusId, f64> {
+    let mut substituted = 0usize;
+    let kv_of = net
+        .buses()
+        .iter()
+        .map(|b| {
+            let kv = if b.base_kv.is_finite() && b.base_kv > 0.0 {
+                b.base_kv
+            } else {
+                substituted += 1;
+                SUBSTITUTE_V_NOM_KV
+            };
+            (b.id, kv)
+        })
+        .collect();
+    if substituted > 0 {
+        warnings.push(&F.value_substituted, format!(
+            "{substituted} bus base voltage(s) that are not positive written as v_nom = {SUBSTITUTE_V_NOM_KV} kV: PyPSA per-unitizes impedances on v_nom, and the lines and shunts at those buses are rebased on the same value"
+        ));
+    }
+    kv_of
+}
+
+const SUBSTITUTE_V_NOM_KV: f64 = 1.0;
+
+/// The `buses.csv` `v_mag_pu_set` per bus. PyPSA holds a PV or slack bus at
+/// the bus's `v_mag_pu_set` and has no generator voltage setpoint, so a PV
+/// or reference bus takes the Vg of its first in-service generator. Other
+/// buses keep their stated voltage magnitude.
+fn bus_voltage_setpoints(net: &BalancedNetwork, warnings: &mut Diagnostics) -> HashMap<BusId, f64> {
+    let controlled: HashSet<BusId> = net
+        .buses()
+        .iter()
+        .filter(|b| matches!(b.kind, BusType::Pv | BusType::Ref))
+        .map(|b| b.id)
+        .collect();
+    let mut v_set: HashMap<BusId, f64> = HashMap::new();
+    let mut disagree: Vec<usize> = Vec::new();
+    for g in net.generators() {
+        if !g.in_service || !controlled.contains(&g.bus) {
+            continue;
+        }
+        match v_set.get(&g.bus) {
+            None => {
+                v_set.insert(g.bus, g.vg);
+            }
+            Some(first) if (first - g.vg).abs() > 1e-9 => disagree.push(g.bus.0),
+            Some(_) => {}
+        }
+    }
+    if !disagree.is_empty() {
+        disagree.sort_unstable();
+        disagree.dedup();
+        let buses: Vec<String> = disagree.iter().map(usize::to_string).collect();
+        warnings.push(&F.value_collapsed, format!(
+            "bus(es) {} carry in-service generators with different voltage setpoints: PyPSA holds one v_mag_pu_set per bus, written from the first generator",
+            buses.join(", ")
+        ));
+    }
+    for b in net.buses() {
+        v_set.entry(b.id).or_insert(b.vm);
+    }
+    v_set
+}
+
+/// `buses-v_mag_pu.csv` and `buses-v_ang.csv` for the writer's one snapshot.
+fn bus_state_csvs(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> (String, String) {
+    let mut header = String::from("snapshot");
+    let mut v_mag = String::from("now");
+    let mut v_ang = String::from("now");
+    for b in net.buses() {
+        let _ = write!(header, ",{}", key_for(key_of, b.id));
+        let _ = write!(v_mag, ",{}", b.vm);
+        let _ = write!(v_ang, ",{}", b.va.to_radians());
+    }
+    (
+        format!("{header}\n{v_mag}\n"),
+        format!("{header}\n{v_ang}\n"),
+    )
 }
 
 fn network_csv(net: &BalancedNetwork) -> String {
@@ -832,7 +1017,12 @@ fn network_csv(net: &BalancedNetwork) -> String {
     )
 }
 
-fn buses_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
+fn buses_csv(
+    net: &BalancedNetwork,
+    key_of: &HashMap<BusId, String>,
+    kv_of: &HashMap<BusId, f64>,
+    v_set: &HashMap<BusId, f64>,
+) -> String {
     // The coordinate columns appear only when the case carries locations, so
     // a case without geometry writes exactly as before. PyPSA defaults a
     // missing cell to 0, so a located case writes empty cells for the odd
@@ -848,8 +1038,8 @@ fn buses_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
             s,
             "{},{},{},{},{}",
             key_for(key_of, b.id),
-            b.base_kv,
-            b.vm,
+            kv_of[&b.id],
+            v_set[&b.id],
             b.vmin,
             b.vmax
         );
@@ -1059,7 +1249,7 @@ fn lines_csv(
 
 fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     let mut s =
-        String::from("name,bus0,bus1,r,x,b,g,s_nom,tap_ratio,phase_shift,active,s_max_pu\n");
+        String::from("name,bus0,bus1,r,x,b,g,s_nom,tap_ratio,phase_shift,active,s_max_pu,model\n");
     for (i, br) in net
         .branches()
         .iter()
@@ -1080,7 +1270,10 @@ fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> S
         });
         let _ = writeln!(
             s,
-            "transformer_{},{},{},{},{},{},{},{},{},{},{},{}",
+            // `model` = pi: the source branch is a pi model, and PyPSA's
+            // default "t" would move the charging to the middle of the series
+            // impedance.
+            "transformer_{},{},{},{},{},{},{},{},{},{},{},{},pi",
             i + 1,
             key_for(key_of, br.from),
             key_for(key_of, br.to),
@@ -1294,6 +1487,7 @@ pub fn pypsa_axis(source: &powerio_core::Source) -> Result<PypsaAxis> {
     let entries = source
         .entry_names()
         .map_err(|error| acquisition_error(&error))?;
+    let mut bus_state = false;
     for entry in &entries {
         let name = entry.as_str();
         if name.contains('/') {
@@ -1306,14 +1500,27 @@ pub fn pypsa_axis(source: &powerio_core::Source) -> Result<PypsaAxis> {
             continue;
         };
         if series_field(component, attribute).is_some() {
-            return Ok(PypsaAxis::Series);
+            if matches!(name, BUS_VM_FILE | BUS_VA_FILE) {
+                bus_state = true;
+            } else {
+                return Ok(PypsaAxis::Series);
+            }
         }
     }
     let folder = PypsaFolder { source, entries };
     let Some(snapshot_table) = folder.optional("snapshots.csv")? else {
-        return Ok(PypsaAxis::SingleSnapshot);
+        // Bus state without a declared axis stays the sequence reader's
+        // refusal, as before.
+        return Ok(if bus_state {
+            PypsaAxis::Series
+        } else {
+            PypsaAxis::SingleSnapshot
+        });
     };
-    if snapshot_table.rows.len() > 1 {
+    // One declared snapshot whose only series siblings are the bus voltage
+    // state (what the writer emits for one case) is one network with that
+    // state, not a one point sequence.
+    if snapshot_table.rows.len() > 1 || (bus_state && snapshot_table.rows.is_empty()) {
         Ok(PypsaAxis::Series)
     } else {
         Ok(PypsaAxis::SingleSnapshot)
@@ -1811,6 +2018,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn disagreeing_pv_setpoints_on_one_bus_are_reported() {
+        // PyPSA holds one v_mag_pu_set per bus (#920): the first in-service
+        // generator's Vg is written, and a disagreeing one is reported.
+        let mut pv = bus(1, None);
+        pv.kind = BusType::Ref;
+        let mut net = net_with(vec![pv, bus(2, None)]);
+        let mut first = make_gen(1, None);
+        first.vg = 1.04;
+        let mut second = make_gen(1, None);
+        second.vg = 1.02;
+        let mut off = make_gen(1, None);
+        off.vg = 0.9;
+        off.in_service = false;
+        *net.generators_mut() = vec![off, first, second];
+        *net.branches_mut() = vec![line(1, 2)];
+        let (files, diagnostics) = pypsa_csv_artifacts(&net);
+        let buses = &files.iter().find(|(n, _)| *n == "buses.csv").unwrap().1;
+        assert_eq!(buses.lines().nth(1).unwrap(), "1,110,1.04,0.9,1.1");
+        let rendered = crate::diagnostics::render_diagnostics(&diagnostics);
+        assert!(
+            rendered
+                .iter()
+                .any(|d| d.contains("VALUE_COLLAPSED") && d.contains("bus(es) 1 carry")),
+            "{rendered:?}"
+        );
+    }
+
     fn storage_unit(bus: usize) -> Storage {
         Storage {
             bus: BusId(bus),
@@ -2144,7 +2379,7 @@ mod tests {
         let csv = transformers_csv(&net, &key_of);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
-            "transformer_1,1,2,0.0625,0.25,0.5,0,50,1.05,0,true,1"
+            "transformer_1,1,2,0.0625,0.25,0.5,0,50,1.05,0,true,1,pi"
         );
     }
 
@@ -2157,7 +2392,7 @@ mod tests {
         let csv = transformers_csv(&net, &key_of);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
-            "transformer_1,1,2,0.125,0.5,0.25,0,100,1.05,0,true,inf"
+            "transformer_1,1,2,0.125,0.5,0.25,0,100,1.05,0,true,inf,pi"
         );
     }
 
