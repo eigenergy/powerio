@@ -83,6 +83,8 @@
   still read with their old meaning and report `READ.SURGE.LEGACY_LAYOUT`
   (#919).
 
+## 0.12.5
+
 - Surge JSON output gives parallel branches distinct circuits. Every branch
   was written with circuit `"1"`, so two branches between the same buses
   shared one `(from_bus, to_bus, circuit)` key. A circuit the source states
@@ -91,6 +93,22 @@
   The Surge reader now reads a branch circuit other than `"1"`, so a fresh
   Surge or PSS/E write keeps it, and no longer reports it as retained only in
   the source text (#915).
+
+- Surge JSON output states bus shunts on the bus and branch charging once. The
+  writer put every bus shunt only in `fixed_shunts`, which Surge does not add
+  to its admittance matrix, so a Surge solve of case14 or case118 ran with no
+  shunts; it now writes each bus's in service shunt total on the bus record
+  and keeps a `fixed_shunts` record only for equipment with an identity of its
+  own (a Surge or PSS/E shunt id, switching control, out of service status, a
+  second shunt on one bus, or a shunt on a bus whose shunts cancel). The
+  writer also repeated each end's half of the line charging in
+  `b_shunt_from` / `b_shunt_to`, which Surge adds on top of `b/2`; those
+  fields now carry only charging beyond the even split, zero for a plain pi
+  branch. The reader matches: it reads end charging as `b/2 + b_shunt_*` and
+  `g_pi/2 + g_shunt_*`, so a Surge branch with `b` and zero end shunts keeps
+  its charging, and it no longer counts an in service `fixed_shunts` record
+  twice. Files written by PowerIO 0.12.4 and earlier still read with their old
+  meaning and report `READ.SURGE.LEGACY_LAYOUT` (#919).
 
 - PyPSA CSV output describes the source case's power flow (#920). A PV or
   slack bus's `v_mag_pu_set` in `buses.csv` is the Vg of its first in service
@@ -127,11 +145,32 @@
   which PowerSystems.jl refuses to build. Reading the file back restores the
   zero-tap branch (#921).
 
+- `emit` returns an element map that says which written row each bus,
+  branch, and generator became (#916). `EmitResult::element_map()` in Rust,
+  `EmitResult.id_map` in Python, `pio_emit_result_element_map` in the C ABI,
+  and `powerio convert --id-map PATH` give it as JSON: for each element `uid`,
+  in module order, the target table, the 0-based row index in that table as
+  written, the target's own key for the row where it has one, and for a branch
+  whether the row's first end is the element's `to` bus. The writer records
+  each row as it writes it, so two parallel branches or two generators on one
+  bus no longer have to be told apart by position. The `matpower`, `psse`,
+  `pandapower-json`, `pypsa-csv`, `surge-json`, `egret-json`, and
+  `powersystems-json` writers record maps, and `serialize` returns the
+  identity map over the IR network's `buses`, `branches`, and `generators`.
+  Other targets, and an emission that returns the retained source bytes, have
+  no map. An element a writer writes no row for maps to `null` with
+  `EMIT.ELEMENT_MAP.UNMAPPED`. `key` is always a string; look egret and
+  pandapower rows up by key. The guide's Element maps section gives each
+  target's tables, indices, and keys. No written byte changes.
+
 - Each release publishes the browser bindings to npm as `powerio-wasm`, at
   the same version as the Python wheel and the crates. The package is the
   converter's `wasm-pack --target web` build with SINCAL support, and
   `npm install powerio-wasm` replaces building the Rust crate and a wasm32
   Clang for SQLite locally (#917).
+
+- The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve
+  RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata (#909).
 
 ## 0.12.4
 
