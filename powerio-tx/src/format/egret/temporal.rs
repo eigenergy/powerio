@@ -197,7 +197,7 @@ fn write(series: &TimeSeries<BalancedNetwork>) -> Result<super::super::TextEmiss
     for (point, network) in series.values().iter().enumerate() {
         network.validate()?;
         let mut findings = Diagnostics::new();
-        let scalar = Value::Object(write_document(network, &mut findings));
+        let scalar = Value::Object(write_document(network, &mut findings, None));
         super::super::warn_nonfinite_json(&F, &scalar, &mut findings);
         let mut checks = super::super::TextEmission::new(String::new(), findings);
         super::super::append_emit_warnings(

@@ -11,11 +11,14 @@
 //! use the explicit electrical time-series profile; this does not model unit
 //! commitment constraints. Same-format emission preserves retained bytes.
 
+use std::collections::HashMap;
+
+use powerio_core::{ElementMapBuilder, RowRef};
 use serde_json::{Map, Value};
 
 use super::decode::lenient_table;
 use super::json_extension::carry_row;
-use super::{TextEmission, finish, jnum};
+use super::{TargetFormat, TextEmission, element_map, finish, jnum};
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
 use crate::network::{
@@ -32,15 +35,59 @@ const FMT: &str = "egret JSON";
 #[must_use]
 pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
-    let root = write_document(net, &mut warnings);
-    finish(&F, root, warnings)
+    let mut map = element_map::builder(net, TargetFormat::EgretJson);
+    let root = write_document(net, &mut warnings, Some(&mut map));
+    finish(&F, root, warnings).with_element_map(map)
 }
 
-fn write_document(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Map<String, Value> {
+/// Record each bus, branch, and generator in `map` as the row of its
+/// `elements` dictionary. A row's key is its dictionary key and its index the
+/// key's position in the dictionary as written. Buses that share a number
+/// share one key; the dictionary keeps the last of them, so only that one is
+/// mapped and the others stay unmapped.
+fn record_element_map(
+    map: &mut ElementMapBuilder,
+    tables: [(&Map<String, Value>, Vec<String>); 3],
+) {
+    let [bus, branch, generator] = tables.map(|(table, keys)| {
+        let index: HashMap<&str, usize> = table
+            .keys()
+            .enumerate()
+            .map(|(index, key)| (key.as_str(), index))
+            .collect();
+        let mut owner: HashMap<&str, usize> = HashMap::new();
+        for (position, key) in keys.iter().enumerate() {
+            owner.insert(key.as_str(), position);
+        }
+        let mut rows: Vec<(usize, usize, String)> = owner
+            .into_iter()
+            .map(|(key, position)| (position, index[key], key.to_owned()))
+            .collect();
+        rows.sort_unstable();
+        rows
+    });
+    for (position, index, key) in bus {
+        map.bus(position, RowRef::new("bus", index).with_key(key));
+    }
+    // `branch_obj` writes `from_bus` and `to_bus` as the branch states them.
+    for (position, index, key) in branch {
+        map.branch(position, RowRef::new("branch", index).with_key(key), false);
+    }
+    for (position, index, key) in generator {
+        map.generator(position, RowRef::new("generator", index).with_key(key));
+    }
+}
+
+fn write_document(
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+    map: Option<&mut ElementMapBuilder>,
+) -> Map<String, Value> {
+    let bus_keys: Vec<String> = net.buses().iter().map(|b| b.id.to_string()).collect();
     let mut bus = Map::new();
-    for b in net.buses() {
+    for (b, key) in net.buses().iter().zip(&bus_keys) {
         bus.insert(
-            b.id.to_string(),
+            key.clone(),
             carry_row(bus_obj(b), b.uid.as_deref(), &b.extras, net),
         );
     }
@@ -62,19 +109,34 @@ fn write_document(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Map<Stri
         );
     }
 
+    let branch_keys: Vec<String> = (1..=net.branches().len()).map(|i| i.to_string()).collect();
     let mut branch = Map::new();
-    for (i, br) in net.branches().iter().enumerate() {
+    for (br, key) in net.branches().iter().zip(&branch_keys) {
         branch.insert(
-            (i + 1).to_string(),
+            key.clone(),
             carry_row(branch_obj(br), br.uid.as_deref(), &br.extras, net),
         );
     }
 
+    let generator_keys: Vec<String> = (1..=net.generators().len())
+        .map(|i| i.to_string())
+        .collect();
     let mut generator = Map::new();
-    for (i, g) in net.generators().iter().enumerate() {
+    for (g, key) in net.generators().iter().zip(&generator_keys) {
         generator.insert(
-            (i + 1).to_string(),
+            key.clone(),
             carry_row(gen_obj(g, warnings), g.uid.as_deref(), &Extras::new(), net),
+        );
+    }
+
+    if let Some(map) = map {
+        record_element_map(
+            map,
+            [
+                (&bus, bus_keys),
+                (&branch, branch_keys),
+                (&generator, generator_keys),
+            ],
         );
     }
 
@@ -1541,6 +1603,59 @@ mod tests {
         });
         let cost = read_cost(&mixed, 0.0, 0.0).unwrap();
         assert_eq!(cost.coeffs, vec![3.0, 0.0, 0.0]);
+    }
+
+    /// The element map indexes each row by its key's position in the
+    /// dictionary as written, which sorts `"10"` second, after `"1"`, and leaves a
+    /// bus whose number a later bus overwrote unmapped.
+    #[test]
+    fn element_map_follows_the_written_dictionary_order() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
+        let mut net = crate::format::test_parse::parse_file(path, None)
+            .unwrap()
+            .network;
+        let written = write_egret_json(&net);
+        let document: Value = serde_json::from_str(&written.text).unwrap();
+        let mut diagnostics = Vec::new();
+        let map = element_map::finish(written.element_map, &mut diagnostics)
+            .unwrap()
+            .unwrap();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        for (section, entries) in [
+            ("branch", map.branch().collect::<Vec<_>>()),
+            ("generator", map.generator().collect::<Vec<_>>()),
+            ("bus", map.bus().collect::<Vec<_>>()),
+        ] {
+            let keys: Vec<&String> = document["elements"][section]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect();
+            for (_, row) in &entries {
+                let row = row.unwrap();
+                assert_eq!(row.table, section);
+                assert_eq!(row.key.as_ref(), Some(keys[row.index]));
+            }
+        }
+        let tenth = map.branch().nth(9).unwrap().1.unwrap();
+        assert_eq!(tenth.key.as_deref(), Some("10"));
+        assert_eq!(tenth.index, 1);
+
+        let shared = net.buses()[1].id;
+        net.buses_mut()[2].id = shared;
+        let written = write_egret_json(&net);
+        let mut diagnostics = Vec::new();
+        let map = element_map::finish(written.element_map, &mut diagnostics)
+            .unwrap()
+            .unwrap();
+        let buses: Vec<_> = map.bus().map(|(_, row)| row).collect();
+        assert!(buses[1].is_none());
+        assert_eq!(buses[2].unwrap().key, Some(shared.to_string()));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code() == "EMIT.ELEMENT_MAP.UNMAPPED")
+        );
     }
 
     fn fixture(name: &str) -> String {
