@@ -157,11 +157,11 @@ pub use powerio_core::electrical;
 /// keep ordinary callers out of the component crate paths.
 pub use powerio_core::{
     ArtifactPath, ComponentId, Destination, Diagnostic, DiagnosticCode, DiagnosticId,
-    DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, EmitResult,
-    EmittedOutput, Fidelity, FormatId, HistoryEntry, HistoryId, HistoryKind, MemoryArtifact,
-    OutputLayout, PioModule, Producer, Scenario, ScenarioId, ScenarioSet, Source, SourceBuffer,
-    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, SourceTree,
-    SourceTreeLimits, StagedEdit, TimePoint, TimeSeries,
+    DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, ElementMap,
+    EmitResult, EmittedOutput, Fidelity, FormatId, HistoryEntry, HistoryId, HistoryKind,
+    MemoryArtifact, OutputLayout, PioModule, Producer, RowRef, Scenario, ScenarioId, ScenarioSet,
+    Source, SourceBuffer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
+    SourceTree, SourceTreeLimits, StagedEdit, TimePoint, TimeSeries,
 };
 
 /// The facade error covers source acquisition, routing, stored modules, and

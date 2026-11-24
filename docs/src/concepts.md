@@ -160,6 +160,14 @@ source bytes or fresh canonical output; and the emission diagnostics, which
 report each loss. A single file format produces one artifact, and a directory
 format such as PyPSA CSV, GridFM, or CGMES produces one per file.
 
+`EmitResult::element_map` (Python `id_map`) says which written row each bus,
+branch, and generator became: for each element `uid`, the target table, the
+row index in that table as written, the target's own key for the row, and for
+a branch whether the row runs from the element's `to` bus. The writer records
+it as it writes, so it tells parallel branches and generators on one bus
+apart. It is absent when the emission echoes retained source bytes and for
+targets whose writer does not record one yet.
+
 `resolve_format` maps an accepted spelling of a format to its canonical token
 and reports the conventional file suffix, the output layout, and whether a
 fresh writer exists. It describes formats only; values are named by

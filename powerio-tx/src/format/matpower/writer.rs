@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::diagnostics::Diagnostics;
-use crate::format::{TextEmission, warn_extra_branch_rating_sets};
+use crate::format::{TargetFormat, TextEmission, element_map, warn_extra_branch_rating_sets};
+use powerio_core::{ElementMapBuilder, RowRef};
 
 /// The MATPOWER emission family, named once for the block below.
 use crate::diagnostics::codes::EMIT_MATPOWER as F;
@@ -18,16 +19,19 @@ use crate::network::{BalancedNetwork, BusId, GenCost, Generator};
 /// Serialize `net` to canonical MATPOWER `.m` text from the typed model. The
 /// byte exact echo of an unchanged parsed module lives on the module emission
 /// path ([`crate::emit`]); this is the semantic serializer.
+#[cfg(test)]
 #[must_use]
 pub fn write_matpower(net: &BalancedNetwork) -> String {
-    canonical(net)
+    canonical(net, None)
 }
 
 /// MATPOWER conversion with fidelity warnings: the canonical path can't carry
 /// everything the neutral model holds, so it itemizes what it leaves out, the
 /// cross-format leg of the fidelity behavior (see [`TextEmission`]).
 pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> TextEmission {
-    TextEmission::new(write_matpower(net), canonical_warnings(net))
+    let mut map = element_map::builder(net, TargetFormat::Matpower);
+    let text = canonical(net, Some(&mut map));
+    TextEmission::new(text, canonical_warnings(net)).with_element_map(map)
 }
 
 /// One bus name as a MATLAB single-quoted string body.
@@ -239,7 +243,11 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
 /// byte-exact. HVDC lines ride `mpc.dcline`/`mpc.dclinecost`, the same blocks
 /// the reader reads.
 #[allow(clippy::too_many_lines)] // flat per-section serializer; splitting adds noise
-fn canonical(net: &BalancedNetwork) -> String {
+///
+/// `map`, when given, records each bus, branch, and generator row as it is
+/// written: the `bus`, `branch`, and `gen` matrices hold one row per element
+/// in module order, a bus keyed on its `BUS_I` number.
+fn canonical(net: &BalancedNetwork, mut map: Option<&mut ElementMapBuilder>) -> String {
     // Aggregate demand and shunts onto their bus. MATPOWER's bus row states
     // one demand and one shunt per bus with no status of their own, so an out
     // of service element cannot be written as anything but absent — folding
@@ -264,7 +272,10 @@ fn canonical(net: &BalancedNetwork) -> String {
     let _ = writeln!(s, "mpc.baseMVA = {};", net.base_mva());
 
     let _ = writeln!(s, "mpc.bus = [");
-    for b in net.buses() {
+    for (index, b) in net.buses().iter().enumerate() {
+        if let Some(map) = map.as_deref_mut() {
+            map.bus(index, RowRef::new("bus", index).with_key(b.id.to_string()));
+        }
         let (pd, qd) = demand.get(&b.id).copied().unwrap_or((0.0, 0.0));
         let (gs, bs) = shunt.get(&b.id).copied().unwrap_or((0.0, 0.0));
         let _ = writeln!(
@@ -303,7 +314,10 @@ fn canonical(net: &BalancedNetwork) -> String {
     // A solved case states PF, QF, PT, QT after ANGMAX, for every row or none.
     let solved = branches_solved(net);
     let _ = writeln!(s, "mpc.branch = [");
-    for br in net.branches() {
+    for (index, br) in net.branches().iter().enumerate() {
+        if let Some(map) = map.as_deref_mut() {
+            map.branch(index, RowRef::new("branch", index), false);
+        }
         let _ = write!(
             s,
             "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -345,7 +359,10 @@ fn canonical(net: &BalancedNetwork) -> String {
         // to keep the matrix rectangular.
         let with_caps = net.generators().iter().any(Generator::has_caps);
         let _ = writeln!(s, "mpc.gen = [");
-        for g in net.generators() {
+        for (index, g) in net.generators().iter().enumerate() {
+            if let Some(map) = map.as_deref_mut() {
+                map.generator(index, RowRef::new("gen", index));
+            }
             let _ = write!(
                 s,
                 "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",

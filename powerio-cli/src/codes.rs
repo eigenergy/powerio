@@ -27,6 +27,8 @@ powerio_core::diagnostic_codes! {
         "an emitted sidecar path is not relative to the output directory", category = Output;
     EMIT_CLI_ERRORS_REPORTED = "EMIT.CLI.ERRORS_REPORTED", Error,
         "the writer reported errors, so the output is incomplete", category = Output;
+    EMIT_CLI_ID_MAP_UNAVAILABLE = "EMIT.CLI.ID_MAP_UNAVAILABLE", Warning,
+        "the emission has no element map, so --id-map wrote nothing";
     BIND_CLI_UNCLASSIFIED = "BIND.CLI.UNCLASSIFIED", Error,
         "the command failed without a registered diagnostic code";
 }

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TargetFormat, TextEmission, element_map, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_SURGE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -19,6 +19,7 @@ use crate::network::{
 };
 use crate::normalize;
 use crate::{Error, Result};
+use powerio_core::{ElementMapBuilder, RowRef};
 
 const FMT: &str = "Surge JSON";
 const FORMAT_VALUE: &str = "surge-json";
@@ -39,6 +40,9 @@ fn three_winding_transformer_identity(
 pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     let mut network = Map::new();
+    // Buses are keyed on their number, generators on their written id;
+    // branches carry no id of their own.
+    let mut map = element_map::builder(net, TargetFormat::SurgeJson);
 
     network.insert("name".into(), Value::String(net.name().clone()));
     network.insert("base_mva".into(), jnum(net.base_mva()));
@@ -50,7 +54,14 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
         Value::Array(
             net.buses()
                 .iter()
-                .map(|bus| bus_obj(bus, bus_shunts.get(&bus.id).copied()))
+                .enumerate()
+                .map(|(index, bus)| {
+                    map.bus(
+                        index,
+                        RowRef::new("buses", index).with_key(bus.id.to_string()),
+                    );
+                    bus_obj(bus, bus_shunts.get(&bus.id).copied())
+                })
                 .collect(),
         ),
     );
@@ -59,7 +70,7 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
         Value::Array(net.loads().iter().enumerate().map(load_obj).collect()),
     );
     network.insert("fixed_shunts".into(), Value::Array(fixed_shunt_objs(net)));
-    network.insert("branches".into(), Value::Array(branch_objs(net)));
+    network.insert("branches".into(), Value::Array(branch_objs(net, &mut map)));
 
     // Surge's network profile has no three-winding transformer record. Report
     // the specific equipment that cannot cross this format boundary rather
@@ -93,15 +104,10 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
         );
     }
 
-    let mut gen_counts: BTreeMap<BusId, usize> = BTreeMap::new();
-    let mut generators = Vec::new();
-    for generator in net.generators() {
-        generators.push(gen_obj(generator, &mut gen_counts, &mut warnings));
-    }
-    for storage in net.storage() {
-        generators.push(storage_gen_obj(storage, &mut gen_counts));
-    }
-    network.insert("generators".into(), Value::Array(generators));
+    network.insert(
+        "generators".into(),
+        Value::Array(generator_objs(net, &mut map, &mut warnings)),
+    );
 
     if !net.hvdc().is_empty() {
         let links = net
@@ -135,7 +141,31 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
 
     warn_extra_branch_rating_sets(&F, FMT, net, &mut warnings);
     super::warn_dropped_areas(&F, FMT, true, net, &mut warnings);
-    finish(&F, root, warnings)
+    finish(&F, root, warnings).with_element_map(map)
+}
+
+/// The generator records: every generator, keyed on its written id, then
+/// every storage unit, which has no generator element behind it.
+fn generator_objs(
+    net: &BalancedNetwork,
+    map: &mut ElementMapBuilder,
+    warnings: &mut Diagnostics,
+) -> Vec<Value> {
+    let mut gen_counts: BTreeMap<BusId, usize> = BTreeMap::new();
+    let mut generators = Vec::new();
+    for (index, generator) in net.generators().iter().enumerate() {
+        let written = gen_obj(generator, &mut gen_counts, warnings);
+        let mut row = RowRef::new("generators", index);
+        if let Some(id) = written.get("id").and_then(Value::as_str) {
+            row = row.with_key(id);
+        }
+        map.generator(index, row);
+        generators.push(written);
+    }
+    for storage in net.storage() {
+        generators.push(storage_gen_obj(storage, &mut gen_counts));
+    }
+    generators
 }
 
 fn bus_type(kind: BusType) -> &'static str {
@@ -312,11 +342,14 @@ fn shunt_obj(net: &BalancedNetwork, i: usize, shunt: &Shunt) -> Value {
 /// otherwise each pair hands out "1", "2", ... The pair is taken unordered so
 /// a reversed parallel branch (20-10 beside 10-20) also gets a circuit of its
 /// own.
-fn branch_objs(net: &BalancedNetwork) -> Vec<Value> {
+fn branch_objs(net: &BalancedNetwork, map: &mut ElementMapBuilder) -> Vec<Value> {
     let mut circuit_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
     net.branches()
         .iter()
-        .map(|branch| {
+        .enumerate()
+        .map(|(index, branch)| {
+            // A branch row keeps the element's from and to buses.
+            map.branch(index, RowRef::new("branches", index), false);
             let pair = if branch.from <= branch.to {
                 (branch.from, branch.to)
             } else {

@@ -164,6 +164,12 @@ pio_emit_result_release(result);
 pio_destination_release(destination);
 ```
 
+`pio_emit_result_element_map` returns the element map as JSON: which written
+row each bus, branch, and generator became, keyed on element `uid`, in the
+shape [the Python guide](python.md) describes for `EmitResult.id_map`. The
+view is empty when the emission recorded no map (a retained source echo, or a
+target whose writer records none).
+
 `pio_module_serialize` writes PowerIO IR and `pio_module_deserialize` reads
 it. The document header names the schema (`"schema": "pio-ir"`) and its
 version, and `pio_schema_report` reports both under `powerio_ir`; the producer

@@ -6754,6 +6754,16 @@ PioStringView pio_emit_result_layout(const PioEmitResult *result);
 PioStringView pio_emit_result_fidelity(const PioEmitResult *result);
 
 /**
+ * The element map as JSON: which written row each bus, branch, and
+ * generator became. An empty view when the emission recorded no map (a
+ * retained source echo, or a target whose writer records none).
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_emit_result_element_map(const PioEmitResult *result);
+
+/**
  *
  * # Safety
  * Pointers and handles must satisfy the crate-level safety requirements.

@@ -13,6 +13,12 @@ pub(crate) struct MemoryEmission {
     #[allow(dead_code)] // The binary consumes sidecars; the library target does not.
     pub sidecars: Vec<MemorySidecar>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The element map as JSON, when the writer recorded one.
+    #[allow(dead_code)] // The binary consumes the map; the library target does not.
+    pub element_map: Option<String>,
+    /// The emission returned the retained source bytes.
+    #[allow(dead_code)] // The binary consumes this flag; the library target does not.
+    pub retained: bool,
 }
 
 impl MemoryEmission {
@@ -28,6 +34,8 @@ pub(crate) fn unpack_memory_emission(
     primary_name: Option<&str>,
 ) -> anyhow::Result<MemoryEmission> {
     let diagnostics = result.diagnostics().to_vec();
+    let element_map = result.element_map().map(powerio_core::ElementMap::to_json);
+    let retained = result.fidelity() == powerio_core::Fidelity::ExactSameFormat;
     let powerio_core::EmittedOutput::Memory { artifacts } = result.into_output() else {
         anyhow::bail!("a memory destination returned path output")
     };
@@ -55,6 +63,8 @@ pub(crate) fn unpack_memory_emission(
         text,
         sidecars,
         diagnostics,
+        element_map,
+        retained,
     })
 }
 

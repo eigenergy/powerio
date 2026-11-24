@@ -13,6 +13,7 @@ mod component_id;
 pub mod dense;
 mod diagnostic;
 pub mod electrical;
+mod element_map;
 mod error;
 mod module;
 pub(crate) mod nonfinite;
@@ -31,6 +32,7 @@ pub use diagnostic::{
     ErrorCategory, attach_retention_details, check_registry, check_scope_ownership,
     code_is_well_formed, render_diagnostic, render_diagnostics,
 };
+pub use element_map::{ElementMap, ElementMapBuilder, RowRef};
 pub use error::Error;
 pub use module::{PioModule, StagedEdit};
 pub use output::{

@@ -38,7 +38,7 @@ import operator as _operator
 import os as _os
 from collections import namedtuple
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Union
 
 from . import _powerio
@@ -203,12 +203,21 @@ class Artifact:
 
 @dataclass(frozen=True)
 class EmitResult:
-    """Artifact inventory and diagnostics from an emission or serialization."""
+    """Artifact inventory and diagnostics from an emission or serialization.
+
+    ``id_map`` says which written row each bus, branch, and generator became:
+    a ``dict`` with ``"format"``, ``"powerio"``, and ``"bus"``, ``"branch"``,
+    and ``"gen"`` sections, each mapping an element ``uid`` (in module order)
+    to ``{"table", "index", "key"?, "flip"?}`` or ``None``. It is ``None``
+    when the emission returned the retained source bytes (no writer ran) and
+    for targets whose writer records no map.
+    """
 
     artifacts: tuple[Artifact, ...]
     layout: str
     fidelity: str
     diagnostics: tuple[Diagnostic, ...]
+    id_map: Optional[dict[str, Any]] = field(default=None, hash=False)
 
     @property
     def text(self) -> Optional[str]:
@@ -2273,6 +2282,7 @@ def _result_from_native(result: dict[str, Any]) -> EmitResult:
         layout=result["layout"],
         fidelity=result["fidelity"],
         diagnostics=tuple(result["diagnostics"]),
+        id_map=None if result.get("element_map") is None else _json.loads(result["element_map"]),
     )
 
 

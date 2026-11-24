@@ -2229,6 +2229,32 @@ def test_emit_matpower_echo_is_byte_exact():
     assert conv.diagnostics == ()
 
 
+def test_emit_result_id_map_names_each_written_row():
+    module = powerio.parse(DATA / "case4par.m")
+    result = powerio.emit(module, "surge-json")
+    id_map = result.id_map
+    assert id_map["format"] == "surge-json"
+    assert id_map["powerio"] == powerio.__version__
+    assert list(id_map) == ["format", "powerio", "bus", "branch", "gen"]
+    assert list(id_map["bus"]) == ["10", "20", "30", "40"]
+    surge = json.loads(result.text)
+    for uid, row in id_map["branch"].items():
+        written = surge["network"][row["table"]][row["index"]]
+        assert row["flip"] is False
+        assert f'{written["from_bus"]}-{written["to_bus"]}' == uid.removesuffix("-2")
+    gen = id_map["gen"]["bus-10-2"]
+    assert surge["network"]["generators"][gen["index"]]["id"] == gen["key"] == "gen_10_2"
+
+    # An unchanged module emitted to its own format echoes the source and
+    # runs no writer.
+    assert powerio.emit(module, "matpower").id_map is None
+    assert powerio.serialize(module).id_map["branch"]["10-20"] == {
+        "table": "branches",
+        "index": 0,
+        "flip": False,
+    }
+
+
 def test_emit_matpower_to_each_format():
     for fmt in [
         "powermodels-json",

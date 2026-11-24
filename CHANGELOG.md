@@ -49,6 +49,20 @@
   switch no longer counts. The OpenDSS writer keeps a closed switch ideal when
   its extras also carry a `name` or `type`.
 
+- `emit` returns an element map that says which written row each bus,
+  branch, and generator became (#916). `EmitResult::element_map()` in Rust,
+  `EmitResult.id_map` in Python, `pio_emit_result_element_map` in the C ABI,
+  and `powerio convert --id-map PATH` give it as JSON: for each element `uid`,
+  in module order, the target table, the 0-based row index in that table as
+  written, the target's own key for the row where it has one, and for a branch
+  whether the row's first end is the element's `to` bus. The writer records
+  each row as it writes it, so two parallel branches or two generators on one
+  bus no longer have to be told apart by position. This release records maps
+  for MATPOWER and Surge JSON output; `serialize` returns the identity map
+  over the IR network tables. Other targets, and an emission that returns the
+  retained source bytes, have no map. An element a writer writes no row for
+  maps to `null` with `EMIT.ELEMENT_MAP.UNMAPPED`. No written byte changes.
+
 - Surge JSON output states bus shunts on the bus and branch charging once.
   The writer put every bus shunt only in `fixed_shunts`, which Surge does not
   add to its admittance matrix, so a Surge solve of case14 or case118 ran with

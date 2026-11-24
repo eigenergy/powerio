@@ -98,6 +98,12 @@ crate::diagnostic_codes! {
         "a complete staged output could not be moved into place", category = Io;
     EMIT_IO_CLEANUP = "EMIT.IO.CLEANUP", Error,
         "an incomplete output staging path could not be removed", category = Io;
+    EMIT_ELEMENT_MAP_DUPLICATE_ROW = "EMIT.ELEMENT_MAP.DUPLICATE_ROW", Error,
+        "a writer recorded two elements for one written row or row key", category = Output;
+    EMIT_ELEMENT_MAP_DUPLICATE_UID = "EMIT.ELEMENT_MAP.DUPLICATE_UID", Warning,
+        "two elements of one kind share a uid, so the emission returns no element map";
+    EMIT_ELEMENT_MAP_UNMAPPED = "EMIT.ELEMENT_MAP.UNMAPPED", Warning,
+        "the target wrote no row for an element, so its element map entry is null";
 }
 
 pub use ALL as CORE_DIAGNOSTIC_CODES;

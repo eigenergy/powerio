@@ -208,7 +208,8 @@ powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
                               diagnostic.rs, codes.rs, error.rs, records.rs,
                               time_series.rs, scenario.rs, component_id.rs,
                               validation.rs (limits), bounded.rs, nonfinite.rs,
-                              cim.rs (shared CIM vocabulary, MG-RAVENS profiles)
+                              cim.rs (shared CIM vocabulary, MG-RAVENS profiles),
+                              element_map.rs (emit's element map and builder)
 powerio-tx/src                network.rs (BalancedNetwork and its tables),
                               indexed.rs, hvdc.rs, lcc.rs, normalize.rs,
                               operations.rs, dc.rs, gen_cost.rs,
@@ -303,6 +304,14 @@ docs/                         the mdBook guide, the schema archive, release note
   a distribution format), the facade metadata in `powerio/src/formats.rs`,
   and the CLI token in `FormatArg` in `powerio-cli/src/main.rs`. Format enums are nonexhaustive and bindings use
   stable names rather than integer positions.
+- **Element maps.** A balanced writer records which row each bus, branch,
+  and generator became as it writes the row: start a builder with
+  `format::element_map::builder(net, target)`, call its `bus`, `branch` (with
+  `flip`), or `generator` method with the element's module position and a
+  `RowRef`, and attach it with `TextEmission::with_element_map`. The emit
+  path finishes it and refuses two elements on one row or key. Each target's
+  test lives in `powerio/tests/element_map_<format>.rs` over the shared
+  harness in `powerio/tests/common/element_map.rs`.
 - **PowerIO IR.** `serialize` and `deserialize` move `PioModule<PioValue>`.
   Retained source bytes are not serialized. The header is `"schema": "pio-ir"`
   with `"version"` naming the release whose schema the document follows;

@@ -134,6 +134,31 @@ An `EmitResult` has the artifacts (one `Artifact` per produced file, with its
 commit), the layout, the fidelity, and the emission diagnostics. `result.text`
 is the UTF-8 memory artifact when there is a single one, and `None` otherwise.
 
+`result.id_map` says which written row each bus, branch, and generator became,
+so results another tool reports per row can be joined back to element `uid`s:
+
+```python
+result = powerio.emit(module, "surge-json")
+result.id_map["branch"]["10-20-2"]
+# {'table': 'branches', 'index': 1, 'flip': False}
+result.id_map["gen"]["bus-10"]
+# {'table': 'generators', 'index': 0, 'key': 'gen_10_1'}
+```
+
+It is a `dict` with `"format"`, `"powerio"` (the release that wrote it), and a
+`"bus"`, `"branch"`, and `"gen"` section, each mapping every element `uid` in
+module order to its row: `table` is the target's table, `index` the 0-based
+row position in that table as written, `key` the target's own name for the row
+when it has one (always a string), and `flip`, on branches only, is true when
+the row's first end is the element's `to` bus. An element the target writes no
+row for maps to `None`, with an `EMIT.ELEMENT_MAP.UNMAPPED` diagnostic. Rows a
+writer adds with no element behind them are absent. MATPOWER and Surge JSON
+record maps in this release, and `serialize` returns the identity map over the
+IR network's `buses`, `branches`, and `generators`. `id_map` is `None` for
+other targets and when the emission returned the retained source bytes (an
+unchanged module emitted to its own format runs no writer, and its source's
+row order is not known in general).
+
 PowerIO IR has its own pair of functions:
 
 ```python

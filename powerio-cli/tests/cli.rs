@@ -390,6 +390,48 @@ fn convert_to_stdout_keeps_text_on_stdout() {
 }
 
 #[test]
+fn convert_id_map_writes_the_element_map_or_warns() {
+    let case = repo_file("tests/data/case4par.m");
+    let tmp = tempfile::tempdir().unwrap();
+    let output = tmp.path().join("case.surge.json");
+    let id_map = tmp.path().join("case.map.json");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "surge-json",
+        "-o",
+        output.to_str().unwrap(),
+        "--id-map",
+        id_map.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let map: serde_json::Value = serde_json::from_slice(&std::fs::read(&id_map).unwrap()).unwrap();
+    assert_eq!(map["format"], "surge-json");
+    assert_eq!(map["branch"]["10-20-2"]["index"], 1);
+    assert_eq!(map["gen"]["bus-10-2"]["key"], "gen_10_2");
+
+    // The MATPOWER echo of a MATPOWER source runs no writer: no map, a warning.
+    let output = tmp.path().join("case.m");
+    let id_map = tmp.path().join("echo.map.json");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "matpower",
+        "-o",
+        output.to_str().unwrap(),
+        "--id-map",
+        id_map.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    assert!(!id_map.exists());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("EMIT.CLI.ID_MAP_UNAVAILABLE"), "{stderr}");
+    assert!(stderr.contains("retained source"), "{stderr}");
+}
+
+#[test]
 fn convert_goc3_problem_and_solution_source_emits_official_solution() {
     let source = repo_file("tests/data/goc3");
     let out = run(&[

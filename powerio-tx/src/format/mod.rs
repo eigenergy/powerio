@@ -52,6 +52,7 @@ use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, Transmission
 mod cgmes;
 mod decode;
 mod egret;
+pub(crate) mod element_map;
 pub(crate) mod goc3;
 mod ieee_cdf;
 mod json_extension;
@@ -1080,6 +1081,8 @@ pub(crate) struct TextEmission {
     pub(crate) text: String,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) fidelity: powerio_core::Fidelity,
+    /// The rows the writer recorded, finished when the emission commits.
+    pub(crate) element_map: Option<powerio_core::ElementMapBuilder>,
 }
 
 impl TextEmission {
@@ -1088,7 +1091,14 @@ impl TextEmission {
             text,
             diagnostics: diagnostics.into_records(),
             fidelity: powerio_core::Fidelity::Canonical,
+            element_map: None,
         }
+    }
+
+    /// The same emission carrying the element map its writer recorded.
+    pub(crate) fn with_element_map(mut self, map: powerio_core::ElementMapBuilder) -> Self {
+        self.element_map = Some(map);
+        self
     }
 
     /// An emission that dropped nothing, e.g. a same format echo.
@@ -1502,11 +1512,14 @@ pub fn emit_with_options(
         &mut conv.diagnostics,
         "EMIT.SINCAL.RETAINED_SOURCE_OMITTED",
     )?;
+    let map = element_map::finish(conv.element_map.take(), &mut conv.diagnostics)?;
     let artifact = powerio_core::MemoryArtifact::new(
         powerio_core::ArtifactPath::new("case").expect("static name is a valid artifact path"),
         conv.text.into_bytes(),
     );
-    destination.__commit_artifacts(false, conv.fidelity, vec![artifact], conv.diagnostics)
+    destination
+        .__commit_artifacts(false, conv.fidelity, vec![artifact], conv.diagnostics)
+        .map(|result| element_map::attach(result, map))
 }
 
 /// Emit a parsed module as a PyPSA CSV folder through a destination. Either

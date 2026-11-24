@@ -9017,6 +9017,7 @@ pub(crate) fn write_jiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         text,
         diagnostics,
         fidelity: emission.fidelity,
+        element_map: emission.element_map,
     })
 }
 

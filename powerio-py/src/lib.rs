@@ -224,6 +224,7 @@ fn emit_result_to_py<'py>(
         .iter()
         .map(PyDiagnostic::from)
         .collect();
+    let element_map = result.element_map().map(powerio_core::ElementMap::to_json);
     let artifacts = PyList::empty(py);
     match result.into_output() {
         powerio_core::EmittedOutput::Memory {
@@ -272,6 +273,7 @@ fn emit_result_to_py<'py>(
     output.set_item("layout", layout)?;
     output.set_item("fidelity", fidelity)?;
     output.set_item("diagnostics", diagnostics)?;
+    output.set_item("element_map", element_map)?;
     Ok(output)
 }
 
