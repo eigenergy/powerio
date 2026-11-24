@@ -5,7 +5,7 @@
 //! exact same format writes, and reports source sections that stay only in the
 //! retained document.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
@@ -56,10 +56,7 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
         "fixed_shunts".into(),
         Value::Array(net.shunts().iter().enumerate().map(shunt_obj).collect()),
     );
-    network.insert(
-        "branches".into(),
-        Value::Array(net.branches().iter().enumerate().map(branch_obj).collect()),
-    );
+    network.insert("branches".into(), Value::Array(branch_objs(net)));
 
     // Surge's network profile has no three-winding transformer record. Report
     // the specific equipment that cannot cross this format boundary rather
@@ -235,12 +232,44 @@ fn shunt_obj((i, shunt): (usize, &Shunt)) -> Value {
     Value::Object(obj)
 }
 
-fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
+/// The branch records, each with a circuit of its own.
+///
+/// Surge keys a branch on its bus pair and circuit, so parallel branches need
+/// distinct circuits. A captured source circuit wins, as in the PSS/E writer;
+/// otherwise each pair hands out "1", "2", ... The pair is taken unordered so
+/// a reversed parallel branch (20-10 beside 10-20) also gets a circuit of its
+/// own.
+fn branch_objs(net: &BalancedNetwork) -> Vec<Value> {
+    let mut circuit_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
+    net.branches()
+        .iter()
+        .map(|branch| {
+            let pair = if branch.from <= branch.to {
+                (branch.from, branch.to)
+            } else {
+                (branch.to, branch.from)
+            };
+            let circuit = super::allocate_circuit_id(
+                branch
+                    .extras
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty()),
+                pair,
+                &mut circuit_ids,
+            );
+            branch_obj(branch, circuit)
+        })
+        .collect()
+}
+
+fn branch_obj(branch: &Branch, circuit: String) -> Value {
     let charging = branch.calc_terminal_charging();
     let mut obj = Map::new();
     obj.insert("from_bus".into(), Value::from(branch.from.0 as u64));
     obj.insert("to_bus".into(), Value::from(branch.to.0 as u64));
-    obj.insert("circuit".into(), Value::String("1".into()));
+    obj.insert("circuit".into(), Value::String(circuit));
     obj.insert("r".into(), jnum(branch.r));
     obj.insert("x".into(), jnum(branch.x));
     obj.insert("b".into(), jnum(branch.calc_total_charging_b()));
@@ -831,8 +860,23 @@ fn read_branch(value: &Value) -> Result<Branch> {
         solution: read_branch_solution(obj)?,
         uid: None,
         route: None,
-        extras: Extras::new(),
+        extras: read_branch_circuit(obj),
     })
+}
+
+/// Capture a branch circuit into its extras under `"id"`, the key the PSS/E
+/// reader uses, so the writer (and the PSS/E and PSLF writers) replay it. A
+/// circuit of `1` is the positional default the writer allocates when none is
+/// retained, so it is not kept, as in the PSS/E reader.
+fn read_branch_circuit(obj: &Map<String, Value>) -> Extras {
+    let mut extras = Extras::new();
+    if let Some(circuit) = string_map(obj, "circuit")
+        .map(str::trim)
+        .filter(|circuit| !circuit.is_empty() && *circuit != "1")
+    {
+        extras.insert("id".into(), Value::String(circuit.to_owned()));
+    }
+    extras
 }
 
 fn read_branch_charging(obj: &Map<String, Value>, b: f64) -> Result<Option<BranchCharging>> {
@@ -1204,7 +1248,7 @@ fn source_loss_warnings_from_root(
         &mut warnings,
         network,
         "branches",
-        "branch control, phase shifter bounds, sequence, thermal, cost, or circuit metadata retained only in source text",
+        "branch control, phase shifter bounds, sequence, thermal, or cost metadata retained only in source text",
         branch_has_source_only_fields,
     );
     warn_count(
@@ -1327,7 +1371,6 @@ fn branch_has_source_only_fields(branch: &Map<String, Value>) -> bool {
         || bool_not_default(branch, "delta_connected", false)
         || string_not_default(branch, "phase_mode", "fixed")
         || string_not_default(branch, "tap_mode", "fixed")
-        || string_not_default(branch, "circuit", "1")
         || has_nonempty(branch, "opf_control")
         || has_nonempty(branch, "owners")
         || has_nonempty(branch, "zero_sequence")
