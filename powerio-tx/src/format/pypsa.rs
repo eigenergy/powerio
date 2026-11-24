@@ -11,7 +11,9 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
-use super::{bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
+use powerio_core::{ElementMapBuilder, RowRef};
+
+use super::{bus_kv, element_map, set_bus_kind, warn_extra_branch_rating_sets, zbase};
 use crate::diagnostics::codes::EMIT_PYPSA as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -704,15 +706,31 @@ fn write_pypsa_csv_folder(
 /// `(file name, content)` pairs in emission order, plus the writer's
 /// findings. Both the folder writer and the `Destination` write commit these
 /// as one atomic inventory.
-// One emission body shared by the streaming and inventory writers; the
-// length is the format's table count, not branching depth.
-#[allow(clippy::too_many_lines)]
+#[cfg(test)]
 pub(crate) fn pypsa_csv_artifacts(
     net: &BalancedNetwork,
 ) -> (
     Vec<(&'static str, String)>,
     Vec<crate::diagnostics::Diagnostic>,
 ) {
+    let (files, diagnostics, _) = pypsa_csv_artifacts_with_map(net);
+    (files, diagnostics)
+}
+
+/// The PyPSA CSV inventory and findings plus the element map: each bus,
+/// line, transformer, and generator row keyed on its `name` column, in the
+/// table (file stem) it was written to.
+// One emission body shared by the streaming and inventory writers; the
+// length is the format's table count, not branching depth.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn pypsa_csv_artifacts_with_map(
+    net: &BalancedNetwork,
+) -> (
+    Vec<(&'static str, String)>,
+    Vec<crate::diagnostics::Diagnostic>,
+    ElementMapBuilder,
+) {
+    let mut map = element_map::builder_for_token(net, "pypsa-csv");
     let mut files: Vec<(&'static str, String)> = Vec::new();
     let mut write_file = |name: &'static str, text: String| {
         files.push((name, text));
@@ -910,14 +928,19 @@ pub(crate) fn pypsa_csv_artifacts(
     let v_set = bus_voltage_setpoints(net, &mut warnings);
     write_file("network.csv", network_csv(net));
     write_file("snapshots.csv", ",snapshot\n0,now\n".to_owned());
-    write_file("buses.csv", buses_csv(net, &key_of, &kv_of, &v_set));
+    write_file(
+        "buses.csv",
+        buses_csv(net, &key_of, &kv_of, &v_set, &mut map),
+    );
     write_file(
         "generators.csv",
-        generators_csv(net, &key_of, &mut warnings),
+        generators_csv(net, &key_of, &mut warnings, &mut map),
     );
     write_file("loads.csv", loads_csv(net, &key_of));
-    write_file("lines.csv", lines_csv(net, &key_of, &kv_of));
-    let transformers = transformers_csv(net, &key_of);
+    write_file("lines.csv", lines_csv(net, &key_of, &kv_of, &mut map));
+    // A case without transformers writes no transformers.csv and records no
+    // row in it.
+    let transformers = transformers_csv(net, &key_of, &mut map);
     if transformers.lines().count() > 1 {
         write_file("transformers.csv", transformers);
     }
@@ -932,7 +955,7 @@ pub(crate) fn pypsa_csv_artifacts(
     let (v_mag, v_ang) = bus_state_csvs(net, &key_of);
     write_file(BUS_VM_FILE, v_mag);
     write_file(BUS_VA_FILE, v_ang);
-    (files, warnings.into_records())
+    (files, warnings.into_records(), map)
 }
 
 /// The snapshot local bus voltage state files: magnitude per unit and angle
@@ -1044,6 +1067,7 @@ fn buses_csv(
     key_of: &HashMap<BusId, String>,
     kv_of: &HashMap<BusId, f64>,
     v_set: &HashMap<BusId, f64>,
+    map: &mut ElementMapBuilder,
 ) -> String {
     // The coordinate columns appear only when the case carries locations, so
     // a case without geometry writes exactly as before. PyPSA defaults a
@@ -1055,7 +1079,8 @@ fn buses_csv(
     } else {
         "name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max\n"
     });
-    for b in net.buses() {
+    for (index, b) in net.buses().iter().enumerate() {
+        map.bus(index, RowRef::new("buses", index).with_key(&key_of[&b.id]));
         let _ = write!(
             s,
             "{},{},{},{},{}",
@@ -1087,6 +1112,7 @@ fn generators_csv(
     net: &BalancedNetwork,
     key_of: &HashMap<BusId, String>,
     warnings: &mut Diagnostics,
+    map: &mut ElementMapBuilder,
 ) -> String {
     let mut s = String::from(
         "name,bus,control,p_nom,p_set,q_set,p_min_pu,p_max_pu,marginal_cost,marginal_cost_quadratic,active,v_mag_pu_set\n",
@@ -1122,6 +1148,10 @@ fn generators_csv(
             }
             None => (0.0, 0.0),
         };
+        map.generator(
+            i,
+            RowRef::new("generators", i).with_key(format!("gen_{}", i + 1)),
+        );
         let _ = writeln!(
             s,
             "gen_{},{},{},{},{},{},{},{},{},{},{},{}",
@@ -1234,14 +1264,22 @@ fn lines_csv(
     net: &BalancedNetwork,
     key_of: &HashMap<BusId, String>,
     kv_of: &HashMap<BusId, f64>,
+    map: &mut ElementMapBuilder,
 ) -> String {
     let mut s = String::from("name,bus0,bus1,r,x,b,g,s_nom,v_ang_min,v_ang_max,active,s_max_pu\n");
-    for (i, br) in net
+    for (index, (i, br)) in net
         .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| !b.is_transformer())
+        .enumerate()
     {
+        // bus0 is always the branch's from bus, so no row is flipped.
+        map.branch(
+            i,
+            RowRef::new("lines", index).with_key(format!("line_{}", i + 1)),
+            false,
+        );
         // PyPSA per-unitizes line ohms on the BUS0 v_nom, not bus1.
         let zb = zbase(*kv_of.get(&br.from).unwrap_or(&0.0), net.base_mva());
         let charging = br.calc_terminal_charging();
@@ -1269,15 +1307,26 @@ fn lines_csv(
     s
 }
 
-fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
+fn transformers_csv(
+    net: &BalancedNetwork,
+    key_of: &HashMap<BusId, String>,
+    map: &mut ElementMapBuilder,
+) -> String {
     let mut s =
         String::from("name,bus0,bus1,r,x,b,g,s_nom,tap_ratio,phase_shift,active,s_max_pu,model\n");
-    for (i, br) in net
+    for (index, (i, br)) in net
         .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| b.is_transformer())
+        .enumerate()
     {
+        // bus0 is the from (tap) side, so no row is flipped.
+        map.branch(
+            i,
+            RowRef::new("transformers", index).with_key(format!("transformer_{}", i + 1)),
+            false,
+        );
         // PyPSA wants impedances per unit on the transformer's own s_nom base
         // A zero limit must not make the impedance base zero. Use a positive
         // base and state the actual thermal constraint separately in s_max_pu.
@@ -2153,6 +2202,11 @@ mod tests {
         BalancedNetwork::in_memory("t", 100.0, buses, Vec::new())
     }
 
+    /// An element map builder for a test that calls one table writer alone.
+    fn scratch_map(net: &BalancedNetwork) -> ElementMapBuilder {
+        element_map::builder_for_token(net, "pypsa-csv")
+    }
+
     #[test]
     fn an_extendable_branch_is_bounded_by_its_maximum_capacity() {
         // Expansion models state s_nom = 0 for a line to be built. Reading
@@ -2398,7 +2452,7 @@ mod tests {
         *net.branches_mut() = vec![xfmr(1, 2, 50.0)];
         let key_of: HashMap<BusId, String> =
             net.buses().iter().map(|b| (b.id, bus_key(b))).collect();
-        let csv = transformers_csv(&net, &key_of);
+        let csv = transformers_csv(&net, &key_of, &mut scratch_map(&net));
         assert_eq!(
             csv.lines().nth(1).unwrap(),
             "transformer_1,1,2,0.0625,0.25,0.5,0,50,1.05,0,true,1,pi"
@@ -2411,7 +2465,7 @@ mod tests {
         *net.branches_mut() = vec![xfmr(1, 2, 0.0)];
         let key_of: HashMap<BusId, String> =
             net.buses().iter().map(|b| (b.id, bus_key(b))).collect();
-        let csv = transformers_csv(&net, &key_of);
+        let csv = transformers_csv(&net, &key_of, &mut scratch_map(&net));
         assert_eq!(
             csv.lines().nth(1).unwrap(),
             "transformer_1,1,2,0.125,0.5,0.25,0,100,1.05,0,true,inf,pi"
@@ -2865,7 +2919,7 @@ mod tests {
         let key_of: HashMap<BusId, String> =
             net.buses().iter().map(|b| (b.id, bus_key(b))).collect();
         let mut warnings = Diagnostics::new();
-        let csv = generators_csv(&net, &key_of, &mut warnings);
+        let csv = generators_csv(&net, &key_of, &mut warnings, &mut scratch_map(&net));
         assert_eq!(
             csv.lines().nth(1).unwrap(),
             "gen_1,1,PQ,10,1,0,0,1,3,4,true,1"

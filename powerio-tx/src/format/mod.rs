@@ -1556,8 +1556,8 @@ pub fn __emit_pypsa_csv_with_options(
             apply_emit_cost_policy(module.value(), options).map_err(core_error)?;
         (Some(network), diagnostics)
     };
-    let (artifacts, format_diagnostics) =
-        pypsa::pypsa_csv_artifacts(working.as_ref().unwrap_or(module.value()));
+    let (artifacts, format_diagnostics, map) =
+        pypsa::pypsa_csv_artifacts_with_map(working.as_ref().unwrap_or(module.value()));
     diagnostics.extend(format_diagnostics);
     diagnostics.extend(sincal_source_omitted(module.value()));
     powerio_core::attach_retention_details(
@@ -1574,12 +1574,15 @@ pub fn __emit_pypsa_csv_with_options(
             )
         })
         .collect();
-    destination.__commit_artifacts(
-        true,
-        powerio_core::Fidelity::Canonical,
-        artifacts,
-        diagnostics,
-    )
+    let map = element_map::finish(Some(map), &mut diagnostics)?;
+    destination
+        .__commit_artifacts(
+            true,
+            powerio_core::Fidelity::Canonical,
+            artifacts,
+            diagnostics,
+        )
+        .map(|result| element_map::attach(result, map))
 }
 
 /// Prepare a parsed module with emission policies. The plain

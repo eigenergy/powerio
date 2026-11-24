@@ -22,6 +22,12 @@ use super::TargetFormat;
 /// give it, computed on a copy: the caller's network and the written bytes do
 /// not change.
 pub(crate) fn builder(net: &BalancedNetwork, format: TargetFormat) -> ElementMapBuilder {
+    builder_for_token(net, format.token())
+}
+
+/// [`builder`] for a target with no [`TargetFormat`], such as the PyPSA CSV
+/// directory, named by its format token.
+pub(crate) fn builder_for_token(net: &BalancedNetwork, token: &str) -> ElementMapBuilder {
     let missing = net.buses().iter().any(|bus| bus.uid.is_none())
         || net.branches().iter().any(|branch| branch.uid.is_none())
         || net
@@ -40,7 +46,7 @@ pub(crate) fn builder(net: &BalancedNetwork, format: TargetFormat) -> ElementMap
             .expect("assign_missing_component_ids gives every record a uid")
     };
     ElementMapBuilder::new(
-        format.token(),
+        token,
         net.buses().iter().map(|bus| uid(&bus.uid)),
         net.branches().iter().map(|branch| uid(&branch.uid)),
         net.generators().iter().map(|generator| uid(&generator.uid)),
