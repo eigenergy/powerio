@@ -34,7 +34,8 @@ From the repository root, after checking out the pinned upstream revision:
 
 ```sh
 python3 -m venv .venv-ravens
-.venv-ravens/bin/python -m pip install /path/to/MG-RAVENS -r evals/validation/ravens/requirements.txt
+.venv-ravens/bin/python -m pip install -r evals/validation/ravens/requirements.txt
+.venv-ravens/bin/python -m pip install --no-deps /path/to/MG-RAVENS
 cargo build --locked -p powerio-cli
 .venv-ravens/bin/python evals/validation/ravens/generate_schema.py /path/to/MG-RAVENS target/ravens-upstream-schema.json
 .venv-ravens/bin/python evals/validation/ravens/check.py \
