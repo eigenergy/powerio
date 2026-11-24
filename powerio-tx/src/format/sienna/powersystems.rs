@@ -561,7 +561,7 @@ pub(in crate::format) fn write(
     original: Option<&Value>,
 ) -> Result<TextEmission> {
     let schema = original.map(to_schema).transpose()?;
-    let (mut doc, warnings) = super::write_document(net, 4, schema.as_ref())?;
+    let (mut doc, warnings) = super::write_document(net, 4, schema.as_ref(), true)?;
     let mut output = TextEmission::new(String::new(), warnings);
     let mut winding_warnings = Diagnostics::new();
     super::powersystems_three_winding::prepare(&mut doc, net.base_mva(), &mut winding_warnings)?;

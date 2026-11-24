@@ -95,6 +95,20 @@
   used to be refused, so a case with zero base voltages could not come back
   through PyPSA's own import and export.
 
+- PowerSystems JSON output writes a line angle difference limit at or beyond
+  90 degrees as ±pi/2, PowerSystems' unconstrained value. An unconstrained
+  MATPOWER limit of -360/360 used to be written as ±2 pi radians, which
+  PowerSystems.jl reads as degrees and turns into a ±6.3 degree limit. The
+  source limits stay in the retained extension, so a PowerSystems JSON round
+  trip still reads -360/360. A constrained limit between 90 and 360 degrees
+  is reported with `EMIT.SIENNA.VALUE_SUBSTITUTED` (#921).
+
+- PowerSystems JSON output writes a zero-tap branch whose end buses differ in
+  base voltage by more than 1% as a `TapTransformer` with tap 1 and reports it
+  with `EMIT.SIENNA.ELEMENT_RELABELED`. It used to be written as a `Line`,
+  which PowerSystems.jl refuses to build. Reading the file back restores the
+  zero-tap branch (#921).
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
