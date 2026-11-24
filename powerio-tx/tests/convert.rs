@@ -3291,6 +3291,69 @@ fn surge_shunts_with_identity_keep_their_fixed_shunt_record() {
 }
 
 #[test]
+fn surge_shunts_that_cancel_on_a_bus_each_keep_a_record() {
+    // case14's only shunt is bus 9's Bs = 19. A second anonymous shunt there
+    // with -19 makes the bus total zero, so every bus in the document states
+    // zero. With the +19 left on the bus and only the -19 as a record, the
+    // reader took the file for the 0.12.4 layout and lost the +19.
+    let shunt_summary = |net: &BalancedNetwork| -> Vec<(usize, f64, bool)> {
+        let mut rows: Vec<(usize, f64, bool)> = net
+            .shunts()
+            .iter()
+            .map(|shunt| (shunt.bus.0, shunt.b, shunt.in_service))
+            .collect();
+        rows.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        rows
+    };
+
+    let mut net = parse_file(data("case14.m"), None).unwrap().network;
+    net.shunts_mut()
+        .push(powerio_tx::Shunt::new(BusId(9), 0.0, -19.0));
+    let doc = surge_doc(&net);
+    assert_close(
+        surge_bus(&doc, 9)["shunt_susceptance_mvar"]
+            .as_f64()
+            .unwrap(),
+        0.0,
+    );
+    let records: Vec<f64> = doc["network"]["fixed_shunts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["b_mvar"].as_f64().unwrap())
+        .collect();
+    assert_eq!(records, vec![19.0, -19.0]);
+    let parsed = parse_str(&serde_json::to_string(&doc).unwrap(), "surge-json").unwrap();
+    assert_eq!(shunt_summary(&parsed.network), shunt_summary(&net));
+
+    // A named shunt cancelled by an anonymous one: the same rule applies, and
+    // with bus 9 nonzero the file takes the current reading.
+    let mut net = parse_file(data("case14.m"), None).unwrap().network;
+    let mut named = powerio_tx::Shunt::new(BusId(4), 0.0, 5.0);
+    named.uid = Some("cap_4".into());
+    net.shunts_mut()
+        .extend([named, powerio_tx::Shunt::new(BusId(4), 0.0, -5.0)]);
+    let doc = surge_doc(&net);
+    assert_close(
+        surge_bus(&doc, 4)["shunt_susceptance_mvar"]
+            .as_f64()
+            .unwrap(),
+        0.0,
+    );
+    assert_eq!(doc["network"]["fixed_shunts"].as_array().unwrap().len(), 2);
+    let parsed = parse_str(&serde_json::to_string(&doc).unwrap(), "surge-json").unwrap();
+    assert_eq!(has_legacy_layout_warning(&parsed), 0);
+    assert_eq!(shunt_summary(&parsed.network), shunt_summary(&net));
+    assert!(
+        parsed
+            .network
+            .shunts()
+            .iter()
+            .any(|shunt| shunt.uid.as_deref() == Some("cap_4"))
+    );
+}
+
+#[test]
 fn infers_surge_json_file() {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
