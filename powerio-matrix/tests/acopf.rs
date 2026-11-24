@@ -6,7 +6,7 @@
 use powerio_matrix::{
     AcOpfAssemblyOptions, AcPfAssemblyOptions, BalancedNetwork, Branch, Bus, BusId, BusType,
     GenCost, Generator, PreparedAcBusSpecification, PreparedObjective, build_ac_opf_preparation,
-    build_ac_pf_preparation,
+    build_ac_pf_preparation, calc_prepared_bus_specifications,
 };
 use powerio_prob::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, ActiveConstraints,
@@ -658,4 +658,60 @@ fn energized_zero_limit_keeps_two_bus_shunts_and_admittance() {
     assert_ne!(outage.g, zero.g);
     assert_ne!(outage.b, zero.b);
     assert_eq!(network.shunts(), instance.network().shunts());
+}
+
+#[test]
+fn prepared_specifications_scale_by_the_instance_network_base() {
+    let network = BalancedNetwork::in_memory(
+        "specifications",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
+    );
+    let raw = AcPfInstance::new(
+        network.clone(),
+        vec![
+            AcBusSpecification::Reference { vm: 1.0, va: 30.0 },
+            AcBusSpecification::Pq { p: -10.0, q: -2.0 },
+        ],
+    )
+    .unwrap();
+    let prepared = calc_prepared_bus_specifications(&raw, powerio_matrix::Units::PerUnit).unwrap();
+    assert_eq!(
+        prepared[1],
+        PreparedAcBusSpecification::Pq { p: -0.1, q: -0.02 }
+    );
+    let PreparedAcBusSpecification::Reference { va, .. } = prepared[0] else {
+        panic!("reference expected");
+    };
+    assert!((va - 30f64.to_radians()).abs() < 1e-15);
+    // The preparation reads the same conversion at its retained buses.
+    let full = build_ac_pf_preparation(&raw, &AcPfAssemblyOptions::default()).unwrap();
+    assert_eq!(full.specifications.len(), 2);
+
+    // A normalized network already states per unit power and radians.
+    let mut network = network;
+    network.generators_mut().push(Generator::new(BusId(1)));
+    let normalized = network.to_normalized().unwrap();
+    let instance = AcPfInstance::new(
+        normalized,
+        vec![
+            AcBusSpecification::Reference { vm: 1.0, va: 0.5 },
+            AcBusSpecification::Pq { p: -0.1, q: -0.02 },
+        ],
+    )
+    .unwrap();
+    let prepared =
+        calc_prepared_bus_specifications(&instance, powerio_matrix::Units::PerUnit).unwrap();
+    assert_eq!(
+        prepared[1],
+        PreparedAcBusSpecification::Pq { p: -0.1, q: -0.02 }
+    );
+    assert_eq!(
+        prepared[0],
+        PreparedAcBusSpecification::Reference { vm: 1.0, va: 0.5 }
+    );
 }

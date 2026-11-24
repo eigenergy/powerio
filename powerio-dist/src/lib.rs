@@ -54,8 +54,10 @@
 pub mod bmopf;
 pub mod cim;
 mod collect;
+mod connection;
 pub mod convert;
 mod current_form;
+pub mod dense;
 pub mod diagnostics;
 pub mod dss;
 pub mod error;
@@ -65,25 +67,40 @@ pub mod graph;
 pub mod kron;
 pub mod lindist3flow;
 pub mod model;
+pub mod overhead;
 pub mod pmd;
 mod portable_path;
 pub mod ravens;
 pub mod readiness;
+pub mod sequence;
+mod shielded_cable;
+/// The scalar electrical formulas both network families share, which live
+/// in powerio-core ([`electrical::calc_impedance_base`], the power factor
+/// relations and the voltage power law term).
+pub use powerio_core::electrical;
+pub mod terminal_index;
 #[cfg(test)]
 pub(crate) mod testkit;
 mod transform_audit;
+pub mod transformer;
+pub mod voltage_zones;
 
 pub use bmopf::{BMOPF_SCHEMA_ID, BmopfEmitOptions};
 pub use cim::{
     CIM_DIST_HEAD_BYTES, looks_like_cim_dist, looks_like_cim_dist_header,
     source_looks_like_cim_dist,
 };
+pub use connection::{
+    ConnectionChannel, calc_capacitor_susceptance, calc_coil_susceptance_matrix,
+    calc_connection_channels, calc_element_connection, calc_mapped_neutral_position,
+    calc_wye_neutral_position, lindist3flow_carries_connection, orient_delta_ring,
+};
 pub use convert::{
     DistTargetFormat, EmitOptions, classify_distribution_json, emit, emit_with_options, parse,
-    parse_dist_target_format,
+    parse_dist_target_format, parse_with_dss_limits,
 };
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
-pub use dss::{DssEmitOptions, DssLoadVoltageBounds};
+pub use dss::{DssEmitOptions, DssLoadVoltageBounds, DssReadLimits};
 pub use error::{Error, Result};
 pub use geo::{
     CoordinateSpace, DistCanvas, DistComponentLocation, DistCoordsKind, DistGeoMeta,
@@ -108,11 +125,16 @@ pub use model::{
     DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
     DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
-    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, find_unresolved_references,
+    TerminalRole, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
+    calc_terminal_role, find_unresolved_references,
 };
 pub use readiness::{
     ElectricalReadiness, ReadinessFinding, ReadinessSeverity, audit_electrical_readiness,
     require_electrical_readiness,
 };
+pub use terminal_index::{MulticonductorTerminalIndex, TerminalIndexError};
 
 mod load_voltage;
+pub use load_voltage::{
+    ZipLaw, ZipVoltage, calc_load_nominal_admittance, calc_zip_coefficient, calc_zip_nominal_power,
+};

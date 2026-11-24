@@ -12,6 +12,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use serde_json::{Map, Value, json};
 
 use super::profile;
+use super::validate::strictly_positive;
 use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::diagnostics::{Diagnostic, DiagnosticInfo};
@@ -19,8 +20,8 @@ use crate::model::{
     ActivePowerReference, ActivePowerUnit, ConductorMatrix, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, DistWinding,
     DistWindingConn, Extras, MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
-    VoltVarControl, VoltWattControl, VoltageSource, n_winding_impedance_base,
-    open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
+    VoltVarControl, VoltWattControl, VoltageSource, open_delta_connection, open_delta_pairable,
+    pair_keys, winding_phase_pair,
 };
 
 /// Untyped classes that belong to the BMOPF ecosystem. The schema declares
@@ -326,18 +327,8 @@ impl Writer {
         conventions: Option<&Value>,
     ) {
         let phases = b.phase_indices(conventions).len();
-        let neutral = match conventions {
-            Some(roles) => roles
-                .get("neutral")
-                .and_then(Value::as_array)
-                .is_some_and(|names| {
-                    names.iter().any(|n| {
-                        n.as_str()
-                            .is_some_and(|n| b.terminals.iter().any(|t| t == n))
-                    })
-                }),
-            None => b.terminals.len() > phases,
-        };
+        // The one terminal classification: an earth `0` is not a neutral.
+        let neutral = !b.neutral_indices(conventions).is_empty();
         let mut rules: Vec<(&str, bool, &str)> = Vec::new();
         for key in ["vng_max", "vpn_min", "vpn_max"] {
             rules.push((key, neutral, "needs a neutral terminal"));
@@ -485,8 +476,10 @@ impl Writer {
                     // Writer-owned: this document is powerio's emission, at
                     // the model's frequency, against the version above. A
                     // source `schema_version` names the version that document
-                    // was written against, not this one.
-                    "$schema" | "schema_version" | "frequency" | "case_study_generator" => {}
+                    // was written against, not this one, and `crs` is stated
+                    // from the network's geometry by `geometry`.
+                    "$schema" | "schema_version" | "frequency" | "case_study_generator" | "crs" => {
+                    }
                     "title" | "description" | "license" | "authors" | "data_sources"
                     | "created" | "modified" | "provenance" | "version" => {
                         m.insert(key.clone(), value.clone());
@@ -551,16 +544,9 @@ impl Writer {
     /// required rating or nominal voltage is not positive is dropped whole,
     /// since it cannot be stated validly without it.
     fn enforce_positive_values(&mut self, doc: &mut Map<String, Value>) {
-        fn positive(value: &Value) -> bool {
-            let one = |v: &Value| v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0);
-            one(value)
-                || value
-                    .as_array()
-                    .is_some_and(|a| !a.is_empty() && a.iter().all(one))
-        }
         let drop_fields = |o: &mut Map<String, Value>, keys: &[&str], what: &str, w: &mut Self| {
             for key in keys {
-                if o.get(*key).is_some_and(|v| !positive(v)) {
+                if o.get(*key).is_some_and(|v| !strictly_positive(v)) {
                     let value = o.remove(*key).unwrap_or(Value::Null);
                     w.warn(
                         &C::EMIT_BMOPF_FIELD_DROPPED,
@@ -601,7 +587,7 @@ impl Writer {
                     drop_fields(o, optional, &what, self);
                     let mut invalid = required
                         .iter()
-                        .find(|key| o.get(**key).is_some_and(|v| !positive(v)))
+                        .find(|key| o.get(**key).is_some_and(|v| !strictly_positive(v)))
                         .map(|key| (*key).to_owned());
                     if let Some(Value::Array(windings)) = o.get_mut("windings") {
                         for (idx, winding) in windings.iter_mut().enumerate() {
@@ -613,7 +599,7 @@ impl Writer {
                                 &what,
                                 self,
                             );
-                            if w.get("v_nom").is_some_and(|v| !positive(v)) {
+                            if w.get("v_nom").is_some_and(|v| !strictly_positive(v)) {
                                 invalid.get_or_insert_with(|| format!("winding {idx} v_nom"));
                             }
                         }
@@ -643,17 +629,10 @@ impl Writer {
     /// A capacitor's `v_nom` is required and strictly positive in the
     /// schema; a capacitor without a positive one is dropped and reported.
     fn drop_nonpositive_capacitors(&mut self, doc: &mut Map<String, Value>) {
-        fn positive(value: &Value) -> bool {
-            let one = |v: &Value| v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0);
-            one(value)
-                || value
-                    .as_array()
-                    .is_some_and(|a| !a.is_empty() && a.iter().all(one))
-        }
         if let Some(Value::Object(capacitors)) = doc.get_mut("capacitor") {
             let invalid: Vec<String> = capacitors
                 .iter()
-                .filter(|(_, c)| c.get("v_nom").is_some_and(|v| !positive(v)))
+                .filter(|(_, c)| c.get("v_nom").is_some_and(|v| !strictly_positive(v)))
                 .map(|(name, _)| name.clone())
                 .collect();
             for name in invalid {
@@ -2515,7 +2494,10 @@ impl Writer {
                 wj.insert("terminal_map".into(), json!(w.terminal_map));
                 wj.insert(
                     "v_nom".into(),
-                    self.num(n_winding_bmopf_v_nom(w), "transformer winding v_nom"),
+                    self.num(
+                        crate::transformer::calc_coil_voltage(t, idx),
+                        "transformer winding v_nom",
+                    ),
                 );
                 wj.insert(
                     "configuration".into(),
@@ -2524,14 +2506,17 @@ impl Writer {
                         DistWindingConn::Delta => "DELTA",
                     }),
                 );
-                let zbase = n_winding_base(w, w.s_rating).unwrap_or(f64::NAN);
+                let zbase = crate::transformer::calc_winding_impedance_base(t, idx, w.s_rating)
+                    .unwrap_or(f64::NAN);
                 wj.insert(
                     "r_winding".into(),
                     self.num(w.r_pct / 100.0 * zbase, "transformer winding r_winding"),
                 );
                 wj.insert("s_rating".into(), self.num(w.s_rating, "winding s_rating"));
                 wj.insert("tap_ratio".into(), self.num(w.tap, "winding tap_ratio"));
-                if w.r_neutral.is_some_and(|r| r < 0.0) {
+                if crate::transformer::calc_stated_neutral_grounding(w)
+                    == crate::transformer::WindingNeutralGrounding::Floating
+                {
                     self.warn(&C::EMIT_BMOPF_FIELD_DROPPED, format!("transformer {} winding {idx}: open OpenDSS neutral has no internal impedance branch; neutral impedance fields omitted", t.name));
                 } else {
                     // The schema takes nonnegative winding neutral fields,
@@ -2567,10 +2552,9 @@ impl Writer {
             })
             .collect();
         o.insert("windings".into(), Value::Array(windings));
-        let base_z = t
-            .windings
-            .first()
-            .and_then(|w| n_winding_base(w, s))
+        let base_z = (!t.windings.is_empty())
+            .then(|| crate::transformer::calc_winding_impedance_base(t, 0, s))
+            .flatten()
             .unwrap_or(f64::NAN);
         let x_sc = self.n_winding_x_sc(t, base_z);
         o.insert("x_sc".into(), Value::Object(x_sc));
@@ -2635,7 +2619,6 @@ impl Writer {
     fn decompose_wye_wye(&mut self, t: &DistTransformer) -> Vec<(String, Value)> {
         let mut out = Vec::new();
         let (from, to) = (&t.windings[0], &t.windings[1]);
-        let sqrt3 = 3f64.sqrt();
         for k in 0..t.phases {
             let per = |w: &DistWinding| {
                 let neutral = w.terminal_map.last().cloned().unwrap_or_default();
@@ -2643,7 +2626,7 @@ impl Writer {
                     bus: w.bus.clone(),
                     terminal_map: vec![w.terminal_map[k].clone(), neutral],
                     conn: DistWindingConn::Wye,
-                    v_ref: w.v_ref / sqrt3,
+                    v_ref: crate::electrical::calc_wye_phase_voltage(w.v_ref),
                     s_rating: w.s_rating / 3.0,
                     r_pct: w.r_pct,
                     tap: w.tap,
@@ -2752,7 +2735,9 @@ impl Writer {
             let resistance = format!("r_neutral_{side}");
             let reactance = format!("x_neutral_{side}");
             self.transformer_neutral_field(o, t, &resistance, winding.r_neutral);
-            if winding.r_neutral.is_some_and(|r| r < 0.0) {
+            if crate::transformer::calc_stated_neutral_grounding(winding)
+                == crate::transformer::WindingNeutralGrounding::Floating
+            {
                 if let Some(x) = winding.x_neutral {
                     self.warn(&C::EMIT_BMOPF_TRANSFORMER_NEUTRAL_DROPPED,
                         format!("transformer {}: {reactance}={x} omitted with the open neutral encoded by negative {resistance}", t.name));
@@ -2864,16 +2849,13 @@ impl Writer {
         let voltage = t
             .windings
             .get(1)
-            .map(|w| crate::model::winding_coil_voltage(w, t.phases));
+            .map(|w| crate::transformer::calc_coil_voltage(t, 1) * w.tap);
         if let Some(voltage) = voltage
-            && voltage.is_finite()
-            && voltage > 0.0
-            && s.is_finite()
-            && s > 0.0
+            && let Some(y_base) =
+                crate::electrical::calc_admittance_base(voltage, s / t.phases.max(1) as f64)
             && loss.is_none_or(|v| v >= 0.0)
             && imag.is_none_or(|v| v >= 0.0)
         {
-            let y_base = s / t.phases.max(1) as f64 / voltage.powi(2);
             o.insert(
                 "no_load_shunt".into(),
                 json!({
@@ -3693,36 +3675,21 @@ fn winding_base(w: &DistWinding) -> Option<f64> {
 /// circuit. The schema leaves every series impedance field optional, so the
 /// caller drops the field instead, and an absent field reads as unknown.
 fn base_impedance(v_ref: f64, s: f64) -> Option<f64> {
-    (s > 0.0 && s.is_finite()).then(|| v_ref * v_ref / s)
+    powerio_core::electrical::calc_impedance_base(v_ref, s)
 }
 
-fn n_winding_phase_count(w: &DistWinding) -> usize {
-    crate::model::n_winding_phase_count(w.conn, &w.terminal_map)
-}
-
-fn n_winding_bmopf_v_nom(w: &DistWinding) -> f64 {
-    if w.conn == DistWindingConn::Wye && n_winding_phase_count(w) >= 2 {
-        w.v_ref / 3f64.sqrt()
-    } else {
-        w.v_ref
-    }
-}
-
-fn n_winding_base(w: &DistWinding, s: f64) -> Option<f64> {
-    n_winding_impedance_base(n_winding_phase_count(w), n_winding_bmopf_v_nom(w), s)
-}
-
+/// The `delta_roll` of a DELTA winding: the one delta orientation
+/// ([`crate::transformer::calc_delta_direction`]), so a unit that states no
+/// roll writes the orientation it has (`+1` for a BMOPF n-winding unit, as
+/// BMOPFTools defaults it) and reads back unchanged. `None` for a WYE
+/// winding or an orientation the model cannot state.
 fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &DistWinding) -> Option<i64> {
     if w.conn != DistWindingConn::Delta {
         return None;
     }
-    t.extras
-        .get(BMOPF_DELTA_ROLLS_EXTRA)
-        .and_then(Value::as_object)
-        .and_then(|rolls| rolls.get(&(idx + 1).to_string()))
-        .and_then(Value::as_i64)
-        .filter(|roll| *roll == 1 || *roll == -1)
-        .or(Some(-1))
+    crate::transformer::calc_delta_direction(t, idx)
+        .ok()
+        .map(i64::from)
 }
 
 /// The phase and neutral label lists, from the bus terminal names. The rule
@@ -3765,25 +3732,35 @@ fn proposal_provenance(meta: &mut Map<String, Value>) {
     }
 }
 
-/// Labels keep first-seen order and case-sensitive identity.
+/// Labels keep first-seen order and case-sensitive identity. Each label
+/// takes the role the one terminal classification
+/// ([`crate::model::DistBus::terminal_role`], over the network's terminal
+/// conventions: the CIM wire convention for a network read from CIM or
+/// MG-RAVENS) gives it: neutral when it is a
+/// neutral on any bus, else earth when it is earth on any bus, else phase.
+/// The `earth` list is written only when some label is earth.
 fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
-    let neutral_names: BTreeSet<&String> = net
-        .buses()
-        .iter()
-        .flat_map(|bus| {
-            let phases = bus.phase_indices(None);
-            bus.terminals
-                .iter()
-                .enumerate()
-                .filter_map(move |(index, name)| (!phases.contains(&index)).then_some(name))
-        })
-        .collect();
+    use crate::model::TerminalRole;
+    let named = |role: TerminalRole| -> BTreeSet<&String> {
+        net.buses()
+            .iter()
+            .flat_map(|bus| {
+                bus.terminals
+                    .iter()
+                    .filter(move |name| bus.terminal_role(name, net.terminal_conventions()) == role)
+            })
+            .collect()
+    };
+    let (neutral_names, earth_names) = (named(TerminalRole::Neutral), named(TerminalRole::Earth));
     let mut phase = Vec::new();
     let mut neutral = Vec::new();
+    let mut earth = Vec::new();
     for bus in net.buses() {
         for term in &bus.terminals {
             let labels = if neutral_names.contains(term) {
                 &mut neutral
+            } else if earth_names.contains(term) {
+                &mut earth
             } else {
                 &mut phase
             };
@@ -3792,7 +3769,14 @@ fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
             }
         }
     }
-    (!phase.is_empty() || !neutral.is_empty()).then(|| json!({"phase": phase, "neutral": neutral}))
+    if phase.is_empty() && neutral.is_empty() && earth.is_empty() {
+        return None;
+    }
+    let mut conventions = json!({"phase": phase, "neutral": neutral});
+    if !earth.is_empty() {
+        conventions["earth"] = json!(earth);
+    }
+    Some(conventions)
 }
 
 fn config_str(c: Configuration) -> &'static str {

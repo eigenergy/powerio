@@ -57,7 +57,7 @@ pub(super) fn prepare(
         let (profile, pf) = control_profile(ctx, inv, config)?;
         // pf > 0: Q on the same side as P (OpenDSS, BMOPF); Q/P = a/pf.
         let power_factor_coefficients =
-            pf.map(|v| [((1.0 - v.abs()) * (1.0 + v.abs())).sqrt(), -v]);
+            pf.map(powerio_core::electrical::calc_power_factor_coefficients);
         let slope = power_factor_coefficients
             .map(|[a, b]| -a / b)
             .filter(|v| v.is_finite());
@@ -168,7 +168,8 @@ fn curve(
             _ => Err(invalid(&inv.name, "invalid controller voltage reference")),
         })
         .collect::<Result<_>>()?;
-    let epsilon = 2e-3 * knots.iter().sum::<f64>() / (knots.len() as f64) / vb;
+    let epsilon =
+        super::MC_OPF_DROOP_SMOOTHING * knots.iter().sum::<f64>() / (knots.len() as f64) / vb;
     Ok(McOpfDroop {
         monitors: if avg { monitors } else { vec![monitors[k]] },
         knots: knots.iter().map(|v| v / vb).collect(),

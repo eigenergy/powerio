@@ -40,6 +40,20 @@ pub mod codes {
             "candidate multiconductor output has no native SINCAL acceptance evidence";
         EMIT_SINCAL_MULTICONDUCTOR_LOSS = "EMIT.DIST.SINCAL_LOSS", Warning,
             "candidate multiconductor output canonicalizes topology or omits ancillary data";
+        // The pandapower three-phase (runpp_3ph) reader in powerio-tnd.
+        READ_PANDAPOWER_TABLE_UNSUPPORTED = "READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED", Warning,
+            "a pandapower element table has no three-phase mapping and remains only in source";
+        READ_PANDAPOWER_ELEMENT_UNSUPPORTED = "READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED", Warning,
+            "a pandapower element row has no three-phase mapping and remains only in source";
+        READ_PANDAPOWER_APPROXIMATED = "READ.DIST.PANDAPOWER_APPROXIMATED", Warning,
+            "a mapped pandapower element differs from the runpp_3ph model";
+        READ_PANDAPOWER_OUT_OF_SERVICE = "READ.DIST.PANDAPOWER_OUT_OF_SERVICE", Warning,
+            "an out-of-service pandapower element is kept with its status in extras";
+        READ_PANDAPOWER_RETAINED_SOURCE_ONLY = "READ.DIST.PANDAPOWER_RETAINED_SOURCE_ONLY", Remark,
+            "pandapower data runpp_3ph does not use remain in extras or the retained source";
+        EMIT_PANDAPOWER_UNSUPPORTED = "EMIT.DIST.PANDAPOWER_UNSUPPORTED", Error,
+            "pandapower JSON output exists only as the echo of an unchanged pandapower source",
+            category = Output;
         // PARSE: the source text could not be decoded as given.
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
@@ -133,8 +147,16 @@ pub mod codes {
             "a value the model needs was absent or unusable and was defaulted";
         READ_DSS_VALUE_UNSUPPORTED = "READ.DSS.VALUE_UNSUPPORTED", Warning,
             "a property value outside the modeled set was read as the nearest one";
+        READ_DSS_CONTROL_NOT_EXECUTED = "READ.DSS.CONTROL_NOT_EXECUTED", Warning,
+            "a control is retained without running it; equipment keeps its written settings";
         READ_DSS_OBJECT_UNTYPED = "READ.DSS.OBJECT_UNTYPED", Warning,
             "an object shape the model does not type yet is kept untyped";
+        /// `New` named a general object (a linecode, a loadshape, wire data
+        /// and the like) that already exists. OpenDSS edits the existing
+        /// object without a message, and so does the reader. Severity
+        /// `Remark`: the script is valid and nothing was lost.
+        READ_DSS_OBJECT_REDEFINED = "READ.DSS.OBJECT_REDEFINED", Remark,
+            "a second `New` for an existing general object edited it, as OpenDSS does";
         READ_DSS_SOURCE_DISABLED = "READ.DSS.SOURCE_DISABLED", Remark,
             "a disabled source is retained without electrical contributions";
         EMIT_DSS_PROJECT_UNREPRESENTABLE = "EMIT.DSS.PROJECT_UNREPRESENTABLE", Error,
@@ -169,6 +191,10 @@ pub mod codes {
             "line geometry remains source data without calculated conductor impedances";
         BUILD_DIST_ELECTRICAL_INCOMPLETE = "BUILD.DIST.ELECTRICAL_INCOMPLETE", Error,
             "distribution equipment lacks the electrical data required for numerical use", category = Data;
+        BUILD_DIST_TRANSFORMER_INVALID = "BUILD.DIST.TRANSFORMER_INVALID", Error,
+            "a transformer's nameplate, tap, terminal map, neutral or magnetizing data is not usable", category = Data;
+        BUILD_DIST_TRANSFORMER_UNSUPPORTED = "BUILD.DIST.TRANSFORMER_UNSUPPORTED", Error,
+            "a transformer's shape or stated property has no supported winding equations", category = Data;
         TRANSFORM_DIST_LINDIST3FLOW_PREPARATION_FAILED =
             "TRANSFORM.DIST.LINDIST3FLOW_PREPARATION_FAILED", Error,
             "a distribution component cannot be prepared for LinDist3Flow", category = Data;

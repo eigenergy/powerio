@@ -150,10 +150,8 @@ fn inspection_budget_and_ir_dispatch_are_explicit() {
             .parse(&candidate.selection, &ParseOptions::default())
             .is_ok()
     );
-    let limits = CollectionLimits {
-        probe_bytes: 1,
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.probe_bytes = 1;
     let limited = Collection::from_files(
         "ir",
         [(
@@ -189,10 +187,8 @@ fn folder_reads_are_bounded_and_selections_share_owned_bytes() {
         .primary_buffer()
         .unwrap();
     assert!(Arc::ptr_eq(&a.shared_bytes(), &b.shared_bytes()));
-    let limits = CollectionLimits {
-        tree: powerio::SourceTreeLimits::new(1, 1, 1).unwrap(),
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.tree = powerio::SourceTreeLimits::new(1, 1, 1).unwrap();
     assert!(Collection::from_directory(dir.path(), limits).is_err());
 }
 

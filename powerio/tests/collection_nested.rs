@@ -69,22 +69,18 @@ fn nested_namespaces_and_native_layers_are_explicit() {
 fn siblings_clones_and_repeat_opens_share_expansion_and_entry_budgets() {
     let child = zip(&[("one.txt", b"abc"), ("two.txt", b"def")]);
     let outer = zip(&[("a.zip", &child), ("b.zip", &child)]);
-    let limits = CollectionLimits {
-        tree: SourceTreeLimits::new(5, 4096, 64).unwrap(),
-        archive: ArchiveLimits::new(4096, 5, 4096, 200).unwrap(),
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.tree = SourceTreeLimits::new(5, 4096, 64).unwrap();
+    limits.archive = ArchiveLimits::new(4096, 5, 4096, 200).unwrap();
     let collection = Collection::from_zip("outer", outer, limits).unwrap();
     let cloned = collection.clone();
     collection.open_nested("a.zip").unwrap();
     assert!(cloned.open_nested("b.zip").is_err());
     assert!(cloned.open_nested("a.zip").is_err());
 
-    let limits = CollectionLimits {
-        tree: SourceTreeLimits::new(4096, child.len() as u64 + 5, 64).unwrap(),
-        archive: ArchiveLimits::new(4096, 4096, 4096, 200).unwrap(),
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.tree = SourceTreeLimits::new(4096, child.len() as u64 + 5, 64).unwrap();
+    limits.archive = ArchiveLimits::new(4096, 4096, 4096, 200).unwrap();
     let collection = Collection::from_files(
         "memory",
         [(ArtifactPath::new("child.zip").unwrap(), child)],
@@ -100,9 +96,10 @@ fn work_is_bounded_per_operation_and_cancellation_is_sticky() {
         Collection::from_files(
             "memory",
             [(ArtifactPath::new("master.dss").unwrap(), Arc::clone(&bytes))],
-            CollectionLimits {
-                work_bytes,
-                ..CollectionLimits::default()
+            {
+                let mut limits = CollectionLimits::default();
+                limits.work_bytes = work_bytes;
+                limits
             },
         )
         .unwrap()
@@ -148,11 +145,9 @@ fn work_is_bounded_per_operation_and_cancellation_is_sticky() {
 fn failed_verification_releases_its_reservation_and_inspection_is_bounded_per_call() {
     let mut corrupt = zip(&[("payload.xml", b"abcdef")]).to_vec();
     corrupt[30 + "payload.xml".len()] ^= 1;
-    let limits = CollectionLimits {
-        tree: SourceTreeLimits::new(2, 4096, 64).unwrap(),
-        archive: ArchiveLimits::new(4096, 2, 4096, 200).unwrap(),
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.tree = SourceTreeLimits::new(2, 4096, 64).unwrap();
+    limits.archive = ArchiveLimits::new(4096, 2, 4096, 200).unwrap();
     for native in [false, true] {
         let collection = Collection::from_files(
             "memory",
@@ -189,9 +184,10 @@ fn failed_verification_releases_its_reservation_and_inspection_is_bounded_per_ca
                 ArtifactPath::new("x").unwrap(),
                 Arc::<[u8]>::from(&b"a"[..]),
             )],
-            CollectionLimits {
-                work_bytes,
-                ..CollectionLimits::default()
+            {
+                let mut limits = CollectionLimits::default();
+                limits.work_bytes = work_bytes;
+                limits
             },
         )
         .unwrap()
@@ -218,10 +214,8 @@ fn native_prefixed_zip_cannot_bypass_layers_and_dss_companions_are_opaque() {
         ("native.sinx", &prefixed),
         ("Master.DSS", b"New Circuit.case basekv=12.47\n"),
     ]);
-    let limits = CollectionLimits {
-        max_zip_layers: 1,
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.max_zip_layers = 1;
     let c = Collection::from_zip("outer", outer, limits).unwrap();
     for (name, format) in [("native.zip", "CGMES"), ("native.sinx", "sincal-balanced")] {
         let error = c

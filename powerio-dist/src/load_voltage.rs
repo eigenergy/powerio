@@ -28,38 +28,64 @@ impl DistLoadVoltageModel {
     ///
     /// Returns an error for missing coefficients, invalid parameters or
     /// nonfinite evaluation instead of manufacturing a nominal load law.
+    pub fn power_scale(&self, phase: usize, voltage: f64) -> Result<[f64; 2], String> {
+        self.power_scale_where(phase, voltage, [true; 2])
+    }
+
+    /// [`power_scale`](Self::power_scale) for only the components `evaluate`
+    /// selects, `[active power, reactive power]`. An inactive component is
+    /// returned as zero without evaluating its law, so an exponent stated for
+    /// a component the load does not draw (a reactive exponent of a purely
+    /// active load, say) cannot make the result nonfinite. A caller that
+    /// multiplies each factor by its nominal power passes `[p != 0, q != 0]`.
     #[expect(
         clippy::too_many_lines,
         reason = "keep all branches of the bounded voltage law together for comparison with its documented equations"
     )]
-    pub fn power_scale(&self, phase: usize, voltage: f64) -> Result<[f64; 2], String> {
+    pub fn power_scale_where(
+        &self,
+        phase: usize,
+        voltage: f64,
+        evaluate: [bool; 2],
+    ) -> Result<[f64; 2], String> {
         if !voltage.is_finite() || voltage < 0.0 {
             return Err("load voltage magnitude must be finite and nonnegative".into());
         }
         if matches!(self, Self::ConstantPower { .. }) {
-            return Ok([1.0; 2]);
+            return Ok(evaluate.map(|on| if on { 1.0 } else { 0.0 }));
         }
-        let nominal = *self
-            .v_nom()
-            .get(phase)
+        let nominal = self
+            .nominal_voltage(phase)
             .ok_or("missing nominal load voltage")?;
         if !nominal.is_finite() || nominal <= 0.0 {
             return Err("nominal load voltage must be positive and finite".into());
         }
         let voltage_pu = voltage / nominal;
-        let at = |v: &[f64]| -> Result<f64, String> {
-            v.get(phase)
-                .copied()
-                .filter(|v| v.is_finite())
-                .ok_or_else(|| "missing or nonfinite load coefficient".into())
+        let at = |v: &[f64]| coefficient(v, phase);
+        // An inactive component's exponent is never read; zero stands in, so
+        // its factor stays finite until it is cleared below.
+        let exponent = |v: &[f64], component: usize| -> Result<f64, String> {
+            if evaluate[component] { at(v) } else { Ok(0.0) }
         };
         let value = match self {
             Self::ConstantPower { .. } => unreachable!(),
-            Self::ConstantCurrent { .. } => [voltage_pu; 2],
-            Self::ConstantImpedance { .. } => [voltage_pu * voltage_pu; 2],
-            Self::Exponential {
-                gamma_p, gamma_q, ..
-            } => [voltage_pu.powf(at(gamma_p)?), voltage_pu.powf(at(gamma_q)?)],
+            Self::ConstantCurrent { .. }
+            | Self::ConstantImpedance { .. }
+            | Self::Exponential { .. }
+            | Self::Zip { .. } => {
+                let mut value = [0.0; 2];
+                for (component, out) in value.iter_mut().enumerate() {
+                    if evaluate[component] {
+                        let terms = self
+                            .component_terms(phase, component == 1)?
+                            .ok_or("load law has no power law terms")?;
+                        *out =
+                            powerio_core::electrical::calc_voltage_power_terms(&terms, voltage_pu)
+                                .0;
+                    }
+                }
+                value
+            }
             Self::BoundedConstantPower {
                 v_min_pu,
                 v_max_pu,
@@ -74,10 +100,12 @@ impl DistLoadVoltageModel {
                 {
                     return Err("constant-power bounds and current limit must be positive, finite and ordered".into());
                 }
+                // Outside the band the load is a constant impedance at the
+                // band edge: the one power law term with exponent two.
                 let scale = if voltage_pu <= *v_min_pu {
-                    (voltage_pu / v_min_pu).powi(2)
+                    crate::electrical::calc_voltage_power_term(1.0, 2.0, voltage_pu / v_min_pu).0
                 } else if voltage_pu > *v_max_pu {
-                    (voltage_pu / v_max_pu).powi(2)
+                    crate::electrical::calc_voltage_power_term(1.0, 2.0, voltage_pu / v_max_pu).0
                 } else {
                     1.0
                 };
@@ -90,21 +118,15 @@ impl DistLoadVoltageModel {
                 v_min_pu,
                 v_max_pu,
                 ..
-            } => bounded_exponential_scale(
-                voltage_pu,
-                [at(gamma_p)?, at(gamma_q)?],
-                [*v_low_pu, *v_min_pu, *v_max_pu],
-            )?,
-            Self::Zip {
-                alpha_z,
-                alpha_i,
-                alpha_p,
-                beta_z,
-                beta_i,
-                beta_p,
-                ..
+            } => {
+                let gamma = [exponent(gamma_p, 0)?, exponent(gamma_q, 1)?];
+                banded_scale(voltage_pu, [*v_low_pu, *v_min_pu, *v_max_pu])?.unwrap_or_else(|| {
+                    gamma.map(|exponent| {
+                        crate::electrical::calc_voltage_power_term(1.0, exponent, voltage_pu).0
+                    })
+                })
             }
-            | Self::BoundedZip {
+            Self::BoundedZip {
                 alpha_z,
                 alpha_i,
                 alpha_p,
@@ -115,14 +137,17 @@ impl DistLoadVoltageModel {
             } => {
                 let active = [at(alpha_z)?, at(alpha_i)?, at(alpha_p)?];
                 let reactive = [at(beta_z)?, at(beta_i)?, at(beta_p)?];
-                let (impedance_scale, current_scale, power_scale, dropout) =
-                    if let Self::BoundedZip {
+                let (impedance_scale, current_scale, power_scale, dropout) = {
+                    let Self::BoundedZip {
                         v_low_pu: low,
                         v_min_pu: min,
                         v_max_pu: max,
                         cutoff_pu: cutoff,
                         ..
                     } = self
+                    else {
+                        unreachable!()
+                    };
                     {
                         if [low, min, max, cutoff]
                             .iter()
@@ -132,28 +157,30 @@ impl DistLoadVoltageModel {
                                 "load voltage thresholds must be finite and nonnegative".into()
                             );
                         }
-                        if voltage_pu <= *low {
+                        let band = voltage_band(voltage_pu, [*low, *min, *max]);
+                        if band == VoltageBand::Low {
                             // Native low-voltage continuation is the full nominal
                             // impedance, even when ZIP coefficients do not sum to one.
                             return if (voltage_pu * voltage_pu).is_finite() {
-                                Ok([voltage_pu * voltage_pu; 2])
+                                Ok(evaluate.map(
+                                    |on| {
+                                        if on { voltage_pu * voltage_pu } else { 0.0 }
+                                    },
+                                ))
                             } else {
                                 Err("load power evaluation became nonfinite".into())
                             };
                         }
-                        let (current_scale, power_scale) = if voltage_pu <= *min {
-                            let weight = (voltage_pu - low) / (min - low);
-                            (
+                        let (current_scale, power_scale) = match band {
+                            VoltageBand::Transition(weight) => (
                                 voltage_pu * (low + (1.0 - low) * weight),
-                                voltage_pu * (low + (1.0 / min - low) * weight),
-                            )
-                        } else if voltage_pu > *max {
-                            (
+                                transition_power_scale(voltage_pu, *low, *min, weight),
+                            ),
+                            VoltageBand::High => (
                                 voltage_pu * voltage_pu / if *max == 0.0 { 1.0 } else { *max },
-                                voltage_pu * voltage_pu / if *max == 0.0 { 1.0 } else { max * max },
-                            )
-                        } else {
-                            (voltage_pu, 1.0)
+                                high_power_scale(voltage_pu, *max),
+                            ),
+                            _ => (voltage_pu, 1.0),
                         };
                         let dropout = if *cutoff > 0.0 {
                             f64::midpoint(1.0, (500.0 * (voltage_pu - cutoff)).tanh())
@@ -161,9 +188,8 @@ impl DistLoadVoltageModel {
                             1.0
                         };
                         (voltage_pu * voltage_pu, current_scale, power_scale, dropout)
-                    } else {
-                        (voltage_pu * voltage_pu, voltage_pu, 1.0, 1.0)
-                    };
+                    }
+                };
                 [
                     active[0] * impedance_scale
                         + active[1] * current_scale
@@ -175,10 +201,124 @@ impl DistLoadVoltageModel {
                 .map(|v| v * dropout)
             }
         };
+        let mut value = value;
+        for (factor, &on) in value.iter_mut().zip(&evaluate) {
+            if !on {
+                *factor = 0.0;
+            }
+        }
         if value.iter().any(|v| !v.is_finite()) {
             Err("load power evaluation became nonfinite".into())
         } else {
             Ok(value)
+        }
+    }
+
+    /// The nominal voltage of channel `channel`, volts, `None` when the law
+    /// states no entry for it.
+    #[must_use]
+    pub fn nominal_voltage(&self, channel: usize) -> Option<f64> {
+        channel_entry(self.v_nom(), channel)
+    }
+
+    /// The law of channel `channel` as voltage power law terms
+    /// `[fraction, exponent]`, active then reactive: each contributes
+    /// `fraction · nominal power · (|V| / V_nom)^exponent`. Constant power is
+    /// `[1, 0]`, constant current `[1, 1]`, constant impedance `[1, 2]`, an
+    /// exponential law `[1, γ]` and a ZIP law its three fractions at
+    /// exponents 2, 1 and 0. `None` for a voltage bounded law, which is
+    /// piecewise. Every coefficient is required, one entry per channel, as the
+    /// BMOPF schema states them.
+    ///
+    /// The one term form of the unbounded laws: [`power_scale`](Self::power_scale)
+    /// evaluates these terms with
+    /// [`powerio_core::electrical::calc_voltage_power_term`], and the
+    /// multiconductor OPF load law states them in per unit.
+    ///
+    /// # Errors
+    /// A missing or nonfinite coefficient.
+    pub fn calc_power_terms(&self, channel: usize) -> Result<Option<[Vec<[f64; 2]>; 2]>, String> {
+        Ok(self
+            .component_terms(channel, false)?
+            .zip(self.component_terms(channel, true)?)
+            .map(|(active, reactive)| [active, reactive]))
+    }
+
+    fn component_terms(
+        &self,
+        channel: usize,
+        reactive: bool,
+    ) -> Result<Option<Vec<[f64; 2]>>, String> {
+        let at = |v: &[f64]| coefficient(v, channel);
+        Ok(Some(match self {
+            Self::ConstantPower { .. } => vec![[1.0, 0.0]],
+            Self::ConstantCurrent { .. } => vec![[1.0, 1.0]],
+            Self::ConstantImpedance { .. } => vec![[1.0, 2.0]],
+            Self::Exponential {
+                gamma_p, gamma_q, ..
+            } => vec![[1.0, at(if reactive { gamma_q } else { gamma_p })?]],
+            Self::Zip {
+                alpha_z,
+                alpha_i,
+                alpha_p,
+                beta_z,
+                beta_i,
+                beta_p,
+                ..
+            } => {
+                let [z, i, p] = if reactive {
+                    [beta_z, beta_i, beta_p]
+                } else {
+                    [alpha_z, alpha_i, alpha_p]
+                };
+                vec![[at(z)?, 2.0], [at(i)?, 1.0], [at(p)?, 0.0]]
+            }
+            Self::BoundedZip { .. }
+            | Self::BoundedExponential { .. }
+            | Self::BoundedConstantPower { .. } => return Ok(None),
+        }))
+    }
+
+    /// [`power_scale_where`](Self::power_scale_where) of this law inside a
+    /// set of voltage bands `[v_low_pu, v_min_pu, v_max_pu]`, OpenDSS's load
+    /// voltage limits: both factors are `u²` (the nominal impedance) at or
+    /// below `v_low_pu`, `u * (low + (1/min - low) * (u - low)/(min - low))`
+    /// (current magnitude moving linearly to the constant power current at
+    /// `v_min_pu`) up to `v_min_pu`, `(u/max)²` above `v_max_pu`, and this
+    /// law's own factors between. A bounded exponential law is exactly its
+    /// exponential law inside its own bands; this applies the same bands
+    /// to any law, as a solver's voltage band option does.
+    ///
+    /// # Errors
+    /// Thresholds that are not finite and nonnegative, or what
+    /// [`power_scale_where`](Self::power_scale_where) refuses in the middle
+    /// band.
+    pub fn power_scale_in_voltage_bands(
+        &self,
+        phase: usize,
+        voltage: f64,
+        bands: [f64; 3],
+        evaluate: [bool; 2],
+    ) -> Result<[f64; 2], String> {
+        if !voltage.is_finite() || voltage < 0.0 {
+            return Err("load voltage magnitude must be finite and nonnegative".into());
+        }
+        let nominal = self
+            .nominal_voltage(phase)
+            .ok_or("missing nominal load voltage")?;
+        if !nominal.is_finite() || nominal <= 0.0 {
+            return Err("nominal load voltage must be positive and finite".into());
+        }
+        match banded_scale(voltage / nominal, bands)? {
+            Some(scale) => {
+                let value = [0, 1].map(|c| if evaluate[c] { scale[c] } else { 0.0 });
+                if value.iter().any(|v| !v.is_finite()) {
+                    Err("load power evaluation became nonfinite".into())
+                } else {
+                    Ok(value)
+                }
+            }
+            None => self.power_scale_where(phase, voltage, evaluate),
         }
     }
 
@@ -246,24 +386,168 @@ impl DistLoadVoltageModel {
     }
 }
 
-fn bounded_exponential_scale(
-    u: f64,
-    gamma: [f64; 2],
-    bounds: [f64; 3],
-) -> Result<[f64; 2], String> {
+/// A per channel entry: one entry per channel, in channel order, as the
+/// BMOPF schema states every load coefficient ("one entry per sub-load").
+fn channel_entry(values: &[f64], channel: usize) -> Option<f64> {
+    values.get(channel).copied()
+}
+
+/// A finite per channel load coefficient ([`channel_entry`]).
+fn coefficient(values: &[f64], channel: usize) -> Result<f64, String> {
+    channel_entry(values, channel)
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| "missing or nonfinite load coefficient".into())
+}
+
+/// Where a per unit voltage falls in a load's voltage bands
+/// `[low, min, max]`, in the native branch order (so overlapping thresholds
+/// keep it): at or below `low`, up to `min` (with the transition weight
+/// `(u - low)/(min - low)`), above `max`, or in the middle band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum VoltageBand {
+    Low,
+    Transition(f64),
+    High,
+    Middle,
+}
+
+fn voltage_band(u: f64, [low, min, max]: [f64; 3]) -> VoltageBand {
+    if u <= low {
+        VoltageBand::Low
+    } else if u <= min {
+        VoltageBand::Transition((u - low) / (min - low))
+    } else if u > max {
+        VoltageBand::High
+    } else {
+        VoltageBand::Middle
+    }
+}
+
+/// The constant power factor between `low` and `min`: current magnitude
+/// moving linearly from the nominal impedance's to `1/min`.
+fn transition_power_scale(u: f64, low: f64, min: f64, weight: f64) -> f64 {
+    u * (low + (1.0 / min - low) * weight)
+}
+
+/// The constant power factor above `max`: `(u/max)²`, `u²` for a zero `max`.
+fn high_power_scale(u: f64, max: f64) -> f64 {
+    u * u / if max == 0.0 { 1.0 } else { max * max }
+}
+
+/// Both factors of a law in the outer voltage bands, or `None` in the
+/// middle band, where the law's own factors hold.
+fn banded_scale(u: f64, bounds: [f64; 3]) -> Result<Option<[f64; 2]>, String> {
     if bounds.iter().any(|v| !v.is_finite() || *v < 0.0) {
         return Err("load voltage thresholds must be finite and nonnegative".into());
     }
     let [low, min, max] = bounds;
-    // Preserve the native branch order even when thresholds overlap.
-    let scale = if u <= low {
-        u * u
-    } else if u <= min {
-        u * (low + (1.0 / min - low) * (u - low) / (min - low))
-    } else if u > max {
-        u * u / if max == 0.0 { 1.0 } else { max * max }
-    } else {
-        return Ok(gamma.map(|exponent| u.powf(exponent)));
-    };
-    Ok([scale; 2])
+    Ok(match voltage_band(u, bounds) {
+        VoltageBand::Low => Some([u * u; 2]),
+        VoltageBand::Transition(weight) => Some([transition_power_scale(u, low, min, weight); 2]),
+        VoltageBand::High => Some([high_power_scale(u, max); 2]),
+        VoltageBand::Middle => None,
+    })
+}
+
+/// A GridLAB-D ZIP load term: the law its coefficient states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ZipLaw {
+    /// `constant_power`: the coefficient is the complex power.
+    Power,
+    /// `constant_current`: the coefficient is a current phasor.
+    Current,
+    /// `constant_impedance`: the coefficient is an impedance.
+    Impedance,
+}
+
+/// The nominal voltage a ZIP conversion reads: a real magnitude (`f64`,
+/// a zero angle reference) or a phasor (`Complex64`).
+pub trait ZipVoltage: Copy {
+    /// The voltage times `value`.
+    fn scale(self, value: num_complex::Complex64) -> num_complex::Complex64;
+    /// `|V|²`: the square of a magnitude, or a phasor's `norm_sqr`.
+    fn magnitude_squared(self) -> f64;
+}
+
+impl ZipVoltage for f64 {
+    fn scale(self, value: num_complex::Complex64) -> num_complex::Complex64 {
+        self * value
+    }
+    fn magnitude_squared(self) -> f64 {
+        self * self
+    }
+}
+
+impl ZipVoltage for num_complex::Complex64 {
+    fn scale(self, value: num_complex::Complex64) -> num_complex::Complex64 {
+        self * value
+    }
+    fn magnitude_squared(self) -> f64 {
+        self.norm_sqr()
+    }
+}
+
+/// The complex power a ZIP coefficient draws at its nominal voltage
+/// `voltage`: the constant power itself, `S = V conj(I)` for a constant
+/// current, and `S = |V|² / conj(Z)` for a constant impedance (zero for a
+/// zero impedance, which GridLAB-D reads as no term). The one ZIP
+/// coefficient to power conversion: the GridLAB-D load, explicit connection
+/// and triplex readers read it.
+#[must_use]
+pub fn calc_zip_nominal_power<V: ZipVoltage>(
+    law: ZipLaw,
+    coefficient: num_complex::Complex64,
+    voltage: V,
+) -> num_complex::Complex64 {
+    match law {
+        ZipLaw::Power => coefficient,
+        ZipLaw::Current => voltage.scale(coefficient.conj()),
+        ZipLaw::Impedance if coefficient == num_complex::Complex64::default() => {
+            num_complex::Complex64::default()
+        }
+        ZipLaw::Impedance => crate::electrical::calc_squared_voltage_impedance(
+            voltage.magnitude_squared(),
+            coefficient.conj(),
+        ),
+    }
+}
+
+/// The ZIP coefficient that draws `power` at a nominal voltage of magnitude
+/// `magnitude` and unit phasor `direction` (`1.0` for a zero angle
+/// reference): the power itself, the current `conj(S) e^{jθ} / |V|` (that
+/// is `conj(S / V)`), or the impedance `|V|² / conj(S)` (zero for zero
+/// power), the reciprocal of [`calc_load_nominal_admittance`]'s
+/// `conj(S) / |V|²` formed without a reciprocal. The inverse of
+/// [`calc_zip_nominal_power`]: the GridLAB-D load, explicit connection and
+/// triplex writers read it.
+#[must_use]
+pub fn calc_zip_coefficient<V: ZipVoltage>(
+    law: ZipLaw,
+    power: num_complex::Complex64,
+    direction: V,
+    magnitude: f64,
+) -> num_complex::Complex64 {
+    match law {
+        ZipLaw::Power => power,
+        ZipLaw::Current => direction.scale(power.conj()) / magnitude,
+        ZipLaw::Impedance if power == num_complex::Complex64::default() => {
+            num_complex::Complex64::default()
+        }
+        ZipLaw::Impedance => {
+            crate::electrical::calc_squared_voltage_impedance(magnitude * magnitude, power.conj())
+        }
+    }
+}
+
+/// The nominal admittance of a load branch drawing `power` at `v_nom`:
+/// `conj(S) / V²`, siemens, the constant impedance law's admittance and the
+/// current `Y U` every law reduces to at or below its low voltage
+/// threshold.
+#[must_use]
+pub fn calc_load_nominal_admittance(
+    power: num_complex::Complex64,
+    v_nom: f64,
+) -> num_complex::Complex64 {
+    crate::electrical::calc_squared_voltage_admittance(power.conj(), v_nom * v_nom)
 }

@@ -198,7 +198,10 @@ between produces none of these findings.
   `Error::ZeroImpedance`; `true` skips the branch and records the skipped
   source branch rows in `MatrixStats` as `skipped_zero_impedance` and
   `skipped_zero_impedance_branches`. Full AC admittance builders use
-  \\(r^2 + x^2\\); DC incidence and reactance only FDPF forms use \\(x\\).
+  \\(r^2 + x^2\\). DC incidence and the DC OPF use \\(r^2 + x^2\\) under the
+  formulas that read resistance (`series_susceptance`,
+  `tap_adjusted_series_susceptance`, `series_susceptance_no_phase_shift`) and
+  \\(x\\) under the reactance formulas; reactance only FDPF forms use \\(x\\).
   The gridfm export still zeros its admittance and flow columns for these rows
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
   `BalancedNetwork::merge_buses` resolves them explicitly instead, together
@@ -242,6 +245,17 @@ between produces none of these findings.
   injection vector `p_shift`. A tap does not scale it. It reduces to
   \\(b = -1/x\\) when the branch has no resistance.
 
+  `SeriesSusceptanceNoPhaseShift` uses the same series coefficient but drops
+  phase shifts as well as taps, matching PowerModels DCP on the same branch
+  orientation and impedance reference side. PowerModels' parsing can reverse
+  antiparallel transformers and rescale their impedances, changing this
+  tap-ignoring coefficient; see the [orientation caveat](instances.md#explicit-dc-conventions).
+  The unchanged default is also not identical to DCP on phase-shifting branches.
+
+  `TapAdjustedSeriesSusceptance` divides that series coefficient by the effective
+  transformer tap and includes phase shifts. It is the ignore-conductance
+  convention; see [the formula table](instances.md#explicit-dc-conventions).
+
   `TapAdjustedReactance` reproduces MATPOWER's `makeBdc`:
   \\(b = -1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
 
@@ -256,7 +270,7 @@ matrix is stored as its lower triangle with the `symmetric` header and 1-based
 indices (`io::mtx::emit_mtx`). The `sensitivities` command writes
 `<case>_ptdf.mtx`, `<case>_lodf.mtx`, and `<case>_sensitivity_meta.json`. Pick
 the branch susceptance formula with
-`--formula series-susceptance|tap-adjusted-reactance|reactance-only`, the
+`--formula series-susceptance|tap-adjusted-reactance|reactance-only|tap-adjusted-series-susceptance|series-susceptance-no-phase-shift`, the
 PTDF/LODF solve path with `--solver dense|sparse|auto`, and drop entries whose
 absolute value is at or below a threshold with `--drop-tolerance <value>`. On
 the sparse path the CLI writes the retained Matrix Market coordinates through

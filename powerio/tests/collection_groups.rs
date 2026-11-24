@@ -148,10 +148,8 @@ fn sincal_mdb_companions_are_charged_as_opaque_work() {
         ("input.mdb", &mdb[..]),
         ("records.json", &b"PK\x03\x04opaque"[..]),
     ];
-    let limits = CollectionLimits {
-        work_bytes: mdb.len() as u64,
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.work_bytes = mdb.len() as u64;
     let c = Collection::from_files(
         "bounded",
         files

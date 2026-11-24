@@ -424,12 +424,15 @@ keeps original source text for exact write-back and retains unknown/custom
 model names and ordered parameter tokens. `DynamicStudy::new(network,
 dynamics)` explicitly pairs that data with a parsed `BalancedNetwork`.
 
-The current study link check only reports DYR bus IDs absent from the static
-case. It intentionally does not infer that a record's second key is a
-generator ID, and does not claim model-specific device references are
-resolved. Typed model schemas, dynamic-device linking, DYR-to-AUX/DYD/SWI
-conversion, and transient simulation are not provided yet. See
-[Dynamics and DYR](dynamics.md) for the API definition.
+The generic study link check only reports DYR bus IDs absent from the static
+case. It does not infer that a record's second key is a generator ID.
+`typed_model` reads the machine, exciter, governor and stabilizer models in
+`SUPPORTED_MODELS` through their PSS/E parameter schemas, and
+`DynamicStudy::machines()` attaches those records to generators by
+`(bus, machine id)`; other records stay raw and are reported, not dropped.
+Typed views for further models, load and dc-line model linking,
+DYR-to-AUX/DYD/SWI conversion, and transient simulation are not provided yet.
+See [Dynamics and DYR](dynamics.md) for the API definition.
 
 ### UCTE-DEF
 

@@ -130,7 +130,7 @@ After deserialization, `emit` writes fresh output from the stored value.
 | IEEE Common Data Format | `ieee-cdf` | yes | no |
 | PowerModels JSON | `powermodels-json` | yes | yes |
 | Egret JSON | `egret-json` | yes | yes |
-| pandapower JSON | `pandapower-json` | yes | yes |
+| pandapower JSON, balanced and three-phase profiles | `pandapower-json` | yes | yes; a three-phase network only as its unchanged source |
 | PyPSA CSV directory | `pypsa-csv` | yes | yes |
 | SiennaSchemas SystemDocument | `sienna-json`, `sienna-0-{1,2,3,4}-json` | 0.1.0 through 0.4.0 | 0.1.0 through 0.4.0 |
 | PowerSystems.jl serialized System | `powersystems-json` | data formats 4, 5 | data format 5 |
@@ -151,7 +151,12 @@ Python also provides optional Sienna JSON/HDF5 bundles and PyPSA NetCDF/HDF5
 transports. See [Sienna exchange and pipeline integration](docs/src/sienna.md).
 
 The balanced transmission formats parse to `BalancedNetwork`, and OpenDSS,
-PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. SINCAL
+PMD, BMOPF, and distribution CIM parse to `MulticonductorNetwork`. A
+three-phase pandapower document (rows in `asymmetric_load`, `asymmetric_sgen`
+or `res_bus_3ph`) parses to `MulticonductorNetwork` too, unless it has rows in
+a table only the balanced reader maps yet (`trafo`, `shunt`, `gen`, `storage`,
+`dcline`) and that reader accepts it; see
+[pandapower three-phase JSON](docs/src/distribution.md#pandapower-three-phase-json). SINCAL
 holds both kinds of network in one project, so a parse names its profile:
 `sincal-balanced` gives a `BalancedNetwork` and `sincal-multiconductor` a
 `MulticonductorNetwork`. A GO Challenge 3 problem

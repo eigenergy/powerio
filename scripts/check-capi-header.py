@@ -52,7 +52,7 @@ def series_name(version: tuple[int, int, int]) -> str:
 
 def workspace_version() -> str:
     """The core release of the workspace version: a prerelease such as
-    0.12.0-rc.1 is a candidate of 0.12.0 and belongs to its series."""
+    1.0.0-rc.1 is a prerelease of 1.0.0 and belongs to its series."""
     cargo = (ROOT / "Cargo.toml").read_text()
     match = re.search(r'^version = "(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?"', cargo, re.M)
     if match is None:

@@ -278,6 +278,8 @@ pub mod codes {
             "a PyPSA element was read through the nearest canonical element";
         READ_PYPSA_NAME_REMAPPED = "READ.PYPSA.NAME_REMAPPED", Warning,
             "a PyPSA bus name collides with another and was keyed by its numeric id";
+        READ_PYPSA_THERMAL_BOUND_ZERO = "READ.PYPSA.THERMAL_BOUND_ZERO", Warning,
+            "a non-extendable PyPSA line or transformer states s_nom * s_max_pu = 0, a zero flow bound";
 
         READ_POWERWORLD_VALUE_DEFAULTED = "READ.POWERWORLD.VALUE_DEFAULTED", Warning,
             "a PowerWorld field this binary vintage does not locate was defaulted";
@@ -526,6 +528,8 @@ pub mod codes {
             "a generator carries no cost data under a policy that requires one", category = Data;
         VALIDATE_THERMAL_LIMIT_INVALID = "VALIDATE.THERMAL_LIMIT.INVALID", Error,
             "a finite thermal limit must be finite and nonnegative", category = Data;
+        VALIDATE_LOAD_VOLTAGE_INVALID = "VALIDATE.LOAD_VOLTAGE.INVALID", Error,
+            "a load's voltage model cannot be evaluated", category = Data;
         VALIDATE_GEN_COST_NOT_A_NUMBER = "VALIDATE.GEN_COST.NOT_A_NUMBER", Error,
             "a default generator cost field is not finite", category = Data;
         VALIDATE_GEN_COST_PATCH_INVALID = "VALIDATE.GEN_COST.PATCH_INVALID", Error,

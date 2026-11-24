@@ -62,7 +62,12 @@ impl Reader<'_> {
         let min = number("vminpu", 0.9)?;
         let max = number("vmaxpu", 1.1)?;
         let (kw, kvar) = static_power(object, self.vars)?;
-        let nominal = voltage_base(object, self.vars)? * if delta { 3.0_f64.sqrt() } else { 1.0 };
+        let base = voltage_base(object, self.vars)?;
+        let nominal = if delta {
+            crate::electrical::calc_wye_line_voltage(base)
+        } else {
+            base
+        };
         let voltage_model = DistLoadVoltageModel::BoundedConstantPower {
             v_nom: vec![nominal; phases],
             v_min_pu: min,
@@ -245,7 +250,10 @@ fn static_power(object: &RawObject, vars: &super::VarMap) -> Result<(f64, f64), 
     let demand_q = if kvar_mode {
         -kvar
     } else {
-        kw * (1.0 / (pf * pf) - 1.0).sqrt() * pf.signum()
+        kw * crate::electrical::calc_reactive_ratio(
+            pf,
+            crate::electrical::ReactiveRatioForm::OpenDss,
+        )
     };
     // Native non-idle PF limiting tests both Q limits before choosing a sign.
     let pf_limit =
@@ -396,20 +404,18 @@ fn voltage_base(object: &RawObject, vars: &super::VarMap) -> Result<f64, String>
                     .value
                     .to_f64(Some(vars))
                     .map_err(|_| "invalid voltage history")?;
-                base = kv * 1000.0
-                    / if matches!(phases, 2.0 | 3.0) {
-                        3.0_f64.sqrt()
-                    } else {
-                        1.0
-                    };
+                base = if matches!(phases, 2.0 | 3.0) {
+                    crate::electrical::calc_wye_phase_voltage(kv * 1000.0)
+                } else {
+                    kv * 1000.0
+                };
             }
             Some("conn") => {
-                base = kv * 1000.0
-                    / if matches!(phases, 2.0 | 3.0) {
-                        3.0_f64.sqrt()
-                    } else {
-                        1.0
-                    }
+                base = if matches!(phases, 2.0 | 3.0) {
+                    crate::electrical::calc_wye_phase_voltage(kv * 1000.0)
+                } else {
+                    kv * 1000.0
+                }
             }
             _ => {}
         }

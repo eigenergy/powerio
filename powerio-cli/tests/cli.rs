@@ -158,13 +158,14 @@ fn a_missing_input_exits_with_the_io_status_and_json_records() {
         .iter()
         .filter(|d| d["severity"] == "note")
         .collect();
+    // The reason is the platform's own text for a missing file.
+    let reason = std::fs::File::open("does-not-exist.m")
+        .unwrap_err()
+        .to_string();
     assert!(
-        notes.iter().any(|note| {
-            note["message"]
-                .as_str()
-                .unwrap()
-                .contains("No such file or directory")
-        }),
+        notes
+            .iter()
+            .any(|note| note["message"].as_str().unwrap().contains(&reason)),
         "{diagnostics:?}"
     );
     for note in &notes {
@@ -981,6 +982,87 @@ fn batch_scan_skips_unlowerable_dss_but_explicit_input_fails() {
     );
 }
 
+/// A pandapower `DataFrame` cell in split orientation.
+fn pandapower_frame(columns: &[&str], data: &serde_json::Value) -> serde_json::Value {
+    let rows = data.as_array().map_or(0, Vec::len);
+    let inner = serde_json::json!({
+        "columns": columns, "index": (0..rows).collect::<Vec<_>>(), "data": data
+    });
+    serde_json::json!({
+        "_module": "pandas.core.frame", "_class": "DataFrame", "orient": "split",
+        "_object": inner.to_string(), "is_multiindex": false, "is_multicolumn": false
+    })
+}
+
+#[test]
+fn batch_reads_three_phase_pandapower_multiconductor() {
+    // The balanced reader refuses the fixture (its empty `res_shunt_3ph`),
+    // so it reads multiconductor. Its transformer and closed bus-bus switch
+    // have no three-phase mapping yet, which would leave the LV buses
+    // without their source, so batch skips it. A feeder whose connectivity
+    // the reading maps exports, after the Kron reduction batch reports.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let case = repo_file("tests/data/dist/pandapower/tiny_3ph.json");
+    std::fs::copy(&case, root.join("tiny_3ph.json")).unwrap();
+    std::fs::copy(repo_file("tests/data/case9.m"), root.join("case9.m")).unwrap();
+    let object = serde_json::json!({
+        "f_hz": 50.0,
+        "sn_mva": 1.0,
+        "bus": pandapower_frame(&["vn_kv", "in_service"], &serde_json::json!([[0.4, true], [0.4, true]])),
+        "ext_grid": pandapower_frame(&["bus", "vm_pu", "in_service"], &serde_json::json!([[0, 1.0, true]])),
+        "line": pandapower_frame(
+            &[
+                "from_bus", "to_bus", "length_km", "r_ohm_per_km", "x_ohm_per_km",
+                "c_nf_per_km", "r0_ohm_per_km", "x0_ohm_per_km", "c0_nf_per_km",
+                "max_i_ka", "parallel", "in_service",
+            ],
+            &serde_json::json!([[0, 1, 0.1, 0.207, 0.08, 261.0, 0.828, 0.32, 261.0, 0.27, 1, true]]),
+        ),
+        "asymmetric_load": pandapower_frame(
+            &["bus", "p_a_mw", "p_b_mw", "p_c_mw", "in_service"],
+            &serde_json::json!([[1, 0.02, 0.01, 0.005, true]]),
+        ),
+    });
+    let feeder = serde_json::json!({
+        "_module": "pandapower.auxiliary", "_class": "pandapowerNet", "_object": object
+    });
+    std::fs::write(root.join("feeder_3ph.json"), feeder.to_string()).unwrap();
+    let out_dir = root.join("out");
+
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out_dir.join("case9_bprime.mtx").is_file(), "{stderr}");
+    assert!(
+        !out_dir.join("tiny_3ph_bprime.mtx").exists(),
+        "an islanded network was exported:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("tiny_3ph.json") && stderr.contains("trafo, switch rows"),
+        "no skip warning:\n{stderr}"
+    );
+    assert!(out_dir.join("feeder_3ph_bprime.mtx").is_file(), "{stderr}");
+    assert!(
+        stderr.contains("KRON_REDUCTION_REQUIRED") && stderr.contains("feeder_3ph.json"),
+        "no Kron reduction warning:\n{stderr}"
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out_dir.join("feeder_3ph_meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        meta["matrices"][0]["sddm"],
+        serde_json::json!(true),
+        "{meta}"
+    );
+}
+
 #[test]
 fn batch_scan_with_no_case_files_reports_supported_extensions() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1191,16 +1273,17 @@ fn an_unreadable_include_is_a_warning_not_a_containment_refusal() {
     ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     #[cfg(unix)]
-    if !nix_running_as_root() {
-        assert!(
-            out.status.success(),
-            "an unreadable include is not an escape attempt:\n{stderr}"
-        );
-        assert!(
-            !stderr.contains("READ.DSS.INCLUDE_REFUSED"),
-            "stderr:\n{stderr}"
-        );
+    if nix_running_as_root() {
+        return;
     }
+    assert!(
+        out.status.success(),
+        "an unreadable include is not an escape attempt:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("READ.DSS.INCLUDE_REFUSED"),
+        "stderr:\n{stderr}"
+    );
 }
 
 /// Root reads a mode 000 file, so the permission case cannot be staged there.
@@ -1701,4 +1784,78 @@ fn summary_lists_the_islands() {
     assert_eq!(islands["islands"][2]["generators"], 0);
     assert_eq!(islands["islands"][2]["hvdc_ties"], 1);
     assert_eq!(islands["islands"][1]["hvdc_ties"], 0);
+}
+
+/// A refused conversion reports the reader's findings ahead of the error,
+/// in text and in the JSON array, so a segment the reader could not type
+/// shows its precise reason (`READ.CIM_DIST.IMPEDANCE_UNRESOLVED`) beside
+/// the writer's `BUILD.DIST.ELECTRICAL_INCOMPLETE`.
+#[test]
+fn convert_failure_reports_the_reader_findings_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let case = tmp.path().join("no_impedance.xml");
+    let terminal = |id: &str, equipment: &str, node: &str, seq: u8| {
+        format!(
+            r##"<cim:Terminal rdf:ID="{id}"><cim:Terminal.ConductingEquipment rdf:resource="#{equipment}"/><cim:Terminal.ConnectivityNode rdf:resource="#{node}"/><cim:Terminal.phases rdf:resource="http://iec.ch/TC57/CIM100#PhaseCode.ABC"/><cim:ACDCTerminal.sequenceNumber>{seq}</cim:ACDCTerminal.sequenceNumber></cim:Terminal>
+"##
+        )
+    };
+    let text = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#">
+<cim:BaseFrequency rdf:ID="_f"><cim:BaseFrequency.frequency>60</cim:BaseFrequency.frequency></cim:BaseFrequency>
+<cim:ConnectivityNode rdf:ID="_n1"><cim:IdentifiedObject.name>n1</cim:IdentifiedObject.name></cim:ConnectivityNode>
+<cim:ConnectivityNode rdf:ID="_n2"><cim:IdentifiedObject.name>n2</cim:IdentifiedObject.name></cim:ConnectivityNode>
+<cim:EnergySource rdf:ID="_src"><cim:IdentifiedObject.name>src</cim:IdentifiedObject.name><cim:EnergySource.voltageMagnitude>12470</cim:EnergySource.voltageMagnitude></cim:EnergySource>
+{}<cim:ACLineSegment rdf:ID="_l1"><cim:IdentifiedObject.name>l1</cim:IdentifiedObject.name><cim:Conductor.length>100</cim:Conductor.length></cim:ACLineSegment>
+{}{}</rdf:RDF>
+"#,
+        terminal("_src_t1", "_src", "_n1", 1),
+        terminal("_l1_t1", "_l1", "_n1", 1),
+        terminal("_l1_t2", "_l1", "_n2", 2),
+    );
+    std::fs::write(&case, text).unwrap();
+    let case = case.to_str().unwrap();
+    let out_path = tmp.path().join("out.dss");
+    let out_path = out_path.to_str().unwrap();
+
+    let text_mode = run(&[
+        "convert", case, "--from", "cim-dist", "--to", "dss", "-o", out_path,
+    ]);
+    assert_failure(&text_mode);
+    let stderr = String::from_utf8_lossy(&text_mode.stderr);
+    let read = stderr
+        .find("READ.CIM_DIST.IMPEDANCE_UNRESOLVED: ACLineSegment l1")
+        .unwrap_or_else(|| panic!("{stderr}"));
+    let error = stderr
+        .find("BUILD.DIST.ELECTRICAL_INCOMPLETE")
+        .unwrap_or_else(|| panic!("{stderr}"));
+    assert!(read < error, "{stderr}");
+
+    let json_mode = run(&[
+        "--diagnostics-format",
+        "json",
+        "convert",
+        case,
+        "--from",
+        "cim-dist",
+        "--to",
+        "dss",
+        "-o",
+        out_path,
+    ]);
+    assert_failure(&json_mode);
+    let codes: Vec<String> = json_diagnostics(&json_mode)
+        .iter()
+        .map(|d| d["code"].as_str().unwrap().to_owned())
+        .collect();
+    let read = codes
+        .iter()
+        .position(|c| c == "READ.CIM_DIST.IMPEDANCE_UNRESOLVED")
+        .unwrap_or_else(|| panic!("{codes:?}"));
+    let error = codes
+        .iter()
+        .position(|c| c == "BUILD.DIST.ELECTRICAL_INCOMPLETE")
+        .unwrap_or_else(|| panic!("{codes:?}"));
+    assert!(read < error, "{codes:?}");
 }

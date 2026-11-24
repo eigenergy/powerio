@@ -105,6 +105,7 @@ jobs:
     - name: Test snapshot schema validation
       run: .venv/bin/python -m unittest discover -s evals/validation -p test_validate_bmopf_schema.py
     - name: Run the validation matrix
+      timeout-minutes: 20
       run: bash evals/validation/run_validation.sh
     - name: Compare explicit BMOPF core admittances with OpenDSS
       run: |

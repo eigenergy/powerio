@@ -21,8 +21,7 @@ use crate::model::{
     DistLoad, DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
     DistWinding, DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation,
     MulticonductorNetwork, MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference,
-    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
-    n_winding_impedance_base, n_winding_phase_count, pair_keys,
+    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, pair_keys,
 };
 
 pub(crate) fn parse_bmopf_collecting(
@@ -47,6 +46,7 @@ pub(crate) fn parse_bmopf_collecting(
     report_non_numeric_fields(&doc, diags);
     let stated = report_schema_version(&doc, diags);
     let states_current = stated.current;
+    let lowercase_tokens = canonical_tokens(&mut doc);
     super::validate::report(&doc, diags, states_current);
     super::capacitor::lower(&mut doc, diags)?;
     let mut rd = Reader {
@@ -54,13 +54,16 @@ pub(crate) fn parse_bmopf_collecting(
         diagnostics: crate::diagnostics::Diagnostics::new(),
         frequency_stated: false,
         states_current,
-        legacy_spellings: std::collections::BTreeMap::new(),
+        legacy_spellings: if states_current {
+            lowercase_tokens
+        } else {
+            std::collections::BTreeMap::new()
+        },
     };
     if stated.schema_key {
         rd.note_legacy_spelling("meta.$schema");
     }
     rd.document(&doc);
-    rd.note_lowercase_tokens(&doc);
     rd.line_s_max_per_conductor(&doc);
     rd.report_legacy_spellings();
     let found = std::mem::take(&mut rd.diagnostics);
@@ -68,6 +71,261 @@ pub(crate) fn parse_bmopf_collecting(
     super::geo::read(&doc, &mut net, diags);
     crate::model::warn_unresolved_references(&net, diags);
     Ok(net)
+}
+
+const CONFIGURATION: &[&str] = &["WYE", "DELTA", "SINGLE_PHASE"];
+
+/// The tokens of every enum field the schema spells UPPER_SNAKE, with the
+/// note a lowercase spelling of it gets: `(field, accepted tokens, note)`.
+/// The accepted tokens include the older drafts' own (`DSTATCOM`,
+/// `VA_FRACTION`), which the reader maps further.
+type TokenField = (&'static str, &'static [&'static str], &'static str);
+
+const LOAD_TOKENS: &[TokenField] = &[
+    (
+        "model",
+        &[
+            "CONSTANT_POWER",
+            "CONSTANT_CURRENT",
+            "CONSTANT_IMPEDANCE",
+            "ZIP",
+            "EXPONENTIAL",
+        ],
+        "load.model lowercase",
+    ),
+    (
+        "configuration",
+        CONFIGURATION,
+        "load.configuration lowercase",
+    ),
+];
+const GENERATOR_TOKENS: &[TokenField] = &[(
+    "configuration",
+    CONFIGURATION,
+    "generator.configuration lowercase",
+)];
+const CAPACITOR_TOKENS: &[TokenField] = &[(
+    "configuration",
+    CONFIGURATION,
+    "capacitor.configuration lowercase",
+)];
+const IBR_TOKENS: &[TokenField] = &[
+    (
+        "topology",
+        &["SINGLE_PHASE", "THREE_LEG", "FOUR_LEG"],
+        "ibr.topology lowercase",
+    ),
+    (
+        "prime_mover",
+        &["PV", "BATTERY", "GENERIC", "STATCOM", "DSTATCOM"],
+        "ibr.prime_mover lowercase",
+    ),
+    (
+        "dc_control",
+        &["P", "V", "DROOP"],
+        "ibr.dc_control lowercase",
+    ),
+    (
+        "voltage_aggregation",
+        &["PER_PHASE", "AVERAGE"],
+        "ibr.voltage_aggregation lowercase",
+    ),
+];
+const VOLTAGE_REFERENCE: &[&str] = &[
+    "PN_PER_PHASE",
+    "PP_PER_PHASE",
+    "PP_AVERAGED",
+    "PG_AVERAGED",
+    "PN_AVERAGED",
+    "PG_PER_PHASE",
+];
+const VOLT_VAR_TOKENS: &[TokenField] = &[
+    (
+        "voltage_reference",
+        VOLTAGE_REFERENCE,
+        "control_profile.volt_var.voltage_reference lowercase",
+    ),
+    (
+        "q_unit",
+        &["VAR", "PU", "VA_FRACTION"],
+        "control_profile.volt_var.q_unit lowercase",
+    ),
+    (
+        "q_ref",
+        &["VAR_MAX", "VAR_AVAILABLE"],
+        "control_profile.volt_var.q_ref lowercase",
+    ),
+];
+const VOLT_WATT_TOKENS: &[TokenField] = &[
+    (
+        "voltage_reference",
+        VOLTAGE_REFERENCE,
+        "control_profile.volt_watt.voltage_reference lowercase",
+    ),
+    (
+        "p_unit",
+        &["W", "PU", "VA_FRACTION"],
+        "control_profile.volt_watt.p_unit lowercase",
+    ),
+    (
+        "p_ref",
+        &["P_AVAILABLE", "P_MAX", "S_MAX"],
+        "control_profile.volt_watt.p_ref lowercase",
+    ),
+];
+const TRANSFORMER_TOKENS: &[TokenField] = &[
+    (
+        "regulator_type",
+        &["A", "B"],
+        "transformer.regulator_type lowercase",
+    ),
+    (
+        "connection",
+        &["ABBC", "BCAC", "CABA"],
+        "transformer.connection lowercase",
+    ),
+];
+const WINDING_TOKENS: &[TokenField] = &[
+    (
+        "configuration",
+        &["WYE", "DELTA"],
+        "transformer.windings.configuration lowercase",
+    ),
+    (
+        "connection",
+        &["WYE", "DELTA"],
+        "transformer.windings.connection lowercase",
+    ),
+];
+const WIRE_TOKENS: &[TokenField] = &[(
+    "kind",
+    &["OVERHEAD", "CN_CABLE", "TS_CABLE"],
+    "wire_data.kind lowercase",
+)];
+const GEOMETRY_TOKENS: &[TokenField] = &[(
+    "earth_model",
+    &["MODIFIED_CARSON", "FULL_CARSON", "DERI"],
+    "line_geometry.earth_model lowercase",
+)];
+const DC_POLES: &[&str] = &["POSITIVE", "NEGATIVE", "METALLIC_RETURN"];
+
+/// The number of values rewritten per field note.
+type Rewrites = std::collections::BTreeMap<&'static str, usize>;
+
+/// The tables whose records carry enum values, read at the top level and,
+/// in an older draft's layout, under `extras`.
+const TOKEN_TABLES: [&str; 8] = [
+    "load",
+    "generator",
+    "capacitor",
+    "ibr",
+    "control_profile",
+    "wire_data",
+    "line_geometry",
+    "dc_bus",
+];
+
+/// Rewrites the enum values older drafts spelled lowercase (`constant_power`,
+/// `wye`, `pv`, `droop`, ...) to the schema's UPPER_SNAKE spelling, once,
+/// before any check or table reader sees the document, so every consumer
+/// matches the one canonical token. A value whose uppercase form is no token
+/// of its field is left as stated for the reader to report. Returns the
+/// rewrites per field for the one `READ.BMOPF.SCHEMA_LEGACY` finding; the
+/// tables the reader types from `extras` (`ibr`, `control_profile`, `transformer`)
+/// are rewritten too; the rest of `extras` is left as stated.
+fn canonical_tokens(doc: &mut Map<String, Value>) -> Rewrites {
+    let mut found = Rewrites::new();
+    for name in TOKEN_TABLES {
+        canonical_table_tokens(doc, name, &mut found);
+    }
+    canonical_transformer_tokens(doc.get_mut("transformer"), &mut found);
+    // `extras` is free-form. Only the tables the reader types from it (the first
+    // draft kept `ibr`, `control_profile` and transformer details there) are
+    // canonicalized; everything else under `extras` is the user's and is written
+    // back as it was read.
+    if let Some(Value::Object(extras)) = doc.get_mut("extras") {
+        for name in ["ibr", "control_profile"] {
+            canonical_table_tokens(extras, name, &mut found);
+        }
+        canonical_transformer_tokens(extras.get_mut("transformer"), &mut found);
+    }
+    found
+}
+
+fn canonical_token(value: &mut Value, tokens: &[&str], note: &'static str, found: &mut Rewrites) {
+    if let Value::String(text) = value
+        && text.chars().any(|c| c.is_ascii_lowercase())
+    {
+        let upper = text.to_ascii_uppercase();
+        if tokens.contains(&upper.as_str()) {
+            *text = upper;
+            *found.entry(note).or_default() += 1;
+        }
+    }
+}
+
+fn canonical_fields(record: &mut Map<String, Value>, tokens: &[TokenField], found: &mut Rewrites) {
+    for (field, accepted, note) in tokens {
+        if let Some(value) = record.get_mut(*field) {
+            canonical_token(value, accepted, note, found);
+        }
+    }
+}
+
+fn object_records(table: Option<&mut Value>) -> impl Iterator<Item = &mut Map<String, Value>> {
+    table
+        .and_then(Value::as_object_mut)
+        .into_iter()
+        .flat_map(|items| items.values_mut())
+        .filter_map(Value::as_object_mut)
+}
+
+fn canonical_table_tokens(doc: &mut Map<String, Value>, name: &str, found: &mut Rewrites) {
+    let tokens: &[TokenField] = match name {
+        "load" => LOAD_TOKENS,
+        "generator" => GENERATOR_TOKENS,
+        "capacitor" => CAPACITOR_TOKENS,
+        "ibr" => IBR_TOKENS,
+        "wire_data" => WIRE_TOKENS,
+        "line_geometry" => GEOMETRY_TOKENS,
+        _ => &[],
+    };
+    for record in object_records(doc.get_mut(name)) {
+        canonical_fields(record, tokens, found);
+        match name {
+            "control_profile" => {
+                for (block, tokens) in [
+                    ("volt_var", VOLT_VAR_TOKENS),
+                    ("volt_watt", VOLT_WATT_TOKENS),
+                ] {
+                    if let Some(Value::Object(block)) = record.get_mut(block) {
+                        canonical_fields(block, tokens, found);
+                    }
+                }
+            }
+            "dc_bus" => {
+                if let Some(Value::Object(poles)) = record.get_mut("pole") {
+                    for pole in poles.values_mut() {
+                        canonical_token(pole, DC_POLES, "dc_bus.pole lowercase", found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn canonical_transformer_tokens(subtypes: Option<&mut Value>, found: &mut Rewrites) {
+    for group in object_records(subtypes) {
+        for record in group.values_mut().filter_map(Value::as_object_mut) {
+            canonical_fields(record, TRANSFORMER_TOKENS, found);
+            if let Some(Value::Array(windings)) = record.get_mut("windings") {
+                for winding in windings.iter_mut().filter_map(Value::as_object_mut) {
+                    canonical_fields(winding, WINDING_TOKENS, found);
+                }
+            }
+        }
+    }
 }
 
 /// What a document's `meta` states about the release it was written against.
@@ -721,8 +979,9 @@ impl Reader<'_> {
                 // `meta` is provenance (license, authors, generator tool),
                 // with no typed slot in the model. Stash it whole, the way the
                 // PMD reader stashes `pmd_settings`; the BMOPF writer owns
-                // `$schema`/`frequency`/`case_study_generator` and folds the
-                // other schema fields back from this stash.
+                // `schema_version`/`frequency`/`case_study_generator`/`crs`,
+                // drops `$schema`, and folds the other schema fields back
+                // from this stash.
                 "meta" => {
                     self.net
                         .extras_mut()
@@ -913,13 +1172,6 @@ impl Reader<'_> {
             if let Some(cost) = extras.remove("cost") {
                 self.note_legacy_spelling("ibr.cost");
                 extras.entry("energy_cost_rate".to_owned()).or_insert(cost);
-            }
-            // Every enum of the schema is UPPER_SNAKE; the DC control mode was `droop`.
-            if let Some(Value::String(mode)) = extras.get_mut("dc_control")
-                && mode.as_str() == "droop"
-            {
-                "DROOP".clone_into(mode);
-                self.note_legacy_spelling("ibr.dc_control droop");
             }
             self.net.ibrs_mut().push(DistIbr {
                 name: name.clone(),
@@ -1217,9 +1469,12 @@ impl Reader<'_> {
         for line in self.net.lines_mut() {
             let Some(limits) = &line.s_max else { continue };
             let conductors = line.terminal_map_from.len();
+            if limits.len() == conductors {
+                continue;
+            }
             let phases =
                 DistBus::new("", line.terminal_map_from.clone()).phase_indices(conventions);
-            if limits.len() == conductors || limits.len() != phases.len() {
+            if limits.len() != phases.len() {
                 continue;
             }
             let mut per_conductor = vec![f64::INFINITY; conductors];
@@ -1237,33 +1492,6 @@ impl Reader<'_> {
                      drafts did; read per conductor with the neutral conductor unbounded"
                 ),
             );
-        }
-    }
-
-    /// Notes the lowercase enum values earlier drafts used where the schema
-    /// spells them UPPER_SNAKE: `wire_data.kind` and
-    /// `line_geometry.earth_model`. Both tables are retained as source data,
-    /// so only the spelling is noted.
-    fn note_lowercase_tokens(&mut self, doc: &Map<String, Value>) {
-        for (table, field, note) in [
-            ("wire_data", "kind", "wire_data.kind lowercase"),
-            (
-                "line_geometry",
-                "earth_model",
-                "line_geometry.earth_model lowercase",
-            ),
-        ] {
-            let lowercase = doc
-                .get(table)
-                .and_then(Value::as_object)
-                .into_iter()
-                .flat_map(|items| items.values())
-                .filter_map(|item| item.get(field).and_then(Value::as_str))
-                .filter(|value| value.chars().any(|c| c.is_ascii_lowercase()))
-                .count();
-            for _ in 0..lowercase {
-                self.note_legacy_spelling(note);
-            }
         }
     }
 
@@ -1856,8 +2084,8 @@ impl Reader<'_> {
         let phases = if three_phase { 3 } else { 1 };
 
         let pct = |x_ohm: f64, v: f64| {
-            if s > 0.0 && v > 0.0 {
-                x_ohm / (v * v / s) * 100.0
+            if let Some(base) = crate::electrical::calc_impedance_base(v, s) {
+                x_ohm / base * 100.0
             } else {
                 0.0
             }
@@ -1927,7 +2155,12 @@ impl Reader<'_> {
                 x_neutral: first_float(o.get("x_neutral_to")),
             },
         ];
-        expand_center_tap_windings(subtype, &mut windings, self.net.buses());
+        expand_center_tap_windings(
+            subtype,
+            &mut windings,
+            self.net.buses(),
+            self.net.terminal_conventions(),
+        );
         if subtype == "center_tap"
             && let Some(w) = windings.get(1)
             && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses(), bus_index)
@@ -2167,8 +2400,8 @@ impl Reader<'_> {
             }
         };
         let pct = |x_ohm: f64, v: f64| {
-            if s > 0.0 && v > 0.0 {
-                x_ohm / (v * v / s) * 100.0
+            if let Some(base) = crate::electrical::calc_impedance_base(v, s) {
+                x_ohm / base * 100.0
             } else {
                 0.0
             }
@@ -2251,6 +2484,7 @@ impl Reader<'_> {
         ];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
+        let mut r_windings = Vec::new();
         let mut delta_rolls = Map::new();
         let mut winding_metadata = Map::new();
         if let Some(items) = o.get("windings").and_then(Value::as_array) {
@@ -2297,30 +2531,53 @@ impl Reader<'_> {
                 if let Some(delta_roll) = delta_roll_value(w.get("delta_roll")) {
                     delta_rolls.insert((idx + 1).to_string(), Value::from(delta_roll));
                 }
-                let r_pct = if let Some(base_z) =
-                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, rating)
-                {
-                    r_winding / base_z * 100.0
-                } else {
-                    0.0
-                };
+                r_windings.push(r_winding);
+                // `v_nom` is the coil voltage; the rated voltage follows once
+                // the unit's phase count is known, below.
                 windings.push(DistWinding {
                     bus: string(w.get("bus")),
                     terminal_map: terminal_map.clone(),
                     conn,
-                    v_ref: n_winding_internal_v_ref(conn, &terminal_map, bmopf_v_nom),
+                    v_ref: bmopf_v_nom,
                     s_rating: rating,
-                    r_pct,
+                    r_pct: 0.0,
                     tap: w.get("tap_ratio").map_or(1.0, f),
                     r_neutral: w.get("r_neutral").map(f),
                     x_neutral: w.get("x_neutral").map(f),
                 });
             }
         }
-        let base_z = windings
-            .first()
-            .and_then(|w| n_winding_base_from_internal(w, s))
+        let phases = windings
+            .iter()
+            .map(|w| crate::transformer::calc_winding_phase_count(w.conn, &w.terminal_map))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        for w in &mut windings {
+            w.v_ref *= crate::transformer::calc_coil_voltage_ratio(w.conn, phases);
+        }
+        // The one winding impedance base
+        // (`crate::transformer::calc_winding_impedance_base`) over the unit as
+        // read so far: each winding's resistance on its rating, the pair
+        // reactances on the unit's power base.
+        let mut unit = DistTransformer {
+            name: name.to_string(),
+            phases,
+            windings,
+            xsc_pct: Vec::new(),
+            extras: Extras::new(),
+        };
+        for (idx, r_winding) in r_windings.into_iter().enumerate() {
+            let rating = unit.windings[idx].s_rating;
+            unit.windings[idx].r_pct =
+                crate::transformer::calc_winding_impedance_base(&unit, idx, rating)
+                    .map_or(0.0, |base_z| r_winding / base_z * 100.0);
+        }
+        let base_z = (!unit.windings.is_empty())
+            .then(|| crate::transformer::calc_winding_impedance_base(&unit, 0, s))
+            .flatten()
             .unwrap_or(f64::NAN);
+        let windings = unit.windings;
         let mut xsc_pct = Vec::new();
         let x_sc = o.get("x_sc").and_then(Value::as_object);
         for (i, j) in pair_keys(windings.len()) {
@@ -2357,12 +2614,7 @@ impl Reader<'_> {
         }
         DistTransformer {
             name: name.to_string(),
-            phases: windings
-                .iter()
-                .map(|w| n_winding_phase_count(w.conn, &w.terminal_map))
-                .max()
-                .unwrap_or(1)
-                .max(1),
+            phases,
             windings,
             xsc_pct,
             extras,
@@ -2422,7 +2674,7 @@ fn regulator_voltage(
         .flat_map(|source| source.v_magnitude.iter().copied())
         .find(|v| v.is_finite() && *v > 0.0)?;
     Some(if line_to_line {
-        magnitude * 3.0_f64.sqrt()
+        crate::electrical::calc_wye_line_voltage(magnitude)
     } else {
         magnitude
     })
@@ -2439,12 +2691,17 @@ fn open_delta_pairs_of(connection: &str) -> Option<((u8, u8), (u8, u8))> {
     }
 }
 
-fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, buses: &[DistBus]) {
+fn expand_center_tap_windings(
+    subtype: &str,
+    windings: &mut Vec<DistWinding>,
+    buses: &[DistBus],
+    conventions: Option<&Value>,
+) {
     if subtype != "center_tap" || windings[1].terminal_map.len() < 3 {
         return;
     }
     let to = windings.pop().expect("secondary winding exists");
-    let neutral_idx = center_tap_neutral_index(&to, buses);
+    let neutral_idx = center_tap_neutral_index(&to, buses, conventions);
     let canonical = neutral_idx == 1;
     let common = to
         .terminal_map
@@ -2487,8 +2744,16 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, bu
     windings.push(other_half);
 }
 
-fn center_tap_neutral_index(to: &DistWinding, buses: &[DistBus]) -> usize {
-    if let Some(bus) = buses.iter().find(|bus| bus.id == to.bus)
+/// The secondary's common terminal: the first one its bus grounds, else the
+/// first whose role on the bus is neutral ([`crate::calc_terminal_role`]),
+/// else the last.
+fn center_tap_neutral_index(
+    to: &DistWinding,
+    buses: &[DistBus],
+    conventions: Option<&Value>,
+) -> usize {
+    let bus = buses.iter().find(|bus| bus.id == to.bus);
+    if let Some(bus) = bus
         && let Some((idx, _)) = to
             .terminal_map
             .iter()
@@ -2497,48 +2762,13 @@ fn center_tap_neutral_index(to: &DistWinding, buses: &[DistBus]) -> usize {
     {
         return idx;
     }
+    let terminals = bus.map_or(to.terminal_map.as_slice(), |bus| bus.terminals.as_slice());
     to.terminal_map
         .iter()
-        .position(|term| term.eq_ignore_ascii_case("n") || term == "4")
+        .position(|term| {
+            crate::calc_terminal_role(terminals, term, conventions) == crate::TerminalRole::Neutral
+        })
         .unwrap_or_else(|| to.terminal_map.len() - 1)
-}
-
-fn n_winding_internal_v_ref(
-    conn: DistWindingConn,
-    terminal_map: &[String],
-    bmopf_v_nom: f64,
-) -> f64 {
-    if conn == DistWindingConn::Wye && n_winding_phase_count(conn, terminal_map) >= 2 {
-        bmopf_v_nom * 3f64.sqrt()
-    } else {
-        bmopf_v_nom
-    }
-}
-
-fn n_winding_bmopf_v_nom_from_internal(w: &DistWinding) -> f64 {
-    if w.conn == DistWindingConn::Wye && n_winding_phase_count(w.conn, &w.terminal_map) >= 2 {
-        w.v_ref / 3f64.sqrt()
-    } else {
-        w.v_ref
-    }
-}
-
-fn n_winding_base_from_bmopf(
-    conn: DistWindingConn,
-    terminal_map: &[String],
-    bmopf_v_nom: f64,
-    s: f64,
-) -> Option<f64> {
-    n_winding_impedance_base(n_winding_phase_count(conn, terminal_map), bmopf_v_nom, s)
-}
-
-fn n_winding_base_from_internal(w: &DistWinding, s: f64) -> Option<f64> {
-    n_winding_base_from_bmopf(
-        w.conn,
-        &w.terminal_map,
-        n_winding_bmopf_v_nom_from_internal(w),
-        s,
-    )
 }
 
 #[cfg(test)]

@@ -809,11 +809,11 @@ fn write_shunt(
     let mut obj = identified("LinearShuntCompensator", &name, shunt.uid.as_deref());
     obj.insert(
         "LinearShuntCompensator.bPerSection".into(),
-        jnum(shunt.b / (eff * eff)),
+        jnum(crate::electrical::calc_rated_admittance(shunt.b, eff)),
     );
     obj.insert(
         "LinearShuntCompensator.gPerSection".into(),
-        jnum(shunt.g / (eff * eff)),
+        jnum(crate::electrical::calc_rated_admittance(shunt.g, eff)),
     );
     obj.insert("ShuntCompensator.normalSections".into(), Value::from(1u64));
     obj.insert("ShuntCompensator.maximumSections".into(), Value::from(1u64));
@@ -1044,8 +1044,8 @@ fn write_branch(
     let raw_kv_from = kv_of.get(&branch.from).copied().unwrap_or(1.0);
     let raw_kv_to = kv_of.get(&branch.to).copied().unwrap_or(1.0);
     let kv = eff_kv(raw_kv_from);
-    let z_base = kv * kv / base_mva;
-    let y_base = base_mva / (kv * kv);
+    let z_base = powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN);
+    let y_base = powerio_core::electrical::calc_admittance_base(kv, base_mva).unwrap_or(f64::NAN);
 
     let set_name = format!("OpLimbranch{n}");
     let limits = vec![
@@ -1549,12 +1549,19 @@ pub(crate) fn parse_ravens_source(
             "ShuntCompensator.sections",
             f_or(obj, "ShuntCompensator.normalSections", 1.0),
         );
-        // `(eff * eff)` groups as the writer's divisor so the multiply mirrors
-        // the divide bit exactly (sections is 1.0 on written documents).
+        // `calc_rated_power` squares `eff` as the writer's
+        // `calc_rated_admittance` does, so the multiply mirrors the divide
+        // bit exactly (sections is 1.0 on written documents).
         let mut shunt = Shunt::new(
             bus,
-            f_or(obj, "LinearShuntCompensator.gPerSection", 0.0) * sections * (eff * eff),
-            f_or(obj, "LinearShuntCompensator.bPerSection", 0.0) * sections * (eff * eff),
+            crate::electrical::calc_rated_power(
+                f_or(obj, "LinearShuntCompensator.gPerSection", 0.0) * sections,
+                eff,
+            ),
+            crate::electrical::calc_rated_power(
+                f_or(obj, "LinearShuntCompensator.bPerSection", 0.0) * sections,
+                eff,
+            ),
         );
         shunt.in_service = in_service(obj);
         shunt.uid = mrid(obj);
@@ -1689,11 +1696,13 @@ pub(crate) fn parse_ravens_source(
             continue;
         };
         let kv = eff_kv(kv_of.get(&from).copied().unwrap_or(1.0));
-        let z_base = kv * kv / base_mva;
+        let z_base =
+            powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN);
         // Divide by the writer's own multiplier (not the reciprocal
         // constant): same-constant mul→div round trips bit exactly, mixed
         // constants double-round and break canonical idempotence.
-        let y_base = base_mva / (kv * kv);
+        let y_base =
+            powerio_core::electrical::calc_admittance_base(kv, base_mva).unwrap_or(f64::NAN);
         let mut branch = Branch::new(
             from,
             to,
@@ -2084,7 +2093,7 @@ fn read_transformer(
     };
 
     let kv = eff_kv(kv_of.get(&from).copied().unwrap_or(1.0));
-    let z_base = kv * kv / base_mva;
+    let z_base = powerio_core::electrical::calc_impedance_base(kv, base_mva).unwrap_or(f64::NAN);
     let end_f = |end: &Map<String, Value>, key: &str| -> f64 {
         end.get(key).and_then(Value::as_f64).unwrap_or(0.0)
     };
@@ -2095,7 +2104,7 @@ fn read_transformer(
     let mut branch = Branch::new(from, to, r, x);
     // See the line reader: divide by the writer's multiplier for bit-exact
     // round trips.
-    let y_base = base_mva / (kv * kv);
+    let y_base = powerio_core::electrical::calc_admittance_base(kv, base_mva).unwrap_or(f64::NAN);
     branch.b = (end_f(ends[0], "PowerTransformerEnd.b") + end_f(ends[1], "PowerTransformerEnd.b"))
         / y_base;
     branch.in_service = in_service(obj);

@@ -71,21 +71,20 @@ pub fn run(command: CollectionCommand) -> anyhow::Result<()> {
             } else {
                 CollectionOperation::Parse
             };
-            let base = CollectionSelection {
-                root,
-                format: from,
-                operation,
-                members: (!member.is_empty()).then_some(member),
-                primary: None,
-            };
+            let mut base = CollectionSelection::default();
+            base.root = root;
+            base.format = from;
+            base.operation = operation;
+            base.members = (!member.is_empty()).then_some(member);
             let selections: Vec<_> = if entry.is_empty() {
                 vec![base]
             } else {
                 entry
                     .into_iter()
-                    .map(|primary| CollectionSelection {
-                        primary: Some(primary),
-                        ..base.clone()
+                    .map(|primary| {
+                        let mut selection = base.clone();
+                        selection.primary = Some(primary);
+                        selection
                     })
                     .collect()
             };

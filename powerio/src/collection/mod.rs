@@ -39,7 +39,23 @@ fn selection_error(message: impl Into<String>) -> Error {
 }
 
 /// Explicit host limits. Parser/model limits remain independently active.
+///
+/// The collection types are `#[non_exhaustive]` so that 0.12.x can add
+/// fields and variants. Start from the default and set fields:
+///
+/// ```
+/// let mut limits = powerio::CollectionLimits::default();
+/// limits.work_bytes = 1 << 20;
+/// ```
+///
+/// ```compile_fail
+/// let limits = powerio::CollectionLimits {
+///     work_bytes: 1 << 20,
+///     ..powerio::CollectionLimits::default()
+/// };
+/// ```
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct CollectionLimits {
     pub tree: SourceTreeLimits,
     pub archive: ArchiveLimits,
@@ -68,6 +84,7 @@ impl Default for CollectionLimits {
 
 /// One file, including unrecognized assets retained for explicit selection.
 #[derive(Clone, Debug, Serialize)]
+#[non_exhaustive]
 pub struct CollectionEntry {
     pub path: String,
     pub bytes: u64,
@@ -76,6 +93,7 @@ pub struct CollectionEntry {
 /// The operation to perform; stored PowerIO IR is never grid-format parsing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CollectionOperation {
     #[default]
     Parse,
@@ -88,6 +106,7 @@ pub enum CollectionOperation {
 /// acquired tables. Other standalone formats receive only the primary.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CollectionSelection {
     pub root: Option<String>,
     pub primary: Option<String>,
@@ -146,6 +165,7 @@ impl CollectionSelection {
 /// Discovery readiness is not dependency completeness or solver suitability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CandidateStatus {
     Selectable,
     NeedsOptions,
@@ -155,6 +175,7 @@ pub enum CandidateStatus {
     Incomplete,
 }
 #[derive(Clone, Debug, Serialize)]
+#[non_exhaustive]
 pub struct CollectionCandidate {
     pub selection: CollectionSelection,
     pub status: CandidateStatus,
@@ -163,6 +184,7 @@ pub struct CollectionCandidate {
 /// Parsed selections remain independent modules, including their parser-defined
 /// time/scenario structure. A successful parse does not certify study completeness.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct CollectionResult {
     pub module: PioModule<PioValue>,
     pub dependencies: Vec<String>,

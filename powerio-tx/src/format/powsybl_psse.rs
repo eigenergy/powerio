@@ -19,7 +19,12 @@ use crate::network::{
 /// `√3 · Vnom · I / 1000` MVA for `I` in A and `Vnom` in kV
 /// (`AbstractConverter.convertToMva`).
 pub(super) fn current_limit_mva(current_a: f64, nominal_kv: f64) -> f64 {
-    current_a / 1000.0 * 3f64.sqrt() * nominal_kv
+    powerio_core::electrical::calc_line_apparent_power(
+        nominal_kv,
+        current_a / 1000.0,
+        powerio_core::electrical::SQRT_3,
+        powerio_core::electrical::ApparentPowerOrder::CurrentFirst,
+    )
 }
 
 /// The MVA ratings of one set of current limits, permanent and temporary,

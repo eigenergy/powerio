@@ -42,7 +42,7 @@ static int library_matches_header(PioVersionView library) {
 }
 
 /* `view` states the release `core` (MAJOR.MINOR.PATCH), optionally with a
- * prerelease suffix: 0.12.0-rc.1 is a candidate of 0.12.0. */
+ * prerelease suffix: 1.0.0-rc.1 is a prerelease of 1.0.0. */
 static int view_states_release(PioStringView view, const char *core) {
     size_t len = strlen(core);
     return view.data != NULL && view.len >= len && memcmp(view.data, core, len) == 0 &&

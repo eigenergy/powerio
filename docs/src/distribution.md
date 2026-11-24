@@ -2,8 +2,8 @@
 
 A multiconductor network is the conductor level distribution model, and
 OpenDSS, GridLAB-D, PowerModelsDistribution ENGINEERING and MATHEMATICAL
-JSON, BMOPF JSON, the multiconductor MG-RAVENS JSON profile, and distribution
-CIM all parse to it. When you need a calculation, construct an
+JSON, BMOPF JSON, the multiconductor MG-RAVENS JSON profile, three-phase
+pandapower JSON, and distribution CIM all parse to it. When you need a calculation, construct an
 `McAcPfInstance`, `McAcOpfInstance`, `LinDist3FlowPfInstance`, or
 `LinDist3FlowOpfInstance` from it explicitly (see
 [Calculation instances and solutions](instances.md)).
@@ -186,18 +186,22 @@ is refused.
 | `ConnectivityNode`, `Terminal.phases` | buses, with the terminals the equipment uses; a `Ground` at a node grounds the conductors its phase code names |
 | `ACLineSegment` with `ACLineSegmentPhase` | lines, every conductor in `sequenceNumber` order, the neutral included; each end's `Terminal.phases` is its own map, so a lateral landing on another phase keeps both |
 | `PerLengthPhaseImpedance` | line codes in ohm/m and S/m |
-| `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus |
+| `EnergyConsumer` with `EnergyConsumerPhase` | loads; a wye load returns on the neutral terminal, and `grounded` says whether that neutral is grounded at the bus; a single phase load stating `grounded` false whose neutral nothing but such loads reaches is kept as stated with a `READ.RAVENS_DIST.VALUE_CONFLICT` finding, since its neutral floats (the CIM reader grounds it) |
 | `LinearShuntCompensator` | shunt banks; `Yn` is a wye bank whose neutral is grounded, `Y` one on an ungrounded neutral |
 | the `Switch` classes with `SwitchPhase` | switches with their state |
-| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit |
+| `PowerTransformer`, `TransformerTank`, `TransformerTankEnd`, `TransformerEndInfo` with its tests | transformers, one tank per unit; each end's `phaseAngleClock` is the vector group shift, as in distribution CIM below (clock 11 on a delta–wye unit reads as `leadlag` euro), or the tank stays untyped with the represented clock named; the writer states each end's clock and the vector group (`Dyn1`, `Dyn11`) |
 | `EnergySource` | voltage sources; a source whose phasors are not one balanced set is written as one single phase `EnergySource` per conductor with the same phasors |
 | `RotatingMachine`, `PowerElectronicsConnection` | generators and inverter based resources |
 
-Line import currently supports impedance stated through
-`PerLengthPhaseImpedance`. Segments whose impedance comes only from wire or
-cable assets (`WireSpacingInfo`, `OverheadWireInfo`,
-`ConcentricNeutralCableInfo`, or `TapeShieldCableInfo`) have no typed line
-projection yet; their source records are retained and the omission is diagnosed.
+A segment with a `PerLengthPhaseImpedance` takes it. A segment without one,
+on a `WireSpacingInfo`, takes the impedance of its wires, calculated as the
+CIM reader does (see [Wire catalog lines](#wire-catalog-lines)). A segment
+whose wires cannot be calculated stays untyped at its source path with the
+reason, and the catalog records stay untyped as well. In-service equipment
+kept untyped this way (a segment, switch, tank or load the reader cannot
+type) round trips to MG-RAVENS, and conversion to any other format refuses
+it (`READINESS.RAVENS_DIST.EQUIPMENT_UNRESOLVED`) rather than writing the
+feeder without it.
 
 Voltage limits follow the upstream converter's line-to-line base, including
 single-phase equipment. PowerIO converts them to phase-to-ground bounds in the
@@ -225,6 +229,28 @@ and diagnostic, and includes controls that reject malformed output. See
 [`evals/validation/ravens/`](https://github.com/eigenergy/powerio/tree/main/evals/validation/ravens)
 for the revision, commands, and scope; schema validity alone does not establish
 electrical equivalence.
+
+## pandapower three-phase JSON
+
+pandapower JSON has one token, `pandapower-json`, for balanced and three-phase
+networks. A document whose `asymmetric_load`, `asymmetric_sgen` or
+`res_bus_3ph` table has rows is a network for pandapower's `runpp_3ph`, and
+`powerio_tnd::formats::pandapower` reads it here. The facade and the CLI pick
+the reader from the content. Every bus has the phase terminals 1, 2 and 3
+and a grounded neutral 4, lines turn their sequence data into phase
+matrices, an external grid is an ideal source, and loads and static
+generators are constant power, balanced or per phase.
+
+This reading does not map transformers, shunts, switches and the other
+element tables yet, and reports each one it drops. A document with rows in a
+table only the balanced reader maps (`trafo`, `shunt`, `gen`, `storage`,
+`dcline`) keeps reading balanced, as in PowerIO 0.12.0, when that reader
+accepts it. A transformer or a switch that joins or splits buses changes the
+connectivity, so `powerio batch` skips a three-phase network read without
+one. An element on an out-of-service bus is kept with `in_service` false in
+its extras. Writing a three-phase network to `pandapower-json` returns its
+unchanged source; any other multiconductor network is refused with
+`EMIT.DIST.PANDAPOWER_UNSUPPORTED`.
 
 ## PowerModelsDistribution MATHEMATICAL model
 
@@ -301,6 +327,35 @@ code. A diagram without a code is a drawing. PowerIO does not reproject: the
 network's `geo` metadata names the CRS, and a geographic layer applied with
 `apply_geo_layer` replaces the coordinates with reprojected ones.
 
+### Wire catalog lines
+
+A segment with no `PerLengthImpedance` that names a `WireSpacingInfo` takes
+the impedance of its conductors: each `ACLineSegmentPhase` names a
+`WirePosition` by its `sequenceNumber` and a wire catalog entry by its
+`PowerSystemResource.AssetDatasheet` (`OverheadWireInfo`, `WireInfo`,
+`ConcentricNeutralCableInfo` or `TapeShieldCableInfo`). The OpenDSS line
+constants that read `geometry` calculate it, under OpenDSS's default earth
+(Deri, 100 ohm-m) since CIM states none, reported once as a
+`VALUE_DEFAULTED` finding. Positions and diameters are meters and
+resistances ohm/m, as CIM states them; `diameterOverScreen` is the tape's
+inside diameter. A position repeated with the same coordinates is one
+position. A neutral (`N`) phase the segment's `Terminal.phases` does not
+state is Kron reduced, as an OpenDSS line on a spacing with more conductors
+than phases reduces its neutrals; one the terminals state stays a conductor.
+
+A position no phase names leaves the impedance unknown (an unstated neutral
+changes every phase entry), and the segment is refused with the position
+named: `READ.CIM_DIST.IMPEDANCE_UNRESOLVED`, or an untyped segment in
+MG-RAVENS; either way conversion to another format refuses it. The
+MG-RAVENS `IEEE13_Assets` example, as XML or JSON, is such a document: it
+names no wire for the neutral of nine of its eleven segments (`650632`,
+`632670`, `670671`, `671680`, `632633`, `632645`, `671684`, `684611` and
+`684652`); `645646` states a `PerLengthImpedance`. Its one complete wire
+catalog segment (`692675`, concentric neutral) matches OpenDSS to 2e-5,
+the difference of the exporter's 1609.3 m mile; the same conductors stated
+completely, neutral included, match OpenDSS to 1e-13 of each matrix's
+largest entry.
+
 Without a `BaseFrequency`, distribution CIM reads at 60 Hz in both CIM16 and
 CIM100, with a `READ.CIM_DIST.VALUE_DEFAULTED` finding. The namespace identifies
 the schema, not the grid's operating frequency; state `BaseFrequency` for 50 Hz
@@ -331,13 +386,20 @@ from test losses, a loss of 0 states nothing, and a nonzero loss that
 disagrees with the end resistances is reported
 (`READ.CIM_DIST.VALUE_CONFLICT`).
 
-Tank phase clocks are validated against the represented winding layout:
-aligned connections use clock 0, the supported three-phase D/Y lagging
-connection uses clock 1, and reversed single-phase center-tap halves use
-clock 6. Other vector groups (including clock 11), invalid clocks, inactive
-tanks or parents, and disconnected end terminals are refused. An absent clock
-is assumed to match the layout with a diagnostic. Fresh writing derives the
-clock from the current windings and reports conflicting retained metadata.
+Tank phase clocks are the vector group shift the physics stamps
+(`powerio_dist::transformer`'s delta orientation): aligned connections are
+clock 0, a three-phase D/Y unit is clock 1 when the high voltage winding
+leads (OpenDSS's default `leadlag`) and clock 11 when the low voltage
+winding leads, and reversed single-phase center-tap halves are clock 6. A
+D/Y unit stating clock 11 reads with `leadlag` euro, so it stamps the -30
+degree shift. Other clocks, invalid clocks, inactive tanks or parents, and
+disconnected end terminals are refused. An absent clock is assumed to match
+the layout with a diagnostic. Fresh writing derives the clock from the
+current windings and `leadlag` and reports conflicting retained metadata;
+the `PowerTransformerEnd` form states its clocks whenever OpenDSS's default
+convention does not represent them, so a unit neither convention represents
+(a Y-D-D unit whose deltas roll opposite ways) is written with its clocks
+and refused on reading, never read back with a winding shifted.
 
 A transformer whose extras carry
 `cim_form = "tank"` is written as tanks, grouped under the `PowerTransformer`
@@ -346,7 +408,7 @@ sharing one `TransformerTankInfo`; every other transformer, including those
 from other formats, takes the `PowerTransformerEnd` form.
 
 Regulator controls, distributed energy resources
-(`PowerElectronicsConnection`), machines, wire and cable geometry, operational limits,
+(`PowerElectronicsConnection`), machines, operational limits,
 `LoadResponseCharacteristic`, and `TopologicalNode` only documents are not
 mapped yet, and the reader reports each of them: a class with no mapping is
 counted per class (`READ.CIM_DIST.CLASS_UNMAPPED`), a property no mapping reads
@@ -373,7 +435,8 @@ maps back exactly, so write, read, write is byte stable. The output is not
 fully qualified against external producer corpora. The committed synthetic
 tank cases are checked against native OpenDSS grounded admittance stamps and
 loaded coil phasors by `evals/validation/validate_cim_tanks.py`, including fresh
-CIM writing and a clock-1/clock-11 control. This does not establish support for
+CIM writing, a clock-1/clock-11 control and a clock 11 tank read as
+`leadlag` euro. This does not establish support for
 producer dialects outside the documented electrical profile.
 
 ### Distribution CIM status
@@ -402,8 +465,8 @@ producer dialects outside the documented electrical profile.
   not run yet.
 - **Not mapped.** Regulator and tap changer controls (`RegulatingControl`,
   `TapChangerControl`), distributed energy resources
-  (`PowerElectronicsConnection`) and machines, wire and cable geometry,
-  operational limits, and `LoadResponseCharacteristic` are reported on read
+  (`PowerElectronicsConnection`) and machines, operational limits, and
+  `LoadResponseCharacteristic` are reported on read
   (`READ.CIM_DIST.CLASS_UNMAPPED`, `READ.CIM_DIST.FIELD_UNMAPPED`). A
   document that connects equipment through `TopologicalNode` (bus branch)
   only is refused. On write, generators, inverter based resources, and

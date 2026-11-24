@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 /// Checks the semantic rules of BMOPF conformance (dsopt-schema
 /// `docs/conformance.md`) and the structural constraints the reader relies
 /// on. `current` says the document states the current schema; a document written
-/// against an earlier version keeps that version's line `s_max` reading.
+/// against an earlier version keeps that version's line `s_max` reading. The
+/// reader has already rewritten an older draft's lowercase enum values to the
+/// schema's tokens, so the checks match UPPER_SNAKE only.
 pub(super) fn report(doc: &Map<String, Value>, diagnostics: &mut Diagnostics, current: bool) {
     let mut check = Check {
         doc,
@@ -105,23 +107,16 @@ pub(super) fn report(doc: &Map<String, Value>, diagnostics: &mut Diagnostics, cu
     }
 }
 
-/// Whether a terminal list has a neutral: one the conventions name as
-/// neutral, or, without conventions, `n`/`N`, or `"4"` when the terminals
-/// are exactly `1`-`4`.
+/// Whether a terminal list has a neutral: a terminal whose role
+/// ([`crate::calc_terminal_role`]) is neutral.
 fn has_neutral(names: &[&str], roles: Option<&Value>) -> bool {
-    if let Some(roles) = roles {
-        return strings(roles.get("neutral"))
-            .iter()
-            .any(|n| names.contains(n));
-    }
-    let numeric_four = names.len() == 4 && ["1", "2", "3", "4"].iter().all(|t| names.contains(t));
     names
         .iter()
-        .any(|n| n.eq_ignore_ascii_case("n") || (numeric_four && *n == "4"))
+        .any(|n| crate::calc_terminal_role(names, n, roles) == crate::TerminalRole::Neutral)
 }
 
 /// A number, or every entry of a non-empty array, finite and strictly positive.
-fn strictly_positive(value: &Value) -> bool {
+pub(super) fn strictly_positive(value: &Value) -> bool {
     let one = |v: &Value| v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0);
     one(value)
         || value

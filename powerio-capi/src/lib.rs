@@ -69,7 +69,7 @@ pub const PIO_VERSION_MAJOR: u32 = 0;
 pub const PIO_VERSION_MINOR: u32 = 12;
 
 /// Patch number of the PowerIO release this header was generated from.
-pub const PIO_VERSION_PATCH: u32 = 0;
+pub const PIO_VERSION_PATCH: u32 = 4;
 
 // ---- views -----------------------------------------------------------------
 
@@ -6974,12 +6974,7 @@ pub unsafe extern "C" fn pio_calculation_instance_multiconductor_network(
 }
 
 fn branch_susceptance_formula_name(formula: BranchSusceptanceFormula) -> &'static str {
-    match formula {
-        BranchSusceptanceFormula::ReactanceOnly => "reactance_only",
-        BranchSusceptanceFormula::TapAdjustedReactance => "tap_adjusted_reactance",
-        BranchSusceptanceFormula::SeriesSusceptance => "series_susceptance",
-        _ => "unknown",
-    }
+    formula.formula_name()
 }
 
 unsafe fn require_calculation_instance<'a>(
@@ -18890,6 +18885,10 @@ fn collect_solution_values(solution: &PioValue, quantity: &str) -> Result<Vec<f6
                 .collect(),
             "source_active_injection" => solution.source_active_injections().to_vec(),
             "generator_active_power" => solution.generator_active_powers().to_vec(),
+            "generator_coil_active_power" => solution
+                .generator_coil_active_powers()
+                .map(<[f64]>::to_vec)
+                .ok_or_else(unknown)?,
             _ => return Err(unknown()),
         },
         _ => {
@@ -19031,15 +19030,13 @@ pub unsafe extern "C" fn pio_ac_scuc_solution_get_values_at(
 }
 
 fn formula(name: Option<&str>) -> Result<BranchSusceptanceFormula, *mut PioError> {
-    match name.unwrap_or("series_susceptance") {
-        "series_susceptance" => Ok(BranchSusceptanceFormula::SeriesSusceptance),
-        "tap_adjusted_reactance" => Ok(BranchSusceptanceFormula::TapAdjustedReactance),
-        "reactance_only" => Ok(BranchSusceptanceFormula::ReactanceOnly),
-        other => Err(boundary_error(
+    let name = name.unwrap_or("series_susceptance");
+    BranchSusceptanceFormula::from_formula_name(name).ok_or_else(|| {
+        boundary_error(
             &codes::REQUEST_CAPI_UNKNOWN_FORMULA,
-            format!("unknown branch susceptance formula '{other}'"),
-        )),
-    }
+            format!("unknown branch susceptance formula '{name}'"),
+        )
+    })
 }
 
 unsafe fn dc_operators(
@@ -19925,6 +19922,12 @@ unsafe fn dc_vector(
     }
 }
 
+/// Signed branch by bus incidence matrix of a balanced network. `formula`
+/// names the branch susceptance formula, which decides the zero impedance
+/// guard: `series_susceptance` (the default when `formula` is NULL),
+/// `series_susceptance_no_phase_shift`, `tap_adjusted_reactance`,
+/// `tap_adjusted_series_susceptance`, or `reactance_only`. Any other token
+/// fails with `REQUEST.CAPI.UNKNOWN_FORMULA`.
 ///
 /// # Safety
 /// Pointers and handles must satisfy the crate-level safety requirements.
@@ -20934,6 +20937,20 @@ pub unsafe extern "C" fn pio_ac_ots_solution_materialize(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dc_formula_names_include_the_additive_variants() {
+        for name in [
+            "series_susceptance",
+            "tap_adjusted_reactance",
+            "reactance_only",
+            "tap_adjusted_series_susceptance",
+            "series_susceptance_no_phase_shift",
+        ] {
+            let parsed = super::formula(Some(name)).expect("stable formula");
+            assert_eq!(super::branch_susceptance_formula_name(parsed), name);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -21338,7 +21355,7 @@ mod tests {
         );
         let version = pio_version_numbers();
         assert_eq!([version.major, version.minor, version.patch], numbers);
-        // A prerelease (0.12.0-rc.1) states its core release in the numbers
+        // A prerelease (1.0.0-rc.1) states its core release in the numbers
         // and the whole version in the string.
         let text = unsafe { view_text(pio_version()) };
         assert_eq!(text, powerio::VERSION);
@@ -22606,6 +22623,44 @@ mod tests {
             terminals[1] = terminals[0].clone();
         }
         check_stored_solution_rejected(&duplicate);
+    }
+
+    #[test]
+    fn mc_ac_opf_coil_dispatch_is_a_quantity_only_when_recorded() {
+        // A DELTA generator on the three phases has three coils.
+        let mut network = multiconductor_network();
+        network
+            .generators_mut()
+            .push(powerio_dist::DistGenerator::new(
+                "g",
+                "source",
+                vec!["1".into(), "2".into(), "3".into()],
+                powerio_dist::Configuration::Delta,
+                Vec::new(),
+                Vec::new(),
+            ));
+        let solution = powerio_prob::McAcOpfSolution::new(
+            Arc::new(powerio_prob::McAcOpfInstance::from_network(network).unwrap()),
+            powerio_prob::Termination::Converged,
+            vec![240.0; 3],
+            vec![0.0; 3],
+            vec![0.0; 3],
+            vec![0.0; 3],
+            0.0,
+        )
+        .unwrap();
+        let quantity = "generator_coil_active_power";
+        let absent = PioValue::McAcOpfSolution(solution.clone());
+        assert!(collect_solution_values(&absent, quantity).is_err());
+        let recorded = PioValue::McAcOpfSolution(
+            solution
+                .with_generator_coil_active_powers(vec![1.0, 2.0, 3.0])
+                .unwrap(),
+        );
+        assert_eq!(
+            collect_solution_values(&recorded, quantity).unwrap(),
+            vec![1.0, 2.0, 3.0]
+        );
     }
 
     #[test]

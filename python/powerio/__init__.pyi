@@ -122,6 +122,8 @@ __version__: str
 
 Scheme = Literal["bx", "xb"]
 BranchSusceptanceFormula = Literal[
+    "tap_adjusted_series_susceptance",
+    "series_susceptance_no_phase_shift",
     "series_susceptance",
     "tap_adjusted_reactance",
     "reactance_only",
@@ -1375,6 +1377,8 @@ def parse(
     sincal_balanced: Optional[SincalBalancedReadOptions] = ...,
     acquisition_root: Optional[Any] = ...,
     named_buffers: Optional[Mapping[str, bytes]] = ...,
+    dss_max_include_bytes: Optional[int] = ...,
+    dss_max_properties: Optional[int] = ...,
 ) -> PioModule[Any]: ...
 def emit(
     module: PioModule[Any], format: Format, destination: Optional[Any] = ...

@@ -78,6 +78,33 @@ fn lines_share_one_code_per_linecode_prefix() {
     }
 }
 
+/// A second `New Linecode.lc` edits `lc`, as in OpenDSS. Lines that fetched
+/// it earlier keep the values of that time; lines after take the edited ones.
+#[test]
+fn a_linecode_declared_again_serves_each_line_the_state_it_fetched() {
+    let net = parse_dss_str(
+        "New Circuit.c
+New Linecode.lc nphases=1 rmatrix=[1] xmatrix=[2] cmatrix=[3] units=km
+New Line.a bus1=sourcebus.1 bus2=a.1 linecode=lc length=10 units=m
+New Line.b bus1=a.1 bus2=b.1 linecode=lc length=20 units=m
+New Linecode.lc rmatrix=[7]
+New Line.d bus1=b.1 bus2=d.1 linecode=lc length=5 units=m
+New Line.e bus1=d.1 bus2=e.1 linecode=lc length=6 units=m
+",
+    );
+    for line in ["a", "b"] {
+        let lc = code(&net, line);
+        assert_eq!(lc.name, "lc", "line {line}");
+        assert_eq!(lc.r_series[0][0].to_bits(), (1.0_f64 / 1000.0).to_bits());
+    }
+    for line in ["d", "e"] {
+        let lc = code(&net, line);
+        assert_eq!(lc.name, "lc_1", "line {line}");
+        assert_eq!(lc.r_series[0][0].to_bits(), (7.0_f64 / 1000.0).to_bits());
+        assert_eq!(lc.x_series[0][0].to_bits(), (2.0_f64 / 1000.0).to_bits());
+    }
+}
+
 #[test]
 fn changed_primitives_keep_their_own_code() {
     let net = parse_dss_str(

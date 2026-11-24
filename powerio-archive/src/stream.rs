@@ -4,10 +4,15 @@ use std::io::Read;
 
 /// Why an entry's inflated stream was refused.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DeclaredSizeFailure {
+    /// The reader or inflater failed, including a CRC mismatch.
     Read(std::io::Error),
+    /// The declared size does not fit in memory on this platform.
     Allocation,
+    /// The stream ended after this many bytes, before the declared size.
     Short(u64),
+    /// The stream produced more bytes than declared or than the bound allows.
     Long,
 }
 

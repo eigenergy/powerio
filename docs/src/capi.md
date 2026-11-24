@@ -34,7 +34,7 @@ The header states the PowerIO release it was generated from as
 `PIO_VERSION_MAJOR`, `PIO_VERSION_MINOR`, and `PIO_VERSION_PATCH`, and
 `pio_version_numbers()` returns the release of the loaded library as a
 `PioVersionView`. `pio_version()` returns the same release as text. A
-prerelease such as `0.12.0-rc.1` states its core release, `0.12.0`, in the
+prerelease such as `1.0.0-rc.1` states its core release, `1.0.0`, in the
 numbers and the whole version in `pio_version()`.
 
 A program compiled against the header of release X.Y.Z works with any

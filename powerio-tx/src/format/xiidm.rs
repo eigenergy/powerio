@@ -854,25 +854,20 @@ pub(crate) fn parse_xiidm_bytes(
             "XIIDM XML exceeds the {MAX_XIIDM_BYTES} byte input limit"
         )));
     }
-    reject_xml_entities(bytes)?;
-    let mut reader = NsReader::from_reader(bytes);
+    let (text, mark_bytes) = xiidm_text(bytes)?;
+    reject_xml_entities(&text)?;
+    let mut reader = NsReader::from_str(&text);
     reader.config_mut().trim_text(true);
     reader.config_mut().check_end_names = true;
     reader.config_mut().expand_empty_elements = false;
     let mut parsed = ParsedXiidm::default();
     let mut element_depth = 0_usize;
-    let mut encoding_checked = false;
-    let mut buffer = Vec::new();
     loop {
-        let event_offset = reader.buffer_position();
+        let event_offset = reader.buffer_position() + mark_bytes;
         let (resolved, event) = reader
-            .read_resolved_event_into(&mut buffer)
+            .read_resolved_event()
             .map_err(|error| format_error(format!("malformed XML: {error}")))?;
         let namespace = resolved_namespace(resolved)?;
-        if !encoding_checked && !matches!(&event, Event::Decl(_)) {
-            validate_xml_encoding(None, reader.decoder())?;
-            encoding_checked = true;
-        }
         match event {
             Event::Start(element) => {
                 element_depth = element_depth
@@ -883,24 +878,24 @@ pub(crate) fn parse_xiidm_bytes(
                         "XIIDM XML exceeds the {MAX_XIIDM_ELEMENT_DEPTH} element nesting limit"
                     )));
                 }
-                let tag = local_name(element.name().as_ref())?;
+                let tag = local_name(element.name().into_inner());
                 let attrs = if parsed.skipped_depth > 0 {
                     Attrs::new()
                 } else {
-                    attributes(&element, reader.decoder())?
+                    attributes(&element)?
                 };
                 let id = attrs.get("id").cloned();
                 parsed
                     .consume(
                         TreeEvent::Start {
-                            tag: &tag,
+                            tag,
                             namespace: namespace.as_deref(),
                             attrs,
                             empty: false,
                         },
                         diagnostics,
                     )
-                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
+                    .map_err(|error| locate(error, tag, id.as_deref(), event_offset))?;
             }
             Event::Empty(element) => {
                 if element_depth >= MAX_XIIDM_ELEMENT_DEPTH {
@@ -908,46 +903,40 @@ pub(crate) fn parse_xiidm_bytes(
                         "XIIDM XML exceeds the {MAX_XIIDM_ELEMENT_DEPTH} element nesting limit"
                     )));
                 }
-                let tag = local_name(element.name().as_ref())?;
+                let tag = local_name(element.name().into_inner());
                 let attrs = if parsed.skipped_depth > 0 {
                     Attrs::new()
                 } else {
-                    attributes(&element, reader.decoder())?
+                    attributes(&element)?
                 };
                 let id = attrs.get("id").cloned();
                 parsed
                     .consume(
                         TreeEvent::Start {
-                            tag: &tag,
+                            tag,
                             namespace: namespace.as_deref(),
                             attrs,
                             empty: true,
                         },
                         diagnostics,
                     )
-                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
+                    .map_err(|error| locate(error, tag, id.as_deref(), event_offset))?;
             }
             Event::End(element) => {
-                let tag = local_name(element.name().as_ref())?;
+                let tag = local_name(element.name().into_inner());
                 parsed
-                    .consume(TreeEvent::End(&tag), diagnostics)
-                    .map_err(|error| locate(error, &tag, None, event_offset))?;
+                    .consume(TreeEvent::End(tag), diagnostics)
+                    .map_err(|error| locate(error, tag, None, event_offset))?;
                 element_depth = element_depth.saturating_sub(1);
             }
             Event::Text(value) => {
                 if parsed.skipped_depth == 0 && parsed.pending_alias.is_some() {
-                    let text = value
-                        .decode()
-                        .map_err(|error| format_error(error.to_string()))?;
-                    parsed.consume(TreeEvent::Text(&text), diagnostics)?;
+                    parsed.consume(TreeEvent::Text(&value), diagnostics)?;
                 }
             }
             Event::CData(value) => {
                 if parsed.skipped_depth == 0 && parsed.pending_alias.is_some() {
-                    let text = value
-                        .decode()
-                        .map_err(|error| format_error(error.to_string()))?;
-                    parsed.consume(TreeEvent::Text(&text), diagnostics)?;
+                    parsed.consume(TreeEvent::Text(&value), diagnostics)?;
                 }
             }
             Event::GeneralRef(reference) => {
@@ -963,13 +952,11 @@ pub(crate) fn parse_xiidm_bytes(
                 return Err(format_error("DTD declarations are not accepted"));
             }
             Event::Decl(declaration) => {
-                validate_xml_encoding(Some(&declaration), reader.decoder())?;
-                encoding_checked = true;
+                validate_xml_encoding(&declaration)?;
             }
             Event::PI(_) | Event::Comment(_) => {}
             Event::Eof => break,
         }
-        buffer.clear();
     }
     parsed.finish(diagnostics)
 }
@@ -1381,37 +1368,81 @@ fn json_array_text(values: &[JsonNode]) -> String {
         .join(",")
 }
 
-fn validate_xml_encoding(
-    declaration: Option<&BytesDecl<'_>>,
-    decoder: quick_xml::encoding::Decoder,
-) -> Result<()> {
-    let declared_label = declaration
-        .and_then(BytesDecl::encoding)
-        .transpose()
-        .map_err(|error| format_error(format!("malformed XML encoding declaration: {error}")))?
-        .map(|label| {
-            std::str::from_utf8(&label)
-                .map(str::to_owned)
-                .map_err(|error| {
-                    format_error(format!("XML encoding name is not valid ASCII: {error}"))
-                })
-        })
-        .transpose()?;
-    let encoding = decoder.encoding();
-    let supported = encoding.name() == "UTF-8" || encoding.is_single_byte();
-    let unknown =
-        declared_label.is_some() && declaration.is_some_and(|value| value.encoder().is_none());
-    if unknown || !supported {
-        let name = declared_label.as_deref().unwrap_or_else(|| encoding.name());
-        return Err(format_error(format!(
-            "unsupported XIIDM XML encoding `{name}`; use UTF-8 or a recognized single-byte encoding"
-        )));
-    }
-    Ok(())
+/// The document as UTF-8 text, and the length of a leading UTF-8 byte order
+/// mark, which the text leaves out.
+///
+/// The text is UTF-8 unless a leading XML declaration names a single-byte
+/// encoding; then the whole document is transcoded once. Offsets in read
+/// errors count bytes of this text.
+fn xiidm_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, str>, u64)> {
+    // The byte order mark, or the first bytes of `<?`, give UTF-16 away.
+    let detected = quick_xml::encoding::detect_encoding(bytes);
+    let mark_len = match &detected {
+        Some(detected) if !detected.encoding().is_ascii_compatible() => {
+            return Err(unsupported_xml_encoding(detected.encoding().name()));
+        }
+        Some(detected) => detected.bom_len(),
+        None => 0,
+    };
+    let body = &bytes[mark_len..];
+    let mark_bytes = mark_len as u64;
+    // Only the declaration is read here. It is ASCII in every encoding the
+    // reader accepts, so it reads before the document is transcoded. White
+    // space and comments before the declaration are skipped.
+    let mut probe = quick_xml::Reader::from_reader(body);
+    probe.config_mut().trim_text(true);
+    let declared = loop {
+        match probe.read_event() {
+            Ok(Event::Comment(_)) => {}
+            Ok(Event::Decl(declaration)) => {
+                validate_xml_encoding(&declaration)?;
+                break declaration.encoder();
+            }
+            _ => break None,
+        }
+    };
+    let text = match declared {
+        Some(encoding) if encoding.name() != "UTF-8" => encoding
+            .decode_without_bom_handling_and_without_replacement(body)
+            .ok_or_else(|| {
+                format_error(format!(
+                    "malformed XML: cannot decode input using {}",
+                    encoding.name()
+                ))
+            })?,
+        _ => std::borrow::Cow::Borrowed(std::str::from_utf8(body).map_err(|error| {
+            format_error(format!(
+                "malformed XML: cannot decode input using UTF-8: {error}"
+            ))
+        })?),
+    };
+    Ok((text, mark_bytes))
 }
 
-fn reject_xml_entities(bytes: &[u8]) -> Result<()> {
-    let upper = String::from_utf8_lossy(bytes).to_ascii_uppercase();
+/// Accept a declaration that names no encoding, UTF-8, or a recognized
+/// single-byte encoding.
+fn validate_xml_encoding(declaration: &BytesDecl<'_>) -> Result<()> {
+    let Some(label) = declaration
+        .encoding()
+        .transpose()
+        .map_err(|error| format_error(format!("malformed XML encoding declaration: {error}")))?
+    else {
+        return Ok(());
+    };
+    match declaration.encoder() {
+        Some(encoding) if encoding.name() == "UTF-8" || encoding.is_single_byte() => Ok(()),
+        _ => Err(unsupported_xml_encoding(&label)),
+    }
+}
+
+fn unsupported_xml_encoding(name: &str) -> Error {
+    format_error(format!(
+        "unsupported XIIDM XML encoding `{name}`; use UTF-8 or a recognized single-byte encoding"
+    ))
+}
+
+fn reject_xml_entities(text: &str) -> Result<()> {
+    let upper = text.to_ascii_uppercase();
     if upper.contains("<!DOCTYPE") || upper.contains("<!ENTITY") {
         return Err(format_error(
             "DTD declarations and entity definitions are not accepted",
@@ -3832,8 +3863,8 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         b * section_count as f64,
                         vec![ShuntBlock::with_admittance(
                             maximum,
-                            g * nominal * nominal,
-                            b * nominal * nominal,
+                            powerio_core::electrical::calc_rated_power(g, nominal),
+                            powerio_core::electrical::calc_rated_power(b, nominal),
                         )],
                     )
                 } else if !equipment.shunt_sections.is_empty() {
@@ -3854,8 +3885,8 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         .map(|(g, b)| {
                             ShuntBlock::with_admittance(
                                 1,
-                                g * nominal * nominal,
-                                b * nominal * nominal,
+                                powerio_core::electrical::calc_rated_power(*g, nominal),
+                                powerio_core::electrical::calc_rated_power(*b, nominal),
                             )
                         })
                         .collect();
@@ -3866,8 +3897,11 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         equipment.id
                     )));
                 };
-                let mut shunt =
-                    Shunt::new(bus1, g_si * nominal * nominal, b_si * nominal * nominal);
+                let mut shunt = Shunt::new(
+                    bus1,
+                    powerio_core::electrical::calc_rated_power(g_si, nominal),
+                    powerio_core::electrical::calc_rated_power(b_si, nominal),
+                );
                 shunt.uid = Some(equipment.id.clone());
                 shunt.in_service = connected1;
                 shunt.section_count = assigned_section_count;
@@ -5660,8 +5694,13 @@ fn read_line_attributes(
 ) -> Result<Branch> {
     let r = required_f64(attrs, "r")?;
     let x = required_f64(attrs, "x")?;
-    let scale = DEFAULT_BASE_MVA / (nominal_v1 * nominal_v2);
-    let mut branch = Branch::new(from, to, r * scale, x * scale);
+    let zbase = powerio_core::electrical::calc_branch_impedance_base(
+        nominal_v1,
+        nominal_v2,
+        DEFAULT_BASE_MVA,
+    )
+    .unwrap_or(f64::NAN);
+    let mut branch = Branch::new(from, to, r / zbase, x / zbase);
     let denominator = r * r + x * x;
     let y_real = if denominator == 0.0 {
         0.0
@@ -5763,7 +5802,8 @@ fn read_transformer(
             equipment.id
         )));
     }
-    let zbase = nominal_v2 * nominal_v2 / DEFAULT_BASE_MVA;
+    let zbase = powerio_core::electrical::calc_impedance_base(nominal_v2, DEFAULT_BASE_MVA)
+        .unwrap_or(f64::NAN);
     let mut branch = Branch::new(from, to, r / zbase, x / zbase);
     branch.tap = 1.0 / rho;
     branch.shift = -alpha;
@@ -6106,7 +6146,8 @@ fn read_three_winding_transformer(
             equipment.id
         )));
     }
-    let zbase = rated_u0 * rated_u0 / DEFAULT_BASE_MVA;
+    let zbase = powerio_core::electrical::calc_impedance_base(rated_u0, DEFAULT_BASE_MVA)
+        .unwrap_or(f64::NAN);
     let mut star_r = [0.0; 3];
     let mut star_x = [0.0; 3];
     let mut star_g = [0.0; 3];
@@ -6894,14 +6935,12 @@ fn detailed_endpoint(voltage_level: &str, endpoint: &RawEndpoint) -> Result<Topo
     }
 }
 
-fn attributes(element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder) -> Result<Attrs> {
+fn attributes(element: &BytesStart<'_>) -> Result<Attrs> {
     let mut values = Attrs::new();
     for attribute in element.attributes().with_checks(true) {
         let attribute = attribute.map_err(|error| format_error(error.to_string()))?;
-        let key = std::str::from_utf8(attribute.key.as_ref())
-            .map_err(|error| format_error(error.to_string()))?
-            .to_owned();
-        let value = super::xml::attribute_value(&attribute, decoder)
+        let key = attribute.key.as_ref().to_owned();
+        let value = super::xml::attribute_value(&attribute)
             .map_err(|error| format_error(error.to_string()))?
             .into_owned();
         if values.insert(key.clone(), value).is_some() {
@@ -6911,24 +6950,16 @@ fn attributes(element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder) -
     Ok(values)
 }
 
-fn local_name(name: &[u8]) -> Result<String> {
-    let name = std::str::from_utf8(name).map_err(|error| format_error(error.to_string()))?;
-    Ok(name
-        .rsplit_once(':')
-        .map_or(name, |(_, local)| local)
-        .to_owned())
+fn local_name(name: &str) -> &str {
+    name.rsplit_once(':').map_or(name, |(_, local)| local)
 }
 
 fn resolved_namespace(resolved: ResolveResult<'_>) -> Result<Option<String>> {
     match resolved {
         ResolveResult::Unbound => Ok(None),
-        ResolveResult::Bound(namespace) => std::str::from_utf8(namespace.as_ref())
-            .map(str::to_owned)
-            .map(Some)
-            .map_err(|error| format_error(format!("XML namespace is not valid UTF-8: {error}"))),
+        ResolveResult::Bound(namespace) => Ok(Some(namespace.as_ref().to_owned())),
         ResolveResult::Unknown(prefix) => Err(format_error(format!(
-            "XML namespace prefix `{}` is not declared",
-            String::from_utf8_lossy(&prefix)
+            "XML namespace prefix `{prefix}` is not declared"
         ))),
     }
 }
@@ -8665,6 +8696,9 @@ fn collapse_cross_substation_transformers(
 }
 
 pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
+    // Every ohm and siemens value is a per unit value times a base over the
+    // system base; refuse a base none can be formed over.
+    network.check_base_mva()?;
     let unstated_nominal_voltage = super::unstated_nominal_voltage(network);
     let unbounded_reactive_limits = super::unbounded_reactive_limits(network);
     let mut prepared_network = None;
@@ -9019,9 +9053,9 @@ fn xiidm_to_jiidm(xml: &str) -> Result<String> {
             .read_event()
             .map_err(|error| jiidm_emission_error(format!("fresh XIIDM is malformed: {error}")))?;
         match event {
-            Event::Start(element) => stack.push(open_element(&element, reader.decoder())?),
+            Event::Start(element) => stack.push(open_element(&element)?),
             Event::Empty(element) => {
-                let open = open_element(&element, reader.decoder())?;
+                let open = open_element(&element)?;
                 close_element(open, &mut stack, &mut root)?;
             }
             Event::End(_) => {
@@ -9034,18 +9068,12 @@ fn xiidm_to_jiidm(xml: &str) -> Result<String> {
                 let open = stack.last_mut().ok_or_else(|| {
                     jiidm_emission_error("fresh XIIDM has text outside an element")
                 })?;
-                let text = text
-                    .decode()
-                    .map_err(|error| jiidm_emission_error(error.to_string()))?;
                 open.content.get_or_insert_with(String::new).push_str(&text);
             }
             Event::CData(text) => {
                 let open = stack.last_mut().ok_or_else(|| {
                     jiidm_emission_error("fresh XIIDM has text outside an element")
                 })?;
-                let text = text
-                    .decode()
-                    .map_err(|error| jiidm_emission_error(error.to_string()))?;
                 open.content.get_or_insert_with(String::new).push_str(&text);
             }
             Event::GeneralRef(reference) => {
@@ -9074,24 +9102,20 @@ fn xiidm_to_jiidm(xml: &str) -> Result<String> {
     Ok(output)
 }
 
-fn open_element(
-    element: &BytesStart<'_>,
-    decoder: quick_xml::encoding::Decoder,
-) -> Result<OpenElement> {
-    let tag = local_name(element.name().as_ref())?;
+fn open_element(element: &BytesStart<'_>) -> Result<OpenElement> {
+    let tag = local_name(element.name().into_inner()).to_owned();
     let mut attrs = Vec::new();
     let mut namespaces = Vec::new();
     for attribute in element.attributes() {
         let attribute = attribute.map_err(|error| jiidm_emission_error(error.to_string()))?;
-        let key = std::str::from_utf8(attribute.key.as_ref())
-            .map_err(|error| jiidm_emission_error(error.to_string()))?;
-        let value = super::xml::attribute_value(&attribute, decoder)
+        let key: &str = attribute.key.as_ref();
+        let value = super::xml::attribute_value(&attribute)
             .map_err(|error| jiidm_emission_error(error.to_string()))?
             .into_owned();
         if key == "xmlns" || key.starts_with("xmlns:") {
             namespaces.push(value);
         } else {
-            attrs.push((local_name(key.as_bytes())?, value));
+            attrs.push((local_name(key).to_owned(), value));
         }
     }
     Ok(OpenElement {
@@ -12468,7 +12492,7 @@ fn write_shunt(
     let metadata = index.metadata(&component);
     let conductance_omitted =
         index.is_omitted(&component, OmittedFieldName::ShuntConductancePerSection);
-    let scale = level.nominal_kv * level.nominal_kv;
+    let kv = level.nominal_kv;
     let Some(control) = &shunt.control else {
         let assigned_section_count = shunt
             .section_count
@@ -12483,11 +12507,14 @@ fn write_shunt(
         let conductance = if conductance_omitted {
             String::new()
         } else {
-            format!(" gPerSection=\"{}\"", number(shunt.g / scale))
+            format!(
+                " gPerSection=\"{}\"",
+                number(powerio_core::electrical::calc_rated_admittance(shunt.g, kv))
+            )
         };
         output.push_str(&format!(
             "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
-            number(shunt.b / scale),
+            number(powerio_core::electrical::calc_rated_admittance(shunt.b, kv)),
         ));
         return;
     };
@@ -12500,11 +12527,14 @@ fn write_shunt(
         let conductance = if conductance_omitted {
             String::new()
         } else {
-            format!(" gPerSection=\"{}\"", number(shunt.g / scale))
+            format!(
+                " gPerSection=\"{}\"",
+                number(powerio_core::electrical::calc_rated_admittance(shunt.g, kv))
+            )
         };
         output.push_str(&format!(
             "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"1\"/>\n      </iidm:shuntCompensator>\n",
-            number(shunt.b / scale),
+            number(powerio_core::electrical::calc_rated_admittance(shunt.b, kv)),
         ));
         diagnostics.push(
             &codes::EMIT_XIIDM.field_dropped,
@@ -12554,11 +12584,14 @@ fn write_shunt(
         let conductance = if conductance_omitted {
             String::new()
         } else {
-            format!(" gPerSection=\"{}\"", number(block.g / scale))
+            format!(
+                " gPerSection=\"{}\"",
+                number(powerio_core::electrical::calc_rated_admittance(block.g, kv))
+            )
         };
         output.push_str(&format!(
             "        <iidm:shuntLinearModel{conductance} bPerSection=\"{}\" maximumSectionCount=\"{}\"/>\n",
-            number(block.b / scale),
+            number(powerio_core::electrical::calc_rated_admittance(block.b, kv)),
             block.steps,
         ));
     } else {
@@ -12568,11 +12601,14 @@ fn write_shunt(
                 let conductance = if conductance_omitted {
                     String::new()
                 } else {
-                    format!(" g=\"{}\"", number(block.g / scale))
+                    format!(
+                        " g=\"{}\"",
+                        number(powerio_core::electrical::calc_rated_admittance(block.g, kv))
+                    )
                 };
                 output.push_str(&format!(
                     "          <iidm:section{conductance} b=\"{}\"/>\n",
-                    number(block.b / scale),
+                    number(powerio_core::electrical::calc_rated_admittance(block.b, kv)),
                 ));
             }
         }
@@ -12848,7 +12884,8 @@ fn write_three_winding_transformer(
         } else {
             buses[0].base_kv
         });
-    let zbase = rated_u0 * rated_u0 / index.base_mva;
+    let zbase =
+        powerio_core::electrical::calc_impedance_base(rated_u0, index.base_mva).unwrap_or(f64::NAN);
     let star = transformer.calc_star_impedances();
     let winding_buses = transformer.windings.each_ref().map(|winding| winding.bus);
     let synthesized: [Option<NetworkTapChanger>; 3] = std::array::from_fn(|side| {
@@ -13288,8 +13325,14 @@ fn write_line(
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
-    let r = branch.r * from.base_kv * to.base_kv / index.base_mva;
-    let x = branch.x * from.base_kv * to.base_kv / index.base_mva;
+    let zbase = powerio_core::electrical::calc_branch_impedance_base(
+        from.base_kv,
+        to.base_kv,
+        index.base_mva,
+    )
+    .unwrap_or(f64::NAN);
+    let r = branch.r * zbase;
+    let x = branch.x * zbase;
     let denominator = r * r + x * x;
     let y_real = if denominator == 0.0 {
         0.0
@@ -13340,7 +13383,8 @@ fn write_transformer(
     let metadata = index.metadata(&component);
     let from = index.bus(branch.from);
     let to = index.bus(branch.to);
-    let zbase = to.base_kv * to.base_kv / index.base_mva;
+    let zbase = powerio_core::electrical::calc_impedance_base(to.base_kv, index.base_mva)
+        .unwrap_or(f64::NAN);
     let charging = branch.calc_terminal_charging();
     let mut taps = transformer_tap_changers(index, &component, 1);
     let synthesized = if taps.is_empty() {
@@ -15369,6 +15413,78 @@ mod tests {
         };
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].bytes(), bytes);
+    }
+
+    #[test]
+    fn a_utf8_byte_order_mark_is_skipped_and_counted_in_offsets() {
+        let mut bytes = b"\xEF\xBB\xBF".to_vec();
+        bytes.extend_from_slice(BUS_BREAKER.as_bytes());
+        parse_xiidm_bytes(&bytes, &mut Diagnostics::new()).unwrap();
+
+        let source = BUS_BREAKER.replacen("nominalV=\"230\"", "nominalX=\"230\"", 1);
+        let mut bytes = b"\xEF\xBB\xBF".to_vec();
+        bytes.extend_from_slice(source.as_bytes());
+        let message = parse_xiidm_bytes(&bytes, &mut Diagnostics::new())
+            .unwrap_err()
+            .to_string();
+        let offset: usize = message
+            .rsplit("at byte ")
+            .next()
+            .and_then(|rest| rest.trim_end_matches(')').parse().ok())
+            .expect("the message ends with the byte offset");
+        assert!(
+            bytes[offset..]
+                .trim_ascii_start()
+                .starts_with(b"<iidm:voltageLevel"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_single_byte_declaration_after_white_space_or_a_comment_still_selects_the_encoding() {
+        let source = BUS_BREAKER
+            .replace("encoding=\"UTF-8\"", "encoding=\"ISO-8859-1\"")
+            .replace("sourceFormat=\"test\"", "sourceFormat=\"Réseau\"");
+        for lead in ["\n  ", "<!-- exported -->", "\n<!-- a -->\n<!-- b -->\n"] {
+            let bytes: Vec<u8> = format!("{lead}{source}")
+                .chars()
+                .map(|value| u8::try_from(u32::from(value)).expect("fixture is ISO-8859-1"))
+                .collect();
+            assert!(std::str::from_utf8(&bytes).is_err());
+            let network = parse_xiidm_bytes(&bytes, &mut Diagnostics::new())
+                .unwrap_or_else(|error| panic!("lead {lead:?}: {error}"));
+            assert_eq!(
+                network.case_metadata().source_model_format.as_deref(),
+                Some("Réseau"),
+                "lead {lead:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn utf16_is_rejected_with_or_without_a_byte_order_mark() {
+        let utf16le: Vec<u8> = BUS_BREAKER
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let utf16be: Vec<u8> = BUS_BREAKER
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        let marked = |mark: [u8; 2]| [&mark[..], BUS_BREAKER.as_bytes()].concat();
+        for (bytes, name) in [
+            (utf16le, "UTF-16LE"),
+            (utf16be, "UTF-16BE"),
+            (marked([0xFF, 0xFE]), "UTF-16LE"),
+            (marked([0xFE, 0xFF]), "UTF-16BE"),
+        ] {
+            let error = parse_xiidm_bytes(&bytes, &mut Diagnostics::new()).unwrap_err();
+            assert!(
+                error.to_string().contains("unsupported XIIDM XML encoding"),
+                "{error}"
+            );
+            assert!(error.to_string().contains(name), "{error}");
+        }
     }
 
     #[test]

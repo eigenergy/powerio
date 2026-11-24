@@ -1,5 +1,5 @@
 //! Apply static loadshape effects at the reference assignment, not at EOF.
-use super::{C, Executor, Loader, MAX_TOTAL_INCLUDE_BYTES, RawDss, RawProp, VarMap};
+use super::{C, Executor, Loader, RawDss, RawProp, VarMap};
 
 impl RawDss {
     pub(in crate::dss) fn load_power(
@@ -80,7 +80,7 @@ impl<L: Loader> Executor<'_, L> {
             error.to_string()
         })?;
         self.include_bytes = self.include_bytes.saturating_add(bytes.len());
-        if self.include_bytes > MAX_TOTAL_INCLUDE_BYTES {
+        if self.include_bytes > self.limits.max_include_bytes {
             return Err("profile byte budget exhausted".into());
         }
         Ok(bytes)

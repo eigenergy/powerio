@@ -129,7 +129,10 @@ fn magnetizing_scale(row: &Value, primary: &Value, kv: f64) -> Result<f64> {
                 base(primary)? / BASE * ratio.powi(2)
             }
             "COMPONENT_MVAR" => 1.0 / BASE,
-            "NATURAL_UNITS" => positive(kv, "base_voltage")?.powi(2) / BASE,
+            "NATURAL_UNITS" => {
+                powerio_core::electrical::calc_impedance_base(positive(kv, "base_voltage")?, BASE)
+                    .unwrap_or(f64::NAN)
+            }
             _ => return Err(error("unsupported three-winding admittance units")),
         },
     )

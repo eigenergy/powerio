@@ -19,7 +19,6 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use quick_xml::XmlVersion;
-use quick_xml::encoding::Decoder;
 use quick_xml::events::Event;
 use quick_xml::events::attributes::Attribute;
 use quick_xml::name::ResolveResult;
@@ -101,18 +100,17 @@ pub(crate) fn is_cim_namespace(uri: &str) -> bool {
 /// letters), `<last-uri-segment>:` for anything else (vendor extensions).
 fn prefixed_name(
     resolve: &ResolveResult,
-    local: &[u8],
+    local: &str,
     cim_namespaces: &mut BTreeSet<String>,
 ) -> String {
-    let local = String::from_utf8_lossy(local).into_owned();
     match resolve {
         ResolveResult::Bound(ns) => {
-            let uri = String::from_utf8_lossy(ns.as_ref());
-            if is_cim_namespace(&uri) {
-                if !cim_namespaces.contains(uri.as_ref()) {
-                    cim_namespaces.insert(uri.into_owned());
+            let uri: &str = ns.as_ref();
+            if is_cim_namespace(uri) {
+                if !cim_namespaces.contains(uri) {
+                    cim_namespaces.insert(uri.to_owned());
                 }
-                local
+                local.to_owned()
             } else if uri == MD_NS {
                 format!("md:{local}")
             } else if uri.contains("entsoe.eu") {
@@ -130,7 +128,7 @@ fn prefixed_name(
                 format!("{tag}:{local}")
             }
         }
-        _ => local,
+        _ => local.to_owned(),
     }
 }
 
@@ -227,12 +225,12 @@ pub(crate) fn parse_cimxml(text: &str) -> Result<CimDocument> {
             }
             (_, Event::Text(t)) => {
                 if !current_prop_nested && current_prop.as_deref().is_some_and(|p| !p.is_empty()) {
-                    prop_text.push_str(&t.xml10_content().map_err(xml_err)?);
+                    prop_text.push_str(&t.xml10_content());
                 }
             }
             (_, Event::CData(t)) => {
                 if !current_prop_nested && current_prop.as_deref().is_some_and(|p| !p.is_empty()) {
-                    prop_text.push_str(&t.decode().map_err(xml_err)?);
+                    prop_text.push_str(&t);
                 }
             }
             // `&amp;`-style references arrive as their own events.
@@ -322,7 +320,7 @@ fn resolve_general_ref(reference: &quick_xml::events::BytesRef<'_>) -> Option<St
     if let Ok(Some(character)) = reference.resolve_char_ref() {
         return Some(character.to_string());
     }
-    match reference.xml10_content().ok()?.as_ref() {
+    match reference.xml10_content().as_ref() {
         "amp" => Some("&".to_string()),
         "lt" => Some("<".to_string()),
         "gt" => Some(">".to_string()),
@@ -332,12 +330,9 @@ fn resolve_general_ref(reference: &quick_xml::events::BytesRef<'_>) -> Option<St
     }
 }
 
-/// The text of one attribute: transcoded to UTF-8, the predefined entities
-/// expanded, and normalized under [`XML_VERSION`].
-fn attribute_value<'a>(attribute: &Attribute<'a>, decoder: Decoder) -> Result<Cow<'a, str>> {
-    attribute
-        .decoded_and_normalized_value(XML_VERSION, decoder)
-        .map_err(xml_err)
+/// The text of one attribute: the predefined entities expanded, and normalized under [`XML_VERSION`].
+fn attribute_value<'a>(attribute: &Attribute<'a>) -> Result<Cow<'a, str>> {
+    attribute.normalized_value(XML_VERSION).map_err(xml_err)
 }
 
 fn read_object<R>(
@@ -350,11 +345,11 @@ fn read_object<R>(
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
         let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
-        if is_rdf_attribute(&namespace, local.as_ref(), b"ID") {
+        if is_rdf_attribute(&namespace, local.as_ref(), "ID") {
             definition = true;
-            id = normalize_id(&attribute_value(&attr, reader.decoder())?);
-        } else if is_rdf_attribute(&namespace, local.as_ref(), b"about") {
-            id = normalize_id(&attribute_value(&attr, reader.decoder())?);
+            id = normalize_id(&attribute_value(&attr)?);
+        } else if is_rdf_attribute(&namespace, local.as_ref(), "about") {
+            id = normalize_id(&attribute_value(&attr)?);
         }
     }
     Ok(CimObject {
@@ -366,8 +361,8 @@ fn read_object<R>(
     })
 }
 
-fn is_rdf_attribute(resolve: &ResolveResult, local: &[u8], expected_local: &[u8]) -> bool {
-    matches!(resolve, ResolveResult::Bound(namespace) if namespace.as_ref() == RDF_NS.as_bytes())
+fn is_rdf_attribute(resolve: &ResolveResult, local: &str, expected_local: &str) -> bool {
+    matches!(resolve, ResolveResult::Bound(namespace) if namespace.as_ref() == RDF_NS)
         && local == expected_local
 }
 
@@ -378,11 +373,8 @@ fn resource_attr<R>(
     for attr in start.attributes() {
         let attr = attr.map_err(xml_err)?;
         let (namespace, local) = reader.resolver().resolve_attribute(attr.key);
-        if is_rdf_attribute(&namespace, local.as_ref(), b"resource") {
-            return Ok(Some(normalize_id(&attribute_value(
-                &attr,
-                reader.decoder(),
-            )?)));
+        if is_rdf_attribute(&namespace, local.as_ref(), "resource") {
+            return Ok(Some(normalize_id(&attribute_value(&attr)?)));
         }
     }
     Ok(None)

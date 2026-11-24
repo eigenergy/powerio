@@ -1567,13 +1567,24 @@ fn n_winding_transformer_round_trips_through_bmopf() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["n_winding"]["t3"];
     assert_eq!(t["windings"].as_array().unwrap().len(), 3);
-    assert_eq!(t["windings"][0]["delta_roll"], serde_json::json!(-1));
+    // A DELTA winding that states no roll takes BMOPFTools' default, +1,
+    // and the writer states the orientation the unit has.
+    assert_eq!(t["windings"][0]["delta_roll"], serde_json::json!(1));
     assert!(t["windings"][1].get("delta_roll").is_none(), "{t:?}");
     assert!(t["windings"][2].get("delta_roll").is_none(), "{t:?}");
     assert_eq!(t["windings"][1]["v_nom"], serde_json::json!(100.0));
     assert_eq!(t["x_sc"]["1_2"], serde_json::json!(0.04));
     assert_eq!(t["g_no_load"], serde_json::json!(0.001));
     assert_eq!(t["b_no_load"], serde_json::json!(-0.002));
+
+    // The round trip keeps the ring orientation: read, written and read
+    // again, the DELTA winding has the same direction.
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(
+        powerio_dist::transformer::calc_delta_direction(&net.transformers()[0], 0).unwrap(),
+        powerio_dist::transformer::calc_delta_direction(&again.transformers()[0], 0).unwrap(),
+    );
+    assert_eq!(emit_bmopf_json(&again).text, out.text);
 }
 
 #[test]
@@ -4964,6 +4975,120 @@ fn embedded_geometry_wins_over_the_legacy_extras_geojson_layer() {
     );
 }
 
+/// The diagnostics of a parse whose code is `code` and whose message names
+/// `subject`.
+fn findings<'a>(
+    diagnostics: &'a [powerio_dist::Diagnostic],
+    code: &str,
+    subject: &str,
+) -> Vec<&'a powerio_dist::Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|d| d.code() == code && d.message().contains(subject))
+        .collect()
+}
+
+/// The legacy `extras.geojson` layer beside typed `geo` slots is not read,
+/// and its features are reported as dropped rather than lost silently.
+#[test]
+fn a_legacy_geojson_layer_beside_typed_slots_is_reported_as_dropped() {
+    let both = r#"{"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[-83.7,42.3]}},"b":{"terminal_names":["1"]}},"extras":{"geojson":{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"bus","id":"a"},"geometry":{"type":"Point","coordinates":[-80,35]}},{"type":"Feature","properties":{"kind":"bus","id":"b"},"geometry":{"type":"Point","coordinates":[-80,36]}}]}}}"#;
+    let net = parse_bmopf_str(both).unwrap();
+    assert!(net.buses()[1].location.is_none());
+    let dropped = findings(
+        &net.diagnostics,
+        "READ.BMOPF.FIELD_DROPPED",
+        "extras.geojson",
+    );
+    assert_eq!(dropped.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        dropped[0].message().contains("2 feature"),
+        "{:?}",
+        dropped[0]
+    );
+}
+
+/// A `geo` value the reader cannot assign has no other home in the model, so
+/// it is reported as dropped, not as retained source data.
+#[test]
+fn an_unassignable_geo_is_reported_as_dropped() {
+    let text = r#"{"bus":{"a":{"terminal_names":["1","n"],"geo":{"type":"Point","coordinates":["east","north"]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1","n"],"v_magnitude":[240.0,0.0],"v_angle":[0.0,0.0]}},
+        "load":{"l":{"bus":"a","terminal_map":["1","n"],"configuration":"WYE","p_nom":[1.0],"q_nom":[0.0],
+            "geo":{"type":"Polygon","coordinates":[]}}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(net.buses()[0].location.is_none());
+    assert_eq!(net.component_locations().as_slice(), []);
+    for subject in ["bus a:", "load l:"] {
+        assert_eq!(
+            findings(&net.diagnostics, "READ.BMOPF.FIELD_DROPPED", subject).len(),
+            1,
+            "{subject}: {:?}",
+            net.diagnostics
+        );
+        assert!(
+            findings(&net.diagnostics, "READ.BMOPF.RETAINED_SOURCE_ONLY", subject).is_empty(),
+            "{subject}: {:?}",
+            net.diagnostics
+        );
+    }
+    // Unreadable coordinate metadata drops every typed `geo` it would place.
+    let text = r#"{"meta":{"crs":123},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[1.0,2.0]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1"],"v_magnitude":[240.0],"v_angle":[0.0]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(net.buses()[0].location.is_none());
+    assert_eq!(
+        findings(&net.diagnostics, "READ.BMOPF.FIELD_DROPPED", "`geo`").len(),
+        1,
+        "{:?}",
+        net.diagnostics
+    );
+}
+
+/// A source `meta.crs` is the writer's to state: it writes the network's
+/// coordinate system back without reporting the source value as dropped.
+#[test]
+fn a_source_crs_is_restated_without_a_drop_finding() {
+    let text = r#"{"meta":{"crs":"EPSG:32617"},"bus":{"a":{"terminal_names":["1"],"geo":{"type":"Point","coordinates":[276500,4686200]}}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1"],"v_magnitude":[240.0],"v_angle":[0.0]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    let out = emit_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["meta"]["crs"], "EPSG:32617");
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("`crs`")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// The canonical `$id` of the 0.2.0 draft PowerIO 0.11 targeted, before the
+/// proposal was reconciled with the Task Force's schema, names that older
+/// draft: a document stating it reads under the draft's rules, so its
+/// per-phase line `s_max` is no schema violation.
+#[test]
+fn the_pre_reconciliation_draft_id_reads_as_an_older_draft() {
+    let text = r#"{"meta":{"$schema":"https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.2.0/bmopf.schema.json","schema_version":"0.2.0"},
+        "bus":{"a":{"terminal_names":["1","2","3","n"]},"b":{"terminal_names":["1","2","3","n"]}},
+        "voltage_source":{"s":{"bus":"a","terminal_map":["1","2","3","n"],"v_magnitude":[240.0,240.0,240.0,0.0],"v_angle":[0.0,-2.0943951,2.0943951,0.0]}},
+        "line":{"ab":{"bus_from":"a","bus_to":"b","terminal_map_from":["1","2","3","n"],"terminal_map_to":["1","2","3","n"],
+            "R_series_1_1":1,"X_series_1_1":1,"s_max":[1.0e6,1.0e6,1.0e6]}}}"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        findings(&net.diagnostics, "READ.BMOPF.SEMANTIC_INVALID", "s_max").is_empty(),
+        "{:?}",
+        net.diagnostics
+    );
+    let schema = findings(&net.diagnostics, "READ.BMOPF.SCHEMA_LEGACY", "");
+    assert_eq!(schema.len(), 1, "{:?}", net.diagnostics);
+    assert!(
+        schema[0]
+            .message()
+            .starts_with("the document is an older BMOPF draft"),
+        "{schema:?}"
+    );
+}
+
 /// A space the schema cannot name travels as `extras.powerio_geo` beside the
 /// typed slots, so a read gets the same metadata back and does not take the
 /// coordinates for WGS84.
@@ -5475,7 +5600,7 @@ fn renamed_tokens_read_as_legacy_and_write_as_the_current_schema() {
     for spelling in [
         "regulator tap_ratio",
         "ibr.prime_mover DSTATCOM",
-        "ibr.dc_control droop",
+        "ibr.dc_control lowercase",
         "control_profile VA_FRACTION",
         "wire_data.kind lowercase",
         "line_geometry.earth_model lowercase",
@@ -5717,4 +5842,307 @@ fn the_semantic_rules_of_conformance_are_checked() {
             "{expected}: {messages:?}"
         );
     }
+}
+
+/// The schema location of the first BMOPF draft, whose loads PowerIO 0.11
+/// wrote with lowercase `model` tokens.
+const FIRST_DRAFT: &str = "https://raw.githubusercontent.com/distribution-system-opt/dsopt-schema/main/schema/bmopf/0.1.0/bmopf.schema.json";
+
+/// One load on a three phase bus, in a document stating `meta`.
+fn one_load_document(meta: &serde_json::Value, load: &serde_json::Value) -> String {
+    let mut ld = serde_json::json!({
+        "bus": "b", "terminal_map": ["1", "2", "3", "n"], "configuration": "WYE",
+        "p_nom": [1.0, 1.0, 1.0], "q_nom": [0.5, 0.5, 0.5]
+    });
+    for (key, value) in load.as_object().unwrap() {
+        ld[key] = value.clone();
+    }
+    serde_json::json!({
+        "meta": meta,
+        "terminal_conventions": {"phase": ["1", "2", "3"], "neutral": ["n"]},
+        "bus": {"b": {"terminal_names": ["1", "2", "3", "n"],
+            "perfectly_grounded_terminals": ["n"]}},
+        "voltage_source": {"src": {"bus": "b", "terminal_map": ["1", "2", "3", "n"],
+            "v_magnitude": [230.0, 230.0, 230.0, 0.0], "v_angle": [0.0, -120.0, 120.0, 0.0]}},
+        "load": {"ld": ld}
+    })
+    .to_string()
+}
+
+fn semantic_findings(net: &helpers::Parsed) -> Vec<String> {
+    net.diagnostics
+        .iter()
+        .filter(|d| d.code() == "READ.BMOPF.SEMANTIC_INVALID")
+        .map(|d| d.message().to_owned())
+        .collect()
+}
+
+/// A load's name, its fields, and the voltage model it must read as.
+type LoadModelCase = (
+    &'static str,
+    serde_json::Value,
+    fn(&powerio_dist::DistLoadVoltageModel) -> bool,
+);
+
+/// An older draft spelled the load models lowercase. Each reads as the
+/// schema's token everywhere, so the semantic check asks for exactly the
+/// fields the canonical model needs: `constant_power` needs no `v_nom`, the
+/// voltage dependent models do.
+#[test]
+fn older_draft_lowercase_load_models_read_as_the_schema_tokens() {
+    use powerio_dist::DistLoadVoltageModel as M;
+    let v_nom = serde_json::json!([230.0, 230.0, 230.0]);
+    let zip = serde_json::json!({
+        "alpha_z": [0.2, 0.2, 0.2], "alpha_i": [0.3, 0.3, 0.3], "alpha_p": [0.5, 0.5, 0.5],
+        "beta_z": [0.1, 0.1, 0.1], "beta_i": [0.4, 0.4, 0.4], "beta_p": [0.5, 0.5, 0.5]
+    });
+    let exponential = serde_json::json!({"gamma_p": [1.2, 1.2, 1.2], "gamma_q": [2.1, 2.1, 2.1]});
+    let with = |model: &str, extra: &[&serde_json::Value]| {
+        let mut load = serde_json::json!({"model": model});
+        for fields in extra {
+            for (key, value) in fields.as_object().unwrap() {
+                load[key] = value.clone();
+            }
+        }
+        load
+    };
+    let v = serde_json::json!({"v_nom": v_nom});
+    let meta = serde_json::json!({"$schema": FIRST_DRAFT});
+    let valid: [LoadModelCase; 6] = [
+        ("constant_power", with("constant_power", &[]), |m| {
+            matches!(m, M::ConstantPower { .. })
+        }),
+        ("constant_power v_nom", with("constant_power", &[&v]), |m| {
+            matches!(m, M::ConstantPower { .. })
+        }),
+        ("constant_current", with("constant_current", &[&v]), |m| {
+            matches!(m, M::ConstantCurrent { .. })
+        }),
+        (
+            "constant_impedance",
+            with("constant_impedance", &[&v]),
+            |m| matches!(m, M::ConstantImpedance { .. }),
+        ),
+        ("zip", with("zip", &[&v, &zip]), |m| {
+            matches!(m, M::Zip { .. })
+        }),
+        (
+            "exponential",
+            with("exponential", &[&v, &exponential]),
+            |m| matches!(m, M::Exponential { .. }),
+        ),
+    ];
+    for (what, load, expected) in valid {
+        let net = parse_bmopf_str(&one_load_document(&meta, &load)).unwrap();
+        assert_eq!(semantic_findings(&net), Vec::<String>::new(), "{what}");
+        let schema: Vec<_> = net
+            .diagnostics
+            .iter()
+            .filter(|d| d.code().starts_with("READ.BMOPF.SCHEMA_"))
+            .collect();
+        assert_eq!(schema.len(), 1, "{what}: {schema:?}");
+        assert_eq!(schema[0].code(), "READ.BMOPF.SCHEMA_LEGACY", "{what}");
+        assert!(expected(&net.loads()[0].voltage_model), "{what}");
+        let out = emit_bmopf_json(&net);
+        assert_eq!(
+            errors(&schema_validator(), &out.text),
+            Vec::<String>::new(),
+            "{what}"
+        );
+    }
+
+    // The voltage dependent models still need what the schema asks of them.
+    let invalid = [
+        ("constant_current", with("constant_current", &[]), "`v_nom`"),
+        (
+            "constant_impedance",
+            with("constant_impedance", &[]),
+            "`v_nom`",
+        ),
+        ("zip", with("zip", &[&v]), "`alpha_p`"),
+        ("exponential", with("exponential", &[&v]), "`gamma_p`"),
+    ];
+    for (what, load, needed) in invalid {
+        let net = parse_bmopf_str(&one_load_document(&meta, &load)).unwrap();
+        let findings = semantic_findings(&net);
+        assert!(
+            findings
+                .iter()
+                .any(|m| m.contains("load.ld") && m.contains(needed)),
+            "{what}: {findings:?}"
+        );
+    }
+
+    // A document stating the current schema gets the one legacy finding.
+    let current = serde_json::json!({"schema_version": release()});
+    let net = parse_bmopf_str(&one_load_document(&current, &with("constant_power", &[]))).unwrap();
+    assert_eq!(semantic_findings(&net), Vec::<String>::new());
+    assert!(
+        net.diagnostics
+            .iter()
+            .any(|d| d.code() == "READ.BMOPF.SCHEMA_LEGACY"
+                && d.message().contains("load.model lowercase")),
+        "{:?}",
+        net.diagnostics
+    );
+}
+
+/// A network using every enum family, its tokens spelled through `case`.
+fn lowercase_twin_document(meta: &serde_json::Value, case: fn(&str) -> String) -> String {
+    serde_json::json!({
+        "meta": meta,
+        "terminal_conventions": {"phase": ["1", "2", "3"], "neutral": ["n"]},
+        "bus": {
+            "b1": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b2": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b3": {"terminal_names": ["1", "2", "3"]},
+            "b4": {"terminal_names": ["1", "2", "3"]}
+        },
+        "voltage_source": {"src": {"bus": "b1", "terminal_map": ["1", "2", "3", "n"],
+            "v_magnitude": [2400.0, 2400.0, 2400.0, 0.0], "v_angle": [0.0, -120.0, 120.0, 0.0]}},
+        "load": {
+            "ld1": {"bus": "b2", "terminal_map": ["1", "2"], "configuration": case("SINGLE_PHASE"),
+                "p_nom": [10.0], "q_nom": [1.0], "model": case("CONSTANT_POWER")},
+            "ld2": {"bus": "b2", "terminal_map": ["1", "2", "3"], "configuration": case("DELTA"),
+                "p_nom": [1.0, 1.0, 1.0], "q_nom": [0.1, 0.1, 0.1]}
+        },
+        "generator": {"g": {"bus": "b2", "terminal_map": ["1", "2", "3", "n"],
+            "configuration": case("WYE"), "p_max": [5.0, 5.0, 5.0]}},
+        "capacitor": {"cap": {"bus": "b2", "terminal_map": ["1", "2", "3", "n"],
+            "configuration": case("WYE"), "q_rated": [10.0, 10.0, 10.0], "v_nom": 2400.0}},
+        "ibr": {"pv": {"bus": "b2", "terminal_map": ["1", "2", "3"], "topology": case("THREE_LEG"),
+            "prime_mover": case("PV"), "s_max": [5000.0, 5000.0, 5000.0], "control_profile": "cp",
+            "voltage_aggregation": case("AVERAGE"), "dc_control": case("DROOP")}},
+        "control_profile": {"cp": {
+            "volt_var": {"voltage_reference": case("PN_PER_PHASE"),
+                "breakpoints": [2160.0, 2350.0, 2450.0, 2640.0],
+                "q_limits": [-0.44, 0.44], "q_unit": case("PU"), "q_ref": case("VAR_MAX")},
+            "volt_watt": {"voltage_reference": case("PG_AVERAGED"),
+                "breakpoints": [2500.0, 2640.0], "p_limits": [0.2, 1.0],
+                "p_unit": case("PU"), "p_ref": case("P_AVAILABLE")}
+        }},
+        "transformer": {
+            "single_phase_autotransformer": {"svr": {
+                "bus_from": "b1", "bus_to": "b2",
+                "terminal_map_from": ["2", "n"], "terminal_map_to": ["2", "n"],
+                "s_rating": 1_666_000.0, "voltage_ratio": 1.05,
+                "regulator_type": case("B")}},
+            "open_delta_regulator": {"odr": {
+                "bus_from": "b1", "bus_to": "b2",
+                "terminal_map_from": ["1", "2", "3"], "terminal_map_to": ["1", "2", "3"],
+                "connection": case("ABBC"), "s_rating": 1_000_000.0,
+                "voltage_ratio": [1.0, 1.03], "regulator_type": case("A")}},
+            "n_winding": {"t": {"s_rating": 10000.0, "windings": [
+                {"bus": "b3", "terminal_map": ["1", "2", "3"], "v_nom": 100.0,
+                    "configuration": case("DELTA"), "r_winding": 0.01},
+                {"bus": "b4", "terminal_map": ["1", "2", "3"], "v_nom": 100.0,
+                    "configuration": case("WYE"), "r_winding": 0.02}
+            ], "x_sc": {"1_2": 0.04}}}
+        },
+        "wire_data": {"w": {"kind": case("OVERHEAD"), "r_dc": 0.1, "gmr": 0.01}},
+        "line_geometry": {"geom": {"earth_model": case("DERI"), "frequency": 60.0,
+            "conductors": []}},
+        "dc_bus": {"d": {"terminal_names": ["p", "r"],
+            "pole": {"p": case("POSITIVE"), "r": case("METALLIC_RETURN")}}}
+    })
+    .to_string()
+}
+
+/// Every enum an older draft could spell lowercase (configurations, the
+/// inverter and control profile tokens, the regulator and winding tokens,
+/// the retained wire, geometry and DC tables) reads as its UPPER_SNAKE
+/// token, so a lowercase document reads and writes exactly as its
+/// uppercase twin, with only the legacy finding beside.
+#[test]
+fn older_draft_lowercase_enum_tokens_read_as_their_uppercase_twin() {
+    let upper = parse_bmopf_str(&lowercase_twin_document(
+        &serde_json::json!({"schema_version": release()}),
+        str::to_owned,
+    ))
+    .unwrap();
+    let lower = parse_bmopf_str(&lowercase_twin_document(
+        &serde_json::json!({"$schema": FIRST_DRAFT}),
+        str::to_ascii_lowercase,
+    ))
+    .unwrap();
+    let findings = |net: &helpers::Parsed| -> Vec<String> {
+        net.diagnostics
+            .iter()
+            .filter(|d| !d.code().starts_with("READ.BMOPF.SCHEMA_"))
+            .map(|d| format!("{}: {}", d.code(), d.message()))
+            .collect()
+    };
+    let upper_findings = findings(&upper);
+    assert!(
+        upper_findings
+            .iter()
+            .all(|f| !f.contains("SEMANTIC_INVALID")
+                && !f.contains("VALUE_UNSUPPORTED")
+                && !f.contains("SOURCE_MALFORMED")),
+        "{upper_findings:?}"
+    );
+    assert_eq!(findings(&lower), upper_findings);
+    assert_eq!(
+        lower
+            .diagnostics
+            .iter()
+            .filter(|d| d.code().starts_with("READ.BMOPF.SCHEMA_"))
+            .map(powerio_dist::Diagnostic::code)
+            .collect::<Vec<_>>(),
+        ["READ.BMOPF.SCHEMA_LEGACY"]
+    );
+    assert_eq!(lower.ibrs()[0].prime_mover, powerio_dist::IbrPrimeMover::Pv);
+    assert_eq!(lower.loads()[0].configuration, Configuration::SinglePhase);
+    let written = |net: &MulticonductorNetwork| -> serde_json::Value {
+        serde_json::from_str(&emit_bmopf_json(net).text).unwrap()
+    };
+    assert_eq!(written(&lower), written(&upper));
+    for net in [&upper, &lower] {
+        let retained: Vec<_> = net
+            .untyped_objects()
+            .iter()
+            .flat_map(|o| o.props.iter().map(|(_, text)| text.as_str()))
+            .collect();
+        for token in [
+            "\"OVERHEAD\"",
+            "\"DERI\"",
+            "\"POSITIVE\"",
+            "\"METALLIC_RETURN\"",
+        ] {
+            assert!(
+                retained.iter().any(|text| text.contains(token)),
+                "{token}: {retained:?}"
+            );
+        }
+    }
+}
+
+/// `extras` is free-form: data a user keeps there under a table's name
+/// (`load`, `generator`, `dc_bus`, `wire_data`, ...) is written back exactly as
+/// read and is not reported as an older draft's spelling. Only the tables the
+/// reader types from `extras` are canonicalized.
+#[test]
+fn free_form_extras_are_kept_as_stated() {
+    let mut doc: serde_json::Value = serde_json::from_str(&one_load_document(
+        &serde_json::json!({}),
+        &serde_json::json!({"model": "CONSTANT_POWER"}),
+    ))
+    .unwrap();
+    let extras = serde_json::json!({
+        "load": {"x": {"model": "zip", "configuration": "Wye", "note": "keep"}},
+        "generator": {"g": {"configuration": "delta"}},
+        "dc_bus": {"d": {"pole": {"p": "positive"}}},
+        "wire_data": {"w": {"kind": "overhead"}}
+    });
+    doc["extras"] = extras.clone();
+    let net = parse_bmopf_str(&doc.to_string()).unwrap();
+    assert!(
+        net.diagnostics
+            .iter()
+            .all(|d| d.code() != "READ.BMOPF.SCHEMA_LEGACY"),
+        "{:?}",
+        net.diagnostics
+    );
+    let out: serde_json::Value = serde_json::from_str(&emit_bmopf_json(&net).text).unwrap();
+    assert_eq!(out["extras"], extras);
 }

@@ -575,28 +575,9 @@ const MULTICONDUCTOR_NUMERIC_QUANTITIES: [MulticonductorOperatingPointQuantity; 
 const MULTICONDUCTOR_FLAGS: [MulticonductorOperatingPointFlag; 1] =
     [MulticonductorOperatingPointFlag::SwitchClosed];
 
-/// The stable cross language DC formula names, spelled locally because this
-/// branch precedes the shared helper.
-fn dc_formula_name(formula: crate::BranchSusceptanceFormula) -> Result<&'static str> {
-    Ok(match formula {
-        crate::BranchSusceptanceFormula::TapAdjustedReactance => "tap_adjusted_reactance",
-        crate::BranchSusceptanceFormula::ReactanceOnly => "reactance_only",
-        crate::BranchSusceptanceFormula::SeriesSusceptance => "series_susceptance",
-        // The runtime enum is non_exhaustive for additive growth; a new
-        // formula must gain a stored spelling before it can be written.
-        _ => return Err(invalid("unmapped branch susceptance formula")),
-    })
-}
-
 fn dc_formula_from_name(name: &str) -> Result<crate::BranchSusceptanceFormula> {
-    match name {
-        "series_susceptance" => Ok(crate::BranchSusceptanceFormula::SeriesSusceptance),
-        "tap_adjusted_reactance" => Ok(crate::BranchSusceptanceFormula::TapAdjustedReactance),
-        "reactance_only" => Ok(crate::BranchSusceptanceFormula::ReactanceOnly),
-        other => Err(invalid(format!(
-            "unknown branch susceptance formula `{other}`"
-        ))),
-    }
+    crate::BranchSusceptanceFormula::from_formula_name(name)
+        .ok_or_else(|| invalid(format!("unknown branch susceptance formula `{name}`")))
 }
 
 /// Refuse an operating point or solution vector longer than the reader
@@ -1167,7 +1148,10 @@ fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::D
             })
             .transpose()?,
         network: Box::new(network),
-        approximation: dc_formula_name(instance.branch_susceptance_formula())?.to_string(),
+        approximation: instance
+            .branch_susceptance_formula()
+            .formula_name()
+            .to_string(),
         hvdc_treatment: stated_hvdc_treatment(instance.hvdc_treatment()),
     })
 }
@@ -1205,7 +1189,10 @@ fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> Result<dto:
             })
             .transpose()?,
         network: Box::new(network),
-        approximation: dc_formula_name(instance.branch_susceptance_formula())?.to_string(),
+        approximation: instance
+            .branch_susceptance_formula()
+            .formula_name()
+            .to_string(),
         objective: encode_objective(instance.objective())?,
         constraints: instance.constraints().clone(),
     })
@@ -1874,6 +1861,10 @@ fn encode_mc_ac_opf_solution(
         })?,
         source_active_injection: stored_values(solution.source_active_injections())?,
         generator_active_power: stored_values(solution.generator_active_powers())?,
+        generator_coil_active_power: solution
+            .generator_coil_active_powers()
+            .map(stored_values)
+            .transpose()?,
         objective: StoredF64(solution.objective()),
     })
 }
@@ -2622,6 +2613,11 @@ fn decode_mc_ac_opf_solution(
     if let Some(powers) = solution.terminal_active_power {
         value = value
             .with_terminal_powers(plain_row(&powers))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
+    if let Some(coils) = solution.generator_coil_active_power {
+        value = value
+            .with_generator_coil_active_powers(plain_row(&coils))
             .map_err(|error| invalid(error.to_string()))?;
     }
     value = value.with_residuals(solution.residuals);

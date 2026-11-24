@@ -844,8 +844,8 @@ fn shunt_facts_record(
     let float = |key: &str, default: f64| extra_f64(&svc.extras, key).unwrap_or(default);
     let limit = svc.b_max_siemens.abs().max(svc.b_min_siemens.abs());
     let shmx = extra_f64(&svc.extras, "psse_shmx")
-        .filter(|shmx| shmx / (kv * kv) == limit)
-        .unwrap_or(limit * (kv * kv));
+        .filter(|shmx| powerio_core::electrical::calc_rated_admittance(*shmx, kv) == limit)
+        .unwrap_or(powerio_core::electrical::calc_rated_power(limit, kv));
     let fields = [
         float("psse_pdes", 0.0),
         float("psse_qdes", 0.0),
@@ -4042,10 +4042,9 @@ fn convert_transformer_impedance(
             }
             let r_pair = (r / 1_000_000.0) / sbase;
             let z_pair = x.abs();
-            let x_pair = (z_pair.mul_add(z_pair, -(r_pair * r_pair)))
-                .max(0.0)
-                .sqrt()
-                .copysign(x);
+            // A resistance at or above the impedance leaves no reactance.
+            let x_pair = powerio_core::electrical::calc_quadrature(z_pair, r_pair);
+            let x_pair = if x_pair.is_nan() { 0.0 } else { x_pair }.copysign(x);
             let scale = system_base / sbase;
             (r_pair * scale, x_pair * scale)
         }
@@ -4133,17 +4132,33 @@ fn convert_transformer_magnetizing_admittance(
                 return (mag_g, mag_b);
             }
 
-            let voltage_scale = (bus_base_kv / nominal).powi(2);
-            let g = mag_g / (1_000_000.0 * system_base) * voltage_scale;
-            let y = mag_b * (winding_base / system_base) * voltage_scale;
-            let b_squared = y.mul_add(y, -(g * g));
-            if b_squared >= 0.0 {
-                (g, -b_squared.sqrt())
-            } else {
+            // An admittance rebase from the winding base at the nominal
+            // voltage (MAG1's watts are per unit on one watt) to the system
+            // base at the bus voltage.
+            let g = powerio_core::electrical::calc_impedance_rebase(
+                mag_g,
+                bus_base_kv,
+                1_000_000.0 * system_base,
+                nominal,
+                1.0,
+                powerio_core::electrical::RebaseOrder::InversePowerRatio,
+            );
+            let y = powerio_core::electrical::calc_impedance_rebase(
+                mag_b,
+                bus_base_kv,
+                system_base,
+                nominal,
+                winding_base,
+                powerio_core::electrical::RebaseOrder::PowerRatio,
+            );
+            let b = powerio_core::electrical::calc_quadrature(y.abs(), g);
+            if b.is_nan() {
                 warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
                     "PSS/E transformer {label}: CM=2 exciting current magnitude {y} is below conductance {g}; set magnetizing susceptance to 0"
                 ));
                 (g, 0.0)
+            } else {
+                (g, -b)
             }
         }
         other => {
@@ -5282,7 +5297,11 @@ fn read_shunt_facts(
     let mode = int_at(f, 3, 1)?;
     let shmx = num_at(f, 7, 9999.0)?;
     let vset = num_at(f, 6, 1.0)?;
-    let mut svc = StaticVarCompensator::new(bus, -shmx / (kv * kv), shmx / (kv * kv));
+    let mut svc = StaticVarCompensator::new(
+        bus,
+        powerio_core::electrical::calc_rated_admittance(-shmx, kv),
+        powerio_core::electrical::calc_rated_admittance(shmx, kv),
+    );
     svc.in_service = mode != 0;
     svc.regulating = true;
     let regulated = id_at(f, 19, 0)?;
@@ -5307,7 +5326,7 @@ fn read_shunt_facts(
     let mut extras = Extras::new();
     // Converting back to p.u. and MVA can land an ulp away; the stated field
     // is kept wherever it would, so a written record restates it.
-    if svc.b_max_siemens * (kv * kv) != shmx {
+    if powerio_core::electrical::calc_rated_power(svc.b_max_siemens, kv) != shmx {
         extras.insert("psse_shmx".into(), jnum(shmx));
     }
     if svc.voltage_setpoint_kv / regulated_kv != vset {
@@ -6828,7 +6847,9 @@ fn calc_vsc_reactive_power(converter: &VscConverter, p: f64) -> f64 {
     if pf == 0.0 {
         return 0.0;
     }
-    p.abs() * (1.0 - pf * pf).sqrt() / pf * converter.acset.signum()
+    p.abs()
+        * crate::electrical::calc_reactive_ratio(pf, crate::electrical::ReactiveRatioForm::Sine)
+        * converter.acset.signum()
 }
 
 /// Read one VSC DC line record into the neutral [`Hvdc`]: the control line

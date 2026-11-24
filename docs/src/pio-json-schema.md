@@ -26,8 +26,8 @@ both sides consume PowerIO values, including calculation instances, solutions,
 time series, and scenario sets.
 
 The generated JSON Schema is checked in at
-`docs/schema/pio-ir/0.12.0/schema.json` and served from
-`https://powerio.dev/schema/pio-ir/0.12.0/schema.json`. That schema, the
+`docs/schema/pio-ir/0.12.4/schema.json` and served from
+`https://powerio.dev/schema/pio-ir/0.12.4/schema.json`. That schema, the
 serializer, and the deserializer are all tested from the same Rust types.
 `docs/schema/README.md` lists the earlier `pio-package` and
 `powerio.module` documents as one history under `pio-ir`.
@@ -165,10 +165,18 @@ entries, unsafe entry names, document type and entity declarations, and
 invalid UTF-8 are refused. These archive checks are fixed; only the byte limit
 is configurable.
 
-Some readers keep fixed limits below these defaults. An XIIDM or JIIDM
+Some readers keep limits below these defaults. An XIIDM or JIIDM
 document holds at most 64 MiB, from a path or from memory. An OpenDSS case
 follows at most 4,096 includes and stops following them once they have loaded
-64 MiB of script text, counting a file again each time the case runs it.
+64 MiB of script text, counting a file again each time the case runs it. It
+also retains at most 4,194,304 property assignments and edit records across
+all its objects. A region with several hundred thousand lines and loads
+passes both the 64 MiB and the property limit; a caller that trusts the case
+raises them with `DssReadLimits` in Rust (`ParseOptions::dss_limits`, or
+`powerio_dist::parse_with_dss_limits`), with `dss_max_include_bytes` and
+`dss_max_properties` in Python's `powerio.parse`, or with
+`--dss-max-include-bytes` and `--dss-max-properties` in the CLI. The 4,096
+include count is fixed.
 
 Apart from CGMES, XIIDM, and JIIDM, caller-owned memory has no whole-document limit; format and
 record limits still apply. Stored solutions embed their instance and network,
@@ -180,8 +188,8 @@ bound process memory.
 ## Versions and release series
 
 The header's `version` names the release whose schema the document follows:
-`"0.12.0"` for a document this build writes, described by
-`pio-ir/0.12.0/schema.json`. `powerio::IR_VERSION` is that release and
+`"0.12.4"` for a document this build writes, described by
+`pio-ir/0.12.4/schema.json`. `powerio::IR_VERSION` is that release and
 `powerio::IR_SCHEMA_ID` the `$id` of its schema file. `producer` names the
 software that wrote the document, which need not be PowerIO; the reader reports
 it and ignores it when deciding whether to read the document.

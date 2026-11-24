@@ -21,12 +21,10 @@ fuzz_target!(|data: &[u8]| {
             }
         }
     }
-    let limits = CollectionLimits {
-        archive,
-        tree: SourceTreeLimits::new(32, 128 << 10, 16).unwrap(),
-        work_bytes: 512 << 10,
-        ..CollectionLimits::default()
-    };
+    let mut limits = CollectionLimits::default();
+    limits.archive = archive;
+    limits.tree = SourceTreeLimits::new(32, 128 << 10, 16).unwrap();
+    limits.work_bytes = 512 << 10;
     if let Ok(collection) = Collection::from_zip("fuzz", Arc::from(data), limits) {
         let _ = collection.inspect();
         for entry in collection.entries().iter().take(4) {

@@ -58,25 +58,9 @@ class Collection:
     def parse(self, selection: Mapping[str, Any], *,
               sincal_multiconductor: SincalReadOptions | None = None,
               sincal_balanced: SincalBalancedReadOptions | None = None) -> CollectionResult:
-        from . import PioModule, SincalBalancedReadOptions
-        from .dist import SincalReadOptions
-        if sincal_multiconductor is not None and not isinstance(
-            sincal_multiconductor, SincalReadOptions
-        ):
-            raise TypeError("sincal_multiconductor must be dist.SincalReadOptions")
-        if sincal_balanced is not None and not isinstance(
-            sincal_balanced, SincalBalancedReadOptions
-        ):
-            raise TypeError("sincal_balanced must be SincalBalancedReadOptions")
-        mc = None if sincal_multiconductor is None else (
-            sincal_multiconductor.variant, sincal_multiconductor.snapshot_hours,
-            sincal_multiconductor.acquired_tables,
-            sincal_multiconductor.assume_inactive_source_controls,
-        )
-        tx = None if sincal_balanced is None else (
-            sincal_balanced.variant, sincal_balanced.snapshot_hours,
-            sincal_balanced.acquired_tables,
-        )
+        from . import PioModule
+        from ._sincal import _native_selections
+        tx, mc = _native_selections(sincal_balanced, sincal_multiconductor)
         module, dependencies, incomplete = self._native._parse(json.dumps(dict(selection)), mc, tx)
         return CollectionResult(PioModule(module), tuple(dependencies), incomplete)
 
