@@ -502,7 +502,7 @@ fn powersystems_writes_a_branch_across_voltage_levels_as_a_tap_transformer() {
     let module = powerio_tx::parse(source).unwrap();
     let out = emit_value(module.value(), TargetFormat::PowerSystemsJson).unwrap();
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    assert!(powersystems_rows(&doc, "Line").is_empty());
+    assert_eq!(powersystems_rows(&doc, "Line").len(), 0);
     let tr = powersystems_rows(&doc, "TapTransformer");
     assert_eq!(tr.len(), 1);
     assert_eq!(tr[0]["tap"], 1.0);
