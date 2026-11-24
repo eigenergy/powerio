@@ -854,8 +854,8 @@ pub(crate) fn parse_xiidm_bytes(
             "XIIDM XML exceeds the {MAX_XIIDM_BYTES} byte input limit"
         )));
     }
-    reject_xml_entities(bytes)?;
     let (text, mark_bytes) = xiidm_text(bytes)?;
+    reject_xml_entities(&text)?;
     let mut reader = NsReader::from_str(&text);
     reader.config_mut().trim_text(true);
     reader.config_mut().check_end_names = true;
@@ -878,7 +878,7 @@ pub(crate) fn parse_xiidm_bytes(
                         "XIIDM XML exceeds the {MAX_XIIDM_ELEMENT_DEPTH} element nesting limit"
                     )));
                 }
-                let tag = local_name(element.name().as_ref());
+                let tag = local_name(element.name().into_inner());
                 let attrs = if parsed.skipped_depth > 0 {
                     Attrs::new()
                 } else {
@@ -888,14 +888,14 @@ pub(crate) fn parse_xiidm_bytes(
                 parsed
                     .consume(
                         TreeEvent::Start {
-                            tag: &tag,
+                            tag,
                             namespace: namespace.as_deref(),
                             attrs,
                             empty: false,
                         },
                         diagnostics,
                     )
-                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
+                    .map_err(|error| locate(error, tag, id.as_deref(), event_offset))?;
             }
             Event::Empty(element) => {
                 if element_depth >= MAX_XIIDM_ELEMENT_DEPTH {
@@ -903,7 +903,7 @@ pub(crate) fn parse_xiidm_bytes(
                         "XIIDM XML exceeds the {MAX_XIIDM_ELEMENT_DEPTH} element nesting limit"
                     )));
                 }
-                let tag = local_name(element.name().as_ref());
+                let tag = local_name(element.name().into_inner());
                 let attrs = if parsed.skipped_depth > 0 {
                     Attrs::new()
                 } else {
@@ -913,20 +913,20 @@ pub(crate) fn parse_xiidm_bytes(
                 parsed
                     .consume(
                         TreeEvent::Start {
-                            tag: &tag,
+                            tag,
                             namespace: namespace.as_deref(),
                             attrs,
                             empty: true,
                         },
                         diagnostics,
                     )
-                    .map_err(|error| locate(error, &tag, id.as_deref(), event_offset))?;
+                    .map_err(|error| locate(error, tag, id.as_deref(), event_offset))?;
             }
             Event::End(element) => {
-                let tag = local_name(element.name().as_ref());
+                let tag = local_name(element.name().into_inner());
                 parsed
-                    .consume(TreeEvent::End(&tag), diagnostics)
-                    .map_err(|error| locate(error, &tag, None, event_offset))?;
+                    .consume(TreeEvent::End(tag), diagnostics)
+                    .map_err(|error| locate(error, tag, None, event_offset))?;
                 element_depth = element_depth.saturating_sub(1);
             }
             Event::Text(value) => {
@@ -1375,23 +1375,20 @@ fn json_array_text(values: &[JsonNode]) -> String {
 /// encoding; then the whole document is transcoded once. Offsets in read
 /// errors count bytes of this text.
 fn xiidm_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, str>, u64)> {
-    // UTF-16 with a byte order mark, or starting `<?` without one.
-    for (prefix, name) in [
-        (&[0xFF, 0xFE][..], "UTF-16LE"),
-        (&[0xFE, 0xFF][..], "UTF-16BE"),
-        (&[b'<', 0, b'?', 0][..], "UTF-16LE"),
-        (&[0, b'<', 0, b'?'][..], "UTF-16BE"),
-    ] {
-        if bytes.starts_with(prefix) {
-            return Err(unsupported_xml_encoding(name));
+    // The byte order mark, or the first bytes of `<?`, give UTF-16 away.
+    let detected = quick_xml::encoding::detect_encoding(bytes);
+    let mark_len = match &detected {
+        Some(detected) if !detected.encoding().is_ascii_compatible() => {
+            return Err(unsupported_xml_encoding(detected.encoding().name()));
         }
-    }
-    let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    let mark_bytes = (bytes.len() - body.len()) as u64;
+        Some(detected) => detected.bom_len(),
+        None => 0,
+    };
+    let body = &bytes[mark_len..];
+    let mark_bytes = mark_len as u64;
     // Only the declaration is read here. It is ASCII in every encoding the
     // reader accepts, so it reads before the document is transcoded. White
-    // space and comments before it are passed over, as the reader on
-    // quick-xml 0.41 passed over them.
+    // space and comments before the declaration are skipped.
     let mut probe = quick_xml::Reader::from_reader(body);
     probe.config_mut().trim_text(true);
     let declared = loop {
@@ -1444,8 +1441,8 @@ fn unsupported_xml_encoding(name: &str) -> Error {
     ))
 }
 
-fn reject_xml_entities(bytes: &[u8]) -> Result<()> {
-    let upper = String::from_utf8_lossy(bytes).to_ascii_uppercase();
+fn reject_xml_entities(text: &str) -> Result<()> {
+    let upper = text.to_ascii_uppercase();
     if upper.contains("<!DOCTYPE") || upper.contains("<!ENTITY") {
         return Err(format_error(
             "DTD declarations and entity definitions are not accepted",
@@ -6953,10 +6950,8 @@ fn attributes(element: &BytesStart<'_>) -> Result<Attrs> {
     Ok(values)
 }
 
-fn local_name(name: &str) -> String {
-    name.rsplit_once(':')
-        .map_or(name, |(_, local)| local)
-        .to_owned()
+fn local_name(name: &str) -> &str {
+    name.rsplit_once(':').map_or(name, |(_, local)| local)
 }
 
 fn resolved_namespace(resolved: ResolveResult<'_>) -> Result<Option<String>> {
@@ -9108,7 +9103,7 @@ fn xiidm_to_jiidm(xml: &str) -> Result<String> {
 }
 
 fn open_element(element: &BytesStart<'_>) -> Result<OpenElement> {
-    let tag = local_name(element.name().as_ref());
+    let tag = local_name(element.name().into_inner()).to_owned();
     let mut attrs = Vec::new();
     let mut namespaces = Vec::new();
     for attribute in element.attributes() {
@@ -9120,7 +9115,7 @@ fn open_element(element: &BytesStart<'_>) -> Result<OpenElement> {
         if key == "xmlns" || key.starts_with("xmlns:") {
             namespaces.push(value);
         } else {
-            attrs.push((local_name(key), value));
+            attrs.push((local_name(key).to_owned(), value));
         }
     }
     Ok(OpenElement {
@@ -15476,17 +15471,13 @@ mod tests {
             .encode_utf16()
             .flat_map(u16::to_be_bytes)
             .collect();
-        for (bytes, name) in [(utf16le, "UTF-16LE"), (utf16be, "UTF-16BE")] {
-            let error = parse_xiidm_bytes(&bytes, &mut Diagnostics::new()).unwrap_err();
-            assert!(
-                error.to_string().contains("unsupported XIIDM XML encoding"),
-                "{error}"
-            );
-            assert!(error.to_string().contains(name), "{error}");
-        }
-        for (mark, name) in [([0xFF, 0xFE], "UTF-16LE"), ([0xFE, 0xFF], "UTF-16BE")] {
-            let mut bytes = mark.to_vec();
-            bytes.extend_from_slice(BUS_BREAKER.as_bytes());
+        let marked = |mark: [u8; 2]| [&mark[..], BUS_BREAKER.as_bytes()].concat();
+        for (bytes, name) in [
+            (utf16le, "UTF-16LE"),
+            (utf16be, "UTF-16BE"),
+            (marked([0xFF, 0xFE]), "UTF-16LE"),
+            (marked([0xFE, 0xFF]), "UTF-16BE"),
+        ] {
             let error = parse_xiidm_bytes(&bytes, &mut Diagnostics::new()).unwrap_err();
             assert!(
                 error.to_string().contains("unsupported XIIDM XML encoding"),

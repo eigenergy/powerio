@@ -77,7 +77,7 @@ struct NamePool {
     names: HashSet<Rc<str>>,
     bytes: usize,
     // A document usually repeats one CIM URI on every class and property.
-    // Cache its raw bytes only after classification and namespace recording.
+    // Cache the URI only after classification and namespace recording.
     // At most 512 bytes; longer URIs keep the ordinary acceptance path.
     cim_namespace: Option<Box<str>>,
 }
