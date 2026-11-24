@@ -2707,8 +2707,13 @@ fn run_convert_with_selection(
         // The directory targets retain their existing writers; text targets
         // use the same balanced module writer as every other scalar network.
         if to == FormatArg::PypsaCsv {
-            convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options)?;
-            return write_id_map(destination.id_map, None, false, to.name());
+            let result = convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options)?;
+            return write_id_map(
+                destination.id_map,
+                result.element_map().map(powerio_core::ElementMap::to_json),
+                false,
+                to.name(),
+            );
         }
         if to == FormatArg::Cgmes {
             convert_to_cgmes(input, output, from, scenario, gen_cost_options)?;
@@ -3570,14 +3575,15 @@ fn run_geo_convert(
 
 /// Write `input` out as a PyPSA CSV folder (a directory target, so it never
 /// returns text). gridfm input reads through the dataset reader; everything else
-/// goes through the shared transmission hub.
+/// goes through the shared transmission hub. Returns the emission result so
+/// the caller can write its element map.
 fn convert_to_pypsa_folder(
     input: &std::path::Path,
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<powerio_core::EmitResult> {
     let Some(out_dir) = output else {
         fail_with!(
             REQUEST_CLI_OUTPUT_REQUIRED,
@@ -3608,7 +3614,7 @@ fn convert_to_pypsa_folder(
     .with_context(|| format!("emitting PyPSA CSV folder {}", out_dir.display()))?;
     report_diagnostics(result.diagnostics());
     report_written(out_dir);
-    Ok(())
+    Ok(result)
 }
 
 /// Write `input` as a CGMES profile set. Fresh output is a directory. An

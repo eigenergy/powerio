@@ -431,6 +431,40 @@ fn convert_id_map_writes_the_element_map_or_warns() {
     assert!(stderr.contains("retained source"), "{stderr}");
 }
 
+/// A GridFM scenario written as a PyPSA folder goes through its own path; it
+/// still writes the map the PyPSA writer recorded.
+#[test]
+fn convert_gridfm_to_pypsa_writes_the_element_map() {
+    let case = repo_file("tests/data/case4par.m");
+    let tmp = tempfile::tempdir().unwrap();
+    let dataset = tmp.path().join("gridfm");
+    assert_success(&run(&[
+        "gridfm",
+        case.to_str().unwrap(),
+        "-o",
+        dataset.to_str().unwrap(),
+    ]));
+    let folder = tmp.path().join("pypsa");
+    let id_map = tmp.path().join("map.json");
+    let out = run(&[
+        "convert",
+        dataset.join("case4par").to_str().unwrap(),
+        "--from",
+        "gridfm",
+        "--to",
+        "pypsa-csv",
+        "-o",
+        folder.to_str().unwrap(),
+        "--id-map",
+        id_map.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let map: serde_json::Value = serde_json::from_slice(&std::fs::read(&id_map).unwrap()).unwrap();
+    assert_eq!(map["format"], "pypsa-csv");
+    assert_eq!(map["branch"].as_object().unwrap().len(), 7);
+    assert_eq!(map["branch"]["1-2-2"]["table"], "lines");
+}
+
 #[test]
 fn convert_goc3_problem_and_solution_source_emits_official_solution() {
     let source = repo_file("tests/data/goc3");
