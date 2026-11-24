@@ -1096,7 +1096,7 @@ class EmitResult:
     layout: Literal["file", "directory"]
     fidelity: Literal["exact_same_format", "canonical"]
     diagnostics: Tuple[Diagnostic, ...]
-    id_map: Optional[Dict[str, Any]]
+    id_map: Optional[Dict[str, Any]] = None
     @property
     def text(self) -> Optional[str]: ...
 
