@@ -1514,6 +1514,9 @@ fn branch_frames(
     let mut trafo_data = Vec::new();
     let mut charging = Vec::new();
     let mut negative_x_trafos = 0usize;
+    // Transformers with no positive rate_a take sn_mva = baseMVA; one counted
+    // warning names the first few bus pairs instead of one copy per branch.
+    let mut unrated_trafos: Vec<(BusId, BusId)> = Vec::new();
     for br in net.branches() {
         let v_from = *kv_of.get(&br.from).unwrap_or(&1.0);
         let v_to = *kv_of.get(&br.to).unwrap_or(&1.0);
@@ -1531,10 +1534,7 @@ fn branch_frames(
             {
                 value
             } else {
-                warnings.push(&F.value_substituted, format!(
-                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: pandapower requires a positive impedance base; this rating is not preserved",
-                    br.from, br.to, br.rate_a, net.base_mva()
-                ));
+                unrated_trafos.push((br.from, br.to));
                 net.base_mva()
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
@@ -1634,6 +1634,28 @@ fn branch_frames(
                 Value::Null,
             ]);
         }
+    }
+    if !unrated_trafos.is_empty() {
+        const SHOWN: usize = 3;
+        let mut pairs = unrated_trafos
+            .iter()
+            .take(SHOWN)
+            .map(|(from, to)| format!("{from}-{to}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if unrated_trafos.len() > SHOWN {
+            pairs.push_str(", ...");
+        }
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "sn_mva = {} substituted for {} transformer branch(es) with no positive rate_a \
+                 ({pairs}): pandapower requires a positive impedance base; these ratings are \
+                 not preserved",
+                net.base_mva(),
+                unrated_trafos.len()
+            ),
+        );
     }
     if negative_x_trafos > 0 {
         warnings.push(&F.value_substituted, format!(
@@ -4222,6 +4244,46 @@ mod tests {
     }
 
     #[test]
+    fn writer_counts_unrated_transformer_substitutions_once() {
+        // #922: case118 has 11 transformers with no rate_a. Each still takes
+        // sn_mva = baseMVA, but the writer reports one counted warning rather
+        // than one copy per transformer.
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case118.m");
+        let net = crate::format::test_parse::parse_file(path, None)
+            .unwrap()
+            .network;
+        let emitted = write_pandapower_json(&net);
+        let substituted: Vec<_> = emitted
+            .diagnostics
+            .iter()
+            .filter(|finding| {
+                finding.code() == F.value_substituted.code
+                    && finding.message().contains("sn_mva = 100 substituted for")
+            })
+            .collect();
+        assert_eq!(substituted.len(), 1, "{substituted:?}");
+        assert!(
+            substituted[0].message().starts_with(
+                "sn_mva = 100 substituted for 11 transformer branch(es) with no positive rate_a ("
+            ),
+            "{}",
+            substituted[0].message()
+        );
+        assert!(
+            substituted[0]
+                .message()
+                .contains(", ...): pandapower requires")
+        );
+        // The written trafo table is unchanged: every unrated transformer
+        // still carries sn_mva = baseMVA.
+        let trafo = written_frame(&emitted.text, "trafo");
+        let sn = col(&trafo, "sn_mva");
+        assert_eq!(sn.len(), 11);
+        assert!(sn.iter().all(|value| value.as_f64() == Some(100.0)));
+    }
+
+    #[test]
     fn writer_preserves_voltage_states_and_reports_unrated_transformer_substitution() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
         net.buses_mut()[0].vm = 1.06;
@@ -4232,7 +4294,7 @@ mod tests {
             finding.code() == F.value_substituted.code
                 && finding
                     .message()
-                    .contains("rate_a = inf replaced by sn_mva = 100")
+                    .starts_with("sn_mva = 100 substituted for 1 transformer branch(es) with no positive rate_a (1-2)")
         }));
         assert!(
             !emitted

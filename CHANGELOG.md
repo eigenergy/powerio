@@ -62,6 +62,8 @@
   which PowerSystems.jl refuses to build. Reading the file back restores the
   zero-tap branch (#921).
 
+- pandapower JSON output reports one counted `EMIT.PANDAPOWER.VALUE_SUBSTITUTED` warning for all transformers with no positive `rate_a`, naming the count and the first few bus pairs. It used to repeat the same warning once per transformer (11 times for case118, 255 for case2869pegase). The written file is unchanged (#922).
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
