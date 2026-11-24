@@ -29,9 +29,10 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 use super::{
-    TextEmission, branch_rating_set_drop_warning, jnum, sanitize_quoted,
+    TargetFormat, TextEmission, branch_rating_set_drop_warning, element_map, jnum, sanitize_quoted,
     warn_extra_branch_rating_sets, warn_winding_rating_sets,
 };
+use powerio_core::RowRef;
 use std::borrow::Cow;
 
 use crate::diagnostics::codes::EMIT_PSSE as F;
@@ -970,6 +971,12 @@ fn write_psse_rev_inner(
     // v34+ wraps the global parameters in a system-wide data section, names
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
+    // The RAW path records which bus, branch, transformer, and generator row
+    // each element became (eigenergy/powerio#916). The builder keys on the
+    // caller's network, before the projections below add or rewrite records.
+    // RAWX writes its own tables from these records and records no map.
+    let mut map = include_detailed_connectivity
+        .then(|| element_map::builder(net, TargetFormat::Psse { rev }));
     let mut warnings = Diagnostics::new();
     warn_edited_correction_nominals(net, &mut warnings);
     // Freeze the correction tables this write cannot state (ZCOD=1 before
@@ -1104,7 +1111,10 @@ fn write_psse_rev_inner(
 
     // Bus, with area/zone kept for the load records that reference them.
     let mut bus_area: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
-    for b in net.buses() {
+    for (index, b) in net.buses().iter().enumerate() {
+        if let Some(map) = map.as_mut() {
+            map.bus(index, RowRef::new("bus", index).with_key(b.id.to_string()));
+        }
         bus_area.insert(b.id, (b.area, b.zone));
         let owner = extra_i64(&b.extras, "psse_owner").unwrap_or(1);
         let raw_name = b.name.as_deref().unwrap_or("");
@@ -1247,11 +1257,18 @@ fn write_psse_rev_inner(
     let _ = writeln!(s, "0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA");
 
     let mut gen_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
-    for g in net.generators() {
+    for (index, g) in net.generators().iter().enumerate() {
         let preferred_id =
             detailed_source_property(net, "generator", g.uid.as_deref(), "psse_eqid")
                 .filter(|id| !id.is_empty());
         let id = quoted_circuit_id(preferred_id, g.bus, &mut gen_ids, &mut sanitized_quoted);
+        if let Some(map) = map.as_mut() {
+            // PSS/E names a machine by (I, ID); the reader trims the id.
+            map.generator(
+                index,
+                RowRef::new("generator", index).with_key(format!("{},{}", g.bus, id.trim())),
+            );
+        }
         // IREG/NREG identify the exact regulated bus and node when detailed
         // connectivity is available.
         let (ireg, regulated_node) = regulating_target(
@@ -1361,11 +1378,12 @@ fn write_psse_rev_inner(
     // keys a branch on (I, J, CKT)); a captured source CKT wins.
     let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
     let mut transformer_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
-    for (branch_index, br) in net
+    for (row, (branch_index, br)) in net
         .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| !b.is_transformer())
+        .enumerate()
     {
         let ckt = quoted_circuit_id(
             br.extras.get("id").and_then(Value::as_str),
@@ -1373,6 +1391,14 @@ fn write_psse_rev_inner(
             &mut branch_ids,
             &mut sanitized_quoted,
         );
+        if let Some(map) = map.as_mut() {
+            // The record states I = from and J = to, so no row is flipped.
+            map.branch(
+                branch_index,
+                RowRef::new("branch", row).with_key(circuit_key(br, &ckt)),
+                false,
+            );
+        }
         let charging = br.calc_terminal_charging();
         let b_total = charging.calc_total_b();
         let b_mid = b_total / 2.0;
@@ -1498,11 +1524,12 @@ fn write_psse_rev_inner(
 
     let impedance_tables = assign_impedance_tables(net, rev, &mut warnings);
     warn_unbacked_table_references(net, &mut warnings);
-    for (branch_index, br) in net
+    for (row, (branch_index, br)) in net
         .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| b.is_transformer())
+        .enumerate()
     {
         let source_id = br
             .extras
@@ -1515,6 +1542,13 @@ fn write_psse_rev_inner(
             &mut transformer_ids,
             &mut sanitized_quoted,
         );
+        if let Some(map) = map.as_mut() {
+            map.branch(
+                branch_index,
+                RowRef::new("transformer", row).with_key(circuit_key(br, &transformer_id)),
+                false,
+            );
+        }
         // 2-winding, 4-line record. CW=1 (turns ratio p.u.), CZ=1 (Z on system
         // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
         // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
@@ -2361,7 +2395,17 @@ fn write_psse_rev_inner(
         );
     }
 
-    TextEmission::new(s, warnings)
+    let emission = TextEmission::new(s, warnings);
+    match map {
+        Some(map) => emission.with_element_map(map),
+        None => emission,
+    }
+}
+
+/// The element map key of a branch or two winding transformer record:
+/// `I,J,CKT` as written, with the circuit id trimmed as the reader trims it.
+fn circuit_key(branch: &Branch, ckt: &str) -> String {
+    format!("{},{},{}", branch.from, branch.to, ckt.trim())
 }
 
 /// MATPOWER/neutral bus kind → PSS/E bus type code (IDE).
