@@ -39,9 +39,14 @@
   T model default. The writer adds `buses-v_mag_pu.csv` and `buses-v_ang.csv`
   (radians) with the case's bus voltages, which `pf(use_seed=True)` starts
   from. The reader takes bus voltages and angles from these files, so a PyPSA
-  CSV round trip keeps them; a folder with one snapshot whose only series
-  files are these two still reads as one network. A generator without a
-  `v_mag_pu_set` column takes its bus's setpoint, as PyPSA does.
+  CSV round trip keeps them. A folder with one snapshot whose only series
+  files are these two used to parse as a one point operating point series and
+  now parses as one `BalancedNetwork` carrying that voltage state. A generator
+  without a `v_mag_pu_set` column takes its bus's setpoint, as PyPSA does. A
+  `buses.csv` without a `v_nom` column, which PyPSA writes when every bus has
+  its default of 1 kV, reads at 1 kV with `READ.PYPSA.VALUE_DEFAULTED`; it
+  used to be refused, so a case with zero base voltages could not come back
+  through PyPSA's own import and export.
 
 ## 0.12.4
 

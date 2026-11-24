@@ -173,3 +173,63 @@ fn a_single_snapshot_with_bus_state_stays_one_network() {
         powerio_tx::format::PypsaAxis::SingleSnapshot
     );
 }
+
+/// Drops one column from a CSV text, as PyPSA's exporter does for a static
+/// attribute whose every value equals its default.
+fn without_column(text: &str, name: &str) -> String {
+    let drop = column(text, name);
+    text.lines()
+        .map(|line| {
+            let mut fields: Vec<&str> = line.split(',').collect();
+            fields.remove(drop);
+            fields.join(",") + "\n"
+        })
+        .collect()
+}
+
+#[test]
+fn a_missing_v_nom_reads_as_pypsas_default() {
+    // case14 has BASE_KV = 0 on every bus, so the writer states v_nom = 1 kV
+    // everywhere; PyPSA then omits the all default column when it re-exports
+    // the folder. The reader takes PyPSA's default back instead of refusing.
+    let (net, out, files, _) = write("case14.m");
+    let stripped = without_column(&files["buses.csv"], "v_nom");
+    assert!(!stripped.lines().next().unwrap().contains("v_nom"));
+    std::fs::write(out.join("buses.csv"), stripped).unwrap();
+
+    let parsed = read_pypsa_csv_folder(&out).unwrap();
+    let rendered = parsed.render_diagnostics();
+    assert!(
+        rendered
+            .iter()
+            .any(|d| d.contains("READ.PYPSA.VALUE_DEFAULTED") && d.contains("v_nom")),
+        "{rendered:?}"
+    );
+    let back = parsed.network;
+    assert!(
+        back.buses()
+            .iter()
+            .all(|b| (b.base_kv - 1.0).abs() < f64::EPSILON)
+    );
+    let lines_of = |n: &BalancedNetwork| -> Vec<(f64, f64)> {
+        n.branches()
+            .iter()
+            .filter(|b| !b.is_transformer())
+            .map(|b| (b.r, b.x))
+            .collect()
+    };
+    let (back_lines, source_lines) = (lines_of(&back), lines_of(&net));
+    assert_eq!(back_lines.len(), source_lines.len());
+    for (a, b) in back_lines.iter().zip(&source_lines) {
+        assert!((a.0 - b.0).abs() < 1e-12 && (a.1 - b.1).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn a_stated_v_nom_that_is_not_a_number_is_refused() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(dir.join("buses.csv"), "name,v_nom\nB1,abc\n").unwrap();
+    let err = read_pypsa_csv_folder(dir).unwrap_err().to_string();
+    assert!(err.contains("v_nom"), "{err}");
+}

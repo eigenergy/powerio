@@ -280,6 +280,8 @@ pub mod codes {
             "a PyPSA bus name collides with another and was keyed by its numeric id";
         READ_PYPSA_THERMAL_BOUND_ZERO = "READ.PYPSA.THERMAL_BOUND_ZERO", Warning,
             "a non-extendable PyPSA line or transformer states s_nom * s_max_pu = 0, a zero flow bound";
+        READ_PYPSA_VALUE_DEFAULTED = "READ.PYPSA.VALUE_DEFAULTED", Warning,
+            "a PyPSA value the folder leaves out was read at PyPSA's own default";
 
         READ_POWERWORLD_VALUE_DEFAULTED = "READ.POWERWORLD.VALUE_DEFAULTED", Warning,
             "a PowerWorld field this binary vintage does not locate was defaulted";
