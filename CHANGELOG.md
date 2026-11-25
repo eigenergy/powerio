@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- pandapower JSON: unrated transformer `sn_mva` substitutions are reported in one counted diagnostic with representative bus pairs instead of one warning per transformer.
+
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
 ## 0.12.4
