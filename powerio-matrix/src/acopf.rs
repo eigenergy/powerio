@@ -1125,6 +1125,8 @@ fn preparation_from_view(
     let mut storage_p_loss = Vec::new();
     let mut storage_q_loss = Vec::new();
     let mut storage_in_service = Vec::new();
+    // `ps` and `qs` stay MW and MVAr in a normalized network.
+    let storage_scale = p_scale * case.network().storage_power_scale();
     for (source_row, storage) in case.network().storage().iter().enumerate() {
         if !storage.in_service {
             continue;
@@ -1145,8 +1147,8 @@ fn preparation_from_view(
         ));
         bus_of_storage.push(bus);
         storage_source_rows.push(source_row);
-        storage_p.push(storage.ps * p_scale);
-        storage_q.push(storage.qs * p_scale);
+        storage_p.push(storage.ps * storage_scale);
+        storage_q.push(storage.qs * storage_scale);
         storage_energy.push(storage.energy * p_scale);
         storage_energy_rating.push(storage.energy_rating * p_scale);
         storage_charge_rating.push(storage.charge_rating * p_scale);

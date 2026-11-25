@@ -5,11 +5,11 @@
 //! exact same format writes, and reports source sections that stay only in the
 //! retained document.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TargetFormat, TextEmission, element_map, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_SURGE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -19,6 +19,8 @@ use crate::network::{
 };
 use crate::normalize;
 use crate::{Error, Result};
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::RowRef;
 
 const FMT: &str = "Surge JSON";
 const FORMAT_VALUE: &str = "surge-json";
@@ -39,27 +41,37 @@ fn three_winding_transformer_identity(
 pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     let mut network = Map::new();
+    // Buses are keyed on their number, generators on their written id;
+    // branches carry no id of their own.
+    let mut map = element_map::builder(net, TargetFormat::SurgeJson);
 
     network.insert("name".into(), Value::String(net.name().clone()));
     network.insert("base_mva".into(), jnum(net.base_mva()));
     network.insert("freq_hz".into(), jnum(net.base_frequency()));
 
+    let bus_shunts = bus_shunt_totals(net);
     network.insert(
         "buses".into(),
-        Value::Array(net.buses().iter().map(bus_obj).collect()),
+        Value::Array(
+            net.buses()
+                .iter()
+                .enumerate()
+                .map(|(index, bus)| {
+                    map.bus(
+                        index,
+                        RowRef::new("buses", index).with_key(bus.id.to_string()),
+                    );
+                    bus_obj(bus, bus_shunts.get(&bus.id).copied())
+                })
+                .collect(),
+        ),
     );
     network.insert(
         "loads".into(),
         Value::Array(net.loads().iter().enumerate().map(load_obj).collect()),
     );
-    network.insert(
-        "fixed_shunts".into(),
-        Value::Array(net.shunts().iter().enumerate().map(shunt_obj).collect()),
-    );
-    network.insert(
-        "branches".into(),
-        Value::Array(net.branches().iter().enumerate().map(branch_obj).collect()),
-    );
+    network.insert("fixed_shunts".into(), Value::Array(fixed_shunt_objs(net)));
+    network.insert("branches".into(), Value::Array(branch_objs(net, &mut map)));
 
     // Surge's network profile has no three-winding transformer record. Report
     // the specific equipment that cannot cross this format boundary rather
@@ -93,15 +105,10 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
         );
     }
 
-    let mut gen_counts: BTreeMap<BusId, usize> = BTreeMap::new();
-    let mut generators = Vec::new();
-    for generator in net.generators() {
-        generators.push(gen_obj(generator, &mut gen_counts, &mut warnings));
-    }
-    for storage in net.storage() {
-        generators.push(storage_gen_obj(storage, &mut gen_counts));
-    }
-    network.insert("generators".into(), Value::Array(generators));
+    network.insert(
+        "generators".into(),
+        Value::Array(generator_objs(net, &mut map, &mut warnings)),
+    );
 
     if !net.hvdc().is_empty() {
         let links = net
@@ -135,7 +142,31 @@ pub fn write_surge_json(net: &BalancedNetwork) -> TextEmission {
 
     warn_extra_branch_rating_sets(&F, FMT, net, &mut warnings);
     super::warn_dropped_areas(&F, FMT, true, net, &mut warnings);
-    finish(&F, root, warnings)
+    finish(&F, root, warnings).with_element_map(map)
+}
+
+/// The generator records: every generator, keyed on its written id, then
+/// every storage unit, which has no generator element behind it.
+fn generator_objs(
+    net: &BalancedNetwork,
+    map: &mut ElementMapBuilder,
+    warnings: &mut Diagnostics,
+) -> Vec<Value> {
+    let mut gen_counts: BTreeMap<BusId, usize> = BTreeMap::new();
+    let mut generators = Vec::new();
+    for (index, generator) in net.generators().iter().enumerate() {
+        let written = gen_obj(generator, &mut gen_counts, warnings);
+        let mut row = RowRef::new("generators", index);
+        if let Some(id) = written.get("id").and_then(Value::as_str) {
+            row = row.with_key(id);
+        }
+        map.generator(index, row);
+        generators.push(written);
+    }
+    for storage in net.storage() {
+        generators.push(storage_gen_obj(storage, &mut gen_counts));
+    }
+    generators
 }
 
 fn bus_type(kind: BusType) -> &'static str {
@@ -147,7 +178,71 @@ fn bus_type(kind: BusType) -> &'static str {
     }
 }
 
-fn bus_obj(bus: &Bus) -> Value {
+/// The shunt admittance `(g MW, b MVAr)` each bus states: the sum of every in
+/// service shunt on it.
+///
+/// Surge puts a bus's shunt admittance on the bus record, as its MATPOWER and
+/// PSS/E readers do, and solves with that total; `fixed_shunts` only keeps the
+/// identity of equipment whose admittance is already in the total. So every in
+/// service shunt counts here, including one that also gets a `fixed_shunts`
+/// record from [`fixed_shunt_objs`]. A switched shunt counts at its present
+/// susceptance; Surge JSON output states no switching control, as before.
+fn bus_shunt_totals(net: &BalancedNetwork) -> BTreeMap<BusId, (f64, f64)> {
+    let mut totals: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
+    for shunt in net.shunts().iter().filter(|shunt| shunt.in_service) {
+        let total = totals.entry(shunt.bus).or_default();
+        total.0 += shunt.g;
+        total.1 += shunt.b;
+    }
+    totals
+}
+
+/// Whether a shunt is equipment with an identity of its own: a source uid
+/// (such as a Surge `fixed_shunts` id), a PSS/E shunt id, switching control,
+/// or an out of service status, which the in service total on the bus cannot
+/// carry.
+fn has_own_identity(net: &BalancedNetwork, shunt: &Shunt) -> bool {
+    !shunt.in_service
+        || shunt.control.is_some()
+        || shunt.extras.contains_key("id")
+        || shunt
+            .uid
+            .as_deref()
+            .is_some_and(|uid| !uid.is_empty() && !net.uid_is_generated(Some(uid)))
+}
+
+/// The `fixed_shunts` records: one per shunt with an identity of its own (see
+/// [`has_own_identity`]), and one per further anonymous shunt on a bus that
+/// already has one, so that two shunts on one bus stay two. The first
+/// anonymous in service shunt on a bus, such as a MATPOWER bus `GS`/`BS`, lives
+/// on the bus alone; [`resolve_shunts`] reads it back from what the bus total
+/// leaves over after the records.
+///
+/// A bus whose in service shunts sum to exactly zero states zero, so every
+/// shunt on it gets a record. Otherwise shunts that cancel could leave every
+/// bus in the document at zero with a nonzero record, which
+/// [`resolve_shunts`] takes for the 0.12.4 layout: the shunt left on the bus
+/// would be lost. With a record each, both readings give every shunt back.
+fn fixed_shunt_objs(net: &BalancedNetwork) -> Vec<Value> {
+    let totals = bus_shunt_totals(net);
+    let mut on_bus: BTreeSet<BusId> = BTreeSet::new();
+    net.shunts()
+        .iter()
+        .enumerate()
+        .filter(|(_, shunt)| {
+            // A zero shunt on the bus would leave nothing to read back.
+            has_own_identity(net, shunt)
+                || (shunt.g == 0.0 && shunt.b == 0.0)
+                || totals
+                    .get(&shunt.bus)
+                    .is_some_and(|&(g, b)| g == 0.0 && b == 0.0)
+                || !on_bus.insert(shunt.bus)
+        })
+        .map(|(i, shunt)| shunt_obj(net, i, shunt))
+        .collect()
+}
+
+fn bus_obj(bus: &Bus, shunt: Option<(f64, f64)>) -> Value {
     let mut obj = Map::new();
     obj.insert("number".into(), Value::from(bus.id.0 as u64));
     obj.insert(
@@ -160,8 +255,9 @@ fn bus_obj(bus: &Bus) -> Value {
     obj.insert("voltage_angle_rad".into(), jnum(bus.va.to_radians()));
     obj.insert("voltage_min_pu".into(), jnum(bus.vmin));
     obj.insert("voltage_max_pu".into(), jnum(bus.vmax));
-    obj.insert("shunt_conductance_mw".into(), jnum(0.0));
-    obj.insert("shunt_susceptance_mvar".into(), jnum(0.0));
+    let (g, b) = shunt.unwrap_or_default();
+    obj.insert("shunt_conductance_mw".into(), jnum(g));
+    obj.insert("shunt_susceptance_mvar".into(), jnum(b));
     obj.insert("area".into(), Value::from(bus.area as u64));
     obj.insert("zone".into(), Value::from(bus.zone as u64));
     obj.insert("island_id".into(), Value::from(0_u64));
@@ -214,9 +310,14 @@ fn load_obj((i, load): (usize, &Load)) -> Value {
     Value::Object(obj)
 }
 
-fn shunt_obj((i, shunt): (usize, &Shunt)) -> Value {
+fn shunt_obj(net: &BalancedNetwork, i: usize, shunt: &Shunt) -> Value {
+    let id = shunt
+        .uid
+        .as_deref()
+        .filter(|uid| !uid.is_empty() && !net.uid_is_generated(Some(uid)))
+        .map_or_else(|| format!("shunt_{}", i + 1), str::to_owned);
     let mut obj = Map::new();
-    obj.insert("id".into(), Value::String(format!("shunt_{}", i + 1)));
+    obj.insert("id".into(), Value::String(id));
     obj.insert("bus".into(), Value::from(shunt.bus.0 as u64));
     obj.insert("g_mw".into(), jnum(shunt.g));
     obj.insert("b_mvar".into(), jnum(shunt.b));
@@ -235,19 +336,58 @@ fn shunt_obj((i, shunt): (usize, &Shunt)) -> Value {
     Value::Object(obj)
 }
 
-fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
+/// The branch records, each with a circuit of its own.
+///
+/// Surge keys a branch on its bus pair and circuit, so parallel branches need
+/// distinct circuits. A captured source circuit wins, as in the PSS/E writer;
+/// otherwise each pair hands out "1", "2", ... The pair is taken unordered so
+/// a reversed parallel branch (20-10 beside 10-20) also gets a circuit of its
+/// own.
+fn branch_objs(net: &BalancedNetwork, map: &mut ElementMapBuilder) -> Vec<Value> {
+    let mut circuit_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
+    net.branches()
+        .iter()
+        .enumerate()
+        .map(|(index, branch)| {
+            // A branch row keeps the element's from and to buses.
+            map.branch(index, RowRef::new("branches", index), false);
+            let pair = if branch.from <= branch.to {
+                (branch.from, branch.to)
+            } else {
+                (branch.to, branch.from)
+            };
+            let circuit = super::allocate_circuit_id(
+                branch
+                    .extras
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty()),
+                pair,
+                &mut circuit_ids,
+            );
+            branch_obj(branch, circuit)
+        })
+        .collect()
+}
+
+fn branch_obj(branch: &Branch, circuit: String) -> Value {
     let charging = branch.calc_terminal_charging();
     let mut obj = Map::new();
     obj.insert("from_bus".into(), Value::from(branch.from.0 as u64));
     obj.insert("to_bus".into(), Value::from(branch.to.0 as u64));
-    obj.insert("circuit".into(), Value::String("1".into()));
+    obj.insert("circuit".into(), Value::String(circuit));
     obj.insert("r".into(), jnum(branch.r));
     obj.insert("x".into(), jnum(branch.x));
-    obj.insert("b".into(), jnum(branch.calc_total_charging_b()));
-    obj.insert("g_shunt_from".into(), jnum(charging.g_fr));
-    obj.insert("b_shunt_from".into(), jnum(charging.b_fr));
-    obj.insert("g_shunt_to".into(), jnum(charging.g_to));
-    obj.insert("b_shunt_to".into(), jnum(charging.b_to));
+    // Surge's pi model puts `b/2` and `g_pi/2` at each end and adds
+    // `{g,b}_shunt_{from,to}` on top, so the end fields state only the part of
+    // each end's charging beyond the even split: zero for a symmetric branch.
+    let (b, g_pi) = (charging.calc_total_b(), charging.calc_total_g());
+    obj.insert("b".into(), jnum(b));
+    obj.insert("g_shunt_from".into(), jnum(charging.g_fr - g_pi / 2.0));
+    obj.insert("b_shunt_from".into(), jnum(charging.b_fr - b / 2.0));
+    obj.insert("g_shunt_to".into(), jnum(charging.g_to - g_pi / 2.0));
+    obj.insert("b_shunt_to".into(), jnum(charging.b_to - b / 2.0));
     obj.insert("tap".into(), jnum(branch.calc_effective_tap()));
     obj.insert("phase_shift_rad".into(), jnum(branch.shift.to_radians()));
     obj.insert(
@@ -293,7 +433,7 @@ fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
         obj.insert("pt_mw".into(), jnum(solution.pt));
         obj.insert("qt_mvar".into(), jnum(solution.qt));
     }
-    obj.insert("g_pi".into(), jnum(0.0));
+    obj.insert("g_pi".into(), jnum(g_pi));
     obj.insert("g_mag".into(), jnum(0.0));
     obj.insert("b_mag".into(), jnum(0.0));
     Value::Object(obj)
@@ -414,12 +554,14 @@ fn storage_gen_obj(storage: &Storage, counts: &mut BTreeMap<BusId, usize>) -> Va
         );
     }
     obj.insert("bus".into(), Value::from(storage.bus.0 as u64));
-    obj.insert("p".into(), jnum(storage.ps));
-    obj.insert("q".into(), jnum(storage.qs));
+    // Surge states storage as a generator, output positive. Storage.ps, qs,
+    // qmin and qmax are withdrawal positive. `0.0 - x` keeps a zero at +0.0.
+    obj.insert("p".into(), jnum(0.0 - storage.ps));
+    obj.insert("q".into(), jnum(0.0 - storage.qs));
     obj.insert("pmax".into(), jnum(storage.discharge_rating));
     obj.insert("pmin".into(), jnum(-storage.charge_rating));
-    obj.insert("qmax".into(), jnum(storage.qmax));
-    obj.insert("qmin".into(), jnum(storage.qmin));
+    obj.insert("qmax".into(), jnum(0.0 - storage.qmin));
+    obj.insert("qmin".into(), jnum(0.0 - storage.qmax));
     obj.insert("voltage_setpoint_pu".into(), jnum(1.0));
     obj.insert(
         "machine_base_mva".into(),
@@ -579,21 +721,32 @@ pub(crate) fn parse_surge_source(
     warnings.absorb(source_loss_warnings_from_root(root, network));
 
     let mut buses = Vec::new();
-    let mut shunts = Vec::new();
+    let mut bus_shunts = Vec::new();
     for value in array_field(network, "buses", true)? {
         let (bus, bus_shunt) = read_bus(value)?;
         buses.push(bus);
-        if let Some(shunt) = bus_shunt {
-            shunts.push(shunt);
-        }
+        bus_shunts.push(bus_shunt);
     }
+    let fixed_shunts = array_field(network, "fixed_shunts", false)?
+        .into_iter()
+        .map(read_fixed_shunt)
+        .collect::<Result<Vec<_>>>()?;
+    let shunts = resolve_shunts(&buses, bus_shunts, fixed_shunts, warnings);
 
-    shunts.extend(
-        array_field(network, "fixed_shunts", false)?
-            .into_iter()
-            .map(read_fixed_shunt)
-            .collect::<Result<Vec<_>>>()?,
-    );
+    let branch_values = array_field(network, "branches", false)?;
+    let legacy_charging = is_legacy_charging(&branch_values)?;
+    if legacy_charging {
+        warnings.push(
+            &codes::READ_SURGE_LEGACY_LAYOUT,
+            "every charged branch states `b_shunt_from + b_shunt_to == b`, the layout PowerIO \
+             0.12.4 and earlier wrote: the end shunts were read as each end's whole charging \
+             rather than as additions to `b/2`",
+        );
+    }
+    let branches = branch_values
+        .into_iter()
+        .map(|value| read_branch(value, legacy_charging))
+        .collect::<Result<Vec<_>>>()?;
 
     let mut generators = Vec::new();
     let mut storage = Vec::new();
@@ -629,11 +782,7 @@ pub(crate) fn parse_surge_source(
             .into(),
         shunts: shunts.into(),
         static_var_compensators: Vec::new().into(),
-        branches: array_field(network, "branches", false)?
-            .into_iter()
-            .map(read_branch)
-            .collect::<Result<Vec<_>>>()?
-            .into(),
+        branches: branches.into(),
         switches: Vec::new().into(),
         generators: generators.into(),
         storage: storage.into(),
@@ -681,25 +830,81 @@ fn validate_wrapper(root: &Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
-fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
+/// The shunts a Surge document states, from each bus's shunt admittance and
+/// the `fixed_shunts` records.
+///
+/// Surge keeps a bus's whole shunt admittance on the bus; an in service
+/// `fixed_shunts` record names equipment whose admittance is already in that
+/// total. Each record becomes a shunt of its own, and the bus keeps only what
+/// its records leave over, so nothing counts twice.
+///
+/// PowerIO 0.12.4 and earlier wrote every bus with zero shunt admittance and
+/// each shunt as a `fixed_shunts` record. A document whose buses all state zero
+/// while an in service record states some is read that way, with
+/// [`codes::READ_SURGE_LEGACY_LAYOUT`]: the records carry the admittance.
+fn resolve_shunts(
+    buses: &[Bus],
+    bus_shunts: Vec<(f64, f64)>,
+    fixed_shunts: Vec<Shunt>,
+    warnings: &mut Diagnostics,
+) -> Vec<Shunt> {
+    let all_buses_zero = bus_shunts.iter().all(|&(g, b)| g == 0.0 && b == 0.0);
+    let legacy = all_buses_zero
+        && fixed_shunts
+            .iter()
+            .any(|shunt| shunt.in_service && (shunt.g != 0.0 || shunt.b != 0.0));
+    if legacy {
+        warnings.push(
+            &codes::READ_SURGE_LEGACY_LAYOUT,
+            "every bus states zero shunt admittance while `fixed_shunts` state some, the layout \
+             PowerIO 0.12.4 and earlier wrote: the `fixed_shunts` records were read as the bus \
+             shunts",
+        );
+        // Those records were the writer's own numbering, not source identity.
+        return fixed_shunts
+            .into_iter()
+            .map(|mut shunt| {
+                shunt.uid = None;
+                shunt
+            })
+            .collect();
+    }
+
+    let mut in_records: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
+    for shunt in fixed_shunts.iter().filter(|shunt| shunt.in_service) {
+        let total = in_records.entry(shunt.bus).or_default();
+        total.0 += shunt.g;
+        total.1 += shunt.b;
+    }
+    let mut shunts = Vec::new();
+    for (bus, (g, b)) in buses.iter().zip(bus_shunts) {
+        let (g_rec, b_rec) = in_records.get(&bus.id).copied().unwrap_or_default();
+        let g = residual(g, g_rec);
+        let b = residual(b, b_rec);
+        if g != 0.0 || b != 0.0 {
+            shunts.push(Shunt::new(bus.id, g, b));
+        }
+    }
+    shunts.extend(fixed_shunts);
+    shunts
+}
+
+/// `total - part`, or zero when the difference is only rounding in the sum a
+/// writer formed.
+fn residual(total: f64, part: f64) -> f64 {
+    let rest = total - part;
+    if rest.abs() <= 1e-9 * total.abs().max(part.abs()).max(1.0) {
+        0.0
+    } else {
+        rest
+    }
+}
+
+fn read_bus(value: &Value) -> Result<(Bus, (f64, f64))> {
     let obj = object(value, "bus record")?;
     let id = BusId(required_usize(obj, "number")?);
     let g = f_map_or(obj, "shunt_conductance_mw", 0.0)?;
     let b = f_map_or(obj, "shunt_susceptance_mvar", 0.0)?;
-    let shunt = if g != 0.0 || b != 0.0 {
-        Some(Shunt {
-            bus: id,
-            g,
-            b,
-            in_service: true,
-            section_count: None,
-            control: None,
-            uid: None,
-            extras: Extras::new(),
-        })
-    } else {
-        None
-    };
     let bus = Bus {
         id,
         kind: read_bus_type(string_map(obj, "bus_type").unwrap_or("PQ"))?,
@@ -719,7 +924,7 @@ fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
         location: None,
         extras: Extras::new(),
     };
-    Ok((bus, shunt))
+    Ok((bus, (g, b)))
 }
 
 fn read_bus_type(value: &str) -> Result<BusType> {
@@ -790,12 +995,52 @@ fn read_fixed_shunt(value: &Value) -> Result<Shunt> {
         in_service: bool_map_or(obj, "in_service", true)?,
         section_count: None,
         control: None,
-        uid: None,
+        // The record's id is the equipment's identity; the writer gives a
+        // shunt with one its own `fixed_shunts` record again.
+        uid: string_map(obj, "id")
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
         extras: Extras::new(),
     })
 }
 
-fn read_branch(value: &Value) -> Result<Branch> {
+/// Whether a branch list is in the charging layout PowerIO 0.12.4 and earlier
+/// wrote: `b` the total charging and `b_shunt_from` / `b_shunt_to` each end's
+/// whole charging, so the two end shunts sum to `b` exactly on every charged
+/// branch.
+///
+/// Surge reads the end shunts as additions on top of `b/2`, under which such a
+/// file would double its charging. The layout is recognized for the whole
+/// document, not branch by branch: it needs at least one branch with nonzero
+/// `b`, and every branch with nonzero `b` must state both end shunts summing to
+/// it. A Surge file whose end shunt additions happen to sum to `b` on every
+/// charged branch reads the old way too; that coincidence is the accepted cost
+/// of keeping 0.12.4 files readable. A file this writer produces now states end
+/// shunts that sum to zero, so it never matches.
+fn is_legacy_charging(branches: &[&Value]) -> Result<bool> {
+    let mut charged = 0usize;
+    for value in branches {
+        let obj = object(value, "branch record")?;
+        let b = f_map_or(obj, "b", 0.0)?;
+        if b == 0.0 {
+            continue;
+        }
+        let (Some(from), Some(to)) = (
+            f_map_opt(obj, "b_shunt_from")?,
+            f_map_opt(obj, "b_shunt_to")?,
+        ) else {
+            return Ok(false);
+        };
+        #[allow(clippy::float_cmp)]
+        if from + to != b {
+            return Ok(false);
+        }
+        charged += 1;
+    }
+    Ok(charged > 0)
+}
+
+fn read_branch(value: &Value, legacy_charging: bool) -> Result<Branch> {
     let obj = object(value, "branch record")?;
     let branch_type = string_map(obj, "branch_type").unwrap_or("Line");
     let tap_value = f_map_or(obj, "tap", 1.0)?;
@@ -806,14 +1051,15 @@ fn read_branch(value: &Value) -> Result<Branch> {
         tap_value
     };
     let b = f_map_or(obj, "b", 0.0)?;
+    let charging = read_branch_charging(obj, b, legacy_charging)?;
     Ok(Branch {
         name: None,
         from: BusId(required_usize(obj, "from_bus")?),
         to: BusId(required_usize(obj, "to_bus")?),
         r: f_map_or(obj, "r", 0.0)?,
         x: f_map_or(obj, "x", 0.0)?,
-        b,
-        charging: read_branch_charging(obj, b)?,
+        b: charging.map_or(b, BranchCharging::calc_total_b),
+        charging,
         rate_a: crate::thermal_limit::from_zero_unlimited(f_map_or(obj, "rating_a_mva", 0.0)?)?,
         rate_b: crate::thermal_limit::from_zero_unlimited(f_map_or(obj, "rating_b_mva", 0.0)?)?,
         rate_c: crate::thermal_limit::from_zero_unlimited(f_map_or(obj, "rating_c_mva", 0.0)?)?,
@@ -829,12 +1075,41 @@ fn read_branch(value: &Value) -> Result<Branch> {
         solution: read_branch_solution(obj)?,
         uid: None,
         route: None,
-        extras: Extras::new(),
+        extras: read_branch_circuit(obj),
     })
 }
 
-fn read_branch_charging(obj: &Map<String, Value>, b: f64) -> Result<Option<BranchCharging>> {
+/// Capture a branch circuit into its extras under `"id"`, the key the PSS/E
+/// reader uses, so the writer (and the PSS/E and PSLF writers) replay it. A
+/// circuit of `1` is the positional default the writer allocates when none is
+/// retained, so it is not kept, as in the PSS/E reader.
+fn read_branch_circuit(obj: &Map<String, Value>) -> Extras {
+    let mut extras = Extras::new();
+    if let Some(circuit) = string_map(obj, "circuit")
+        .map(str::trim)
+        .filter(|circuit| !circuit.is_empty() && *circuit != "1")
+    {
+        extras.insert("id".into(), Value::String(circuit.to_owned()));
+    }
+    extras
+}
+
+/// Each end's charging: Surge's pi model puts `b/2` and `g_pi/2` at each end
+/// and adds `{g,b}_shunt_{from,to}` on top. `g_fr` / `b_fr` / `g_to` / `b_to`,
+/// read when the Surge end shunt fields are absent, state an end's whole
+/// charging. Under `legacy_charging` (see [`is_legacy_charging`]) the
+/// `b_shunt_*` fields are each end's whole susceptance, as PowerIO 0.12.4 and
+/// earlier wrote them; that writer stated `g_pi = 0`, so conductance reads the
+/// same either way.
+///
+/// `None` for a plain symmetric pi branch, which the total `b` states whole.
+fn read_branch_charging(
+    obj: &Map<String, Value>,
+    b: f64,
+    legacy_charging: bool,
+) -> Result<Option<BranchCharging>> {
     let has_terminal = [
+        "g_pi",
         "g_shunt_from",
         "b_shunt_from",
         "g_shunt_to",
@@ -849,12 +1124,26 @@ fn read_branch_charging(obj: &Map<String, Value>, b: f64) -> Result<Option<Branc
     if !has_terminal {
         return Ok(None);
     }
-    Ok(Some(BranchCharging {
-        g_fr: f_map_alias_or(obj, &["g_shunt_from", "g_fr"], 0.0)?,
-        b_fr: f_map_alias_or(obj, &["b_shunt_from", "b_fr"], b / 2.0)?,
-        g_to: f_map_alias_or(obj, &["g_shunt_to", "g_to"], 0.0)?,
-        b_to: f_map_alias_or(obj, &["b_shunt_to", "b_to"], b / 2.0)?,
-    }))
+    let g_pi = f_map_or(obj, "g_pi", 0.0)?;
+    let end = |surge: &str, whole: &str, half: f64, legacy: bool| -> Result<f64> {
+        match f_map_opt(obj, surge)? {
+            Some(value) if legacy => Ok(value),
+            Some(value) => Ok(half + value),
+            None => f_map_or(obj, whole, half),
+        }
+    };
+    let charging = BranchCharging {
+        g_fr: end("g_shunt_from", "g_fr", g_pi / 2.0, false)?,
+        b_fr: end("b_shunt_from", "b_fr", b / 2.0, legacy_charging)?,
+        g_to: end("g_shunt_to", "g_to", g_pi / 2.0, false)?,
+        b_to: end("b_shunt_to", "b_to", b / 2.0, legacy_charging)?,
+    };
+    #[allow(clippy::float_cmp)]
+    let plain_pi = charging.g_fr == 0.0
+        && charging.g_to == 0.0
+        && charging.b_fr == b / 2.0
+        && charging.b_to == b / 2.0;
+    Ok((!plain_pi).then_some(charging))
 }
 
 fn read_current_ratings(obj: &Map<String, Value>) -> Result<Option<BranchCurrentRatings>> {
@@ -1024,8 +1313,9 @@ fn read_storage(
     let energy_rating = f_map_alias_or(obj, &["energy_capacity_mwh", "soc_max_mwh"], 0.0)?;
     let mut out = Storage {
         bus,
-        ps: pg,
-        qs: qg,
+        // The generator's output positive p and q, as withdrawal.
+        ps: 0.0 - pg,
+        qs: 0.0 - qg,
         energy: f_map_or(obj, "soc_initial_mwh", 0.0)?,
         energy_rating,
         charge_rating: if pmin < 0.0 { -pmin } else { 0.0 },
@@ -1034,8 +1324,8 @@ fn read_storage(
         discharge_efficiency: f_map_or(obj, "discharge_efficiency", split_efficiency)?,
         thermal_rating: pmax.abs().max(pmin.abs()),
         current_rating: f_map_opt(obj, "current_rating")?,
-        qmin,
-        qmax,
+        qmin: 0.0 - qmax,
+        qmax: 0.0 - qmin,
         r: 0.0,
         x: 0.0,
         p_loss: 0.0,
@@ -1201,7 +1491,7 @@ fn source_loss_warnings_from_root(
         &mut warnings,
         network,
         "branches",
-        "branch control, phase shifter bounds, sequence, thermal, cost, or circuit metadata retained only in source text",
+        "branch control, phase shifter bounds, sequence, thermal, or cost metadata retained only in source text",
         branch_has_source_only_fields,
     );
     warn_count(
@@ -1300,7 +1590,6 @@ fn load_has_source_only_fields(load: &Map<String, Value>) -> bool {
 
 fn branch_has_source_only_fields(branch: &Map<String, Value>) -> bool {
     [
-        "g_pi",
         "g_mag",
         "b_mag",
         "bi0",
@@ -1324,7 +1613,6 @@ fn branch_has_source_only_fields(branch: &Map<String, Value>) -> bool {
         || bool_not_default(branch, "delta_connected", false)
         || string_not_default(branch, "phase_mode", "fixed")
         || string_not_default(branch, "tap_mode", "fixed")
-        || string_not_default(branch, "circuit", "1")
         || has_nonempty(branch, "opf_control")
         || has_nonempty(branch, "owners")
         || has_nonempty(branch, "zero_sequence")
@@ -1646,46 +1934,58 @@ mod tests {
 
     #[test]
     fn branch_tap_convention() {
-        let branch = read_branch(&serde_json::json!({
-            "from_bus": 1,
-            "to_bus": 2,
-            "branch_type": "Line",
-            "tap": 1.0
-        }))
+        let branch = read_branch(
+            &serde_json::json!({
+                "from_bus": 1,
+                "to_bus": 2,
+                "branch_type": "Line",
+                "tap": 1.0
+            }),
+            false,
+        )
         .unwrap();
         assert!(branch.tap.abs() < EPS);
 
-        let branch = read_branch(&serde_json::json!({
-            "from_bus": 1,
-            "to_bus": 2,
-            "branch_type": "Line",
-            "tap": 1.0,
-            "phase_shift_rad": 0.1
-        }))
+        let branch = read_branch(
+            &serde_json::json!({
+                "from_bus": 1,
+                "to_bus": 2,
+                "branch_type": "Line",
+                "tap": 1.0,
+                "phase_shift_rad": 0.1
+            }),
+            false,
+        )
         .unwrap();
         assert!(branch.tap.abs() < EPS);
         assert!((branch.shift - 0.1 * normalize::RAD_TO_DEG).abs() < EPS);
 
-        let branch = read_branch(&serde_json::json!({
-            "from_bus": 1,
-            "to_bus": 2,
-            "branch_type": "Transformer",
-            "tap": 1.0
-        }))
+        let branch = read_branch(
+            &serde_json::json!({
+                "from_bus": 1,
+                "to_bus": 2,
+                "branch_type": "Transformer",
+                "tap": 1.0
+            }),
+            false,
+        )
         .unwrap();
         assert!((branch.tap - 1.0).abs() < EPS);
     }
 
     #[test]
     fn preserves_branch_terminal_charging() {
-        let branch = read_branch(&serde_json::json!({
-            "from_bus": 1,
-            "to_bus": 2,
-            "g_shunt_from": 0.1,
-            "b_shunt_from": 0.2,
-            "g_shunt_to": 0.3,
-            "b_shunt_to": 0.4
-        }))
+        let branch = read_branch(
+            &serde_json::json!({
+                "from_bus": 1,
+                "to_bus": 2,
+                "g_shunt_from": 0.1,
+                "b_shunt_from": 0.2,
+                "g_shunt_to": 0.3,
+                "b_shunt_to": 0.4
+            }),
+            false,
+        )
         .unwrap();
         let charging = branch.charging.unwrap();
         assert!((charging.g_fr - 0.1).abs() < EPS);

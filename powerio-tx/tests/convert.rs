@@ -519,8 +519,9 @@ fn pypsa_csv_folder_reads_storage_units() {
     assert_eq!(st.discharge_rating, 25.0);
     assert_eq!(st.charge_efficiency, 0.91);
     assert_eq!(st.discharge_efficiency, 0.92);
-    assert_eq!(st.ps, 3.0);
-    assert_eq!(st.qs, 1.5);
+    // PyPSA p_set 3 discharges 3 MW. Storage ps is positive when charging.
+    assert_eq!(st.ps, -3.0);
+    assert_eq!(st.qs, -1.5);
     assert_eq!(st.energy, 20.0);
     assert!(!st.in_service);
 }
@@ -1967,7 +1968,8 @@ fn pypsa_genuine_export_reads() {
     let st = &net.storage()[0];
     assert_eq!(st.charge_rating, 25.0);
     assert_eq!(st.energy_rating, 100.0);
-    assert_eq!(st.ps, 3.0);
+    // PyPSA p_set 3 discharges 3 MW. Storage ps is positive when charging.
+    assert_eq!(st.ps, -3.0);
     assert_eq!(st.energy, 20.0);
 
     // link -> Hvdc, with the one fidelity warning.
@@ -2744,17 +2746,25 @@ fn parses_surge_json_network() {
         other => panic!("unexpected load model: {other:?}"),
     }
 
+    // Surge keeps a bus's whole shunt admittance on the bus; the fixed shunt
+    // record names equipment already inside that total (#919). The bus keeps
+    // the remainder and the record becomes a shunt of its own.
     assert_eq!(net.shunts().len(), 2);
-    assert_close(net.shunts().iter().map(|s| s.g).sum(), 1.5);
-    assert_close(net.shunts().iter().map(|s| s.b).sum(), -3.5);
+    assert_close(net.shunts().iter().map(|s| s.g).sum(), 1.0);
+    assert_close(net.shunts().iter().map(|s| s.b).sum(), -2.0);
+    assert_eq!(net.shunts()[1].uid.as_deref(), Some("shunt_1"));
+    assert_close(net.shunts()[0].g, 0.5);
+    assert_close(net.shunts()[0].b, -0.5);
 
     assert_eq!(net.branches().len(), 1);
     let branch = &net.branches()[0];
     assert_close(branch.tap, 0.0);
-    assert_eq!(
-        branch.charging,
-        Some(BranchCharging::new(0.001, 0.002, 0.003, 0.004))
-    );
+    // The end shunts add to the pi model's b/2 at each end (#919).
+    let charging = branch.charging.unwrap();
+    assert_close(charging.g_fr, 0.001);
+    assert_close(charging.b_fr, 0.035 + 0.002);
+    assert_close(charging.g_to, 0.003);
+    assert_close(charging.b_to, 0.035 + 0.004);
     assert_eq!(
         branch.current_ratings,
         Some(BranchCurrentRatings::new(500.0, 600.0, 700.0))
@@ -2810,6 +2820,50 @@ fn surge_storage_generator_is_not_duplicated_after_canonical_write() {
 }
 
 #[test]
+fn surge_storage_generator_states_output_positive_power() {
+    // Surge states a storage unit as a generator: p and q are output and
+    // pmin = -charge limit. PowerIO's Storage.ps and qs are withdrawal.
+    let mut net = parse_str(SURGE_TINY, "surge-json").unwrap().network;
+    let storage = &net.storage()[0];
+    assert_close(storage.ps, 3.0);
+    assert_close(storage.qs, -1.0);
+    assert_close(storage.qmin, -5.0);
+    assert_close(storage.qmax, 5.0);
+
+    net.storage_mut()[0].qmin = -2.0;
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let generator = doc["network"]["generators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g.get("storage").is_some())
+        .unwrap();
+    assert_eq!(generator["p"], -3.0);
+    assert_eq!(generator["q"], 1.0);
+    assert_eq!(generator["qmin"], -5.0);
+    assert_eq!(generator["qmax"], 2.0);
+    assert_eq!(generator["pmin"], -12.0);
+    assert_eq!(generator["pmax"], 10.0);
+
+    // A zero stays +0.0 through the writer and the reader.
+    net.storage_mut()[0].qs = 0.0;
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let q = doc["network"]["generators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g.get("storage").is_some())
+        .unwrap()["q"]
+        .as_f64()
+        .unwrap();
+    assert!(q == 0.0 && q.is_sign_positive());
+    let back = parse_str(&surge.text, "surge-json").unwrap().network;
+    assert!(back.storage()[0].qs.is_sign_positive());
+}
+
+#[test]
 fn surge_writer_round_trips_supported_core_fields() {
     let net = rich_audit_network();
     let conv = emit_value(&net, TargetFormat::SurgeJson).unwrap();
@@ -2832,6 +2886,470 @@ fn surge_writer_round_trips_supported_core_fields() {
     assert_eq!(
         back.branches()[0].solution,
         Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4))
+    );
+}
+
+/// Two parallel 10-20 lines and a reversed 20-10 line, from the #915
+/// reproducer: MATPOWER carries no circuit id.
+const CASE_PARALLEL_SURGE: &str = "function mpc = case4par
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t10\t3\t0\t0\t0\t0\t1\t1.0\t0\t230\t1\t1.1\t0.9;
+\t20\t2\t50\t10\t0\t0\t1\t1.0\t0\t230\t1\t1.1\t0.9;
+\t30\t1\t90\t30\t0\t0\t1\t1.0\t0\t115\t1\t1.1\t0.9;
+\t40\t1\t60\t20\t0\t5\t1\t1.0\t0\t115\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t10\t50\t0\t300\t-300\t1.04\t100\t1\t250\t10;
+\t20\t80\t0\t300\t-300\t1.02\t100\t1\t300\t10;
+];
+mpc.branch = [
+\t10\t20\t0.01\t0.085\t0.176\t250\t250\t250\t0\t0\t1\t-360\t360;
+\t10\t20\t0.01\t0.085\t0.176\t250\t250\t250\t0\t0\t1\t-360\t360;
+\t20\t10\t0.01\t0.085\t0.176\t250\t250\t250\t0\t0\t1\t-360\t360;
+\t30\t20\t0.0\t0.0586\t0\t0\t0\t0\t0.98\t0\t1\t-360\t360;
+\t30\t40\t0.017\t0.092\t0.158\t150\t150\t150\t0\t0\t1\t-360\t360;
+];
+";
+
+#[test]
+fn surge_writer_gives_parallel_branches_distinct_circuits() {
+    // #915: every branch used to be written with circuit "1", so the two
+    // parallel 10-20 lines shared one (from_bus, to_bus, circuit) key.
+    let net = parse_str(CASE_PARALLEL_SURGE, "matpower").unwrap().network;
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let keys: Vec<(u64, u64, String)> = doc["network"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|branch| {
+            (
+                branch["from_bus"].as_u64().unwrap(),
+                branch["to_bus"].as_u64().unwrap(),
+                branch["circuit"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            (10, 20, "1".to_owned()),
+            (10, 20, "2".to_owned()),
+            (20, 10, "3".to_owned()),
+            (30, 20, "1".to_owned()),
+            (30, 40, "1".to_owned()),
+        ]
+    );
+    let distinct: std::collections::BTreeSet<_> = keys.iter().collect();
+    assert_eq!(distinct.len(), keys.len());
+    // An unordered bus pair keeps the reversed line distinct even for a
+    // consumer that does not orient the key.
+    let unordered: std::collections::BTreeSet<_> = keys
+        .iter()
+        .map(|(from, to, circuit)| ((*from).min(*to), (*from).max(*to), circuit))
+        .collect();
+    assert_eq!(unordered.len(), keys.len());
+}
+
+#[test]
+fn surge_writer_keeps_a_captured_source_circuit() {
+    // A PSS/E source states its own CKT; the Surge writer keeps it and
+    // allocates around it.
+    let mut net = parse_str(CASE_PARALLEL_SURGE, "matpower").unwrap().network;
+    net.branches_mut()[1]
+        .extras
+        .insert("id".into(), Value::String("A".into()));
+    net.branches_mut()[2]
+        .extras
+        .insert("id".into(), Value::String("1".into()));
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&surge.text).unwrap();
+    let circuits: Vec<&str> = doc["network"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|branch| branch["circuit"].as_str().unwrap())
+        .collect();
+    // Branch 0 takes "1" first, so branch 2's captured "1" is taken and it
+    // gets the lowest free id.
+    assert_eq!(circuits, vec!["1", "A", "2", "1", "1"]);
+}
+
+#[test]
+fn surge_reader_keeps_a_stated_circuit_for_a_fresh_write() {
+    // The circuit a Surge file states is read into the branch, so a fresh
+    // write (and a PSS/E write) replays it instead of renumbering.
+    let net = parse_str(CASE_PARALLEL_SURGE, "matpower").unwrap().network;
+    let first = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let mut doc: Value = serde_json::from_str(&first.text).unwrap();
+    doc["network"]["branches"][1]["circuit"] = Value::String("B".into());
+    let surge = serde_json::to_string(&doc).unwrap();
+    let back = parse_str(&surge, "surge-json").unwrap();
+    let lines = back.render_diagnostics();
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("READ.SURGE.RETAINED_SOURCE_ONLY")),
+        "{lines:?}"
+    );
+    let back = back.network;
+    assert_eq!(
+        back.branches()[1].extras.get("id").and_then(Value::as_str),
+        Some("B")
+    );
+    assert_eq!(back.branches()[0].extras.get("id"), None);
+    let again = emit_value(&back, TargetFormat::SurgeJson).unwrap();
+    let doc: Value = serde_json::from_str(&again.text).unwrap();
+    let circuits: Vec<&str> = doc["network"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|branch| branch["circuit"].as_str().unwrap())
+        .collect();
+    assert_eq!(circuits, vec!["1", "B", "3", "1", "1"]);
+}
+
+fn surge_doc(net: &BalancedNetwork) -> Value {
+    let surge = emit_value(net, TargetFormat::SurgeJson).unwrap();
+    serde_json::from_str(&surge.text).unwrap()
+}
+
+fn surge_bus(doc: &Value, number: u64) -> &Value {
+    doc["network"]["buses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bus| bus["number"].as_u64() == Some(number))
+        .unwrap()
+}
+
+fn has_legacy_layout_warning(parsed: &Parsed) -> usize {
+    parsed
+        .render_diagnostics()
+        .iter()
+        .filter(|line| line.contains("READ.SURGE.LEGACY_LAYOUT"))
+        .count()
+}
+
+#[test]
+fn surge_writer_puts_bus_shunts_on_the_bus_and_charging_once() {
+    // #919: case14 bus 9 has Bs = 19 and branch 1-2 has b = 0.0528. The bus
+    // shunt used to go only into `fixed_shunts`, which Surge leaves out of its
+    // admittance matrix, and the end shunts repeated the halves of b on top
+    // of Surge's own b/2.
+    let net = parse_file(data("case14.m"), None).unwrap().network;
+    let doc = surge_doc(&net);
+    let bus9 = surge_bus(&doc, 9);
+    assert_close(bus9["shunt_susceptance_mvar"].as_f64().unwrap(), 19.0);
+    assert_close(bus9["shunt_conductance_mw"].as_f64().unwrap(), 0.0);
+    assert_eq!(doc["network"]["fixed_shunts"], serde_json::json!([]));
+
+    let branch = &doc["network"]["branches"][0];
+    assert_eq!(branch["from_bus"], 1);
+    assert_eq!(branch["to_bus"], 2);
+    assert_close(branch["b"].as_f64().unwrap(), 0.0528);
+    for key in [
+        "b_shunt_from",
+        "b_shunt_to",
+        "g_shunt_from",
+        "g_shunt_to",
+        "g_pi",
+    ] {
+        assert_eq!(branch[key].as_f64(), Some(0.0), "{key}");
+    }
+}
+
+#[test]
+fn surge_round_trip_keeps_matpower_charging_and_shunts() {
+    let net = parse_file(data("case14.m"), None).unwrap().network;
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
+    let parsed = parse_str(&surge.text, "surge-json").unwrap();
+    assert_eq!(
+        has_legacy_layout_warning(&parsed),
+        0,
+        "a fresh file is not the legacy layout"
+    );
+    let back = parsed.network;
+    assert_eq!(back.branches().len(), net.branches().len());
+    for (a, b) in net.branches().iter().zip(back.branches()) {
+        assert_close(b.calc_total_charging_b(), a.calc_total_charging_b());
+        assert_eq!(b.charging, None, "a plain pi branch reads back plain");
+    }
+    assert_eq!(back.shunts().len(), 1);
+    assert_eq!(back.shunts()[0].bus, BusId(9));
+    assert_close(back.shunts()[0].b, 19.0);
+
+    let matpower = emit_value(&back, TargetFormat::Matpower).unwrap();
+    let again = parse_str(&matpower.text, "matpower").unwrap().network;
+    assert_close(again.branches()[0].b, 0.0528);
+    assert_close(again.shunts()[0].b, 19.0);
+}
+
+#[test]
+fn surge_branch_with_b_and_zero_end_shunts_keeps_its_charging() {
+    // A plain Surge pi branch states its charging in `b` and zero end shunts.
+    // The reader used to take the zero end shunts as the whole end charging.
+    let text = r#"{
+  "format": "surge-json",
+  "schema_version": "0.1.0",
+  "meta": {"producer": "surge", "profile": "network"},
+  "network": {
+    "base_mva": 100.0,
+    "buses": [
+      {"number": 1, "bus_type": "Slack", "base_kv": 230.0},
+      {"number": 2, "bus_type": "PQ", "base_kv": 230.0}
+    ],
+    "branches": [
+      {"from_bus": 1, "to_bus": 2, "r": 0.01, "x": 0.1, "b": 0.0528,
+       "g_pi": 0.0, "g_shunt_from": 0.0, "b_shunt_from": 0.0,
+       "g_shunt_to": 0.0, "b_shunt_to": 0.0, "tap": 1.0, "branch_type": "Line"},
+      {"from_bus": 1, "to_bus": 2, "r": 0.01, "x": 0.1, "b": 0.04,
+       "g_pi": 0.002, "b_shunt_from": 0.01, "b_shunt_to": 0.0,
+       "tap": 1.0, "branch_type": "Line"}
+    ]
+  }
+}"#;
+    let parsed = parse_str(text, "surge-json").unwrap();
+    assert_eq!(has_legacy_layout_warning(&parsed), 0);
+    let net = parsed.network;
+    let plain = &net.branches()[0];
+    assert_close(plain.calc_total_charging_b(), 0.0528);
+    assert_eq!(plain.charging, None);
+    // End shunts and g_pi add to the even split at each end.
+    let extra = net.branches()[1].charging.unwrap();
+    assert_close(extra.b_fr, 0.03);
+    assert_close(extra.b_to, 0.02);
+    assert_close(extra.g_fr, 0.001);
+    assert_close(extra.g_to, 0.001);
+    assert_close(net.branches()[1].b, 0.05);
+
+    let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
+    let again = parse_str(&matpower.text, "matpower").unwrap().network;
+    assert_close(again.branches()[0].b, 0.0528);
+
+    // And the writer states the same asymmetry back.
+    let doc = surge_doc(&net);
+    let branch = &doc["network"]["branches"][1];
+    assert_close(branch["b"].as_f64().unwrap(), 0.05);
+    assert_close(branch["b_shunt_from"].as_f64().unwrap(), 0.005);
+    assert_close(branch["b_shunt_to"].as_f64().unwrap(), -0.005);
+    assert_close(branch["g_pi"].as_f64().unwrap(), 0.002);
+    assert_close(branch["g_shunt_from"].as_f64().unwrap(), 0.0);
+}
+
+/// case14 bus 9 and branch 1-2 as PowerIO 0.12.4 wrote them: the bus shunt
+/// only in `fixed_shunts`, and each end's whole charging in `b_shunt_*`. The
+/// second branch is asymmetric, as a PSS/E source with BI/BJ wrote it.
+const SURGE_0124_LAYOUT: &str = r#"{
+  "format": "surge-json",
+  "schema_version": "0.1.0",
+  "meta": {"producer": "surge", "profile": "network"},
+  "network": {
+    "name": "legacy",
+    "base_mva": 100.0,
+    "freq_hz": 60.0,
+    "buses": [
+      {"number": 1, "name": "", "bus_type": "Slack", "base_kv": 0.0, "shunt_conductance_mw": 0.0, "shunt_susceptance_mvar": 0.0},
+      {"number": 2, "name": "", "bus_type": "PQ", "base_kv": 0.0, "shunt_conductance_mw": 0.0, "shunt_susceptance_mvar": 0.0},
+      {"number": 9, "name": "", "bus_type": "PQ", "base_kv": 0.0, "shunt_conductance_mw": 0.0, "shunt_susceptance_mvar": 0.0}
+    ],
+    "loads": [],
+    "fixed_shunts": [
+      {"id": "shunt_1", "bus": 9, "g_mw": 0.0, "b_mvar": 19.0, "in_service": true, "shunt_type": "Capacitor"}
+    ],
+    "branches": [
+      {"from_bus": 1, "to_bus": 2, "circuit": "1", "r": 0.01938, "x": 0.05917, "b": 0.0528, "g_shunt_from": 0.0, "b_shunt_from": 0.0264, "g_shunt_to": 0.0, "b_shunt_to": 0.0264, "tap": 1.0, "phase_shift_rad": 0.0, "in_service": true, "branch_type": "Line", "g_pi": 0.0, "g_mag": 0.0, "b_mag": 0.0},
+      {"from_bus": 2, "to_bus": 9, "circuit": "1", "r": 0.01, "x": 0.1, "b": 0.07, "g_shunt_from": 0.01, "b_shunt_from": 0.02, "g_shunt_to": 0.0, "b_shunt_to": 0.05, "tap": 1.0, "phase_shift_rad": 0.0, "in_service": true, "branch_type": "Line", "g_pi": 0.0, "g_mag": 0.0, "b_mag": 0.0}
+    ],
+    "generators": []
+  }
+}"#;
+
+#[test]
+fn surge_file_written_by_powerio_0124_reads_as_before() {
+    let parsed = parse_str(SURGE_0124_LAYOUT, "surge-json").unwrap();
+    assert_eq!(
+        has_legacy_layout_warning(&parsed),
+        2,
+        "{:?}",
+        parsed.render_diagnostics()
+    );
+    let net = parsed.network;
+
+    // Same charging as the 0.12.4 reader gave, not doubled.
+    let plain = &net.branches()[0];
+    assert_close(plain.calc_total_charging_b(), 0.0528);
+    assert_eq!(plain.charging, None);
+    assert_eq!(
+        net.branches()[1].charging,
+        Some(BranchCharging::new(0.01, 0.02, 0.0, 0.05))
+    );
+
+    // The bus shunt is read once, as an anonymous bus shunt.
+    assert_eq!(net.shunts().len(), 1);
+    assert_eq!(net.shunts()[0].bus, BusId(9));
+    assert_close(net.shunts()[0].b, 19.0);
+    assert!(net.uid_is_generated(net.shunts()[0].uid.as_deref()));
+
+    // Written again, it takes the new layout.
+    let doc = surge_doc(&net);
+    assert_close(
+        surge_bus(&doc, 9)["shunt_susceptance_mvar"]
+            .as_f64()
+            .unwrap(),
+        19.0,
+    );
+    assert_eq!(doc["network"]["fixed_shunts"], serde_json::json!([]));
+    assert_eq!(
+        doc["network"]["branches"][0]["b_shunt_from"].as_f64(),
+        Some(0.0)
+    );
+}
+
+#[test]
+fn surge_shunts_with_identity_keep_their_fixed_shunt_record() {
+    // A Surge fixed shunt (or a PSS/E shunt with its own id) keeps a
+    // `fixed_shunts` record. Its admittance is also in the bus total, as Surge
+    // states it, and reading back does not count it twice. An out of service
+    // shunt, which the bus total cannot carry, keeps a record too, and so does a
+    // second anonymous shunt on a bus, so two shunts there stay two.
+    let mut net = parse_file(data("case14.m"), None).unwrap().network;
+    let mut named = powerio_tx::Shunt::new(BusId(9), 0.0, 5.0);
+    named.uid = Some("cap_9".into());
+    let mut psse = powerio_tx::Shunt::new(BusId(4), 0.0, -3.0);
+    psse.extras.insert("id".into(), Value::String("A".into()));
+    let mut off = powerio_tx::Shunt::new(BusId(5), 0.0, 7.0);
+    off.in_service = false;
+    net.shunts_mut()
+        .extend([named, psse, off, powerio_tx::Shunt::new(BusId(9), 0.0, 2.0)]);
+
+    let doc = surge_doc(&net);
+    let bus_b = |doc: &Value, bus: u64| {
+        surge_bus(doc, bus)["shunt_susceptance_mvar"]
+            .as_f64()
+            .unwrap()
+    };
+    assert_close(bus_b(&doc, 9), 26.0);
+    assert_close(bus_b(&doc, 4), -3.0);
+    assert_close(bus_b(&doc, 5), 0.0);
+    let records = doc["network"]["fixed_shunts"].as_array().unwrap();
+    let summary: Vec<(u64, f64, bool)> = records
+        .iter()
+        .map(|record| {
+            (
+                record["bus"].as_u64().unwrap(),
+                record["b_mvar"].as_f64().unwrap(),
+                record["in_service"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (9, 5.0, true),
+            (4, -3.0, true),
+            (5, 7.0, false),
+            (9, 2.0, true)
+        ]
+    );
+    assert_eq!(records[0]["id"], "cap_9");
+
+    let parsed = parse_str(&serde_json::to_string(&doc).unwrap(), "surge-json").unwrap();
+    assert_eq!(has_legacy_layout_warning(&parsed), 0);
+    let back = parsed.network;
+    assert_eq!(back.shunts().len(), net.shunts().len());
+    let total = |net: &BalancedNetwork, bus: usize| -> f64 {
+        net.shunts()
+            .iter()
+            .filter(|shunt| shunt.bus == BusId(bus) && shunt.in_service)
+            .map(|shunt| shunt.b)
+            .sum()
+    };
+    assert_close(total(&back, 9), 26.0);
+    assert_close(total(&back, 4), -3.0);
+    assert_close(total(&back, 5), 0.0);
+    assert!(
+        back.shunts()
+            .iter()
+            .any(|shunt| shunt.uid.as_deref() == Some("cap_9"))
+    );
+    assert!(
+        back.shunts()
+            .iter()
+            .any(|shunt| shunt.bus == BusId(5) && !shunt.in_service)
+    );
+    // Read and written again, the layout is stable.
+    assert_eq!(
+        surge_doc(&back)["network"]["fixed_shunts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[test]
+fn surge_shunts_that_cancel_on_a_bus_each_keep_a_record() {
+    // case14's only shunt is bus 9's Bs = 19. A second anonymous shunt there
+    // with -19 makes the bus total zero, so every bus in the document states
+    // zero. With the +19 left on the bus and only the -19 as a record, the
+    // reader took the file for the 0.12.4 layout and lost the +19.
+    let shunt_summary = |net: &BalancedNetwork| -> Vec<(usize, f64, bool)> {
+        let mut rows: Vec<(usize, f64, bool)> = net
+            .shunts()
+            .iter()
+            .map(|shunt| (shunt.bus.0, shunt.b, shunt.in_service))
+            .collect();
+        rows.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        rows
+    };
+
+    let mut net = parse_file(data("case14.m"), None).unwrap().network;
+    net.shunts_mut()
+        .push(powerio_tx::Shunt::new(BusId(9), 0.0, -19.0));
+    let doc = surge_doc(&net);
+    assert_close(
+        surge_bus(&doc, 9)["shunt_susceptance_mvar"]
+            .as_f64()
+            .unwrap(),
+        0.0,
+    );
+    let records: Vec<f64> = doc["network"]["fixed_shunts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["b_mvar"].as_f64().unwrap())
+        .collect();
+    assert_eq!(records, vec![19.0, -19.0]);
+    let parsed = parse_str(&serde_json::to_string(&doc).unwrap(), "surge-json").unwrap();
+    assert_eq!(shunt_summary(&parsed.network), shunt_summary(&net));
+
+    // A named shunt cancelled by an anonymous one: the same rule applies, and
+    // with bus 9 nonzero the file takes the current reading.
+    let mut net = parse_file(data("case14.m"), None).unwrap().network;
+    let mut named = powerio_tx::Shunt::new(BusId(4), 0.0, 5.0);
+    named.uid = Some("cap_4".into());
+    net.shunts_mut()
+        .extend([named, powerio_tx::Shunt::new(BusId(4), 0.0, -5.0)]);
+    let doc = surge_doc(&net);
+    assert_close(
+        surge_bus(&doc, 4)["shunt_susceptance_mvar"]
+            .as_f64()
+            .unwrap(),
+        0.0,
+    );
+    assert_eq!(doc["network"]["fixed_shunts"].as_array().unwrap().len(), 2);
+    let parsed = parse_str(&serde_json::to_string(&doc).unwrap(), "surge-json").unwrap();
+    assert_eq!(has_legacy_layout_warning(&parsed), 0);
+    assert_eq!(shunt_summary(&parsed.network), shunt_summary(&net));
+    assert!(
+        parsed
+            .network
+            .shunts()
+            .iter()
+            .any(|shunt| shunt.uid.as_deref() == Some("cap_4"))
     );
 }
 

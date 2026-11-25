@@ -527,14 +527,18 @@ tag. Then:
    still resolves to the tested commit before publishing. The publication
    request must preserve these explicit tag and commit fields too.
    The release event fires the PyPI publish
-   (python.yml) and the crates.io publish (crates.yml: powerio-core,
+   (python.yml), the crates.io publish (crates.yml: powerio-core,
    powerio-archive, powerio-tx, powerio-dist, powerio-tnd, powerio-prob, powerio-synth,
-   powerio-matrix, powerio, and powerio-cli, in dependency order). Both
-   deploy through reviewer protected environments (`pypi` and `crates-io`;
-   the protection lives in the repo settings). A rerun skips the PyPI files
-   and crates.io versions that are already published, so it publishes only
-   what is missing; it does not fix a publish that fails for a reason a rerun
-   does not change.
+   powerio-matrix, powerio, and powerio-cli, in dependency order), and the
+   npm publish (npm.yml: the `wasm-pack build --target web` output of
+   `powerio-wasm`, the converter's build, as the npm package `powerio-wasm`).
+   npm.yml runs `cargo test -p powerio-wasm` and refuses a package whose
+   version is not the workspace version. All three deploy through reviewer
+   protected environments (`pypi`, `crates-io`, and `npm`; the protection
+   lives in the repo settings). A rerun skips the PyPI files, crates.io
+   versions, and npm version that are already published, so it publishes
+   only what is missing; it does not fix a publish that fails for a reason a
+   rerun does not change.
 
    A crate's first version cannot use trusted publishing
    ([crates.io](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)).
@@ -548,6 +552,17 @@ tag. Then:
    same command; the helper never approves it. Afterwards configure the new
    crate's trusted publisher: owner `eigenergy`, repository `powerio`,
    workflow `crates.yml`, environment `crates-io`.
+
+   npm has the same rule, and npm.yml publishes only through trusted
+   publishing (OIDC, with provenance), never with a token. Until the
+   `powerio-wasm` package exists, its publish job fails with a message that
+   names `scripts/npm-bootstrap.sh`. Run `scripts/npm-bootstrap.sh vX.Y.Z`
+   once, after npm.yml's build job has passed, with your own `npm login`. It
+   downloads the tarball that job built (`--build` builds it from the tag
+   instead), checks its name, version, license, and README, publishes it,
+   and prints the trusted publisher to enter on npmjs.com: owner
+   `eigenergy`, repository `powerio`, workflow `npm.yml`, environment `npm`.
+   Rerun the failed job afterwards; it skips the published version.
 4. Publishing also starts PowerIO.jl's "Release" workflow, which releases
    PowerIO.jl X.Y.Z with no PowerIO.jl change: it sets the version, pins the
    release tarballs in `Artifacts.toml`, runs the Julia tests against them,

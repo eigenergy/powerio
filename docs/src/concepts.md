@@ -160,6 +160,19 @@ source bytes or fresh canonical output; and the emission diagnostics, which
 report each loss. A single file format produces one artifact, and a directory
 format such as PyPSA CSV, GridFM, or CGMES produces one per file.
 
+`EmitResult::element_map` (Python `id_map`, C
+`pio_emit_result_element_map`) says which written row each bus, branch, and
+generator became: for each element `uid`, the target table, the row index in
+that table as written, the target's own key for the row, and for a branch
+whether the row runs from the element's `to` bus. The writer records it as it
+writes, so it tells parallel branches and generators on one bus apart. The
+`matpower`, `psse`, `pandapower-json`, `pypsa-csv`, `surge-json`,
+`egret-json`, and `powersystems-json` writers record one, and `serialize`
+returns the identity map over the IR network's `buses`, `branches`, and
+`generators`. It is absent when the emission echoes retained source bytes and
+for other targets. [Element maps](format-fidelity.md#element-maps) gives each
+target's tables, indices, and keys.
+
 `resolve_format` maps an accepted spelling of a format to its canonical token
 and reports the conventional file suffix, the output layout, and whether a
 fresh writer exists. It describes formats only; values are named by

@@ -1,7 +1,9 @@
 //! PowerIO IR serialization and deserialization.
 
+use powerio_core::__implementation::ElementMapBuilder;
 use powerio_core::{
-    ArtifactPath, Diagnostic, EmitResult, Error, Fidelity, MemoryArtifact, PioModule,
+    ArtifactPath, Diagnostic, ElementMap, EmitResult, Error, Fidelity, MemoryArtifact, PioModule,
+    RowRef,
 };
 
 use crate::PioValue;
@@ -37,6 +39,12 @@ pub fn generate_ir_schema() -> schemars::Schema {
 /// PowerIO IR is the durable representation of a complete [`PioModule`]. It
 /// is separate from the grid exchange formats handled by [`crate::emit`].
 ///
+/// For a balanced network the result carries the identity element map
+/// ([`EmitResult::element_map`]): each bus, branch, and generator maps to its
+/// own position in the IR network's `buses`, `branches`, and `generators`
+/// tables, so a caller reads
+/// IR and grid exchange output through one code path.
+///
 /// # Errors
 /// The module cannot be represented by the current IR schema, or the
 /// destination refuses the artifact.
@@ -49,13 +57,50 @@ where
 {
     let module = module.clone().map_value(Into::into);
     let text = crate::stored::emit_module(&module)?;
+    let (map, diagnostics) = match module.value() {
+        PioValue::BalancedNetwork(network) => identity_element_map(network)?,
+        _ => (None, Vec::new()),
+    };
     let artifact = MemoryArtifact::new(ArtifactPath::new("module.pio.json")?, text.into_bytes());
-    output.into_destination()?.__commit_artifacts(
+    let result = output.into_destination()?.__commit_artifacts(
         false,
         Fidelity::Canonical,
         vec![artifact],
-        Vec::new(),
-    )
+        diagnostics,
+    )?;
+    Ok(match map {
+        Some(map) => result.__with_element_map(map),
+        None => result,
+    })
+}
+
+/// The element map of a balanced network written as IR: every element at its
+/// own position, keyed on the uid the stored form carries.
+fn identity_element_map(
+    network: &crate::BalancedNetwork,
+) -> Result<(Option<ElementMap>, Vec<Diagnostic>), Error> {
+    let mut network = network.clone();
+    network.assign_missing_component_ids();
+    let uid = |uid: &Option<String>| uid.clone().unwrap_or_default();
+    let mut map = ElementMapBuilder::new(
+        crate::IR_SCHEMA_NAME,
+        network.buses().iter().map(|bus| uid(&bus.uid)),
+        network.branches().iter().map(|branch| uid(&branch.uid)),
+        network
+            .generators()
+            .iter()
+            .map(|generator| uid(&generator.uid)),
+    );
+    for index in 0..network.buses().len() {
+        map.bus(index, RowRef::new("buses", index));
+    }
+    for index in 0..network.branches().len() {
+        map.branch(index, RowRef::new("branches", index), false);
+    }
+    for index in 0..network.generators().len() {
+        map.generator(index, RowRef::new("generators", index));
+    }
+    map.finish()
 }
 
 /// Deserialize one PowerIO IR input: a file name, content in memory, or a

@@ -3874,20 +3874,21 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                             equipment.id
                         )));
                     }
-                    let (g_si, b_si) = equipment
-                        .shunt_sections
-                        .iter()
-                        .take(section_count)
-                        .fold((0.0, 0.0), |(ga, ba), (g, b)| (ga + g, ba + b));
+                    // IIDM states each section as the accumulated g and b with it and all
+                    // previous sections active. Blocks hold the per section increments.
+                    let (g_si, b_si) = section_count
+                        .checked_sub(1)
+                        .map_or((0.0, 0.0), |last| equipment.shunt_sections[last]);
                     let blocks = equipment
                         .shunt_sections
                         .iter()
-                        .map(|(g, b)| {
-                            ShuntBlock::with_admittance(
+                        .scan((0.0, 0.0), |previous, &(g, b)| {
+                            let (previous_g, previous_b) = std::mem::replace(previous, (g, b));
+                            Some(ShuntBlock::with_admittance(
                                 1,
-                                powerio_core::electrical::calc_rated_power(*g, nominal),
-                                powerio_core::electrical::calc_rated_power(*b, nominal),
-                            )
+                                powerio_core::electrical::calc_rated_power(g - previous_g, nominal),
+                                powerio_core::electrical::calc_rated_power(b - previous_b, nominal),
+                            ))
                         })
                         .collect();
                     (g_si, b_si, blocks)
@@ -4066,7 +4067,7 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         parsed,
                         equipment.winding_ratio_taps[side].as_ref(),
                         equipment.winding_phase_taps[side].as_ref(),
-                        |rho| base_ratio * rho,
+                        |rho| base_ratio / rho,
                         &bus_builder,
                         &voltage_levels,
                     )?;
@@ -6191,7 +6192,7 @@ fn read_three_winding_transformer(
                 }
             }
         }
-        windings[side].tap = winding_rated_u / level.nominal_v * rho;
+        windings[side].tap = winding_rated_u / (level.nominal_v * rho);
         windings[side].shift = -alpha;
         windings[side].nominal_kv = winding_rated_u;
         let apparent = calc_loading_limit_projection(equipment, suffix as u8, |group| {
@@ -9016,6 +9017,7 @@ pub(crate) fn write_jiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         text,
         diagnostics,
         fidelity: emission.fidelity,
+        element_map: emission.element_map,
     })
 }
 
@@ -12596,19 +12598,23 @@ fn write_shunt(
         ));
     } else {
         output.push_str("        <iidm:shuntNonLinearModel>\n");
+        // IIDM sections are accumulated: each states the total with it and all previous ones on.
+        let (mut total_g, mut total_b) = (0.0, 0.0);
         for block in &control.blocks {
             for _ in 0..block.steps {
+                total_g += block.g;
+                total_b += block.b;
                 let conductance = if conductance_omitted {
                     String::new()
                 } else {
                     format!(
                         " g=\"{}\"",
-                        number(powerio_core::electrical::calc_rated_admittance(block.g, kv))
+                        number(powerio_core::electrical::calc_rated_admittance(total_g, kv))
                     )
                 };
                 output.push_str(&format!(
                     "          <iidm:section{conductance} b=\"{}\"/>\n",
-                    number(powerio_core::electrical::calc_rated_admittance(block.b, kv)),
+                    number(powerio_core::electrical::calc_rated_admittance(total_b, kv)),
                 ));
             }
         }
@@ -12902,7 +12908,7 @@ fn write_three_winding_transformer(
             &winding_buses,
             control,
             (winding.tap, winding.shift),
-            |tap| tap / base_ratio,
+            |tap| base_ratio / tap,
             diagnostics,
         )
     });
@@ -12982,10 +12988,10 @@ fn write_three_winding_transformer(
         }
         let rated_u = winding_nominal_kv(winding, bus);
         let base_ratio = rated_u / bus.base_kv;
-        let rho = if base_ratio == 0.0 {
+        let rho = if base_ratio == 0.0 || winding.tap == 0.0 {
             1.0
         } else {
-            winding.tap / base_ratio
+            base_ratio / winding.tap
         };
         if synthesized_kind != Some(TapChangerKind::Ratio) && (rho - 1.0).abs() > f64::EPSILON {
             output.push_str(&format!(
@@ -13386,6 +13392,14 @@ fn write_transformer(
     let zbase = powerio_core::electrical::calc_impedance_base(to.base_kv, index.base_mva)
         .unwrap_or(f64::NAN);
     let charging = branch.calc_terminal_charging();
+    if charging.g_to != 0.0 || charging.b_to != 0.0 {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_collapsed,
+            format!(
+                "transformer `{id}` to-side charging combined into the single XIIDM transformer shunt; terminal admittances change"
+            ),
+        );
+    }
     let mut taps = transformer_tap_changers(index, &component, 1);
     let synthesized = if taps.is_empty() {
         branch.control.as_ref().and_then(|control| {
@@ -13431,8 +13445,8 @@ fn write_transformer(
         identifiable_attributes_with_name(metadata, branch.name.as_deref()),
         number(unapply(branch.r * zbase, resistance_factor)),
         number(unapply(branch.x * zbase, reactance_factor)),
-        number(unapply(charging.g_fr / zbase, conductance_factor)),
-        number(unapply(charging.b_fr / zbase, susceptance_factor)),
+        number(unapply(charging.calc_total_g() / zbase, conductance_factor)),
+        number(unapply(charging.calc_total_b() / zbase, susceptance_factor)),
         number(from.base_kv * branch.calc_effective_tap() * rho_factor),
         number(to.base_kv),
         branch_solution_attributes(index, &component, branch.solution),
@@ -16237,6 +16251,27 @@ mod tests {
     }
 
     #[test]
+    fn transformer_shunt_keeps_both_terminal_charging_values() {
+        let source = BUS_BREAKER.replace(
+            "    <iidm:voltageLevel id=\"VL2\"",
+            "  </iidm:substation>\n  <iidm:substation id=\"S2\">\n    <iidm:voltageLevel id=\"VL2\"",
+        );
+        let mut network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let branch = &mut network.branches_mut()[0];
+        branch.tap = 1.02;
+        branch.b = 0.2;
+        branch.charging = Some(BranchCharging::new(0.0, 0.1, 0.0, 0.1));
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.value_collapsed.code
+                && diagnostic.message().contains("to-side charging")
+        }));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_f64_close(reparsed.branches()[0].calc_total_charging_b(), 0.2);
+    }
+
+    #[test]
     fn fresh_emission_preserves_line_transformer_and_hvdc_names() {
         let transformer = r#"    <iidm:twoWindingsTransformer id="T2" name="Named transformer" r="1" x="10" g="0" b="0" ratedU1="230" ratedU2="230" bus1="B1" connectableBus1="B1" voltageLevelId1="VL1" bus2="B2" connectableBus2="B2" voltageLevelId2="VL2"/>
 "#;
@@ -16592,7 +16627,7 @@ mod tests {
 
         let transformer = &network.transformers_3w()[0];
         assert!((transformer.z[0].r - 0.11).abs() < 1e-12);
-        assert!((transformer.windings[1].tap - 1.05).abs() < 1e-12);
+        assert!((transformer.windings[1].tap - 1.0 / 1.05).abs() < 1e-12);
         assert_f64_close(transformer.windings[0].rate_a, 90.0);
 
         let hvdc = &network.hvdc()[0];
@@ -17224,6 +17259,10 @@ mod tests {
         assert_eq!(network.areas()[0].area_type.as_deref(), Some("ControlArea"));
         assert_f64_close(network.areas()[0].net_interchange, 12.5);
         assert_eq!(network.buses()[0].area, 7);
+        // IIDM sections are accumulated, so sectionCount 2 is the second section alone
+        // and the second block is the increment from the first section to the second.
+        assert_f64_close(network.shunts()[0].g, 30.0);
+        assert_f64_close(network.shunts()[0].b, 40.0);
         let control = network.shunts()[0].control.as_ref().unwrap();
         assert_eq!(control.blocks.len(), 2);
         assert_eq!(
@@ -17232,7 +17271,7 @@ mod tests {
         );
         assert_eq!(
             control.blocks[1],
-            ShuntBlock::with_admittance(1, 30.0, 40.0)
+            ShuntBlock::with_admittance(1, 20.0, 20.0)
         );
         assert_eq!(
             control
@@ -17244,6 +17283,11 @@ mod tests {
 
         let emission = write_xiidm(&network).unwrap();
         assert!(emission.text.contains("<iidm:shuntNonLinearModel>"));
+        assert!(
+            emission
+                .text
+                .contains("<iidm:section g=\"0.003\" b=\"0.004\"/>")
+        );
         assert!(emission.text.contains("<iidm:area id=\"A7\""));
         assert!(emission.text.contains("<iidm:voltageLevelRef id=\"VL\"/>"));
         assert!(!emission.text.contains("load-model-source"));

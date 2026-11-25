@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::validation::{MAX_ARTIFACT_PATH_BYTES, MAX_ARTIFACT_SEGMENT_BYTES};
-use crate::{Diagnostic, Error};
+use crate::{Diagnostic, ElementMap, Error};
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -171,6 +171,7 @@ impl Destination {
             layout: OutputLayout::from_directory(directory),
             fidelity,
             diagnostics,
+            element_map: None,
         })
     }
 }
@@ -224,6 +225,7 @@ pub struct EmitResult {
     layout: OutputLayout,
     fidelity: Fidelity,
     diagnostics: Vec<Diagnostic>,
+    element_map: Option<ElementMap>,
 }
 
 impl EmitResult {
@@ -255,6 +257,28 @@ impl EmitResult {
     #[must_use]
     pub fn __with_diagnostics(mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) -> Self {
         self.diagnostics.extend(diagnostics);
+        self
+    }
+
+    /// Which written row each bus, branch, and generator became, when the
+    /// writer records one.
+    ///
+    /// `None` when the emission returned retained source bytes (no writer
+    /// ran, and the source's own row order is not known in general) and for
+    /// targets whose writer records no map.
+    #[must_use]
+    pub const fn element_map(&self) -> Option<&ElementMap> {
+        self.element_map.as_ref()
+    }
+
+    /// Attach the element map a writer recorded.
+    ///
+    /// This is an implementation hook for family writers and dispatchers. It
+    /// is not part of the user facing API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __with_element_map(mut self, element_map: ElementMap) -> Self {
+        self.element_map = Some(element_map);
         self
     }
 

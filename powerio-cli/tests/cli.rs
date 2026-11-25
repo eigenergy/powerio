@@ -390,6 +390,82 @@ fn convert_to_stdout_keeps_text_on_stdout() {
 }
 
 #[test]
+fn convert_id_map_writes_the_element_map_or_warns() {
+    let case = repo_file("tests/data/case4par.m");
+    let tmp = tempfile::tempdir().unwrap();
+    let output = tmp.path().join("case.surge.json");
+    let id_map = tmp.path().join("case.map.json");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "surge-json",
+        "-o",
+        output.to_str().unwrap(),
+        "--id-map",
+        id_map.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let map: serde_json::Value = serde_json::from_slice(&std::fs::read(&id_map).unwrap()).unwrap();
+    assert_eq!(map["format"], "surge-json");
+    assert_eq!(map["branch"]["10-20-2"]["index"], 1);
+    assert_eq!(map["gen"]["bus-10-2"]["key"], "gen_10_2");
+
+    // The MATPOWER echo of a MATPOWER source runs no writer: no map, a warning.
+    let output = tmp.path().join("case.m");
+    let id_map = tmp.path().join("echo.map.json");
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "matpower",
+        "-o",
+        output.to_str().unwrap(),
+        "--id-map",
+        id_map.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    assert!(!id_map.exists());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("EMIT.CLI.ID_MAP_UNAVAILABLE"), "{stderr}");
+    assert!(stderr.contains("retained source"), "{stderr}");
+}
+
+/// A GridFM scenario written as a PyPSA folder goes through its own path; it
+/// still writes the map the PyPSA writer recorded.
+#[test]
+fn convert_gridfm_to_pypsa_writes_the_element_map() {
+    let case = repo_file("tests/data/case4par.m");
+    let tmp = tempfile::tempdir().unwrap();
+    let dataset = tmp.path().join("gridfm");
+    assert_success(&run(&[
+        "gridfm",
+        case.to_str().unwrap(),
+        "-o",
+        dataset.to_str().unwrap(),
+    ]));
+    let folder = tmp.path().join("pypsa");
+    let id_map = tmp.path().join("map.json");
+    let out = run(&[
+        "convert",
+        dataset.join("case4par").to_str().unwrap(),
+        "--from",
+        "gridfm",
+        "--to",
+        "pypsa-csv",
+        "-o",
+        folder.to_str().unwrap(),
+        "--id-map",
+        id_map.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let map: serde_json::Value = serde_json::from_slice(&std::fs::read(&id_map).unwrap()).unwrap();
+    assert_eq!(map["format"], "pypsa-csv");
+    assert_eq!(map["branch"].as_object().unwrap().len(), 7);
+    assert_eq!(map["branch"]["1-2-2"]["table"], "lines");
+}
+
+#[test]
 fn convert_goc3_problem_and_solution_source_emits_official_solution() {
     let source = repo_file("tests/data/goc3");
     let out = run(&[
@@ -996,11 +1072,10 @@ fn pandapower_frame(columns: &[&str], data: &serde_json::Value) -> serde_json::V
 
 #[test]
 fn batch_reads_three_phase_pandapower_multiconductor() {
-    // The balanced reader refuses the fixture (its empty `res_shunt_3ph`),
-    // so it reads multiconductor. Its transformer and closed bus-bus switch
-    // have no three-phase mapping yet, which would leave the LV buses
-    // without their source, so batch skips it. A feeder whose connectivity
-    // the reading maps exports, after the Kron reduction batch reports.
+    // Every row of the fixture is mapped, so it reads multiconductor. The
+    // balanced lowering refuses to merge its rated closed switch, so batch
+    // skips it. A feeder without such a switch exports, after the Kron
+    // reduction batch reports.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let case = repo_file("tests/data/dist/pandapower/tiny_3ph.json");
@@ -1042,11 +1117,19 @@ fn batch_reads_three_phase_pandapower_multiconductor() {
     assert!(out_dir.join("case9_bprime.mtx").is_file(), "{stderr}");
     assert!(
         !out_dir.join("tiny_3ph_bprime.mtx").exists(),
-        "an islanded network was exported:\n{stderr}"
+        "the fixture with a rated switch was exported:\n{stderr}"
     );
     assert!(
-        stderr.contains("tiny_3ph.json") && stderr.contains("trafo, switch rows"),
+        stderr.contains("tiny_3ph.json") && stderr.contains("ampacity"),
         "no skip warning:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("would not connect"),
+        "the mapped switch was taken for a connectivity change:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("three-phase (runpp_3ph) network"),
+        "the balanced reader read the file:\n{stderr}"
     );
     assert!(out_dir.join("feeder_3ph_bprime.mtx").is_file(), "{stderr}");
     assert!(
@@ -1060,6 +1143,24 @@ fn batch_reads_three_phase_pandapower_multiconductor() {
         meta["matrices"][0]["sddm"],
         serde_json::json!(true),
         "{meta}"
+    );
+
+    let out = run(&[
+        "batch",
+        "-i",
+        case.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("lower") && stderr.contains("balanced") && stderr.contains("Kron"),
+        "expected the lowering diagnostic:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("three-phase (runpp_3ph) network"),
+        "the balanced reader read the file:\n{stderr}"
     );
 }
 

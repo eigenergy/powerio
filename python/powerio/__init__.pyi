@@ -113,6 +113,7 @@ __all__ = [
     "from_ppc",
     "parse",
     "parse_geo",
+    "powerworld",
     "resolve_format",
     "serialize",
     "versions",
@@ -1095,6 +1096,7 @@ class EmitResult:
     layout: Literal["file", "directory"]
     fidelity: Literal["exact_same_format", "canonical"]
     diagnostics: Tuple[Diagnostic, ...]
+    id_map: Optional[Dict[str, Any]] = None
     @property
     def text(self) -> Optional[str]: ...
 
@@ -1109,6 +1111,7 @@ class FormatInfo(NamedTuple):
 Format = str
 
 from . import dist as dist
+from . import powerworld as powerworld
 from .dist import MulticonductorNetwork as MulticonductorNetwork
 
 def resolve_format(name: str) -> Optional[FormatInfo]: ...

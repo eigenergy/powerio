@@ -436,6 +436,12 @@ enum Command {
         /// (and non-transformer branches with |r + jx| at most z).
         #[arg(long, value_name = "SPEC")]
         merge_buses: Option<String>,
+        /// Also write the element map as JSON to PATH: which written row
+        /// each bus, branch, and generator became. Nothing is written, with a
+        /// warning, when the output is the retained source or the target's
+        /// writer records no map.
+        #[arg(long, value_name = "PATH")]
+        id_map: Option<PathBuf>,
     },
     /// Extract, apply, or normalize standalone geographic layers (.geo.json).
     Geo {
@@ -1270,10 +1276,14 @@ fn main() -> std::process::ExitCode {
             default_gen_cost,
             gen_cost_csv,
             merge_buses,
+            id_map,
         } => run_convert_with_selection(
             &input,
             to,
-            output.as_deref(),
+            ConvertOutput {
+                path: output.as_deref(),
+                id_map: id_map.as_deref(),
+            },
             from,
             scenario,
             GenCostCliOptions::new(
@@ -2602,7 +2612,10 @@ fn run_convert(
     run_convert_with_selection(
         input,
         to,
-        output,
+        ConvertOutput {
+            path: output,
+            id_map: None,
+        },
         from,
         scenario,
         gen_cost_options,
@@ -2617,13 +2630,23 @@ fn run_convert(
 fn run_convert_with_selection(
     input: &std::path::Path,
     to: FormatArg,
-    output: Option<&std::path::Path>,
+    destination: ConvertOutput<'_>,
     from: Option<FormatArg>,
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
     selection: &SincalCliOptions,
     merge_buses: Option<&str>,
 ) -> anyhow::Result<()> {
+    let output = destination.path;
+    if destination
+        .id_map
+        .is_some_and(|path| path.as_os_str() == "-")
+    {
+        fail_with!(
+            REQUEST_CLI_OPTION_INVALID,
+            "`--id-map` needs a file path; it cannot write to stdout"
+        );
+    }
     selection.options(from)?;
     if !selection.is_empty()
         && (from == Some(FormatArg::Gridfm)
@@ -2684,10 +2707,17 @@ fn run_convert_with_selection(
         // The directory targets retain their existing writers; text targets
         // use the same balanced module writer as every other scalar network.
         if to == FormatArg::PypsaCsv {
-            return convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options);
+            let result = convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options)?;
+            return write_id_map(
+                destination.id_map,
+                result.element_map().map(powerio_core::ElementMap::to_json),
+                false,
+                to.name(),
+            );
         }
         if to == FormatArg::Cgmes {
-            return convert_to_cgmes(input, output, from, scenario, gen_cost_options);
+            convert_to_cgmes(input, output, from, scenario, gen_cost_options)?;
+            return write_id_map(destination.id_map, None, false, to.name());
         }
         let target = to.transmission().ok_or_else(|| {
             cli_failure(
@@ -2710,14 +2740,19 @@ fn run_convert_with_selection(
         .with_context(|| format!("emitting {target}"))?;
         report_diagnostics(&emission.diagnostics);
         write_conversion_output(&emission.text, &emission.sidecars, output)?;
-        return Ok(());
+        return write_id_map(
+            destination.id_map,
+            emission.element_map.clone(),
+            emission.retained,
+            target.token(),
+        );
     }
 
     // PowerIO IR is decoded rather than parsed, then follows the same typed
     // conversion path as a freshly parsed module.
     if from.is_none() && cases::powerio_ir_text(input)?.is_some() {
         let module = merge_value_module(deserialize_module(input)?, merge_buses)?;
-        return convert_parsed_module(module, to, output, &gen_cost_options);
+        return convert_parsed_module(module, to, destination, &gen_cost_options);
     }
 
     // Parse once through the facade. Static networks retain their established
@@ -2727,13 +2762,13 @@ fn run_convert_with_selection(
         load_module_with_selection(input, from, selection)?,
         merge_buses,
     )?;
-    convert_parsed_module(module, to, output, &gen_cost_options)
+    convert_parsed_module(module, to, destination, &gen_cost_options)
 }
 
 fn convert_parsed_module(
     module: powerio::PioModule<powerio::PioValue>,
     to: FormatArg,
-    output: Option<&Path>,
+    output: ConvertOutput<'_>,
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     // The reader's findings are reported before anything is emitted, so a
@@ -2762,9 +2797,10 @@ fn convert_parsed_module(
 fn convert_balanced_module(
     module: &powerio::PioModule<powerio::BalancedNetwork>,
     to: FormatArg,
-    output: Option<&Path>,
+    destination: ConvertOutput<'_>,
     gen_cost_options: &GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
+    let output = destination.path;
     let options = gen_cost_options.emit_options()?;
     if to == FormatArg::SincalBalanced {
         if !options.is_default() {
@@ -2784,7 +2820,7 @@ fn convert_balanced_module(
             "sincal-balanced",
             powerio_core::Destination::path(output),
         )?;
-        return finish_path_emission(module.diagnostics(), &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output, destination.id_map);
     }
     if to == FormatArg::PypsaCsv {
         let Some(output) = output else {
@@ -2805,7 +2841,7 @@ fn convert_balanced_module(
             powerio_core::Destination::path(output),
         )
         .with_context(|| format!("emitting PyPSA CSV folder {}", output.display()))?;
-        return finish_path_emission(module.diagnostics(), &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output, destination.id_map);
     }
     if to == FormatArg::Cgmes {
         let Some(output) = output else {
@@ -2827,7 +2863,7 @@ fn convert_balanced_module(
             powerio_core::Destination::path(output),
         )
         .with_context(|| format!("emitting CGMES to {}", output.display()))?;
-        return finish_path_emission(module.diagnostics(), &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output, destination.id_map);
     }
     let target = to.transmission().ok_or_else(|| {
         failure!(
@@ -2839,19 +2875,20 @@ fn convert_balanced_module(
     })?;
     let emission = module_io::emit_balanced_module(module, target, &options)
         .with_context(|| format!("emitting {target}"))?;
-    finish_memory_emission(module.diagnostics(), &emission, output)
+    finish_memory_emission(module.diagnostics(), &emission, destination)
 }
 
 fn convert_multiconductor_module(
     module: &powerio::PioModule<powerio::MulticonductorNetwork>,
     to: FormatArg,
-    output: Option<&Path>,
+    destination: ConvertOutput<'_>,
 ) -> anyhow::Result<()> {
+    let output = destination.path;
     if matches!(to, FormatArg::Gridlabd | FormatArg::GridlabdArras) {
         return convert_typed_module(
             &module.clone().map_value(powerio::PioValue::from),
             to,
-            output,
+            destination,
         );
     }
     if to == FormatArg::SincalMulticonductor {
@@ -2862,7 +2899,7 @@ fn convert_multiconductor_module(
             );
         };
         let result = powerio::emit(module, to.name(), powerio::Destination::path(output))?;
-        return finish_path_emission(module.diagnostics(), &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output, destination.id_map);
     }
     let target = to.distribution().ok_or_else(|| {
         failure!(
@@ -2874,14 +2911,15 @@ fn convert_multiconductor_module(
     })?;
     let emission = module_io::emit_multiconductor_module(module, target)
         .with_context(|| format!("emitting {}", target.name()))?;
-    finish_memory_emission(module.diagnostics(), &emission, output)
+    finish_memory_emission(module.diagnostics(), &emission, destination)
 }
 
 fn convert_typed_module(
     module: &powerio::PioModule<powerio::PioValue>,
     to: FormatArg,
-    output: Option<&Path>,
+    destination: ConvertOutput<'_>,
 ) -> anyhow::Result<()> {
+    let output = destination.path;
     let format = powerio::resolve_format(to.name()).ok_or_else(|| {
         failure!(
             REQUEST_CLI_OUTPUT_REQUIRED,
@@ -2910,11 +2948,11 @@ fn convert_typed_module(
             powerio_core::Destination::path(output),
         )
         .with_context(|| format!("emitting {} to {}", format.token, output.display()))?;
-        return finish_path_emission(module.diagnostics(), &result, output);
+        return finish_path_emission(module.diagnostics(), &result, output, destination.id_map);
     }
     let emission = module_io::emit_module(module, format.token)
         .with_context(|| format!("emitting {}", format.token))?;
-    finish_memory_emission(module.diagnostics(), &emission, output)
+    finish_memory_emission(module.diagnostics(), &emission, destination)
 }
 
 /// Report the emission's findings, write the output, and fail when the
@@ -2923,10 +2961,16 @@ fn convert_typed_module(
 fn finish_memory_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     emission: &module_io::MemoryEmission,
-    output: Option<&Path>,
+    destination: ConvertOutput<'_>,
 ) -> anyhow::Result<()> {
     report_diagnostics(&emission.diagnostics);
-    write_conversion_output(&emission.text, &emission.sidecars, output)?;
+    write_conversion_output(&emission.text, &emission.sidecars, destination.path)?;
+    write_id_map(
+        destination.id_map,
+        emission.element_map.clone(),
+        emission.retained,
+        "the target",
+    )?;
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),
         parse_error_count(&emission.diagnostics),
@@ -2938,13 +2982,57 @@ fn finish_path_emission(
     parse_diagnostics: &[powerio::Diagnostic],
     result: &powerio::EmitResult,
     output: &Path,
+    id_map: Option<&Path>,
 ) -> anyhow::Result<()> {
     report_diagnostics(result.diagnostics());
     report_written(output);
+    write_id_map(
+        id_map,
+        result.element_map().map(powerio::ElementMap::to_json),
+        result.fidelity() == powerio::Fidelity::ExactSameFormat,
+        "the target",
+    )?;
     fail_on_reported_errors(
         parse_error_count(parse_diagnostics),
         parse_error_count(result.diagnostics()),
     )
+}
+
+/// Where `convert` writes: the case output and the optional element map.
+#[derive(Clone, Copy)]
+struct ConvertOutput<'a> {
+    path: Option<&'a Path>,
+    id_map: Option<&'a Path>,
+}
+
+/// Write the element map JSON to `id_map` when one was requested. With no
+/// map, write nothing and warn: the output is the retained source (no writer
+/// ran), or the target's writer records no map.
+fn write_id_map(
+    id_map: Option<&Path>,
+    map: Option<String>,
+    retained: bool,
+    target: &str,
+) -> anyhow::Result<()> {
+    let Some(path) = id_map else {
+        return Ok(());
+    };
+    if let Some(json) = map {
+        commit_output_file(path, json.into_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        report_written(path);
+        return Ok(());
+    }
+    let reason = if retained {
+        "the output is the retained source, so no writer ran".to_owned()
+    } else {
+        format!("the writer for {target} records no element map")
+    };
+    report_diagnostics(&[powerio_core::Diagnostic::of(
+        &codes::EMIT_CLI_ID_MAP_UNAVAILABLE,
+        format!("{} not written: {reason}", path.display()),
+    )]);
+    Ok(())
 }
 
 /// The number of `Error`-or-worse findings among `diagnostics`.
@@ -3487,14 +3575,15 @@ fn run_geo_convert(
 
 /// Write `input` out as a PyPSA CSV folder (a directory target, so it never
 /// returns text). gridfm input reads through the dataset reader; everything else
-/// goes through the shared transmission hub.
+/// goes through the shared transmission hub. Returns the emission result so
+/// the caller can write its element map.
 fn convert_to_pypsa_folder(
     input: &std::path::Path,
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<powerio_core::EmitResult> {
     let Some(out_dir) = output else {
         fail_with!(
             REQUEST_CLI_OUTPUT_REQUIRED,
@@ -3525,7 +3614,7 @@ fn convert_to_pypsa_folder(
     .with_context(|| format!("emitting PyPSA CSV folder {}", out_dir.display()))?;
     report_diagnostics(result.diagnostics());
     report_written(out_dir);
-    Ok(())
+    Ok(result)
 }
 
 /// Write `input` as a CGMES profile set. Fresh output is a directory. An

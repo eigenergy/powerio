@@ -13,6 +13,7 @@ mod component_id;
 pub mod dense;
 mod diagnostic;
 pub mod electrical;
+mod element_map;
 mod error;
 mod module;
 pub(crate) mod nonfinite;
@@ -31,6 +32,7 @@ pub use diagnostic::{
     ErrorCategory, attach_retention_details, check_registry, check_scope_ownership,
     code_is_well_formed, render_diagnostic, render_diagnostics,
 };
+pub use element_map::{ElementMap, RowRef};
 pub use error::Error;
 pub use module::{PioModule, StagedEdit};
 pub use output::{
@@ -72,13 +74,16 @@ pub mod limits {
 /// the mutable diagnostic collector and the checked dimension helper are
 /// crate private; each emitting sibling crate carries its own byte identical
 /// crate-private collector copy instead of importing one through a hidden
-/// path. Two items remain, both re-exported here. The nonfinite serde
+/// path. Three items remain, all re-exported here. The nonfinite serde
 /// adapter pair wraps a whole serializer or deserializer inside the network
 /// types' serde trait impls; duplicating that machinery per crate would let
 /// the one shared float spelling diverge. `__commit_staged_file` commits a
 /// file a streaming writer outside this crate already staged itself, for a
 /// writer whose artifact must never be materialized in memory; every other
-/// commit goes through [`Destination`]. Both stay a single hidden seam:
+/// commit goes through [`Destination`]. `ElementMapBuilder` records the rows
+/// a writer writes; the balanced writers in `powerio-tx` and the facade's IR
+/// serializer build one, and only the finished [`ElementMap`] reaches users,
+/// so its signature may change. All three stay a single hidden seam:
 /// unstable, never re-exported by the facade, and not accepted or returned
 /// by any public PowerIO operation.
 #[doc(hidden)]
@@ -91,6 +96,9 @@ pub mod __implementation {
     /// Commit an already staged file onto its destination without
     /// materializing the artifact in memory first.
     pub use crate::output::__commit_staged_file;
+
+    /// Record the rows a writer writes into an element map.
+    pub use crate::element_map::ElementMapBuilder;
 }
 
 /// Declare one crate's diagnostic registry.
@@ -129,7 +137,7 @@ mod tests {
     /// `__implementation` the comment does not name, would go unnoticed
     /// without this: `__implementation` must be the crate's only top level
     /// `#[doc(hidden)]` item, and its own direct items must be exactly the
-    /// two the comment names.
+    /// three the comment names.
     #[test]
     fn hidden_root_items_match_the_implementation_module_note() {
         let source = include_str!("lib.rs");
@@ -172,6 +180,7 @@ mod tests {
             vec![
                 "pub mod nonfinite {".to_owned(),
                 "pub use crate::output::__commit_staged_file;".to_owned(),
+                "pub use crate::element_map::ElementMapBuilder;".to_owned(),
             ],
             "__implementation's direct items no longer match the audit note above it"
         );

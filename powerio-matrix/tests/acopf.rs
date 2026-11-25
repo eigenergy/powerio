@@ -274,6 +274,48 @@ fn ac_opf_preparation_keeps_storage_fields_and_units() {
     assert_eq!(native.storage.q_loss, vec![0.5]);
 }
 
+/// Normalization keeps storage `ps` and `qs` in MW and MVAr, as PowerModels
+/// does. The stated state and the AC OPF preparation still read the same
+/// storage power from a network and its normalized copy.
+#[test]
+fn storage_power_is_the_same_for_a_network_and_its_normalized_copy() {
+    let mut network = BalancedNetwork::in_memory(
+        "storage-normalized",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
+    );
+    let mut generator = Generator::new(BusId(1));
+    generator.pmax = 200.0;
+    generator.cost = Some(GenCost::new(2, 0.0, 0.0, vec![0.01, 10.0, 0.0]));
+    network.generators_mut().push(generator);
+    let mut storage = Storage::new(BusId(2));
+    storage.ps = 12.0;
+    storage.qs = -3.0;
+    storage.energy = 80.0;
+    network.storage_mut().push(storage);
+    let normalized = network.to_normalized().unwrap();
+    assert_eq!(normalized.storage()[0].ps, 12.0);
+
+    let close = |actual: f64, expected: f64| assert!((actual - expected).abs() < 1e-9);
+    for net in [network, normalized] {
+        // Flat voltages carry no branch flow, so bus 2 states only the storage.
+        let options = powerio_matrix::StatedStateOptions::default();
+        let mismatch = powerio_matrix::calc_stated_state_mismatch(&net, &options).unwrap();
+        close(mismatch.buses[1].p_mw, 12.0);
+        close(mismatch.buses[1].q_mvar, -3.0);
+        let instance = AcOpfInstance::from_network(net).unwrap();
+        let prepared =
+            build_ac_opf_preparation(&instance, &AcOpfAssemblyOptions::default()).unwrap();
+        close(prepared.storage.p[0], 0.12);
+        close(prepared.storage.q[0], -0.03);
+        close(prepared.storage.energy[0], 0.8);
+    }
+}
+
 #[test]
 fn ac_preparation_honors_feasibility_constraints_and_limit_synthesis() {
     let mut line = Branch::new(BusId(1), BusId(2), 0.01, 0.1);

@@ -2094,6 +2094,7 @@ pub(crate) fn write_rawx(net: &BalancedNetwork) -> Result<TextEmission> {
         text,
         diagnostics: diagnostics.into_records(),
         fidelity: powerio_core::Fidelity::Canonical,
+        element_map: None,
     })
 }
 

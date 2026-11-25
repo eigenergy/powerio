@@ -38,7 +38,7 @@ import operator as _operator
 import os as _os
 from collections import namedtuple
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Union
 
 from . import _powerio
@@ -175,6 +175,7 @@ __all__ = [
     "from_ppc",
     "parse",
     "parse_geo",
+    "powerworld",
     "resolve_format",
     "serialize",
     "versions",
@@ -202,12 +203,21 @@ class Artifact:
 
 @dataclass(frozen=True)
 class EmitResult:
-    """Artifact inventory and diagnostics from an emission or serialization."""
+    """Artifact inventory and diagnostics from an emission or serialization.
+
+    ``id_map`` says which written row each bus, branch, and generator became:
+    a ``dict`` with ``"format"``, ``"powerio"``, and ``"bus"``, ``"branch"``,
+    and ``"gen"`` sections, each mapping an element ``uid`` (in module order)
+    to ``{"table", "index", "key"?, "flip"?}`` or ``None``. It is ``None``
+    when the emission returned the retained source bytes (no writer ran) and
+    for targets whose writer records no map.
+    """
 
     artifacts: tuple[Artifact, ...]
     layout: str
     fidelity: str
     diagnostics: tuple[Diagnostic, ...]
+    id_map: Optional[dict[str, Any]] = field(default=None, hash=False)
 
     @property
     def text(self) -> Optional[str]:
@@ -1462,6 +1472,16 @@ class AcOtsInstance(_BalancedCalculation):
         """
         return self.module._inner._ac_ots_branches()
 
+    @property
+    def branch_order(self) -> list[str]:
+        """Stable branch IDs in the order used by every topology vector."""
+        return self.module._inner._ac_ots_branch_order()
+
+    @property
+    def initial_closed(self) -> list[bool]:
+        """Initial switch positions in branch order, including out-of-service rows."""
+        return self.module._inner._ac_ots_initial_closed()
+
     def validate_topology(self, closed: Sequence[bool]) -> float:
         """Check a final topology and return its switching cost.
 
@@ -1577,6 +1597,11 @@ class AcOtsSolution(_BalancedCalculation, _CalculationSolution):
             _branch_statuses(closed), solution.module._inner
         )
         return PioModule(inner).value
+
+    @property
+    def ac_solution(self) -> AcOpfSolution:
+        """The AC OPF solution on the final topology, with its fixed instance."""
+        return PioModule(self.module._inner._ac_ots_solution_ac_dispatch()).value
 
     @property
     def branch_closed(self) -> list[bool]:
@@ -2257,6 +2282,7 @@ def _result_from_native(result: dict[str, Any]) -> EmitResult:
         layout=result["layout"],
         fidelity=result["fidelity"],
         diagnostics=tuple(result["diagnostics"]),
+        id_map=None if result.get("element_map") is None else _json.loads(result["element_map"]),
     )
 
 
@@ -2398,3 +2424,6 @@ def diagnostic_record(diagnostic: Diagnostic) -> dict[str, Any]:
 def diagnostic_records(diagnostics: Iterable[Diagnostic]) -> list[dict[str, Any]]:
     """Every diagnostic as a JSON-ready dictionary, in the order given."""
     return [diagnostic_record(item) for item in diagnostics]
+
+
+from . import powerworld  # noqa: E402  (needs emit, defined above)

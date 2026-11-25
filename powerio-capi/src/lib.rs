@@ -69,7 +69,7 @@ pub const PIO_VERSION_MAJOR: u32 = 0;
 pub const PIO_VERSION_MINOR: u32 = 12;
 
 /// Patch number of the PowerIO release this header was generated from.
-pub const PIO_VERSION_PATCH: u32 = 4;
+pub const PIO_VERSION_PATCH: u32 = 5;
 
 // ---- views -----------------------------------------------------------------
 
@@ -2665,6 +2665,12 @@ unsafe fn input_bytes<'a>(
     len: usize,
     argument: &str,
 ) -> Result<&'a [u8], *mut PioError> {
+    if len > isize::MAX as usize {
+        return Err(boundary_error(
+            &codes::BIND_CAPI_INVALID_ARGUMENT,
+            format!("{argument} length exceeds the maximum Rust slice length"),
+        ));
+    }
     if data.is_null() {
         if len == 0 {
             return Ok(&[]);
@@ -18180,6 +18186,7 @@ struct EmitResultInner {
     fidelity: &'static str,
     artifacts: Vec<ArtifactRecord>,
     diagnostics: Arc<DiagnosticsInner>,
+    element_map: Option<String>,
 }
 
 struct ArtifactInner {
@@ -18216,6 +18223,7 @@ fn emit_result_handle(result: EmitResult) -> Result<*mut PioEmitResult, *mut Pio
     let diagnostics = Arc::new(DiagnosticsInner {
         owner: DiagnosticsOwner::Owned(result.diagnostics().to_vec()),
     });
+    let element_map = result.element_map().map(powerio::ElementMap::to_json);
     let artifacts = match result.into_output() {
         EmittedOutput::Memory { artifacts } => artifacts
             .into_iter()
@@ -18246,6 +18254,7 @@ fn emit_result_handle(result: EmitResult) -> Result<*mut PioEmitResult, *mut Pio
         fidelity,
         artifacts,
         diagnostics,
+        element_map,
     }))
 }
 
@@ -18331,6 +18340,24 @@ pub unsafe extern "C" fn pio_emit_result_layout(result: *const PioEmitResult) ->
 pub unsafe extern "C" fn pio_emit_result_fidelity(result: *const PioEmitResult) -> PioStringView {
     unsafe { PioEmitResult::get(result) }.map_or(PioStringView::EMPTY, |result| {
         PioStringView::new(result.fidelity)
+    })
+}
+
+/// The element map as JSON: which written row each bus, branch, and
+/// generator became. An empty view when the emission recorded no map (a
+/// retained source echo, or a target whose writer records none).
+///
+/// # Safety
+/// Pointers and handles must satisfy the crate-level safety requirements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_emit_result_element_map(
+    result: *const PioEmitResult,
+) -> PioStringView {
+    unsafe { PioEmitResult::get(result) }.map_or(PioStringView::EMPTY, |result| {
+        result
+            .element_map
+            .as_deref()
+            .map_or(PioStringView::EMPTY, PioStringView::new)
     })
 }
 
@@ -20952,6 +20979,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn input_slice_rejects_lengths_that_cannot_form_rust_slices() {
+        unsafe {
+            let error = input_bytes(std::ptr::null(), isize::MAX as usize + 1, "data").unwrap_err();
+            assert_eq!(error_code_text(error), "BIND.CAPI.INVALID_ARGUMENT");
+        }
+    }
 
     #[test]
     fn powermodels_construction_preserves_stated_frequency() {
@@ -26085,6 +26120,50 @@ mod tests {
             assert!(!error.is_null());
             pio_error_release(error);
             pio_time_series_release(series);
+        }
+    }
+
+    #[test]
+    fn emit_result_element_map_is_json_or_empty() {
+        unsafe {
+            let module = parse_case9();
+            let emit = |format: &str| {
+                let mut error = std::ptr::null_mut();
+                let destination = pio_destination_memory(c"out".as_ptr(), 3, &mut error);
+                assert!(!destination.is_null(), "{}", error_text(error));
+                let result = pio_emit(
+                    module,
+                    format.as_ptr().cast(),
+                    format.len(),
+                    destination,
+                    &mut error,
+                );
+                pio_destination_release(destination);
+                assert!(!result.is_null(), "{format}: {}", error_text(error));
+                result
+            };
+
+            // A fresh writer run records the map.
+            let result = emit("surge-json");
+            let map: serde_json::Value =
+                serde_json::from_str(&view_text(pio_emit_result_element_map(result))).unwrap();
+            assert_eq!(map["format"], "surge-json");
+            assert_eq!(map["bus"].as_object().unwrap().len(), 9);
+            assert_eq!(map["branch"]["1-4"]["table"], "branches");
+            assert_eq!(map["branch"]["1-4"]["flip"], false);
+            pio_emit_result_release(result);
+
+            // The retained MATPOWER echo runs no writer.
+            let result = emit("matpower");
+            assert_eq!(
+                view_text(pio_emit_result_fidelity(result)),
+                "exact_same_format"
+            );
+            assert_eq!(pio_emit_result_element_map(result).len, 0);
+            pio_emit_result_release(result);
+
+            assert_eq!(pio_emit_result_element_map(std::ptr::null()).len, 0);
+            pio_module_release(module);
         }
     }
 

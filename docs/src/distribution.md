@@ -236,21 +236,76 @@ pandapower JSON has one token, `pandapower-json`, for balanced and three-phase
 networks. A document whose `asymmetric_load`, `asymmetric_sgen` or
 `res_bus_3ph` table has rows is a network for pandapower's `runpp_3ph`, and
 `powerio_tnd::formats::pandapower` reads it here. The facade and the CLI pick
-the reader from the content. Every bus has the phase terminals 1, 2 and 3
-and a grounded neutral 4, lines turn their sequence data into phase
-matrices, an external grid is an ideal source, and loads and static
-generators are constant power, balanced or per phase.
+the reader from the content. The reading follows the `runpp_3ph` model of
+pandapower 3.5. Every bus has the phase terminals 1, 2 and 3 and a grounded
+neutral 4, lines turn their sequence data into phase matrices, an external
+grid is an ideal source, and loads and static generators are constant power,
+balanced or per phase.
 
-This reading does not map transformers, shunts, switches and the other
-element tables yet, and reports each one it drops. A document with rows in a
-table only the balanced reader maps (`trafo`, `shunt`, `gen`, `storage`,
-`dcline`) keeps reading balanced, as in PowerIO 0.12.0, when that reader
-accepts it. A transformer or a switch that joins or splits buses changes the
-connectivity, so `powerio batch` skips a three-phase network read without
-one. An element on an out-of-service bus is kept with `in_service` false in
-its extras. Writing a three-phase network to `pandapower-json` returns its
-unchanged source; any other multiconductor network is refused with
+| pandapower | Model |
+|---|---|
+| `bus` | buses. A GeoJSON Point in `geo` is the bus location |
+| `line` | lines. The sequence data become phase matrices per meter. `parallel` scales them |
+| `trafo`, `trafo_characteristic_table` | transformers of vector group `Dyn` or `YNyn`, with ratio taps and a zero-sequence correction |
+| `load`, `asymmetric_load` | constant power loads, wye or delta |
+| `sgen`, `asymmetric_sgen` | generators, wye or delta |
+| `shunt`, `shunt_characteristic_table` | shunts, with a step from `shunt_characteristic_table` when it applies |
+| `switch` | bus-bus switches. A closed switch with `z_ohm` is a 1 m line. An open line or transformer switch moves the element end behind an open switch |
+| `ext_grid` | ideal `VoltageSource`s |
+
+`runpp_3ph` fixes only the positive sequence of an `ext_grid`. It puts the
+short-circuit impedance in the negative and zero sequence.
+`READ.DIST.PANDAPOWER_APPROXIMATED` reports the approximation. The same code
+reports a shunt at an `ext_grid` bus. `runpp_3ph` puts the shunt's admittance
+in place of the zero-sequence admittance of the `ext_grid`.
+
+A transformer keeps the winding model. A zero-sequence correction then makes
+its zero sequence match the T model of pandapower's `pd2ppc_zero.py`. For
+`Dyn` this is one shunt `(Y/3) * ones(3, 3)` at the LV bus. For `YNyn` there
+are shunts at both sides. The LV winding then has a neutral impedance on a
+terminal of its own, which is not grounded.
+
+The ratio changers `tap` and `tap2` of type `Ratio` or `Symmetrical` set the
+winding taps. pandapower multiplies them. With `tap_dependency_table`,
+`vk_percent` and `vkr_percent` come from the `trafo_characteristic_table` row
+at `tap_pos`. The ratio and the angle of that row are not mapped. That
+changer stays at the nominal ratio. So do a changer of another type and a
+ratio changer with a phase step. `READ.DIST.PANDAPOWER_APPROXIMATED` reports
+each one that pandapower moves off the nominal ratio.
+
+A shunt draws `p_mw` and `q_mvar` times `step` at `vn_kv`. With
+`step_dependency_table` it draws the `shunt_characteristic_table` row of its
+step instead. A closed line or transformer switch changes nothing in the
+solve. It remains only in the retained source. An open switch whose bus is no
+end of its element opens the from end of a line or the LV winding of a
+transformer, as in pandapower. A switch of a `trafo3w` (`et` `t3`) or of
+another element type is not mapped.
+
+This reading does not map the other element tables yet, and reports each one
+it drops with `READ.DIST.PANDAPOWER_TABLE_UNSUPPORTED` or
+`READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED`. A document with rows only the
+balanced reader maps keeps reading balanced, as in PowerIO 0.12.0, when that
+reader accepts it. These are the rows of `gen`, `storage` and `dcline`, a
+`trafo` row of a vector group other than `Dyn` or `YNyn` and a `shunt` row
+whose step has no characteristic row. So does an in-service `shunt` row whose
+step depends on a table it does not name. The balanced reader then warns that
+it drops the per-phase detail. A transformer or an impedance that joins buses
+changes the connectivity, so `powerio batch` skips a three-phase network read
+without one. These are in-service rows of `trafo3w`, `impedance` and `trafo`
+of a vector group other than `Dyn` or `YNyn`. An element out of service or on
+an out-of-service bus is kept with `in_service` false in its extras. The
+correction shunts of such a transformer carry it too.
+`READ.DIST.PANDAPOWER_OUT_OF_SERVICE` reports the element once. Other formats
+emit it in service. An out-of-service element whose data the reading cannot
+map is dropped instead. `READ.DIST.PANDAPOWER_ELEMENT_UNSUPPORTED` reports
+it. Writing a three-phase network to `pandapower-json` returns its unchanged
+source; any other multiconductor network is refused with
 `EMIT.DIST.PANDAPOWER_UNSUPPORTED`.
+
+`tests/data/dist/pandapower/tiny_3ph.json` is a synthetic fixture.
+`evals/validation/validate_pandapower_3ph.py` is the oracle. It solves each
+case with `runpp_3ph` and compares the phase voltages with OpenDSS solving
+PowerIO's converted deck.
 
 ## PowerModelsDistribution MATHEMATICAL model
 

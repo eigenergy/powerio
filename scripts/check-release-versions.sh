@@ -15,7 +15,8 @@
 #   GitHub Actions run for a `v*` tag, `--release` also requires the tag to be
 #   v<workspace version>.
 # - The published 0.11 schema files keep their exact bytes.
-# - Every publishable crate carries the one workspace version.
+# - Every publishable crate carries the one workspace version, and so does
+#   powerio-wasm, whose wasm-pack build npm.yml publishes to npm.
 # - `--release` requires `## Unreleased` in CHANGELOG.md to be empty.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -124,7 +125,7 @@ fi
 
 for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-archive/Cargo.toml powerio-tx/Cargo.toml \
                 powerio-dist/Cargo.toml powerio-tnd/Cargo.toml powerio-matrix/Cargo.toml powerio-prob/Cargo.toml \
-                powerio-synth/Cargo.toml powerio-cli/Cargo.toml; do
+                powerio-synth/Cargo.toml powerio-cli/Cargo.toml powerio-wasm/Cargo.toml; do
     grep -q '^version.workspace = true' "$manifest" \
         || { echo "$manifest does not take the workspace version" >&2; exit 1; }
 done

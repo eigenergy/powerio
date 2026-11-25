@@ -399,6 +399,9 @@ pub(super) fn read(
             )?;
             if kind == "TransformerCircuit" {
                 metadata::restore(root, row, &mut branch, &["angmin", "angmax"])?;
+                restore_voltage_level_line(root, row, &mut branch)?;
+            } else {
+                restore_line_angle_limits(root, row, &mut branch)?;
             }
             metadata::restore_branch_solution(root, row, &mut branch, warnings)?;
             branches.push(branch);
@@ -964,6 +967,40 @@ fn push(doc: &mut Value, kind: &str, row: Value) {
         .expect("constructed array")
         .push(row);
 }
+/// A PowerSystems Line written with its angle limits clamped to ±pi/2 keeps
+/// the source limits in ext; they are restored while the native limits are
+/// still the ones written for them, so an edited limit wins.
+#[allow(clippy::float_cmp)] // The written value is recomputed exactly.
+fn restore_line_angle_limits(root: &Value, row: &Value, branch: &mut Branch) -> Result<()> {
+    let extra = &root["ext"][integer(row, "id")?.to_string()][metadata::KEY];
+    let (Some(angmin), Some(angmax)) = (extra["angmin"].as_f64(), extra["angmax"].as_f64()) else {
+        return Ok(());
+    };
+    let (lo, hi) = powersystems_angle_limits(angmin, angmax);
+    // The reader converted the native radians with `to_degrees`.
+    if (branch.angmin, branch.angmax) == (lo.to_degrees(), hi.to_degrees()) {
+        branch.angmin = angmin;
+        branch.angmax = angmax;
+    }
+    Ok(())
+}
+
+/// A zero-tap branch across two voltage levels is written as a transformer
+/// circuit with tap 1; its zero tap is restored while the circuit is still a
+/// plain tap 1 transformer.
+#[allow(clippy::float_cmp)]
+fn restore_voltage_level_line(root: &Value, row: &Value, branch: &mut Branch) -> Result<()> {
+    let extra = &root["ext"][integer(row, "id")?.to_string()][metadata::KEY];
+    if extra["voltage_level_line"] == true
+        && (branch.tap - 1.0).abs() < 1e-12
+        && branch.shift == 0.0
+        && branch.control.is_none()
+    {
+        branch.tap = 0.0;
+    }
+    Ok(())
+}
+
 fn minmax(lo: f64, hi: f64) -> Value {
     json!({"min":lo,"max":hi})
 }
@@ -973,17 +1010,60 @@ pub(super) fn write(
     requested: u8,
     original: Option<&Value>,
 ) -> Result<TextEmission> {
-    let (doc, warnings) = write_document(net, requested, original)?;
+    let (doc, warnings) = write_document(net, requested, original, false, None)?;
     let text = serde_json::to_string_pretty(&doc).map_err(|e| error(e.to_string()))?;
     Ok(TextEmission::new(text, warnings))
 }
 
+/// PowerSystems' unconstrained angle difference limit, in radians. Its
+/// `sanitize_angle_limits!` takes a limit beyond 3 * pi/2 to be in degrees and
+/// clamps one between pi/2 and 3 * pi/2 to this value.
+const POWERSYSTEMS_ANGLE_LIMIT: f64 = std::f64::consts::FRAC_PI_2;
+
+/// The `angle_limits` (radians) a PowerSystems `Line` carries for limits in
+/// degrees: a side at or beyond 90 degrees is written as PowerSystems'
+/// unconstrained value.
+fn powersystems_angle_limits(angmin: f64, angmax: f64) -> (f64, f64) {
+    let lo = if angmin <= -90.0 {
+        -POWERSYSTEMS_ANGLE_LIMIT
+    } else {
+        angmin.to_radians()
+    };
+    let hi = if angmax >= 90.0 {
+        POWERSYSTEMS_ANGLE_LIMIT
+    } else {
+        angmax.to_radians()
+    };
+    (lo, hi)
+}
+
+/// True when PowerSystems' `check_endpoint_voltages` refuses a `Line` between
+/// these base voltages: they differ by more than 1% of their mean.
+fn crosses_voltage_levels(from_kv: f64, to_kv: f64) -> bool {
+    (from_kv - to_kv).abs() / f64::midpoint(from_kv, to_kv) > 0.01
+}
+
+/// The Sienna component id each bus, branch, and generator of a network was
+/// written with, in module order.
+#[derive(Default)]
+pub(super) struct WrittenIds {
+    pub(super) buses: Vec<i64>,
+    pub(super) branches: Vec<i64>,
+    pub(super) generators: Vec<i64>,
+}
+
 /// The SystemDocument as a JSON value, for a writer that transforms it further.
+/// `powersystems` adapts branches to the checks PowerSystems.jl applies when
+/// it builds a `System`: angle limits and lines across voltage levels.
+/// `written`, when given, receives the component id of each bus, branch, and
+/// generator.
 #[allow(clippy::too_many_lines, clippy::float_cmp)] // One block for each emitted component table.
 pub(super) fn write_document(
     net: &BalancedNetwork,
     requested: u8,
     original: Option<&Value>,
+    powersystems: bool,
+    mut written: Option<&mut WrittenIds>,
 ) -> Result<(Value, Diagnostics)> {
     net.check_base_mva()?;
     net.check_references(FMT)?;
@@ -1072,6 +1152,9 @@ pub(super) fn write_document(
     let [area_ids, zone_ids] = areas::write(net, &mut doc, &mut ids, &mut warnings, selected)?;
     for b in net.buses() {
         let id = ids.get(b.uid.as_deref());
+        if let Some(written) = written.as_deref_mut() {
+            written.buses.push(id);
+        }
         bus_ids.insert(b.id, id);
         metadata::record(&mut doc, id, b, &["uid", "name", "extras"])?;
         push(
@@ -1083,8 +1166,29 @@ pub(super) fn write_document(
     let bus_by_id: BTreeMap<BusId, &Bus> = net.buses().iter().map(|b| (b.id, b)).collect();
     for b in net.branches() {
         let id = ids.get(b.uid.as_deref());
+        if let Some(written) = written.as_deref_mut() {
+            written.branches.push(id);
+        }
         metadata::record(&mut doc, id, b, &["uid", "name", "extras", "rating_sets"])?;
-        if b.is_transformer() {
+        // PowerSystems refuses a Line whose ends differ in base voltage, so a
+        // zero-tap branch across two voltage levels is written as a
+        // transformer circuit with tap 1.
+        let voltage_level_line = powersystems
+            && !b.is_transformer()
+            && crosses_voltage_levels(bus_by_id[&b.from].base_kv, bus_by_id[&b.to].base_kv);
+        let as_transformer = b.is_transformer() || voltage_level_line;
+        if voltage_level_line {
+            warnings.push(
+                &codes::EMIT_SIENNA.element_relabeled,
+                format!(
+                    "branch {id} ({} - {}): its ends have base voltages {} kV and {} kV, so it is written as a TapTransformer with tap 1; PowerSystems refuses a Line across two voltage levels",
+                    b.from, b.to, bus_by_id[&b.from].base_kv, bus_by_id[&b.to].base_kv
+                ),
+            );
+            // The reader restores the zero tap from this marker.
+            metadata::ext_mut(&mut doc, id)["voltage_level_line"] = json!(true);
+        }
+        if as_transformer {
             metadata::ext_mut(&mut doc, id)["angmin"] = json!(b.angmin);
             metadata::ext_mut(&mut doc, id)["angmax"] = json!(b.angmax);
         }
@@ -1103,12 +1207,12 @@ pub(super) fn write_document(
         if let Some(solution) = &b.solution {
             row["active_power_flow"] = json!(solution.pf);
             row["reactive_power_flow"] = json!(solution.qf);
-        } else if !b.is_transformer() {
+        } else if !as_transformer {
             row["active_power_flow"] = json!(0.0);
             row["reactive_power_flow"] = json!(0.0);
             metadata::ext_mut(&mut doc, id)["branch_flow_absent"] = json!(true);
         }
-        if b.is_transformer() {
+        if as_transformer {
             row.as_object_mut().expect("object").remove("name");
             row["tap"] = json!(b.calc_effective_tap());
             row["alpha"] = json!(b.shift.to_radians());
@@ -1144,7 +1248,31 @@ pub(super) fn write_document(
         } else {
             row["b"] = json!({"from":ch.b_fr,"to":ch.b_to});
             row["g"] = json!({"from":ch.g_fr,"to":ch.g_to});
-            row["angle_limits"] = minmax(b.angmin.to_radians(), b.angmax.to_radians());
+            if powersystems {
+                let (lo, hi) = powersystems_angle_limits(b.angmin, b.angmax);
+                if (lo, hi) != (b.angmin.to_radians(), b.angmax.to_radians()) {
+                    // The reader restores the source limits from ext while
+                    // the written limits are unchanged.
+                    metadata::ext_mut(&mut doc, id)["angmin"] = json!(b.angmin);
+                    metadata::ext_mut(&mut doc, id)["angmax"] = json!(b.angmax);
+                    // A side at or beyond ±360 degrees was unconstrained and
+                    // stays so; one strictly between 90 and 360 is tightened.
+                    if (-360.0 < b.angmin && b.angmin < -90.0)
+                        || (90.0 < b.angmax && b.angmax < 360.0)
+                    {
+                        warnings.push(
+                            &codes::EMIT_SIENNA.value_substituted,
+                            format!(
+                                "line {id}: angle difference limits [{}, {}] degrees written as PowerSystems' bound of ±90 degrees; ext retains the source limits",
+                                b.angmin, b.angmax
+                            ),
+                        );
+                    }
+                }
+                row["angle_limits"] = minmax(lo, hi);
+            } else {
+                row["angle_limits"] = minmax(b.angmin.to_radians(), b.angmax.to_radians());
+            }
             push(&mut doc, "Line", row);
         }
     }
@@ -1210,6 +1338,9 @@ pub(super) fn write_document(
     let original_generators = generators::by_id(original);
     for g in net.generators() {
         let id = ids.get(g.uid.as_deref());
+        if let Some(written) = written.as_deref_mut() {
+            written.generators.push(id);
+        }
         metadata::record(&mut doc, id, g, &["uid", "vg", "caps"])?;
         if (g.vg - bus_by_id[&g.bus].vm).abs() > 1e-12 || g.caps.iter().flatten().any(|x| *x != 0.0)
         {
@@ -1264,16 +1395,33 @@ pub(super) fn write_document(
     {
         warnings.push(&codes::EMIT_SIENNA.value_defaulted,"required Line sending-terminal flow fields use zero when no solved flow is supplied; ext marks those values as unavailable");
     }
-    for b in net.branches() {
-        if !b.rating_sets.is_empty() {
-            warnings.push(&codes::EMIT_SIENNA.field_dropped, "named branch rating sets are retained in ext without native Sienna constraint semantics");
-        }
+    let branches_with_rating_sets = net
+        .branches()
+        .iter()
+        .filter(|b| !b.rating_sets.is_empty())
+        .count();
+    if branches_with_rating_sets > 0 {
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!(
+                "{branches_with_rating_sets} branch(es) carry named rating sets; \
+                 they are retained in ext without native Sienna constraint semantics"
+            ),
+        );
     }
-    for transformer in net.transformers_3w() {
-        if (0..3).any(|i| !transformer.winding_rating_sets(i).is_empty()) {
-            warnings.push(&codes::EMIT_SIENNA.field_dropped,
-                "named three-winding rating sets are retained in ext without native Sienna constraint semantics");
-        }
+    let transformers_with_rating_sets = net
+        .transformers_3w()
+        .iter()
+        .filter(|transformer| (0..3).any(|i| !transformer.winding_rating_sets(i).is_empty()))
+        .count();
+    if transformers_with_rating_sets > 0 {
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!(
+                "{transformers_with_rating_sets} three-winding transformer(s) carry named winding rating sets; \
+                 they are retained in ext without native Sienna constraint semantics"
+            ),
+        );
     }
     let extras = net
         .transformers_3w()
@@ -1535,7 +1683,7 @@ mod tests {
         assert_eq!(back.branches()[0].rate_a, f64::INFINITY);
         net.branches_mut()[0].rate_a = 100.0;
         net.branches_mut()[0].r = f64::NAN;
-        assert!(write_document(&net, 4, None).is_err());
+        assert!(write_document(&net, 4, None, false, None).is_err());
     }
 
     #[test]

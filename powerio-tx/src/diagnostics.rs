@@ -280,6 +280,8 @@ pub mod codes {
             "a PyPSA bus name collides with another and was keyed by its numeric id";
         READ_PYPSA_THERMAL_BOUND_ZERO = "READ.PYPSA.THERMAL_BOUND_ZERO", Warning,
             "a non-extendable PyPSA line or transformer states s_nom * s_max_pu = 0, a zero flow bound";
+        READ_PYPSA_VALUE_DEFAULTED = "READ.PYPSA.VALUE_DEFAULTED", Warning,
+            "a PyPSA value the folder leaves out was read at PyPSA's own default";
 
         READ_POWERWORLD_VALUE_DEFAULTED = "READ.POWERWORLD.VALUE_DEFAULTED", Warning,
             "a PowerWorld field this binary vintage does not locate was defaulted";
@@ -334,6 +336,8 @@ pub mod codes {
             "Sienna data is retained in a module extension but has no typed electrical interpretation";
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
+        READ_SURGE_LEGACY_LAYOUT = "READ.SURGE.LEGACY_LAYOUT", Warning,
+            "a Surge document in the shunt or branch charging layout PowerIO 0.12.4 and earlier wrote was read with that layout's meaning";
 
         // READ.RAVENS: the balanced MG-RAVENS profile.
         READ_RAVENS_VALUE_DEFAULTED = "READ.RAVENS.VALUE_DEFAULTED", Warning,

@@ -104,7 +104,7 @@ typedef struct PioVector PioVector;
 /**
  * Patch number of the PowerIO release this header was generated from.
  */
-#define PIO_VERSION_PATCH 4
+#define PIO_VERSION_PATCH 5
 
 /**
  * Borrowed UTF-8 bytes. The bytes need not end in NUL.
@@ -6752,6 +6752,16 @@ PioStringView pio_emit_result_layout(const PioEmitResult *result);
  * Pointers and handles must satisfy the crate-level safety requirements.
  */
 PioStringView pio_emit_result_fidelity(const PioEmitResult *result);
+
+/**
+ * The element map as JSON: which written row each bus, branch, and
+ * generator became. An empty view when the emission recorded no map (a
+ * retained source echo, or a target whose writer records none).
+ *
+ * # Safety
+ * Pointers and handles must satisfy the crate-level safety requirements.
+ */
+PioStringView pio_emit_result_element_map(const PioEmitResult *result);
 
 /**
  *

@@ -1522,6 +1522,27 @@ mod tests {
     }
 
     #[test]
+    fn disconnected_terminals_take_available_equipment_out_of_service() {
+        let mut output = write::write_cgmes(&network(), CgmesVersion::V3_0).unwrap();
+        output.files.retain(|(name, _)| !name.ends_with("_SV.xml"));
+        let ssh = output
+            .files
+            .iter_mut()
+            .find(|(name, _)| name.ends_with("_SSH.xml"))
+            .map(|(_, xml)| xml)
+            .unwrap();
+        assert!(ssh.contains("<cim:Equipment.inService>true</cim:Equipment.inService>"));
+        *ssh = ssh.replace(
+            "<cim:ACDCTerminal.connected>true</cim:ACDCTerminal.connected>",
+            "<cim:ACDCTerminal.connected>false</cim:ACDCTerminal.connected>",
+        );
+        let parsed = read::read_cgmes_documents(output.files, Some("open-terminals")).unwrap();
+        assert!(!parsed.network.loads()[0].in_service);
+        assert!(!parsed.network.generators()[0].in_service);
+        assert!(!parsed.network.branches()[0].in_service);
+    }
+
+    #[test]
     fn sv_status_overrides_ssh_and_round_trips() {
         let mut network = detailed_network();
         network.loads_mut()[0].in_service = false;

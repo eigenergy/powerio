@@ -469,3 +469,183 @@ fn a_disabled_secondary_shunt_stops_charging_its_transformer() {
         );
     }
 }
+
+// #921: a zero-tap branch across two voltage levels and an unconstrained
+// angle limit, as PowerSystems.jl checks them when it builds a System.
+const CASE2KV: &str = "function mpc = case2kv
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+	1	3	0	0	0	0	1	1.0	0	230	1	1.1	0.9;
+	2	1	50	10	0	0	1	1.0	0	115	1	1.1	0.9;
+];
+mpc.gen = [
+	1	50	0	300	-300	1.0	100	1	250	0;
+];
+mpc.branch = [
+	1	2	0.005	0.05	0	200	200	200	0	0	1	-360	360;
+];
+";
+
+fn powersystems_rows<'a>(doc: &'a serde_json::Value, kind: &str) -> Vec<&'a serde_json::Value> {
+    doc["data"]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["__metadata__"]["type"] == kind)
+        .collect()
+}
+
+#[test]
+fn powersystems_writes_a_branch_across_voltage_levels_as_a_tap_transformer() {
+    let source = Source::from_memory("case2kv.m", CASE2KV.as_bytes().to_vec()).unwrap();
+    let module = powerio_tx::parse(source).unwrap();
+    let out = emit_value(module.value(), TargetFormat::PowerSystemsJson).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(powersystems_rows(&doc, "Line").len(), 0);
+    let tr = powersystems_rows(&doc, "TapTransformer");
+    assert_eq!(tr.len(), 1);
+    assert_eq!(tr[0]["tap"], 1.0);
+    assert_eq!(tr[0]["base_voltage_primary"], 230.0);
+    assert_eq!(tr[0]["base_voltage_secondary"], 115.0);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.SIENNA.ELEMENT_RELABELED"
+                && d.message().contains("TapTransformer")),
+        "{:?}",
+        out.render_diagnostics()
+    );
+    // The PowerSystems round trip restores the zero-tap branch.
+    let recovered =
+        powerio_tx::parse(Source::from_memory("system.json", out.text.into_bytes()).unwrap())
+            .unwrap();
+    let (before, after) = (
+        &module.value().branches()[0],
+        &recovered.value().branches()[0],
+    );
+    assert!(after.tap.abs() < f64::EPSILON);
+    assert!(!after.is_transformer());
+    assert!((after.r - before.r).abs() < 1e-12 && (after.x - before.x).abs() < 1e-12);
+    assert_eq!((after.angmin, after.angmax), (-360.0, 360.0));
+    // The SiennaSchemas writer keeps the branch a Line.
+    let sienna = emit_value(module.value(), TargetFormat::SiennaJson { version: 4 }).unwrap();
+    let sienna: serde_json::Value = serde_json::from_str(&sienna.text).unwrap();
+    assert_eq!(sienna["components"]["Line"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn powersystems_retained_edit_to_tap_one_keeps_the_tap() {
+    let source = Source::from_memory("case2kv.m", CASE2KV.as_bytes().to_vec()).unwrap();
+    let module = powerio_tx::parse(source).unwrap();
+    let out = emit_value(module.value(), TargetFormat::PowerSystemsJson).unwrap();
+    let mut module =
+        powerio_tx::parse(Source::from_memory("system.json", out.text.into_bytes()).unwrap())
+            .unwrap();
+    assert!(module.value().branches()[0].tap.abs() < f64::EPSILON);
+    // A deliberate tap of 1 makes the branch a transformer, so the writer no
+    // longer marks it, and the retained original must not bring the marker back.
+    module.value_mut().branches_mut()[0].tap = 1.0;
+    let edited = emit_module(&module, TargetFormat::PowerSystemsJson).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&edited.text).unwrap();
+    assert!(
+        doc["ext"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .all(|(_, ext)| ext["org.eigenergy.powerio"]
+                .get("voltage_level_line")
+                .is_none()),
+        "{}",
+        edited.text
+    );
+    let recovered =
+        powerio_tx::parse(Source::from_memory("system.json", edited.text.into_bytes()).unwrap())
+            .unwrap();
+    assert!((recovered.value().branches()[0].tap - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn powersystems_writes_unconstrained_angle_limits_as_its_unconstrained_bound() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data");
+    let module = powerio_tx::parse(Source::open(root.join("case9.m")).unwrap()).unwrap();
+    let out = emit_value(module.value(), TargetFormat::PowerSystemsJson).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let lines = powersystems_rows(&doc, "Line");
+    assert_eq!(lines.len(), 9);
+    for line in &lines {
+        // PowerSystems takes a limit beyond 3 * pi/2 to be in degrees.
+        assert_eq!(
+            line["angle_limits"],
+            serde_json::json!({"min": -std::f64::consts::FRAC_PI_2, "max": std::f64::consts::FRAC_PI_2})
+        );
+    }
+    // Unconstrained limits are not reported as a change.
+    assert!(
+        !out.diagnostics
+            .iter()
+            .any(|d| d.message().contains("angle difference limits")),
+        "{:?}",
+        out.render_diagnostics()
+    );
+    let recovered =
+        powerio_tx::parse(Source::from_memory("system.json", out.text.into_bytes()).unwrap())
+            .unwrap();
+    for b in recovered.value().branches() {
+        assert_eq!((b.angmin, b.angmax), (-360.0, 360.0));
+    }
+}
+
+#[test]
+fn powersystems_angle_limits_keep_tight_limits_and_report_clamped_ones() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data");
+    let module = powerio_tx::parse(Source::open(root.join("case9.m")).unwrap()).unwrap();
+    let mut net = module.value().clone();
+    net.branches_mut()[0].angmin = -30.0;
+    net.branches_mut()[0].angmax = 30.0;
+    net.branches_mut()[1].angmin = -120.0;
+    net.branches_mut()[1].angmax = 45.0;
+    let out = emit_value(&net, TargetFormat::PowerSystemsJson).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let lines = powersystems_rows(&doc, "Line");
+    let deg = f64::to_radians;
+    assert_eq!(
+        lines[0]["angle_limits"],
+        serde_json::json!({"min": deg(-30.0), "max": deg(30.0)})
+    );
+    assert_eq!(
+        lines[1]["angle_limits"],
+        serde_json::json!({"min": -std::f64::consts::FRAC_PI_2, "max": deg(45.0)})
+    );
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.SIENNA.VALUE_SUBSTITUTED"
+                && d.message().contains("angle difference limits [-120, 45]")),
+        "{:?}",
+        out.render_diagnostics()
+    );
+    let mut doc = doc;
+    let recovered = powerio_tx::parse(
+        Source::from_memory("system.json", serde_json::to_vec(&doc).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let b = recovered.value().branches();
+    assert!((b[0].angmin + 30.0).abs() < 1e-12 && (b[0].angmax - 30.0).abs() < 1e-12);
+    assert_eq!((b[1].angmin, b[1].angmax), (-120.0, 45.0));
+    // An edited native limit wins over the retained source limit.
+    let line = doc["data"]["components"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .filter(|c| c["__metadata__"]["type"] == "Line")
+        .nth(1)
+        .unwrap();
+    line["angle_limits"]["min"] = serde_json::json!(-1.0);
+    let edited = powerio_tx::parse(
+        Source::from_memory("system.json", serde_json::to_vec(&doc).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let b = &edited.value().branches()[1];
+    assert!((b.angmin - (-1.0f64).to_degrees()).abs() < 1e-12);
+}

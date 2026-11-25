@@ -104,11 +104,11 @@ pub const IR_SCHEMA_NAME: &str = "pio-ir";
 /// The constant names a release at or after the workspace version, and
 /// equals it in a published release. `producer.version` names the software
 /// that wrote a document, which need not be PowerIO.
-pub const IR_VERSION: &str = "0.12.4";
+pub const IR_VERSION: &str = "0.12.5";
 
 /// The `$id` of the schema describing this build's document:
 /// `pio-ir/<IR_VERSION>/schema.json` beneath `https://powerio.dev/schema/`.
-pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.4/schema.json";
+pub const IR_SCHEMA_ID: &str = "https://powerio.dev/schema/pio-ir/0.12.5/schema.json";
 
 /// Loss-preserving PSS/E transient-stability parsing and explicit study pairing.
 pub use powerio_tx::dynamic::{
@@ -157,11 +157,11 @@ pub use powerio_core::electrical;
 /// keep ordinary callers out of the component crate paths.
 pub use powerio_core::{
     ArtifactPath, ComponentId, Destination, Diagnostic, DiagnosticCode, DiagnosticId,
-    DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, EmitResult,
-    EmittedOutput, Fidelity, FormatId, HistoryEntry, HistoryId, HistoryKind, MemoryArtifact,
-    OutputLayout, PioModule, Producer, Scenario, ScenarioId, ScenarioSet, Source, SourceBuffer,
-    SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan, SourceTree,
-    SourceTreeLimits, StagedEdit, TimePoint, TimeSeries,
+    DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, ElementMap,
+    EmitResult, EmittedOutput, Fidelity, FormatId, HistoryEntry, HistoryId, HistoryKind,
+    MemoryArtifact, OutputLayout, PioModule, Producer, RowRef, Scenario, ScenarioId, ScenarioSet,
+    Source, SourceBuffer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
+    SourceTree, SourceTreeLimits, StagedEdit, TimePoint, TimeSeries,
 };
 
 /// The facade error covers source acquisition, routing, stored modules, and
@@ -1739,6 +1739,29 @@ mod tests {
         let module =
             parse(powerio_core::Source::open(dir.path()).unwrap()).expect("snapshot parses");
         assert_value_type(&module, "powerio.BalancedNetwork");
+    }
+
+    #[test]
+    fn a_pypsa_snapshot_with_bus_state_parses_to_a_balanced_network() {
+        // The writer's single case folder (#920): one snapshot whose only
+        // series siblings are the bus voltage state is one network with that
+        // state, not a one point operating point series.
+        let dir = pypsa_folder(&[
+            ("snapshots.csv", ",snapshot\n0,now\n"),
+            ("buses-v_mag_pu.csv", "snapshot,B1,B2\nnow,1.02,0.99\n"),
+            (
+                "buses-v_ang.csv",
+                "snapshot,B1,B2\nnow,0.0,-0.017453292519943295\n",
+            ),
+        ]);
+        let module =
+            parse(powerio_core::Source::open(dir.path()).unwrap()).expect("snapshot parses");
+        assert_value_type(&module, "powerio.BalancedNetwork");
+        let PioValue::BalancedNetwork(network) = module.value() else {
+            unreachable!();
+        };
+        assert!((network.buses()[0].vm - 1.02).abs() < 1e-12);
+        assert!((network.buses()[1].va + 1.0).abs() < 1e-9);
     }
 
     #[test]

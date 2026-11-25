@@ -188,14 +188,21 @@ fn warning_level(segment: &str, leg: Leg) -> Option<(Level, String)> {
         "NAME_REMAPPED" => (Level::Restated, "name"),
         "RATING_SET_REMAPPED" => (Level::Restated, "rating set"),
         "ELEMENT_RELABELED" => (Level::Restated, "element"),
-        "VALUE_DEFAULTED" | "VALUE_SUBSTITUTED" | "VALUE_APPROXIMATED" | "VALUE_TRUNCATED"
-        | "VALUE_COLLAPSED" | "VALUE_INFERRED" | "VALUE_UNSUPPORTED" | "VALUE_CONFLICT" => {
-            (Level::Approximate, "value")
-        }
+        // The three-phase pandapower reader's own adjustments count as values.
+        "VALUE_DEFAULTED"
+        | "VALUE_SUBSTITUTED"
+        | "VALUE_APPROXIMATED"
+        | "VALUE_TRUNCATED"
+        | "VALUE_COLLAPSED"
+        | "VALUE_INFERRED"
+        | "VALUE_UNSUPPORTED"
+        | "VALUE_CONFLICT"
+        | "PANDAPOWER_APPROXIMATED"
+        | "PANDAPOWER_NONPASSIVE_CORRECTION" => (Level::Approximate, "value"),
         "NOT_A_NUMBER" => (Level::Approximate, "nonfinite"),
         "REFERENCE_MISSING" => (Level::Approximate, "reference"),
         "SECTION_UNSUPPORTED" => (Level::Dropped, "section"),
-        "TABLE_UNSUPPORTED" => (Level::Dropped, "table"),
+        "TABLE_UNSUPPORTED" | "PANDAPOWER_TABLE_UNSUPPORTED" => (Level::Dropped, "table"),
         "RECORD_IGNORED" => (Level::Dropped, "record"),
         "RETAINED_SOURCE_ONLY" => (Level::Dropped, "source only"),
         "DOWNGRADED" => (Level::Dropped, "downgraded"),
@@ -212,6 +219,9 @@ fn warning_level(segment: &str, leg: Leg) -> Option<(Level, String)> {
         // Untyped source objects pass through the neutral reduction
         // unchanged; they stay source only.
         "KRON_UNTYPED_RETAINED" => (Level::Dropped, "untyped"),
+        // An out-of-service pandapower element is kept energized.
+        "PANDAPOWER_OUT_OF_SERVICE" => (Level::Approximate, "status"),
+        "PANDAPOWER_ELEMENT_UNSUPPORTED" => (Level::Dropped, "element"),
         _ => {
             let stem = segment
                 .strip_suffix("_DROPPED")
@@ -1790,6 +1800,17 @@ const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 9] = [
     ),
 ];
 
+/// The read only distribution sources: a source row each and no target
+/// column, as [`read_only`] states a transmission one. Each row name, its one
+/// fixture's label, the token the fixture is declared as and the fixture. The
+/// row converts the vendored fixture itself, since the format has no writer.
+const DISTRIBUTION_READ_ONLY_SOURCES: [(&str, &str, &str, &str); 1] = [(
+    "pandapower JSON (three-phase)",
+    "pandapower three-phase",
+    "pandapower-json",
+    "dist/pandapower/tiny_3ph.json",
+)];
+
 struct DistributionPayload {
     label: &'static str,
     network: MulticonductorNetwork,
@@ -1890,9 +1911,40 @@ fn run_distribution_matrix() -> Matrix {
         cells.push(row);
     }
 
+    let mut sources = formats.clone();
+    for (name, label, token, fixture) in DISTRIBUTION_READ_ONLY_SOURCES {
+        let payload = read_only_distribution_payload(label, token, fixture);
+        let mut source_cell = Cell::default();
+        match &payload {
+            Ok(payload) => source_cell.record(payload.label, Leg::Source, &payload.parse_findings),
+            Err(err) => source_cell.failures.push(err.clone()),
+        }
+        source_cells.push(source_cell);
+        let mut row = Vec::new();
+        for target in &DISTRIBUTION_FORMATS {
+            let mut cell = Cell::default();
+            match &payload {
+                Ok(payload) => {
+                    validate_distribution_pair(payload, name, *target, false, &mut cell);
+                    let expected = BTreeSet::from([label]);
+                    if cell.cases != expected {
+                        cell.failures.push(format!(
+                            "incomplete fixture coverage: expected {expected:?}, checked {:?}",
+                            cell.cases
+                        ));
+                    }
+                }
+                Err(err) => cell.failures.push(err.clone()),
+            }
+            row.push(cell);
+        }
+        sources.push(name);
+        cells.push(row);
+    }
+
     let groups = vec![("into a distribution format", (0..formats.len()).collect())];
     Matrix {
-        sources: formats.clone(),
+        sources,
         targets: formats,
         groups,
         source_cells,
@@ -1919,6 +1971,62 @@ fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionP
             })
         })
         .collect()
+}
+
+/// A read only source's one payload: the vendored fixture parsed through the
+/// facade, which routes the token to the reader of the network the document
+/// states. The canonical legs start from the value without its source format.
+fn read_only_distribution_payload(
+    label: &'static str,
+    token: &str,
+    fixture: &str,
+) -> Result<DistributionPayload, String> {
+    let text =
+        std::fs::read_to_string(data(fixture)).map_err(|err| format!("read {fixture}: {err}"))?;
+    let parsed = load_read_only_distribution_case(&data(fixture), token)
+        .map_err(|err| format!("parse {fixture}: {err}"))?;
+    let mut network = parsed.network;
+    *network.source_format_mut() = None;
+    Ok(DistributionPayload {
+        label,
+        network,
+        module: parsed.module,
+        text,
+        parse_findings: parsed.diagnostics,
+    })
+}
+
+fn load_read_only_distribution_case(path: &Path, token: &str) -> Result<DistParsed, String> {
+    let format = powerio_core::FormatId::new(token).map_err(|err| err.to_string())?;
+    let source = powerio_core::Source::open(path)
+        .map_err(|err| err.to_string())?
+        .with_format(format);
+    let module = powerio::parse(source).map_err(|err| err.to_string())?;
+    module
+        .try_map_value(|value| match value {
+            powerio::PioValue::MulticonductorNetwork(network) => Ok(network),
+            other => Err(format!(
+                "read as {}, not a multiconductor network",
+                other.type_name()
+            )),
+        })
+        .map(dist_module_to_parsed)
+}
+
+/// A read only source has no target column. Its module still echoes the
+/// retained source byte for byte under its own token.
+#[test]
+fn read_only_distribution_sources_echo_their_bytes() {
+    for (_, label, token, fixture) in DISTRIBUTION_READ_ONLY_SOURCES {
+        let parsed = load_read_only_distribution_case(&data(fixture), token).unwrap();
+        let echo =
+            emit_distribution_module(&parsed.module, DistTargetFormat::PandapowerJson).unwrap();
+        assert_eq!(
+            echo.text,
+            std::fs::read_to_string(data(fixture)).unwrap(),
+            "{label}"
+        );
+    }
 }
 
 /// The canonical write and readback legs start from the electrical value,
@@ -1998,6 +2106,13 @@ fn validate_distribution_emission(
             let after = source_equivalents::contract_source_pairs(&parsed.network);
             let before = source_equivalents::contract_transformer_pairs(&before);
             let after = source_equivalents::contract_transformer_pairs(&after);
+            let after = contract_dss_admittance_shunts(
+                after,
+                target.target,
+                conversion,
+                payload.label,
+                cell,
+            );
             source_equivalents::assert_source_constraints(
                 &before,
                 &after,
@@ -2131,7 +2246,54 @@ fn distribution_target_projection(
                 .into_iter()
                 .map(|problem| format!("{label}: {problem}")),
         );
+        if label == "pandapower three-phase" {
+            // A measured, documented loss of this fixture: the zero-sequence
+            // correction is a full (Y/3) * ones(3, 3) matrix.
+            let name = "trafo_0_zero_sequence_lv";
+            if let Some(shunt) = held.shunts_mut().iter_mut().find(|s| s.name == name) {
+                let prefix = format!("shunt {name}: off-diagonal susceptance");
+                if !emission.diagnostics.iter().any(|d| {
+                    d.code() == "EMIT.RAVENS_DIST.VALUE_COLLAPSED"
+                        && d.message().starts_with(&prefix)
+                }) {
+                    cell.failures.push(format!(
+                        "{label}: missing named off-diagonal shunt loss finding for {name}"
+                    ));
+                }
+                for matrix in [&mut shunt.g, &mut shunt.b] {
+                    for (i, row) in matrix.iter_mut().enumerate() {
+                        for (j, value) in row.iter_mut().enumerate() {
+                            if i != j {
+                                *value = 0.0;
+                            }
+                        }
+                    }
+                }
+                cell.verification_notes.push((label, format!("known RAVENS projection: shunt {name} off-diagonal G and B -> 0; the finding names the susceptance only; exact projected diagonal checked; electrical equivalence is not claimed")));
+            }
+            let name = "asymmetric_sgen_0";
+            if let Some(generator) = held.generators_mut().iter_mut().find(|g| g.name == name) {
+                let prefix = format!("generator {name}: unequal per-phase active power");
+                if !emission.diagnostics.iter().any(|d| {
+                    d.code() == "EMIT.RAVENS_DIST.VALUE_COLLAPSED"
+                        && d.message().starts_with(&prefix)
+                }) {
+                    cell.failures.push(format!(
+                        "{label}: missing named per-phase power loss finding for {name}"
+                    ));
+                }
+                let stated = generator.p_nom.clone();
+                balance_phases(&mut generator.p_nom);
+                balance_phases(&mut generator.q_nom);
+                cell.verification_notes.push((label, format!("known RAVENS projection: generator {name} per-phase P {stated:?} -> {:?}; exact projected values checked; electrical equivalence is not claimed", generator.p_nom)));
+            }
+        }
     }
+    // Fixed by #863: the DSS writer now splits a generator with unequal
+    // phase powers into one single phase generator per phase, the same
+    // allowance `core_survives` gives a split load (#266). `held` needs no
+    // adjustment for this target; its stated per-phase powers are compared
+    // exactly against the split result.
     if target == DistTargetFormat::Dss && label == "BMOPF IEEE 13" {
         // In these two buses the ungrounded named return conductor is bus-local;
         // DSS's diagnosed n -> 2 rename is bijective (the other conductor is
@@ -2193,6 +2355,121 @@ fn distribution_target_projection(
         }
     }
     held
+}
+
+/// Every phase takes the mean of the stated phase values.
+fn balance_phases(values: &mut [f64]) {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    values.fill(mean);
+}
+
+/// The DSS writer states a full shunt admittance matrix as phase to phase
+/// branches and diagonal reactors under one `_pio_shunt_<k>_` prefix, which
+/// its `EMIT.DSS.IMPEDANCE_EQUIVALENT` finding names. For this fixture the
+/// readback's branches and reactors are folded back into the one shunt
+/// matrix they state, so the shunt values are compared entry for entry. The
+/// fold is exact algebra, never a tolerance.
+fn contract_dss_admittance_shunts(
+    mut network: MulticonductorNetwork,
+    target: DistTargetFormat,
+    emission: &TextEmission,
+    label: &'static str,
+    cell: &mut Cell,
+) -> MulticonductorNetwork {
+    use num_complex::Complex64;
+
+    if target != DistTargetFormat::Dss || label != "pandapower three-phase" {
+        return network;
+    }
+    let name = "trafo_0_zero_sequence_lv";
+    let head = format!("shunt {name}: full admittance");
+    let Some(prefix) = emission.diagnostics.iter().find_map(|d| {
+        (d.code() == "EMIT.DSS.IMPEDANCE_EQUIVALENT" && d.message().starts_with(&head))
+            .then(|| d.message().split("under prefix ").nth(1))
+            .flatten()
+            .and_then(|rest| rest.split(';').next())
+            .map(str::to_owned)
+    }) else {
+        cell.failures.push(format!(
+            "{label}: missing named full admittance equivalent finding for {name}"
+        ));
+        return network;
+    };
+    let terminals = ["1", "2", "3"].map(str::to_owned);
+    let index = |terminal: &str| terminals.iter().position(|t| t == terminal);
+    let mut matrix = [[Complex64::new(0.0, 0.0); 3]; 3];
+    let mut bus = None;
+    let mut folded = 0;
+    for line in network
+        .lines()
+        .iter()
+        .filter(|l| l.name.starts_with(&format!("{prefix}pair_")))
+    {
+        let code = network
+            .line_codes()
+            .iter()
+            .find(|code| code.name.eq_ignore_ascii_case(&line.linecode));
+        let (Some(from), Some(to), Some(code)) = (
+            line.terminal_map_from.first().and_then(|t| index(t)),
+            line.terminal_map_to.first().and_then(|t| index(t)),
+            code,
+        ) else {
+            cell.failures
+                .push(format!("{label}: unreadable shunt branch {}", line.name));
+            continue;
+        };
+        if line.bus_from != line.bus_to || line.terminal_map_from.len() != 1 {
+            cell.failures.push(format!(
+                "{label}: shunt branch {} is not a one-bus pair",
+                line.name
+            ));
+            continue;
+        }
+        let z = Complex64::new(code.r_series[0][0], code.x_series[0][0]) * line.length;
+        let branch = 1.0 / z;
+        matrix[from][from] += branch;
+        matrix[to][to] += branch;
+        matrix[from][to] -= branch;
+        matrix[to][from] -= branch;
+        bus = Some(line.bus_from.clone());
+        folded += 1;
+    }
+    for shunt in network
+        .shunts()
+        .iter()
+        .filter(|s| s.name.starts_with(&format!("{prefix}diagonal_")))
+    {
+        let Some(at) = shunt.terminal_map.first().and_then(|t| index(t)) else {
+            cell.failures
+                .push(format!("{label}: unreadable shunt reactor {}", shunt.name));
+            continue;
+        };
+        matrix[at][at] += Complex64::new(shunt.g[0][0], shunt.b[0][0]);
+        bus = Some(shunt.bus.clone());
+        folded += 1;
+    }
+    let Some(bus) = bus else {
+        cell.failures
+            .push(format!("{label}: no `{prefix}` objects in the readback"));
+        return network;
+    };
+    network
+        .lines_mut()
+        .retain(|l| !l.name.starts_with(&format!("{prefix}pair_")));
+    network
+        .shunts_mut()
+        .retain(|s| !s.name.starts_with(&format!("{prefix}diagonal_")));
+    let g = matrix.map(|row| row.map(|v| v.re).to_vec()).to_vec();
+    let b = matrix.map(|row| row.map(|v| v.im).to_vec()).to_vec();
+    network.shunts_mut().push(powerio_dist::DistShunt::new(
+        name,
+        bus,
+        terminals.to_vec(),
+        g,
+        b,
+    ));
+    cell.verification_notes.push((label, format!("equivalent DSS shunt: {folded} `{prefix}` branches and reactors folded back into shunt {name}; every matrix entry checked")));
+    network
 }
 
 /// Retain each winding's original orientation and the grounding identity of
@@ -2320,11 +2597,12 @@ fn parse_distribution_text(
 ///
 /// Source-equivalent series pairs are already contracted after checking their
 /// exact cancellation and exclusive internal nodes. Everything else must match,
-/// with one allowance: a dss target splits a load whose
-/// phases carry different power into one single phase `Load` per phase (#266),
-/// because a dss `Load` divides its `kw` evenly and cannot state the profile
-/// otherwise. That grows the object count and nothing else — the power the
-/// loads carry is compared exactly, on this leg as on every other.
+/// with one allowance: a dss target splits a load, or a generator (#863),
+/// whose phases carry different power into one single phase record per phase
+/// (#266), because a dss `Load` or `Generator` divides its `kw` evenly and
+/// cannot state the profile otherwise. That grows the object count and
+/// nothing else, the power the loads and generators carry is compared
+/// exactly, on this leg as on every other.
 fn core_survives(
     before: &DistributionCore,
     after: &DistributionCore,
@@ -2336,7 +2614,7 @@ fn core_survives(
     target == DistTargetFormat::Dss
         && after.loads >= before.loads
         && after.buses == before.buses
-        && after.generators == before.generators
+        && after.generators >= before.generators
         && after.shunts == before.shunts
         && after.load_p == before.load_p
         && after.load_q == before.load_q

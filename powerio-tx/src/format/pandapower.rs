@@ -6,10 +6,13 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use powerio_core::__implementation::ElementMapBuilder;
+use powerio_core::RowRef;
 use serde_json::{Map, Value};
 
 use super::{
-    TextEmission, bus_kv, finish, jnum, set_bus_kind, warn_extra_branch_rating_sets, zbase,
+    TargetFormat, TextEmission, bus_kv, element_map, finish, jnum, set_bus_kind,
+    warn_extra_branch_rating_sets, zbase,
 };
 use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
 use crate::diagnostics::{Diagnostics, codes};
@@ -977,10 +980,18 @@ fn warn_nonempty_table(
     Ok(())
 }
 
+/// Write `net` as a pandapower JSON network.
+///
+/// The element map names, for each bus, branch, and generator, the frame row
+/// that carries it: buses in `bus` keyed on the pandapower index label (the
+/// bus number less one), branches in `line` or `trafo`, generators in `gen`.
+/// Row indices are positions in the frame as written. A branch row's
+/// `from_bus`/`hv_bus` is always the network's `from` end, so no row flips.
 #[must_use]
 pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
     warn_pandapower_writer_losses(net, &mut warnings);
+    let mut map = element_map::builder(net, TargetFormat::PandapowerJson);
 
     let mut object = Map::new();
     // The written vn_kv per bus, shared by every frame that rebases impedances
@@ -990,16 +1001,16 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
         .iter()
         .map(|b| (b.id, written_kv(b.base_kv)))
         .collect();
-    let (line, trafo, charging) = branch_frames(net, &kv_of, &mut warnings);
+    let (line, trafo, charging) = branch_frames(net, &kv_of, &mut map, &mut warnings);
     warn_pandapower_charging_shunts(charging.len(), &mut warnings);
-    object.insert("bus".into(), bus_frame(net, &mut warnings));
+    object.insert("bus".into(), bus_frame(net, &mut map, &mut warnings));
     object.insert("res_bus".into(), res_bus_frame(net, &mut warnings));
     object.insert("load".into(), load_frame(net, &mut warnings));
     object.insert(
         "shunt".into(),
         shunt_frame(net, &charging, &kv_of, &mut warnings),
     );
-    object.insert("gen".into(), gen_frame(net, &mut warnings));
+    object.insert("gen".into(), gen_frame(net, &mut map, &mut warnings));
     if net.generators().iter().any(|g| g.qg != 0.0) {
         object.insert("res_gen".into(), res_gen_frame(net, &mut warnings));
     }
@@ -1032,7 +1043,7 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> TextEmission {
     );
     root.insert("_class".into(), Value::String("pandapowerNet".into()));
     root.insert("_object".into(), Value::Object(object));
-    finish(&F, root, warnings)
+    finish(&F, root, warnings).with_element_map(map)
 }
 
 fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
@@ -1140,7 +1151,11 @@ fn warn_pandapower_charging_shunts(count: usize, warnings: &mut Diagnostics) {
     }
 }
 
-fn bus_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
+fn bus_frame(
+    net: &BalancedNetwork,
+    map: &mut ElementMapBuilder,
+    warnings: &mut Diagnostics,
+) -> Value {
     let columns = [
         "name",
         "vn_kv",
@@ -1151,9 +1166,26 @@ fn bus_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         "min_vm_pu",
         "max_vm_pu",
     ];
+    // `pp_bus` folds bus 0 onto bus 1's label; a label two rows share keys
+    // neither of them, so the map never names an ambiguous key.
+    let label = |id: BusId| id.0.saturating_sub(1);
+    let mut label_count: HashMap<usize, usize> = HashMap::new();
+    for b in net.buses() {
+        *label_count.entry(label(b.id)).or_default() += 1;
+    }
     let mut index = Vec::with_capacity(net.buses().len());
     let mut data = Vec::with_capacity(net.buses().len());
-    for b in net.buses() {
+    for (position, b) in net.buses().iter().enumerate() {
+        let row = RowRef::new("bus", position);
+        let written = label(b.id);
+        map.bus(
+            position,
+            if label_count[&written] == 1 {
+                row.with_key(written.to_string())
+            } else {
+                row
+            },
+        );
         index.push(pp_bus(b.id));
         data.push(vec![
             b.name.clone().map_or(Value::Null, Value::String),
@@ -1406,7 +1438,11 @@ fn shunt_frame(
     frame("shunt", &columns, index, data, warnings)
 }
 
-fn gen_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
+fn gen_frame(
+    net: &BalancedNetwork,
+    map: &mut ElementMapBuilder,
+    warnings: &mut Diagnostics,
+) -> Value {
     let columns = [
         "name",
         "bus",
@@ -1427,7 +1463,9 @@ fn gen_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let bus_kind: HashMap<BusId, BusType> = net.buses().iter().map(|b| (b.id, b.kind)).collect();
     let mut index = Vec::with_capacity(net.generators().len());
     let mut data = Vec::with_capacity(net.generators().len());
-    for g in net.generators() {
+    for (position, g) in net.generators().iter().enumerate() {
+        // The index label is the row position, so the row needs no key.
+        map.generator(position, RowRef::new("gen", data.len()));
         index.push(Value::from(data.len() as u64));
         data.push(vec![
             Value::Null,
@@ -1461,6 +1499,7 @@ fn gen_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
 fn branch_frames(
     net: &BalancedNetwork,
     kv_of: &HashMap<BusId, f64>,
+    map: &mut ElementMapBuilder,
     warnings: &mut Diagnostics,
 ) -> (Value, Value, Vec<(BusId, f64, f64, bool)>) {
     let line_columns = [
@@ -1514,7 +1553,9 @@ fn branch_frames(
     let mut trafo_data = Vec::new();
     let mut charging = Vec::new();
     let mut negative_x_trafos = 0usize;
-    for br in net.branches() {
+    let mut unrated_transformers = 0usize;
+    let mut unrated_transformer_examples = Vec::with_capacity(5);
+    for (position, br) in net.branches().iter().enumerate() {
         let v_from = *kv_of.get(&br.from).unwrap_or(&1.0);
         let v_to = *kv_of.get(&br.to).unwrap_or(&1.0);
         // pandapower refers line ohms and max_i_ka to the FROM bus voltage
@@ -1531,10 +1572,10 @@ fn branch_frames(
             {
                 value
             } else {
-                warnings.push(&F.value_substituted, format!(
-                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: pandapower requires a positive impedance base; this rating is not preserved",
-                    br.from, br.to, br.rate_a, net.base_mva()
-                ));
+                unrated_transformers += 1;
+                if unrated_transformer_examples.len() < 5 {
+                    unrated_transformer_examples.push(format!("{}-{}", br.from, br.to));
+                }
                 net.base_mva()
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
@@ -1566,6 +1607,9 @@ fn branch_frames(
             if br.x < 0.0 {
                 negative_x_trafos += 1;
             }
+            // hv_bus is always the branch's from end, whichever side has the
+            // higher voltage, so the row never flips.
+            map.branch(position, RowRef::new("trafo", trafo_data.len()), false);
             trafo_index.push(Value::from(trafo_data.len() as u64));
             trafo_data.push(vec![
                 Value::Null,
@@ -1602,6 +1646,7 @@ fn branch_frames(
                     br.from, br.to
                 ));
             }
+            map.branch(position, RowRef::new("line", line_data.len()), false);
             line_index.push(Value::from(line_data.len() as u64));
             line_data.push(vec![
                 Value::Null,
@@ -1634,6 +1679,22 @@ fn branch_frames(
                 Value::Null,
             ]);
         }
+    }
+    if unrated_transformers > 0 {
+        let examples = unrated_transformer_examples.join(", ");
+        let remaining = unrated_transformers - unrated_transformer_examples.len();
+        let remaining = if remaining > 0 {
+            format!(", and {remaining} more")
+        } else {
+            String::new()
+        };
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "sn_mva = {} substituted for {unrated_transformers} transformer(s) with no positive rate_a ({examples}{remaining}): pandapower requires a positive impedance base; these ratings are not preserved",
+                net.base_mva()
+            ),
+        );
     }
     if negative_x_trafos > 0 {
         warnings.push(&F.value_substituted, format!(
@@ -4230,9 +4291,9 @@ mod tests {
         let emitted = write_pandapower_json(&net);
         assert!(emitted.diagnostics.iter().any(|finding| {
             finding.code() == F.value_substituted.code
-                && finding
-                    .message()
-                    .contains("rate_a = inf replaced by sn_mva = 100")
+                && finding.message().contains(
+                    "sn_mva = 100 substituted for 1 transformer(s) with no positive rate_a (1-2)",
+                )
         }));
         assert!(
             !emitted
@@ -4256,6 +4317,46 @@ mod tests {
             (1.02, -5.0)
         );
         assert!((restored.network.branches()[0].rate_a - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_aggregates_unrated_transformer_substitutions() {
+        let buses = (1..=8)
+            .map(|id| test_bus(id, if id == 1 { BusType::Ref } else { BusType::Pq }))
+            .collect();
+        let mut net = test_net(buses);
+        for from in 1..=7 {
+            net.branches_mut().push(test_branch(from, from + 1, 1.05));
+        }
+
+        let emitted = write_pandapower_json(&net);
+        let findings: Vec<_> = emitted
+            .diagnostics
+            .iter()
+            .filter(|finding| finding.code() == F.value_substituted.code)
+            .collect();
+        assert_eq!(findings.len(), 1, "{:?}", emitted.render_diagnostics());
+        let message = findings[0].message();
+        assert!(
+            message
+                .contains("sn_mva = 100 substituted for 7 transformer(s) with no positive rate_a",)
+        );
+        for pair in ["1-2", "2-3", "3-4", "4-5", "5-6"] {
+            assert!(message.contains(pair), "missing {pair} in {message}");
+        }
+        assert!(
+            !message.contains("6-7"),
+            "unexpected extra example: {message}"
+        );
+        assert!(message.contains("and 2 more"), "{message}");
+
+        let trafo = written_frame(&emitted.text, "trafo");
+        assert_eq!(trafo.data.len(), 7);
+        assert!(
+            col(&trafo, "sn_mva")
+                .iter()
+                .all(|value| value.as_f64() == Some(100.0))
+        );
     }
 
     #[test]
@@ -4293,6 +4394,31 @@ mod tests {
         assert!((branch.rate_a - 250.0).abs() < 1e-9);
         assert_eq!(branch.rate_b, f64::INFINITY);
         assert_eq!(branch.rate_c, f64::INFINITY);
+    }
+
+    /// Bus 0 and bus 1 both write index label 0. The map still names each
+    /// row, keys neither, and the emission does not fail on a shared key.
+    #[test]
+    fn element_map_leaves_a_shared_bus_label_unkeyed() {
+        let net = test_net(vec![
+            test_bus(0, BusType::Pq),
+            test_bus(1, BusType::Pq),
+            test_bus(3, BusType::Pq),
+        ]);
+        let emitted = write_pandapower_json(&net);
+        let mut diagnostics = Vec::new();
+        let map = element_map::finish(emitted.element_map, &mut diagnostics)
+            .unwrap()
+            .unwrap();
+        let rows: Vec<(usize, Option<&str>)> = map
+            .bus()
+            .map(|(_, row)| {
+                let row = row.unwrap();
+                assert_eq!(row.table, "bus");
+                (row.index, row.key.as_deref())
+            })
+            .collect();
+        assert_eq!(rows, vec![(0, None), (1, None), (2, Some("2"))]);
     }
 
     #[test]

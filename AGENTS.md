@@ -181,17 +181,27 @@ release on its own.
    its platform. Only then does it stage a **draft** GitHub release with the
    five assets.
 4. A human inspects and publishes the draft. Publishing starts `python.yml`
-   (PyPI) and `crates.yml` (crates.io: `powerio-core`, `powerio-archive`,
+   (PyPI), `crates.yml` (crates.io: `powerio-core`, `powerio-archive`,
    `powerio-tx`, `powerio-dist`, `powerio-tnd`, `powerio-prob`, `powerio-matrix`, `powerio`, and
-   `powerio-cli`, in dependency order). Both deploy through the `pypi` and
-   `crates-io` environments, which wait for the maintainer's approval. A
-   rerun skips files and versions already published. A crate's first
+   `powerio-cli`, in dependency order), and `npm.yml` (npm: the
+   `wasm-pack --target web` build of `powerio-wasm` as the `powerio-wasm`
+   package, after `cargo test -p powerio-wasm` and a check that the package
+   states the release version). They deploy through the `pypi`,
+   `crates-io`, and `npm` environments, which wait for the maintainer's
+   approval. A rerun skips files and versions already published. A crate's first
    version cannot use trusted publishing, so a release that adds a crate
    runs `scripts/release-verified.py` with `--bootstrap-crate <name>`: after
    `crates.yml` fails at the new crate, it publishes that crate with the
    maintainer's local Cargo credentials and reruns the job. Then configure
    the crate's trusted publisher (repository `eigenergy/powerio`, workflow
-   `crates.yml`, environment `crates-io`).
+   `crates.yml`, environment `crates-io`). npm likewise accepts a trusted
+   publisher only for an existing package, and `npm.yml` publishes with no
+   token, so until `powerio-wasm` exists its publish job fails and names
+   `scripts/npm-bootstrap.sh vX.Y.Z`. The maintainer runs that once with a
+   local `npm login`: it publishes the tarball the workflow built (or, with
+   `--build`, one built from the tag) and prints the trusted publisher to
+   configure (repository `eigenergy/powerio`, workflow `npm.yml`,
+   environment `npm`).
 5. Publishing also runs `.github/workflows/notify-powerio-jl.yml`, which
    starts PowerIO.jl's Release workflow; its hourly schedule is the backstop.
    That workflow sets the Julia version, pins the release tarballs in
@@ -208,7 +218,8 @@ powerio-core/src              module.rs (PioModule<T>), source.rs, output.rs,
                               diagnostic.rs, codes.rs, error.rs, records.rs,
                               time_series.rs, scenario.rs, component_id.rs,
                               validation.rs (limits), bounded.rs, nonfinite.rs,
-                              cim.rs (shared CIM vocabulary, MG-RAVENS profiles)
+                              cim.rs (shared CIM vocabulary, MG-RAVENS profiles),
+                              element_map.rs (emit's element map and builder)
 powerio-tx/src                network.rs (BalancedNetwork and its tables),
                               indexed.rs, hvdc.rs, lcc.rs, normalize.rs,
                               operations.rs, dc.rs, gen_cost.rs,
@@ -303,6 +314,14 @@ docs/                         the mdBook guide, the schema archive, release note
   a distribution format), the facade metadata in `powerio/src/formats.rs`,
   and the CLI token in `FormatArg` in `powerio-cli/src/main.rs`. Format enums are nonexhaustive and bindings use
   stable names rather than integer positions.
+- **Element maps.** A balanced writer records which row each bus, branch,
+  and generator became as it writes the row: start a builder with
+  `format::element_map::builder(net, target)`, call its `bus`, `branch` (with
+  `flip`), or `generator` method with the element's module position and a
+  `RowRef`, and attach it with `TextEmission::with_element_map`. The emit
+  path finishes it and refuses two elements on one row or key. Each target's
+  test lives in `powerio/tests/element_map_<format>.rs` over the shared
+  harness in `powerio/tests/common/element_map.rs`.
 - **PowerIO IR.** `serialize` and `deserialize` move `PioModule<PioValue>`.
   Retained source bytes are not serialized. The header is `"schema": "pio-ir"`
   with `"version"` naming the release whose schema the document follows;
@@ -314,7 +333,7 @@ docs/                         the mdBook guide, the schema archive, release note
   meanings stay unchanged; older readers reject types they do not implement.
   The DTOs in `powerio/src/stored/dto.rs` define the document layout.
   Regenerate the schema named by `IR_SCHEMA_ID`, currently
-  `docs/schema/pio-ir/0.12.4/schema.json`. Every release adds its own
+  `docs/schema/pio-ir/0.12.5/schema.json`. Every release adds its own
   `pio-ir/<release>/schema.json`; `IR_VERSION` is at or after the workspace
   version and equals it in a release. Published schema files, including all
   of `pio-ir/2/`, remain byte-exact.

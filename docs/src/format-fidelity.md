@@ -73,6 +73,59 @@ PowerModels and egret compute with their own fields only: a transformer or
 switched shunt control, a remote regulated bus, and an HVDC converter's detail
 ride along for PowerIO and do not change what either tool solves.
 
+## Element maps
+
+An emission to one of seven balanced targets returns an element map: for each
+bus, branch, and generator `uid`, in module order, the row the writer wrote
+for it. The writers that record one are `matpower`, `psse`, `pandapower-json`,
+`pypsa-csv`, `surge-json`, `egret-json`, and `powersystems-json`; `serialize`
+returns the identity map over the PowerIO IR network. Rust reads it with
+`EmitResult::element_map()` (its sections through `bus()`, `branch()`, and
+`generator()`), C with `pio_emit_result_element_map`, the CLI with
+`convert --id-map PATH`, and Python as `EmitResult.id_map`. The JSON is the
+same everywhere:
+
+```json
+{"format": "surge-json", "powerio": "0.12.5",
+ "bus":    {"10": {"table": "buses", "index": 0, "key": "10"}},
+ "branch": {"10-20": {"table": "branches", "index": 0, "flip": false}},
+ "gen":    {"bus-10": {"table": "generators", "index": 0, "key": "gen_10_1"}}}
+```
+
+The generator section is `"gen"` in JSON and `generator()` in Rust. `index`
+is the 0-based row position in `table` as written, and `key` is the target's
+own name for the row where it has one; `key` is always a JSON string, even
+when it spells a number. `flip`, on branches only, is true when the row's
+first end is the element's `to` bus; no writer in this release flips a row,
+so it is always `false`. An element the target writes no row for maps to
+`null` with an `EMIT.ELEMENT_MAP.UNMAPPED` diagnostic. Rows a writer adds
+with no element behind them (a pandapower `ext_grid`, a Surge generator
+written for a storage unit) are absent. No two elements share a `(table, index)` or a
+`(table, key)`.
+
+| Target | Tables (bus, branch, generator) | What `index` counts | `key` |
+| --- | --- | --- | --- |
+| `matpower` | `bus`, `branch`, `gen` | rows of the matrix | bus: `BUS_I`; branch and generator: none |
+| `psse` | `bus`, `branch` or `transformer`, `generator` | records of the section; a two winding transformer record spans four lines and counts once | bus: `I`; branch and transformer: `I,J,CKT`; generator: `I,ID` |
+| `pandapower-json` | `bus`, `line` or `trafo`, `gen` | rows of the frame as written | bus: the frame's index label (the bus number less one), omitted when two buses share a label; others: none |
+| `pypsa-csv` | `buses`, `lines` or `transformers`, `generators` (the CSV file stems) | data rows of the CSV | the `name` column: the bus name when it is unique, else the bus number; `line_N`, `transformer_N`, `gen_N` |
+| `surge-json` | `buses`, `branches`, `generators` | entries of the `network` array | bus: its number; generator: its `id`; branch: none |
+| `egret-json` | `bus`, `branch`, `generator` | position in the written key order, which sorts keys as strings (`"10"` before `"2"`) | the `elements` dictionary key: the bus number, or a 1-based ordinal for branches and generators |
+| `powersystems-json` | the component's `__metadata__.type` (`ACBus`, `Line`, `TapTransformer`, `ThermalStandard`, ...) | components of that type in `data.components` | the component `name`, omitted when another component of the type has the same name |
+| PowerIO IR (`serialize`) | `buses`, `branches`, `generators` | the element's own position | none |
+
+Look an egret or pandapower row up by its key: an egret `index` follows the
+sorted key order, not the module order, and a pandapower bus row is addressed
+by its index label. PSS/E keys follow the circuit id the writer allocates,
+which can repeat for a reversed parallel branch or for a line and a
+transformer on one bus pair; that allocation is tracked separately.
+
+An emission that returns the retained source bytes (an unchanged module
+written to its own format) runs no writer and has no map, because the source
+file's row order is not known in general. Emitting to another format, or
+emitting a changed module, runs a writer and returns a map. Other targets
+return no map.
+
 ## Validation
 
 The harness script `evals/validation/run_validation.sh` checks powerio against
@@ -82,11 +135,14 @@ all five legacy text targets, each PowerWorld output is read back and bridged
 to PowerModels JSON, and the PMread leg covers the PowerModels JSON read side.
 pandapower JSON and PyPSA CSV folders have dedicated import validators, because
 pandapower has its own JSON schema and PyPSA is a directory format; both
-validate the write direction only, since the pandapower JSON and PyPSA readers
-have no external oracle. DOE GO Challenge 3 has a separate pinned reference
-job, described below. Surge JSON and the remaining source and target pairs
-(PowerModels JSON and PowerWorld sources into the targets other than
-PowerModels) rest on the Rust round trip suite.
+validate the write direction only, since the balanced pandapower JSON and PyPSA
+readers have no external oracle. The three-phase pandapower reader has one.
+`validate_pandapower_3ph.py` solves each case with pandapower `runpp_3ph`. It
+compares the phase voltages with OpenDSS solving PowerIO's converted deck. It
+runs by hand with pandapower 3.5.6 from `requirements.txt`. DOE GO Challenge 3
+has a separate pinned reference job, described below. Surge JSON and the
+remaining source and target pairs (PowerModels JSON and PowerWorld sources into
+the targets other than PowerModels) rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`) reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -101,7 +157,8 @@ PowerModels) rest on the Rust round trip suite.
 - **pandapower** (`validate_pandapower.py`, `validate_pandapower_converter.py`)
   cross checks the MATPOWER parse and \\(Y_{\mathrm{bus}}\\), then imports
   powerio's pandapower JSON output back into pandapower and compares counts and
-  \\(Y_{\mathrm{bus}}\\).
+  \\(Y_{\mathrm{bus}}\\). `validate_pandapower_3ph.py` checks the three-phase
+  reader per phase against `runpp_3ph`.
 - **PyPSA** (`validate_pypsa.py`) imports powerio's PyPSA CSV folder output and
   checks counts, totals, line r/x/b rebased from ohms on the bus0 voltage, and
   transformer r/x/tap_ratio/s_nom rebased from the transformer `s_nom` base. A
@@ -520,11 +577,26 @@ frequency other than 50 Hz are reported as dropped.
 
 ### PowerWorld
 
-`.aux` is read and written, `.pwb` binary cases are read only, and a `.pwd`
+`.aux` is read and written, `.pwb` binary cases are read (the Python package
+writes them through Simulator, see [PowerWorld binary
+cases](python.md#powerworld-binary-cases)), and a `.pwd`
 display file parses to a `GeoLayer`
-([Geographic and display data](geo-and-display.md)). `.aux` has no system base,
-so the reader defaults to 100 MVA. No third party `.aux` reader exists, so the
-writer is validated by PowerIO's own read back plus a PowerModels JSON bridge.
+([Geographic and display data](geo-and-display.md)). The writer states the
+system base as Simulator's `SBase` solution option, which the reader reads
+back; an `.aux` that states no base reads at 100 MVA. The writer uses the
+field names Simulator defines and requires to create each object, so
+Simulator loads every bus, load, shunt, generator, and branch it writes.
+Simulator refuses a blank bus name, so an unnamed bus is written under its
+number, and both PowerWorld readers read a name equal to the bus number as no
+name. Simulator's device IDs are two characters, so loads, shunts, and
+generators are numbered per bus. A case with a near zero impedance branch
+states Simulator's lowest zero impedance threshold, so Simulator does not
+merge the voltage control of the buses it joins. Simulator substitutes 138 kV
+for a nominal voltage that is not positive and area or zone 1 for 0, and the
+writer reports both. Simulator is the writer's oracle:
+`evals/validation/validate_powerworld_simauto.py` loads each written case
+through SimAuto and checks Simulator's load log, the object counts, every
+written field, and a power flow against PowerIO's own network.
 The `.pwb` layouts are reverse engineered; the decode evidence and coverage
 matrix are maintainer notes at
 [`powerio-tx/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio-tx/src/format/powerworld/FORMAT.md).
@@ -618,6 +690,10 @@ conductance, transformer magnetizing parameters, ratio/ideal and pandapower
 2.x tap changers, off-nominal `vn_hv_kv`/`vn_lv_kv`, lv-side taps, and shunt
 `vn_kv` scaling. Tabular or unrecognized tap changers, reactive cost
 coefficients, and unsupported nonempty tables are diagnosed with row counts.
+The three-phase profile is described in
+[Distribution networks](distribution.md#pandapower-three-phase-json). When the
+balanced reader reads a three-phase document, it warns that it drops the
+per-phase detail.
 
 The writer emits aggregate HVDC links in a `dcline` table. It reports
 unmapped sending-power floors, reactive flows, received powers that disagree
@@ -642,6 +718,14 @@ falling back to the numeric id when names collide (warned), and warns on
 dropped HVDC, q limits, mbase, transformer angle limits, rate B/C, isolated
 buses, nonfinite p limits, and slackless or normalized networks. Nonnumeric bus
 names read back as dense synthetic ids with the originals on `Bus.name`.
+A PV or slack bus's `v_mag_pu_set` is its first in service generator's Vg,
+because PyPSA holds those buses at the bus setpoint; a bus with a zero base
+voltage is written at `v_nom = 1` kV with its lines and shunts rebased on it
+(`EMIT.PYPSA.VALUE_SUBSTITUTED`); transformers state `model = pi`. The bus
+voltage state of the one snapshot goes to `buses-v_mag_pu.csv` and
+`buses-v_ang.csv` (radians), and the reader takes bus voltages and angles from
+them. A folder with one snapshot whose only series files are those two reads as
+one network rather than a sequence.
 
 ### DOE GO Challenge 3 JSON
 
@@ -685,6 +769,25 @@ received power (the reader derives it from the setpoint and the loss model), so
 those are warned. A link with converter or control detail beyond the neutral
 converter this writer emits (firing angles, converter transformer taps,
 commutation impedance, a DC voltage schedule) is warned on the way in.
+
+Shunts and branch charging follow Surge's own model. A bus record states the
+bus's whole in service shunt admittance; a `fixed_shunts` record names
+equipment whose admittance is already in that total (a shunt with its own id,
+switching control, or out of service status, a second shunt on one bus, or
+any shunt on a bus whose shunts cancel to zero), and the reader keeps it as its
+own shunt with the bus holding the rest. A
+branch states its total charging as `b` and `g_pi`, half at each end, and
+`b_shunt_*` / `g_shunt_*` add any asymmetry on top, so a plain pi branch writes
+zero end shunts. Every branch has a circuit; parallel branches get distinct
+ones. PowerIO 0.12.4 and earlier wrote every bus shunt only as a
+`fixed_shunts` record and each end's whole charging in `b_shunt_*`. A document
+in that layout (all bus shunts zero with in service `fixed_shunts`, or every
+charged branch with `b_shunt_from + b_shunt_to == b`) reads with its old
+meaning and `READ.SURGE.LEGACY_LAYOUT`. A Surge document whose end shunt
+additions happen to sum to `b` on every charged branch reads the same way. A
+fresh file whose only shunts cancel on their buses also states every bus at
+zero and reports the warning, but each such shunt has its own record, so both
+readings give the same shunts.
 
 ### DeepMind OPFData JSON
 

@@ -4291,6 +4291,20 @@ impl BalancedNetwork {
         }
     }
 
+    /// The factor that brings storage `ps` and `qs` into this network's power
+    /// units. Normalization keeps them in MW and MVAr, as PowerModels'
+    /// `make_per_unit!` does, so a normalized network needs `1 / base_mva` to
+    /// match its other per unit powers. A raw network needs `1.0`.
+    #[must_use]
+    #[inline]
+    pub fn storage_power_scale(&self) -> f64 {
+        if self.is_normalized() {
+            1.0 / self.base_mva()
+        } else {
+            1.0
+        }
+    }
+
     /// Error unless `base_mva` is a positive, finite number. It is every
     /// per-unit divisor, so a malformed base would otherwise silently poison
     /// downstream values with `NaN`/`Inf` or flipped signs. The per-unit
