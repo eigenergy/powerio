@@ -153,10 +153,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    # This job builds every test binary of the workspace in four feature sets,
-    # which outgrew the free space of the hosted runner image: the linker died
-    # with SIGBUS (`ld terminated with signal 7`) and the runner with "No space
-    # left on device". Drop the preinstalled SDKs this job never uses.
     - name: Free runner disk space
       run: |
         df -h /
