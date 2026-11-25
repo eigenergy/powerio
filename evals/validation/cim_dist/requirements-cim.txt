@@ -8,4 +8,4 @@
 #
 # Exact pins: CIM-Graph is an alpha release whose generated profile classes
 # are the schema oracle for leg D, so a new version is a new oracle.
-cim-graph==0.5.0a12    # schema_check.py: cim17v40 and rc4_2021 profile classes
+cim-graph==0.6.1a4    # schema_check.py: cim17v40 and rc4_2021 profile classes
