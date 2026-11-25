@@ -1462,6 +1462,16 @@ class AcOtsInstance(_BalancedCalculation):
         """
         return self.module._inner._ac_ots_branches()
 
+    @property
+    def branch_order(self) -> list[str]:
+        """Stable branch IDs in the order used by every topology vector."""
+        return self.module._inner._ac_ots_branch_order()
+
+    @property
+    def initial_closed(self) -> list[bool]:
+        """Initial switch positions in branch order, including out-of-service rows."""
+        return self.module._inner._ac_ots_initial_closed()
+
     def validate_topology(self, closed: Sequence[bool]) -> float:
         """Check a final topology and return its switching cost.
 
@@ -1577,6 +1587,11 @@ class AcOtsSolution(_BalancedCalculation, _CalculationSolution):
             _branch_statuses(closed), solution.module._inner
         )
         return PioModule(inner).value
+
+    @property
+    def ac_solution(self) -> AcOpfSolution:
+        """The AC OPF solution on the final topology, with its fixed instance."""
+        return PioModule(self.module._inner._ac_ots_solution_ac_dispatch()).value
 
     @property
     def branch_closed(self) -> list[bool]:

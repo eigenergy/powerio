@@ -289,6 +289,10 @@ def test_attaching_an_ac_opf_solution():
     solution = powerio.AcOtsSolution.from_ac_opf_solution(instance, closed, ac)
     assert isinstance(solution, powerio.AcOtsSolution)
     assert solution.branch_closed == closed
+    assert instance.branch_order == [b["id"] for b in instance.branches]
+    assert instance.initial_closed == [b["initial_closed"] for b in instance.branches]
+    assert isinstance(solution.ac_solution, powerio.AcOpfSolution)
+    assert [b["in_service"] for b in solution.ac_solution.network.branches] == closed
     assert solution.switching_cost == 4.0
     assert solution.branches_open == 1
     assert solution.branches_switched == 1

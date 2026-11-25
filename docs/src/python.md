@@ -382,3 +382,10 @@ settings `POWERIO_MCP_ROOT` and `POWERIO_MCP_ALLOWED_ROOT` follow it in preceden
 Remote URI schemes are rejected. Host
 approval, request identifiers, timeouts, and cancellation are MCP transport
 concerns and do not touch the PowerIO data.
+
+### Reading a switching solution
+
+An `AcOtsInstance` exposes `branch_order` and `initial_closed` in the same
+order as `AcOtsSolution.branch_closed`. To identify the lines a solver
+switched, compare the two vectors and keep the matching branch IDs.
+`solution.ac_solution` returns the typed AC dispatch on the final topology.
