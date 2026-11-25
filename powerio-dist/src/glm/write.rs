@@ -738,9 +738,35 @@ impl Writer<'_> {
                 unsupported(format!("line {} has no exact linecode identity", line.name))
             })?;
             used_codes.insert(code.name.as_str());
-            if !line.extras.is_empty() || !code.extras.is_empty() {
+            let dss_source = *self.net.source_format() == Some(crate::DistSourceFormat::Dss);
+            for (key, value) in &line.extras {
+                let droppable = dss_source
+                    && match key.as_str() {
+                        "normamps" => value
+                            .as_f64()
+                            .is_some_and(|number| number.is_finite() && number >= 0.0),
+                        "dss_switch" => value.as_bool() == Some(false),
+                        "dss_source_length" => value
+                            .as_f64()
+                            .is_some_and(|number| number.is_finite() && number >= 0.0),
+                        "dss_source_units" => value.as_str().is_some_and(|units| !units.is_empty()),
+                        "dss_flattened_properties" => value.is_array(),
+                        _ => false,
+                    };
+                if !droppable {
+                    return Err(unsupported(format!(
+                        "line {} has uninterpreted electrical extra {key}",
+                        line.name
+                    )));
+                }
+                self.dropped(format!(
+                    "line {}: retained OpenDSS {key} metadata is not emitted; resolved electrical state is materialized in the typed line and linecode",
+                    line.name
+                ));
+            }
+            if !code.extras.is_empty() {
                 return Err(unsupported(format!(
-                    "line {} has uninterpreted electrical extras",
+                    "line {} has uninterpreted linecode electrical extras",
                     line.name
                 )));
             }
