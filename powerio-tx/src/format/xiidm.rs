@@ -7857,6 +7857,56 @@ fn derive_detailed_connectivity(
     Ok(detailed)
 }
 
+/// Refuse derived bus identifiers that collide with emitted equipment IDs.
+/// XIIDM identifiers are document-global; emitting both a derived bus "B1"
+/// and equipment uid "B1" creates a document PowSybl and PowerIO reject.
+fn validate_derived_xiidm_bus_equipment_ids(network: &BalancedNetwork) -> Result<()> {
+    let mut equipment_ids = HashMap::<String, &'static str>::new();
+    macro_rules! register_ids {
+        ($records:expr, $kind:literal) => {
+            for record in $records {
+                if let Some(uid) = record.uid.as_deref() {
+                    equipment_ids.entry(uid.to_owned()).or_insert($kind);
+                }
+            }
+        };
+    }
+    register_ids!(network.loads(), "load");
+    register_ids!(network.generators(), "generator");
+    register_ids!(network.storage(), "storage");
+    register_ids!(network.shunts(), "shunt");
+    register_ids!(network.static_var_compensators(), "static var compensator");
+    register_ids!(network.branches(), "branch");
+    register_ids!(network.switches(), "switch");
+    register_ids!(network.hvdc(), "HVDC line");
+    // Converter stations are emitted as separate XIIDM equipment. Their IDs
+    // can collide with a derived bus even when the parent HVDC line does not.
+    for line in network.hvdc() {
+        for converter in [line.converter1.as_ref(), line.converter2.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            equipment_ids
+                .entry(converter.component.local_id().to_owned())
+                .or_insert("HVDC converter station");
+        }
+    }
+    register_ids!(network.transformers_3w(), "three-winding transformer");
+
+    for bus in network.buses() {
+        let id = format!("B{}", bus.id);
+        if let Some(kind) = equipment_ids.get(&id) {
+            return Err(Error::Emit {
+                format: FORMAT,
+                message: format!(
+                    "derived XIIDM bus id `{id}` collides with {kind} id `{id}`; rename the equipment uid before emission"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Attach each equipment terminal the stated hierarchy leaves out to its bus
 /// in that hierarchy, so the equipment is written with a terminal.
 ///
@@ -8941,6 +8991,7 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         "the network has no complete substation or voltage level hierarchy; XIIDM hierarchy was derived from buses",
     );
     let mut detailed = derive_detailed_connectivity(network, &mut diagnostics)?;
+    validate_derived_xiidm_bus_equipment_ids(network)?;
     if let Some(supplied) = network.detailed_connectivity() {
         detailed.omitted_fields.clone_from(&supplied.omitted_fields);
         // Supplied metadata wins; the derived bus names fill in the rest.
@@ -17112,6 +17163,105 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|d| d.message().contains("is replaced by configured bus id"))
+        );
+    }
+
+    #[test]
+    fn derived_xiidm_bus_ids_reject_equipment_uid_collisions() {
+        let mut network = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        *network.detailed_connectivity_mut() = None;
+        network.loads_mut()[0].uid = Some("B1".to_owned());
+
+        for error in [
+            write_xiidm(&network).unwrap_err(),
+            write_jiidm(&network).unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(
+                message.contains("derived XIIDM bus id `B1` collides with load id `B1`"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn derived_xiidm_bus_ids_reject_hvdc_converter_station_collisions() {
+        let mut network = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        *network.detailed_connectivity_mut() = None;
+        network.hvdc_mut()[0]
+            .converter1
+            .as_mut()
+            .expect("fixture has converter station 1")
+            .component = component_id("voltage_source_converter", "B1").unwrap();
+
+        for error in [
+            write_xiidm(&network).unwrap_err(),
+            write_jiidm(&network).unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(
+                message.contains(
+                    "derived XIIDM bus id `B1` collides with HVDC converter station id `B1`"
+                ),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn derived_xiidm_bus_ids_ignore_detailed_converter_stations_not_emitted() {
+        // This source has a detailed VSC but no reduced-model HVDC line. The
+        // derived hierarchy omits detailed-only converter stations, so its ID
+        // must not collide with a generated bus identifier.
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="detailed-vsc" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:dcNode id="N1" nominalV="500"/>
+  <iidm:dcNode id="N2" nominalV="500"/>
+  <iidm:substation id="S">
+    <iidm:voltageLevel id="VL" nominalV="400" topologyKind="BUS_BREAKER">
+      <iidm:busBreakerTopology><iidm:bus id="B1"/><iidm:bus id="B2"/></iidm:busBreakerTopology>
+      <iidm:voltageSourceConverter id="VSC" dcNode1="N1" dcConnected1="true" dcNode2="N2" dcConnected2="false" idleLoss="2" switchingLoss="0.2" resistiveLoss="0.000002" controlMode="P_PCC" voltageRegulatorOn="false" reactivePowerSetpoint="0" targetP="301" bus1="B1" connectableBus1="B1" bus2="B2" connectableBus2="B2">
+        <iidm:minMaxReactiveLimits minQ="-10" maxQ="10"/>
+        <iidm:pccTerminal id="VSC" number="ONE"/>
+      </iidm:voltageSourceConverter>
+    </iidm:voltageLevel>
+  </iidm:substation>
+</iidm:network>"#;
+        let mut network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        assert_eq!(detailed.voltage_source_converters.len(), 1);
+        let original_id = component_id("voltage_source_converter", "VSC").unwrap();
+        let collision_id = component_id("voltage_source_converter", "B1").unwrap();
+        let converter = &mut detailed.voltage_source_converters[0];
+        converter.component = collision_id.clone();
+        converter
+            .pcc_terminal
+            .as_mut()
+            .expect("fixture has a PCC terminal")
+            .equipment = collision_id.clone();
+        let terminal = detailed
+            .terminals
+            .iter_mut()
+            .find(|terminal| terminal.equipment == original_id && terminal.terminal == 1)
+            .expect("fixture has the converter's AC terminal");
+        terminal.equipment = collision_id;
+        detailed.voltage_levels.clear();
+
+        // Exercise both actual derived-emission paths: XIIDM retains the
+        // generated bus B1, while both formats omit the detailed-only station.
+        let xiidm =
+            write_xiidm(&network).expect("omitted detailed converter must not block bus B1");
+        assert!(xiidm.text.contains("<iidm:bus id=\"B1\""), "{}", xiidm.text);
+        assert!(
+            !xiidm.text.contains("<iidm:voltageSourceConverter"),
+            "derived XIIDM must omit the detailed-only converter"
+        );
+
+        let jiidm =
+            write_jiidm(&network).expect("omitted detailed converter must not block bus B1");
+        assert!(
+            !jiidm.text.contains("voltageSourceConverter"),
+            "derived JIIDM must omit the detailed-only converter"
         );
     }
 
