@@ -1,5 +1,6 @@
 """The repair queue must preserve failures, reduced coverage and provenance."""
 
+import copy
 import hashlib
 import importlib.util
 import json
@@ -22,6 +23,32 @@ def report():
 
 
 class PlannerTests(unittest.TestCase):
+    def test_native_check_regressions_survive_unchanged_totals(self):
+        prior = {
+            "schema": planner.NATIVE_SCHEMA, "schema_version": 1, "spec": "seed",
+            "oracles": {}, "provenance": {},
+            "cases": {"case14": {
+                "source": "matpower", "target": "matpower", "digests": {},
+                "score": {"independent_validation": {"passes": 1, "verified": 1, "applicable": 2}},
+                "checks": {
+                    "a": {"status": "pass", "leg": "independent_validation", "coverage": {"entries": 196}},
+                    "b": {"status": "missing", "leg": "independent_validation"},
+                },
+            }},
+        }
+        current = copy.deepcopy(prior)
+        checks = current["cases"]["case14"]["checks"]
+        checks["a"].update(status="missing", coverage={})
+        checks["b"]["status"] = "pass"
+        backlog = planner.plan(current, "digest", prior)
+        self.assertEqual(backlog["score"], backlog["previous_score"])
+        self.assertFalse(backlog["inputs_changed"])
+        self.assertEqual([change["check"] for change in backlog["changes"]], ["a", "b"])
+        self.assertTrue(backlog["changes"][0]["regression"])
+        self.assertTrue(backlog["changes"][0]["coverage_reduced"])
+        self.assertFalse(backlog["changes"][0]["applicability_changed"])
+        self.assertEqual(backlog["candidates"][0]["check"], "a")
+
     def test_no_greenwashing_failed_run(self):
         result = planner.plan(report(), "digest")
         self.assertFalse(result["suite_passed"])

@@ -44,8 +44,6 @@ import numpy as np
 import scipy.sparse as sp
 from matpowercaseframes import CaseFrames
 
-import powerio
-
 F_BUS, T_BUS = "F_BUS", "T_BUS"
 ABS_TOL = 1e-9
 
@@ -124,6 +122,8 @@ def matrix_difference(left, right):
 
 def compare(path: str, want_ptdf: bool = True) -> list[str]:
     """Run every check for one case; return its failure messages (empty on a pass)."""
+    import powerio
+
     failures: list[str] = []
     print(f"\n===== {path}")
     cf = CaseFrames(path)

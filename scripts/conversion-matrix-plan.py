@@ -7,12 +7,22 @@ import json
 from pathlib import Path
 
 LEVELS = {"failed": 0, "dropped": 1, "approximate": 2, "restated": 3, "exact": 4, "lossless": 5}
+NATIVE_SCHEMA = "powerio-native-fidelity"
+NATIVE_STATUS = {"fail": 0, "missing": 1, "pass": 2}
 
 
 def load(path):
     raw = Path(path).read_bytes()
     report = json.loads(raw)
-    if report.get("schema") != "powerio-conversion-matrix" or report.get("schema_version") != 1:
+    if report.get("schema_version") != 1:
+        raise ValueError("unsupported conversion matrix evidence schema")
+    digest = hashlib.sha256(raw).hexdigest()
+    if report.get("schema") == NATIVE_SCHEMA:
+        for _, check in native_checks(report).items():
+            if check["status"] not in NATIVE_STATUS:
+                raise ValueError("invalid native check status")
+        return report, digest
+    if report.get("schema") != "powerio-conversion-matrix":
         raise ValueError("unsupported conversion matrix evidence schema")
     cells = report["cells"]
     if len({cell["key"] for cell in cells}) != len(cells):
@@ -24,10 +34,82 @@ def load(path):
         # Failed source acquisition leaves both source and conversion cells empty.
         if not cases and not (cell["grade"] == "failed" and cell.get("passed") is False and report.get("passed") is False):
             raise ValueError("empty coverage requires a failed cell and suite")
-    return report, hashlib.sha256(raw).hexdigest()
+    return report, digest
+
+
+def native_checks(report):
+    return {
+        (name, check): result
+        for name, case in report["cases"].items()
+        for check, result in case["checks"].items()
+    }
+
+
+def native_inputs(report):
+    return {
+        "spec": report["spec"],
+        "oracles": report["oracles"],
+        "fixtures": {
+            name: {key: case[key] for key in ("source", "target", "digests")}
+            for name, case in report["cases"].items()
+        },
+    }
+
+
+def native_plan(report, digest, previous):
+    checks = native_checks(report)
+    changes = []
+    old_inputs = native_inputs(previous) if previous is not None else None
+    inputs = native_inputs(report)
+    if previous is not None:
+        before = native_checks(previous)
+        for key in sorted(before.keys() | checks.keys()):
+            old, new = before.get(key), checks.get(key)
+            if old == new:
+                continue
+            old_status = old["status"] if old else None
+            new_status = new["status"] if new else None
+            old_coverage = old.get("coverage", {}) if old else {}
+            new_coverage = new.get("coverage", {}) if new else {}
+            reduced = any(
+                count > new_coverage.get(label, 0)
+                for label, count in old_coverage.items() if isinstance(count, int)
+            )
+            changes.append({
+                "case": key[0], "check": key[1], "before": old, "after": new,
+                "regression": old_status == "pass" and new_status != "pass",
+                "coverage_reduced": (
+                    new is None or reduced
+                    or old_status in ("pass", "fail") and new_status == "missing"
+                ),
+                "applicability_changed": old is None or new is None or old["leg"] != new["leg"],
+                "rule_changed": old is not None and new is not None and any(
+                    old.get(field) != new.get(field)
+                    for field in ("scope", "tolerance", "units", "comparison")
+                ),
+            })
+    candidates = [
+        {"case": name, "check": check, "result": result}
+        for (name, check), result in checks.items() if result["status"] != "pass"
+    ]
+    candidates.sort(key=lambda item: (NATIVE_STATUS[item["result"]["status"]], item["case"], item["check"]))
+    return {
+        "schema": "powerio-native-fidelity-backlog", "schema_version": 1,
+        "evidence_sha256": digest, "provenance": report["provenance"],
+        "comparison_available": previous is not None,
+        "inputs_before": old_inputs, "inputs_after": inputs,
+        "inputs_changed": old_inputs is not None and old_inputs != inputs,
+        "score": {name: case["score"] for name, case in report["cases"].items()},
+        "previous_score": {name: case["score"] for name, case in previous["cases"].items()} if previous else None,
+        "changes": changes, "candidates": candidates,
+    }
 
 
 def plan(report, digest, previous=None):
+    if previous is not None and previous["schema"] != report["schema"]:
+        raise ValueError("cannot compare different evidence schemas")
+    if report["schema"] == NATIVE_SCHEMA:
+        return native_plan(report, digest, previous)
     cells = {cell["key"]: cell for cell in report["cells"]}
     before = {cell["key"]: cell for cell in previous["cells"]} if previous else {}
     changes = []

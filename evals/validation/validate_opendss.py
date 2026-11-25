@@ -9,7 +9,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import powerio
 from opendssdirect import dss
 
 
@@ -62,6 +61,8 @@ def append_result(case: Path, mark: str) -> None:
 
 
 def validate_case(case: Path) -> list[str]:
+    import powerio
+
     expected = solve_voltage_magnitudes(case)
     module = powerio.parse(case, format="dss")
     generated = powerio.emit(module, "dss")
