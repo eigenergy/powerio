@@ -4066,7 +4066,7 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                         parsed,
                         equipment.winding_ratio_taps[side].as_ref(),
                         equipment.winding_phase_taps[side].as_ref(),
-                        |rho| base_ratio * rho,
+                        |rho| base_ratio / rho,
                         &bus_builder,
                         &voltage_levels,
                     )?;
@@ -6191,7 +6191,7 @@ fn read_three_winding_transformer(
                 }
             }
         }
-        windings[side].tap = winding_rated_u / level.nominal_v * rho;
+        windings[side].tap = winding_rated_u / (level.nominal_v * rho);
         windings[side].shift = -alpha;
         windings[side].nominal_kv = winding_rated_u;
         let apparent = calc_loading_limit_projection(equipment, suffix as u8, |group| {
@@ -12902,7 +12902,7 @@ fn write_three_winding_transformer(
             &winding_buses,
             control,
             (winding.tap, winding.shift),
-            |tap| tap / base_ratio,
+            |tap| base_ratio / tap,
             diagnostics,
         )
     });
@@ -12982,10 +12982,10 @@ fn write_three_winding_transformer(
         }
         let rated_u = winding_nominal_kv(winding, bus);
         let base_ratio = rated_u / bus.base_kv;
-        let rho = if base_ratio == 0.0 {
+        let rho = if base_ratio == 0.0 || winding.tap == 0.0 {
             1.0
         } else {
-            winding.tap / base_ratio
+            base_ratio / winding.tap
         };
         if synthesized_kind != Some(TapChangerKind::Ratio) && (rho - 1.0).abs() > f64::EPSILON {
             output.push_str(&format!(
@@ -16592,7 +16592,7 @@ mod tests {
 
         let transformer = &network.transformers_3w()[0];
         assert!((transformer.z[0].r - 0.11).abs() < 1e-12);
-        assert!((transformer.windings[1].tap - 1.05).abs() < 1e-12);
+        assert!((transformer.windings[1].tap - 1.0 / 1.05).abs() < 1e-12);
         assert_f64_close(transformer.windings[0].rate_a, 90.0);
 
         let hvdc = &network.hvdc()[0];
