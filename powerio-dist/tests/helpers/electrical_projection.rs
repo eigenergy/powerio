@@ -149,7 +149,6 @@ fn close(a: f64, b: f64) -> bool {
     a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1e-12)
 }
 
-/// Generated source-EMF buses are format-specific; compare them by source identity.
 fn generated_source_identity(bus: &str) -> Option<String> {
     let id = bus.to_ascii_lowercase();
     if let Some(source) = id.strip_prefix("_pio_source_emf_") {
@@ -166,8 +165,6 @@ fn generated_source_identity(bus: &str) -> Option<String> {
     (collision_suffix && !source.is_empty()).then(|| source.to_owned())
 }
 
-/// Native and RAVENS writers use different synthetic names for the same source
-/// impedance branch. Canonicalize only generated three-phase source branches.
 fn generated_name_matches(name: &str, base: &str) -> bool {
     name == base
         || name.strip_prefix(base).is_some_and(|suffix| {
