@@ -1491,7 +1491,6 @@ impl Writer {
                 .get("conn")
                 .and_then(Value::as_str)
                 .is_some_and(|c| c.eq_ignore_ascii_case("delta"));
-            // nomU = cap.kV * 1000 (opendss2xml), i.e. the dss kv directly:
             // line-to-line for a multi-phase bank, line-to-neutral for a
             // single-phase one. No √3 — the reader inverts with nomU/1000.
             let nom_u =
@@ -1517,8 +1516,6 @@ impl Writer {
             let g0v = self.num(g0, &what);
             obj.insert("LinearShuntCompensator.bPerSection".into(), bv);
             obj.insert("LinearShuntCompensator.gPerSection".into(), gv);
-            // Yn is a wye bank whose neutral is grounded at the bus; Y is
-            // one on an ungrounded neutral conductor.
             obj.insert(
                 "ShuntCompensator.phaseConnection".into(),
                 Value::String(format!(
