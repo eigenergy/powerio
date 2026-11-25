@@ -106,6 +106,8 @@ const JSON_ENV: &str = "POWERIO_CONVERSION_MATRIX_JSON";
 
 #[path = "conversion_matrix/evidence.rs"]
 mod evidence;
+#[path = "conversion_matrix/native.rs"]
+mod native;
 const BLESS_ENV: &str = "POWERIO_MATRIX_BLESS";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
 const DETAILS_MARKER: &str = "<!-- powerio-conversion-matrix-details -->";
@@ -288,6 +290,8 @@ struct Cell {
     /// On the diagonal, whether every payload re-emitted its retained source
     /// byte for byte.
     echo_exact: Option<bool>,
+    /// Whether the latest fresh emission was read back successfully.
+    readback_ok: bool,
 }
 
 /// What a cell's findings add up to, before the baseline comparison.
@@ -1358,6 +1362,16 @@ fn validate_transmission_pair(
             return;
         }
     };
+    validate_transmission_emission(payload, target, cell, &conversion);
+}
+
+fn validate_transmission_emission(
+    payload: &TransmissionPayload,
+    target: TransmissionFormat,
+    cell: &mut Cell,
+    conversion: &TransmissionEmission,
+) {
+    cell.readback_ok = false;
     cell.record(payload.label, Leg::Write, &conversion.diagnostics);
     let parsed = match parse_transmission_emitted(&conversion.emitted, target) {
         Ok(parsed) => parsed,
@@ -1369,6 +1383,7 @@ fn validate_transmission_pair(
             return;
         }
     };
+    cell.readback_ok = true;
     cell.record(payload.label, Leg::Readback, &parsed.diagnostics);
     let held = network_a_target_holds(&payload.network, target);
     let tolerance = electrical_tolerance(target, &held);
@@ -2079,6 +2094,7 @@ fn validate_distribution_emission(
     cell: &mut Cell,
     conversion: &TextEmission,
 ) {
+    cell.readback_ok = false;
     cell.record(payload.label, Leg::Write, &conversion.diagnostics);
     let echoed = diagonal && conversion.text == payload.text;
     if diagonal {
@@ -2092,6 +2108,7 @@ fn validate_distribution_emission(
     }
     match parse_distribution_text(conversion, target) {
         Ok(parsed) => {
+            cell.readback_ok = true;
             if !echoed {
                 cell.record(payload.label, Leg::Readback, &parsed.diagnostics);
             }
@@ -2113,11 +2130,12 @@ fn validate_distribution_emission(
                 payload.label,
                 cell,
             );
-            source_equivalents::assert_source_constraints(
-                &before,
-                &after,
-                &format!("{} as {row} to {}", payload.label, target.name),
-            );
+            cell.failures
+                .extend(source_equivalents::source_constraint_differences(
+                    &before,
+                    &after,
+                    &format!("{} as {row} to {}", payload.label, target.name),
+                ));
             let actual = distribution_core(&after);
             let expected = distribution_core(&before);
             if !core_survives(&expected, &actual, target.target) {

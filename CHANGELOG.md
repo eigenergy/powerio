@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The native conversion fidelity pilot reports byte replay, fresh-write
+  checks, and independent validation of MATPOWER case14 and the IEEE 13-bus
+  OpenDSS feeder ([#957](https://github.com/eigenergy/powerio/issues/957)).
+
 ## 0.12.5
 
 - Surge JSON output gives parallel branches distinct circuits. Every branch

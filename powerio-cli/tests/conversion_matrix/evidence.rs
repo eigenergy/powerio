@@ -20,6 +20,19 @@ fn environment(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
+pub(super) fn provenance() -> Value {
+    json!({
+        "repository": environment("GITHUB_REPOSITORY").unwrap_or_else(|| "eigenergy/powerio".into()),
+        "tested_commit": git(&["rev-parse", "HEAD"]),
+        "head_commit": environment("POWERIO_MATRIX_HEAD_SHA"),
+        "base_commit": environment("POWERIO_MATRIX_BASE_SHA"),
+        "worktree_dirty": git(&["status", "--porcelain", "--untracked-files=normal"]).map(|status| !status.is_empty()),
+        "run_id": environment("GITHUB_RUN_ID"),
+        "run_attempt": environment("GITHUB_RUN_ATTEMPT"),
+        "suite": "powerio-cli/tests/conversion_matrix_report.rs"
+    })
+}
+
 pub(super) fn render(
     matrices: &[(&str, Matrix)],
     judged: &BTreeMap<String, Judged>,
@@ -59,16 +72,7 @@ pub(super) fn render(
         "schema": "powerio-conversion-matrix",
         "schema_version": 1,
         "powerio_version": env!("CARGO_PKG_VERSION"),
-        "provenance": {
-            "repository": environment("GITHUB_REPOSITORY").unwrap_or_else(|| "eigenergy/powerio".into()),
-            "tested_commit": git(&["rev-parse", "HEAD"]),
-            "head_commit": environment("POWERIO_MATRIX_HEAD_SHA"),
-            "base_commit": environment("POWERIO_MATRIX_BASE_SHA"),
-            "worktree_dirty": git(&["status", "--porcelain", "--untracked-files=normal"]).map(|status| !status.is_empty()),
-            "run_id": environment("GITHUB_RUN_ID"),
-            "run_attempt": environment("GITHUB_RUN_ATTEMPT"),
-            "suite": "powerio-cli/tests/conversion_matrix_report.rs"
-        },
+        "provenance": provenance(),
         "passed": failures.is_empty(),
         "failures": failures.iter().map(|s| sanitize_report_text(s)).collect::<Vec<_>>(),
         "counts": counts,
@@ -86,15 +90,7 @@ fn cell(
 ) -> Value {
     let key = target.map_or_else(|| source_key(source), |target| pair_key(source, target));
     let verdict = &judged[&key];
-    let findings = cell.findings.iter().map(|(case, leg, diagnostic)| json!({
-        "case": case,
-        "leg": leg.name(),
-        "code": diagnostic.code(),
-        "severity": diagnostic.severity().as_str(),
-        "level": grade_finding(*leg, diagnostic).ok().flatten().map(|(level, _)| level.name()),
-        "message": sanitize_report_text(diagnostic.message())
-    })).collect::<Vec<_>>();
-    json!({
+    let mut report = json!({
         "key": key,
         "family": family,
         "source": source,
@@ -103,20 +99,54 @@ fn cell(
         "grade": verdict.grade.level.name(),
         "cases": cell.cases,
         "finding_codes": verdict.grade.codes,
-        "findings": findings,
         "baseline": {"expected": expected.get(&key), "observed": verdict.grade.baseline_value()},
         "passed": verdict.problems.is_empty(),
         "problems": verdict.problems.iter().map(|s| sanitize_report_text(s)).collect::<Vec<_>>(),
-        "model_differences": cell.model_diffs.iter().map(|(case, difference)| json!({
-            "case": case, "difference": sanitize_report_text(difference),
-            "equivalence": cell.model_restatements.get(&(*case, difference.clone()))
-        })).collect::<Vec<_>>(),
         "verification": {
             "byte_echo_exact": cell.echo_exact,
-            "limitations": cell.verification_notes.iter().map(|(case, note)| json!({"case": case, "note": sanitize_report_text(note)})).collect::<Vec<_>>(),
+            "limitations": limitations(cell),
             "independent_consumer": "not_run_by_this_suite"
         }
-    })
+    });
+    report.as_object_mut().unwrap().extend(drill_down(cell));
+    report
+}
+
+pub(super) fn limitations(cell: &Cell) -> Vec<Value> {
+    cell.verification_notes
+        .iter()
+        .map(|(case, note)| json!({"case": case, "note": sanitize_report_text(note)}))
+        .collect()
+}
+
+pub(super) fn drill_down(cell: &Cell) -> serde_json::Map<String, Value> {
+    [
+        (
+            "findings".into(),
+            json!(cell.findings.iter().map(|(case, leg, diagnostic)| json!({
+            "case": case,
+            "leg": leg.name(),
+            "code": diagnostic.code(),
+            "severity": diagnostic.severity().as_str(),
+            "level": grade_finding(*leg, diagnostic).ok().flatten().map(|(level, _)| level.name()),
+            "message": sanitize_report_text(diagnostic.message())
+        })).collect::<Vec<_>>()),
+        ),
+        (
+            "model_differences".into(),
+            json!(
+                cell.model_diffs
+                    .iter()
+                    .map(|(case, difference)| json!({
+                        "case": case, "difference": sanitize_report_text(difference),
+                        "equivalence": cell.model_restatements.get(&(*case, difference.clone()))
+                    }))
+                    .collect::<Vec<_>>()
+            ),
+        ),
+    ]
+    .into_iter()
+    .collect()
 }
 
 #[test]

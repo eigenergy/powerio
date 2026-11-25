@@ -461,22 +461,38 @@ fn constraints(net: &MulticonductorNetwork) -> BTreeMap<(Node, Node), Complex64>
     result
 }
 
-pub fn assert_source_constraints(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
+pub fn source_constraint_differences(
+    a: &MulticonductorNetwork,
+    b: &MulticonductorNetwork,
+    what: &str,
+) -> Vec<String> {
     let a = constraints(a);
     let b = constraints(b);
-    assert_eq!(
-        a.keys().collect::<Vec<_>>(),
-        b.keys().collect::<Vec<_>>(),
-        "{what}: source terminal constraints"
-    );
-    for (key, emf) in a {
-        assert!(
-            (emf - b[&key]).norm() <= 1e-9 * emf.norm().max(1.0),
-            "{what}: source phasor at {key:?}: expected {emf:?}, actual {:?}, error {}",
-            b[&key],
-            (emf - b[&key]).norm()
-        );
+    let mut differences = Vec::new();
+    if a.keys().ne(b.keys()) {
+        differences.push(format!(
+            "{what}: source terminal constraints: expected {:?}, actual {:?}",
+            a.keys().collect::<Vec<_>>(),
+            b.keys().collect::<Vec<_>>(),
+        ));
     }
+    for (key, emf) in a {
+        if let Some(actual) = b.get(&key) {
+            let error = (emf - actual).norm();
+            if !error.is_finite() || error > 1e-9 * emf.norm().max(1.0) {
+                differences.push(format!(
+                    "{what}: source phasor at {key:?}: expected {emf:?}, actual {actual:?}, error {error}"
+                ));
+            }
+        }
+    }
+    differences
+}
+
+#[allow(dead_code)] // The CLI matrix records differences without aborting its report.
+pub fn assert_source_constraints(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
+    let differences = source_constraint_differences(a, b, what);
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
 }
 
 /// Eliminate a transformer leakage/cancelling-line pair only after proving its
