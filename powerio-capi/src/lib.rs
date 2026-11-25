@@ -2665,6 +2665,12 @@ unsafe fn input_bytes<'a>(
     len: usize,
     argument: &str,
 ) -> Result<&'a [u8], *mut PioError> {
+    if len > isize::MAX as usize {
+        return Err(boundary_error(
+            &codes::BIND_CAPI_INVALID_ARGUMENT,
+            format!("{argument} length exceeds the maximum Rust slice length"),
+        ));
+    }
     if data.is_null() {
         if len == 0 {
             return Ok(&[]);
@@ -20952,6 +20958,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn input_slice_rejects_lengths_that_cannot_form_rust_slices() {
+        unsafe {
+            let error = input_bytes(std::ptr::null(), isize::MAX as usize + 1, "data").unwrap_err();
+            assert_eq!(error_code_text(error), "BIND.CAPI.INVALID_ARGUMENT");
+        }
+    }
 
     #[test]
     fn powermodels_construction_preserves_stated_frequency() {
