@@ -1357,22 +1357,21 @@ fn write_psse_rev_inner(
     let _ = writeln!(s, "0 / END OF GENERATOR DATA, BEGIN BRANCH DATA");
 
     // Non-transformer branches here; transformers go in their own section.
-    // Parallel branches between the same bus pair get distinct circuit ids (PSS/E
-    // keys a branch on (I, J, CKT)); a captured source CKT wins.
-    let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
-    let mut transformer_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
+    // Every branch between one bus pair gets its own circuit id, across both
+    // sections and either direction (PSS/E names a branch or a two winding
+    // transformer by (I, J, CKT) in either order); a captured source CKT wins.
+    let circuit_ids = branch_circuit_ids(net, &mut sanitized_quoted);
+    let mut restated_as_lines = Vec::new();
     for (branch_index, br) in net
         .branches()
         .iter()
         .enumerate()
-        .filter(|(_, b)| !b.is_transformer())
+        .filter(|(_, b)| writes_as_branch_record(b))
     {
-        let ckt = quoted_circuit_id(
-            br.extras.get("id").and_then(Value::as_str),
-            (br.from, br.to),
-            &mut branch_ids,
-            &mut sanitized_quoted,
-        );
+        let ckt = &circuit_ids[branch_index];
+        if br.is_transformer() {
+            restated_as_lines.push(format!("{}-{}", br.from, br.to));
+        }
         let charging = br.calc_terminal_charging();
         let b_total = charging.calc_total_b();
         let b_mid = b_total / 2.0;
@@ -1502,19 +1501,9 @@ fn write_psse_rev_inner(
         .branches()
         .iter()
         .enumerate()
-        .filter(|(_, b)| b.is_transformer())
+        .filter(|(_, b)| !writes_as_branch_record(b))
     {
-        let source_id = br
-            .extras
-            .get("id")
-            .and_then(Value::as_str)
-            .or_else(|| detailed_source_id(net, "transformer", br.uid.as_deref()));
-        let transformer_id = quoted_circuit_id(
-            source_id,
-            (br.from, br.to),
-            &mut transformer_ids,
-            &mut sanitized_quoted,
-        );
+        let transformer_id = &circuit_ids[branch_index];
         // 2-winding, 4-line record. CW=1 (turns ratio p.u.), CZ=1 (Z on system
         // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
         // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
@@ -2218,7 +2207,7 @@ fn write_psse_rev_inner(
             .branches()
             .iter()
             .filter(|branch| {
-                !branch.is_transformer()
+                writes_as_branch_record(branch)
                     && branch
                         .name
                         .as_deref()
@@ -2325,18 +2314,34 @@ fn write_psse_rev_inner(
             "{branch_solutions} branch solution value set(s) dropped: PSS/E RAW power flow result fields are not written"
         ));
     }
-    let transformer_terminal_shunts = net
+    // Charging the case states at a transformer's to end, MATPOWER's symmetric
+    // `b` included, has no place in the transformer record: its one
+    // magnetizing admittance sits at winding 1's bus.
+    let moved_to_from_bus = net
         .branches()
         .iter()
         .filter(|b| {
-            b.is_transformer()
-                && b.charging
-                    .is_some_and(|c| c.g_to.abs() > f64::EPSILON || c.b_to.abs() > f64::EPSILON)
+            let charging = b.calc_terminal_charging();
+            !writes_as_branch_record(b) && (charging.g_to != 0.0 || charging.b_to != 0.0)
         })
-        .count();
-    if transformer_terminal_shunts > 0 {
+        .map(|b| format!("{}-{}", b.from, b.to))
+        .collect::<Vec<_>>();
+    if !moved_to_from_bus.is_empty() {
         warnings.push(&F.value_collapsed, format!(
-            "{transformer_terminal_shunts} transformer terminal admittance record(s) collapsed to magnetizing admittance: PSS/E transformer records cannot preserve terminal side assignment"
+            "{} transformer(s) state charging at the to end, which the PSS/E transformer record cannot place: \
+             its one magnetizing admittance (MAG1/MAG2) connects at winding 1's bus, so the to end's charging \
+             was written there, changing both buses' shunt admittance ({})",
+            moved_to_from_bus.len(),
+            list_some(&moved_to_from_bus)
+        ));
+    }
+    if !restated_as_lines.is_empty() {
+        warnings.push(&F.element_relabeled, format!(
+            "{} branch(es) with a tap of exactly 1, no phase shift, and charging at the to end written as \
+             non-transformer BRANCH records, which place the charging at both ends exactly; a transformer \
+             record would have moved it to winding 1's bus. The admittance is unchanged ({})",
+            restated_as_lines.len(),
+            list_some(&restated_as_lines)
         ));
     }
     if net.generators().iter().any(Generator::has_caps) {
@@ -2418,6 +2423,82 @@ pub(crate) fn quoted_circuit_id<K: Ord + Clone>(
         Some(id) if id.trim() == allocated => id,
         _ => allocated,
     }
+}
+
+/// Whether the RAW writer states `branch` in the BRANCH section, as a
+/// non-transformer branch, rather than in the TRANSFORMER section.
+///
+/// A branch with a tap or a phase shift is a two winding transformer, except a
+/// branch that is a line electrically and carries shunt admittance at its to
+/// end: a tap of exactly one, no phase shift, no tap control, and no impedance
+/// correction table. A transformer record states one magnetizing admittance,
+/// which PSS/E connects at winding 1's bus only, so it would move the to end's
+/// admittance to the from bus. A BRANCH record states both ends exactly
+/// (#940).
+pub(crate) fn writes_as_branch_record(branch: &Branch) -> bool {
+    !branch.is_transformer() || is_charged_unit_ratio_branch(branch)
+}
+
+/// A transformer by its tap field that is a line electrically and states
+/// shunt admittance at its to end; see [`writes_as_branch_record`].
+// Exactly one: any other ratio, however close, is a transformer the BRANCH
+// record cannot state.
+#[allow(clippy::float_cmp)]
+fn is_charged_unit_ratio_branch(branch: &Branch) -> bool {
+    let charging = branch.calc_terminal_charging();
+    branch.is_transformer()
+        && branch.calc_effective_tap() == 1.0
+        && branch.shift == 0.0
+        && branch.control.is_none()
+        && (charging.g_to != 0.0 || charging.b_to != 0.0)
+        && branch.impedance_correction().is_none()
+}
+
+/// The first five of `items`, comma separated, with an ellipsis when there
+/// are more.
+fn list_some(items: &[String]) -> String {
+    let shown = items.iter().take(5).map(String::as_str).collect::<Vec<_>>();
+    let ellipsis = if items.len() > shown.len() {
+        ", ..."
+    } else {
+        ""
+    };
+    format!("{}{ellipsis}", shown.join(", "))
+}
+
+/// The circuit id the RAW writer states for every branch, aligned with
+/// `net.branches()`.
+///
+/// PSS/E names a non-transformer branch or a two winding transformer by its
+/// two buses, in either order, and its circuit id, and the two kinds share
+/// one name: `brnflo(ibus, jbus, ckt)` reads either. The writer therefore
+/// allocates the ids per unordered bus pair across both sections, in the
+/// order it states the records (the BRANCH section in table order, then the
+/// TRANSFORMER section), so no two records name one circuit (#939). A
+/// retained id wins while it is still free on its pair; a transformer
+/// without one may keep the id its detailed source states.
+pub(crate) fn branch_circuit_ids(
+    net: &BalancedNetwork,
+    sanitized_quoted: &mut usize,
+) -> Vec<String> {
+    let mut ids = vec![String::new(); net.branches().len()];
+    let mut used: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
+    for branch_section in [true, false] {
+        for (row, branch) in net.branches().iter().enumerate() {
+            if writes_as_branch_record(branch) != branch_section {
+                continue;
+            }
+            let preferred = branch.extras.get("id").and_then(Value::as_str).or_else(|| {
+                branch
+                    .is_transformer()
+                    .then(|| detailed_source_id(net, "transformer", branch.uid.as_deref()))
+                    .flatten()
+            });
+            let pair = (branch.from.min(branch.to), branch.from.max(branch.to));
+            ids[row] = quoted_circuit_id(preferred, pair, &mut used, sanitized_quoted);
+        }
+    }
+    ids
 }
 
 /// Whether an HVDC line states DC-side data the two-terminal record cannot
@@ -7893,6 +7974,217 @@ Q
         close(charging.g_to, 0.0);
         close(charging.b_to, 0.0);
         close(back.branches()[0].b, 0.07);
+    }
+
+    /// The records of one RAW section, from its BEGIN line to its END line.
+    fn section<'a>(raw: &'a str, name: &str) -> Vec<&'a str> {
+        raw.lines()
+            .skip_while(|line| !line.contains(&format!("BEGIN {name} DATA")))
+            .skip(1)
+            .take_while(|line| !line.starts_with("0 /"))
+            .collect()
+    }
+
+    fn two_bus_network(branches: Vec<Branch>) -> BalancedNetwork {
+        let mut net = BalancedNetwork::in_memory(
+            "two-bus",
+            100.0,
+            vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        *net.branches_mut() = branches;
+        net
+    }
+
+    /// A MATPOWER branch row: `b` split evenly, no per terminal charging.
+    fn matpower_branch(from: usize, to: usize, b: f64, tap: f64) -> Branch {
+        let mut branch = Branch::new(BusId(from), BusId(to), 0.01, 0.1);
+        branch.b = b;
+        branch.tap = tap;
+        branch
+    }
+
+    #[test]
+    fn a_unit_tap_branch_with_charging_is_written_as_a_line() {
+        // MATPOWER states case118's 68-116 with a ratio of exactly 1 and line
+        // charging. A transformer record would put all of it at winding 1's
+        // bus; a BRANCH record states half at each end (#940).
+        let net = two_bus_network(vec![matpower_branch(1, 2, 0.164, 1.0)]);
+        for rev in [33, 34, 35] {
+            let conv = write_psse_rev(&net, rev);
+            let lines = section(&conv.text, "BRANCH");
+            assert_eq!(lines.len(), 1, "rev {rev}: {:?}", conv.text);
+            assert!(
+                lines[0].starts_with("1, 2, '1', 0.01, 0.1, 0.164,"),
+                "{lines:?}"
+            );
+            assert!(
+                section(&conv.text, "TRANSFORMER").is_empty(),
+                "{}",
+                conv.text
+            );
+            let rendered = conv.render_diagnostics();
+            assert!(
+                rendered
+                    .iter()
+                    .any(|w| w.contains("ELEMENT_RELABELED") && w.contains("(1-2)")),
+                "{rendered:?}"
+            );
+            assert!(
+                !rendered
+                    .iter()
+                    .any(|w| w.contains("magnetizing admittance")),
+                "{rendered:?}"
+            );
+
+            let back = parse_psse(&conv.text).unwrap();
+            assert!(!back.branches()[0].is_transformer());
+            let charging = back.branches()[0].calc_terminal_charging();
+            close(charging.b_fr, 0.082);
+            close(charging.b_to, 0.082);
+            close(charging.g_fr, 0.0);
+            close(charging.g_to, 0.0);
+        }
+
+        // Uneven terminal admittance rides on GI/BI/GJ/BJ.
+        let mut uneven = transformer_with_terminal_charging(BranchCharging {
+            g_fr: 0.01,
+            b_fr: 0.02,
+            g_to: 0.03,
+            b_to: 0.05,
+        });
+        uneven.tap = 1.0;
+        let conv = write_psse(&two_bus_network(vec![uneven]));
+        assert!(
+            section(&conv.text, "TRANSFORMER").is_empty(),
+            "{}",
+            conv.text
+        );
+        let back = parse_psse(&conv.text).unwrap();
+        let charging = back.branches()[0].calc_terminal_charging();
+        close(charging.g_fr, 0.01);
+        close(charging.b_fr, 0.02);
+        close(charging.g_to, 0.03);
+        close(charging.b_to, 0.05);
+    }
+
+    #[test]
+    fn a_unit_tap_branch_stays_a_transformer_when_the_record_is_exact_or_needed() {
+        // No charging, charging at the from end only, a phase shift, or tap
+        // control: the transformer record states each exactly or the BRANCH
+        // record cannot state it.
+        let plain = matpower_branch(1, 2, 0.0, 1.0);
+        let from_end_only = {
+            let mut branch =
+                transformer_with_terminal_charging(BranchCharging::new(0.0, 0.02, 0.0, 0.0));
+            branch.tap = 1.0;
+            branch
+        };
+        let shifted = {
+            let mut branch = matpower_branch(1, 2, 0.1, 1.0);
+            branch.shift = 5.0;
+            branch
+        };
+        let controlled = {
+            let mut branch = matpower_branch(1, 2, 0.1, 1.0);
+            branch.control = Some(TransformerControl::new(TransformerControlMode::Voltage));
+            branch
+        };
+        for branch in [plain, from_end_only, shifted, controlled] {
+            assert!(!writes_as_branch_record(&branch), "{branch:?}");
+            let conv = write_psse(&two_bus_network(vec![branch]));
+            assert!(section(&conv.text, "BRANCH").is_empty(), "{}", conv.text);
+            assert_eq!(section(&conv.text, "TRANSFORMER").len(), 4);
+            assert!(
+                !conv
+                    .render_diagnostics()
+                    .iter()
+                    .any(|w| w.contains("ELEMENT_RELABELED")),
+                "{:?}",
+                conv.render_diagnostics()
+            );
+        }
+    }
+
+    #[test]
+    fn a_tapped_transformer_with_matpower_charging_reports_the_moved_charging() {
+        // A MATPOWER row states `b` without per terminal charging; half of it
+        // belongs at the to end, which the transformer record cannot place.
+        let conv = write_psse(&two_bus_network(vec![matpower_branch(1, 2, 0.1, 1.05)]));
+        let rendered = conv.render_diagnostics();
+        assert!(
+            rendered.iter().any(|w| w.contains("VALUE_COLLAPSED")
+                && w.contains("winding 1's bus")
+                && w.contains("(1-2)")),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn branches_between_one_bus_pair_take_distinct_circuit_ids() {
+        // Antiparallel lines, as case2869pegase states 3113-5289 and
+        // 5289-3113, and a transformer beside a line, as ACTIVSg2000 states
+        // 7161-7292: PSS/E names each by (I, J, CKT) in either order across
+        // the BRANCH and TRANSFORMER sections, so each takes its own id (#939).
+        let net = two_bus_network(vec![
+            matpower_branch(1, 2, 0.0, 0.0),
+            matpower_branch(2, 1, 0.0, 0.0),
+            matpower_branch(2, 1, 0.0, 1.05),
+            matpower_branch(1, 2, 0.0, 0.0),
+        ]);
+        for rev in [33, 35] {
+            let raw = write_psse_rev(&net, rev).text;
+            let ids = |name| {
+                section(&raw, name)
+                    .iter()
+                    .filter(|line| line.starts_with("1, 2,") || line.starts_with("2, 1,"))
+                    .map(|line| fields(line)[if name == "BRANCH" { 2 } else { 3 }].to_string())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids("BRANCH"), ["1", "2", "3"], "{raw}");
+            assert_eq!(ids("TRANSFORMER"), ["4"], "{raw}");
+
+            // The ids the file states survive a round trip unchanged.
+            let back = parse_psse(&raw).unwrap();
+            let again = write_psse_rev(&back, rev).text;
+            assert_eq!(section(&again, "BRANCH"), section(&raw, "BRANCH"));
+            assert_eq!(section(&again, "TRANSFORMER"), section(&raw, "TRANSFORMER"));
+        }
+    }
+
+    #[test]
+    fn retained_circuit_ids_hold_across_the_branch_and_transformer_sections() {
+        // A valid PSS/E case: the transformer between buses 1 and 2 is circuit
+        // '1' and the line beside it circuit '2'. The writer states the line
+        // first; its retained '2' and the transformer's positional '1' both
+        // survive.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+2,1,'2 ',0.01,0.05,0.001,0,0,0,0,0,0,0,1,1,0.0
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,1,1,0,0,2,'XF1         ',1,1,1,0,1,0,1,0,1,'            '
+0.01,0.10,100.0
+1.05,0,0,100,90,80,0,0,1.1,0.9,1.1,0.9,33,0,0,0,0
+1.0,0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let out = write_psse(&parse_psse(raw).unwrap()).text;
+        assert!(
+            section(&out, "BRANCH")[0].starts_with("2, 1, '2',"),
+            "{out}"
+        );
+        assert!(
+            section(&out, "TRANSFORMER")[0].starts_with("1, 2, 0, '1',"),
+            "{out}"
+        );
     }
 
     #[test]

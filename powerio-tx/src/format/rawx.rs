@@ -2674,7 +2674,7 @@ fn apply_detailed_equipment_ids(
     for transformer in net
         .branches()
         .iter()
-        .filter(|branch| branch.is_transformer())
+        .filter(|branch| !super::psse::writes_as_branch_record(branch))
     {
         if let Some(id) = source_id("transformer", transformer.uid.as_deref()) {
             replace_table_string(network, "transformer", row, "ckt", &id)?;
@@ -2832,7 +2832,7 @@ fn output_equipment_keys(
         for (row, branch) in table.rows.iter().zip(
             net.branches()
                 .iter()
-                .filter(|branch| !branch.is_transformer()),
+                .filter(|branch| super::psse::writes_as_branch_record(branch)),
         ) {
             insert_output_equipment_key(
                 &mut keys,
@@ -2847,7 +2847,7 @@ fn output_equipment_keys(
         for branch in net
             .branches()
             .iter()
-            .filter(|branch| branch.is_transformer())
+            .filter(|branch| !super::psse::writes_as_branch_record(branch))
         {
             if let Some(row) = rows.next() {
                 insert_output_equipment_key(
