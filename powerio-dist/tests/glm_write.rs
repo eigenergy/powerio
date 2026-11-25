@@ -330,8 +330,7 @@ New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
     ] {
         net = dss_network(source);
         net.loads_mut()[0].extras.insert(key.into(), invalid);
-        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap())
-            .unwrap_err();
+        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
         assert!(
             error.to_string().contains(key),
             "expected {key} to remain blocking: {error}"
