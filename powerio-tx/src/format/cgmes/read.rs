@@ -1224,7 +1224,6 @@ impl Mapper<'_> {
 }
 
 /// Read already acquired CGMES XML profile documents as one case.
-///
 /// Diagnostics collected before a failure are dropped with it; callers that
 /// must keep them use [`read_cgmes_documents_into`].
 #[cfg(test)]
@@ -4136,11 +4135,7 @@ fn limit_kind<'a>(store: &'a Store, limit_type: &str, version: CgmesVersion) -> 
     }
 }
 
-/// The shared interpretation of one CGMES operational limit.
 ///
-/// Zero is a finite bound in the 0.12 model. A low-direction limit is a
-/// lower-flow constraint, not a thermal upper rating, and cannot be projected
-/// into the current branch rating fields.
 #[derive(Debug)]
 enum OperationalLimitClassification<'a> {
     Accepted {
@@ -4162,11 +4157,6 @@ fn classify_operational_limit<'a>(
             "has no OperationalLimitType",
         ));
     };
-    // Direction determines whether this is an upper rating at all. Check it
-    // before the numeric value so a lower-flow constraint is diagnosed as
-    // such even when its value is negative (which is independently invalid
-    // for an upper thermal rating, but is not the reason this record is
-    // excluded from the branch-rating projection).
     if store.enum_value(limit_type, "OperationalLimitType.direction") == Some("low") {
         return Ok(OperationalLimitClassification::Rejected(
             "is a low-direction limit",
@@ -5256,11 +5246,9 @@ fn read_linear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
         let g_per_section = store
             .f(id, "LinearShuntCompensator.gPerSection")?
             .unwrap_or(0.0)
-            * (kv * kv);
         let b_per_section = store
             .f(id, "LinearShuntCompensator.bPerSection")?
             .unwrap_or(0.0)
-            * (kv * kv);
         let blocks = vec![ShuntBlock::with_admittance(
             maximum_sections.min(u32::MAX as usize) as u32,
             g_per_section,
@@ -5305,11 +5293,9 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
                         store
                             .f(point, "NonlinearShuntCompensatorPoint.g")?
                             .unwrap_or(0.0)
-                            * kv2,
                         store
                             .f(point, "NonlinearShuntCompensatorPoint.b")?
                             .unwrap_or(0.0)
-                            * kv2,
                     ))
                 })
             })?
@@ -6158,8 +6144,6 @@ fn apply_limits_to_targets(
                 continue;
             }
             let class = store.class_of(limit).unwrap_or_default();
-            // Unsupported limits are diagnosed by loading_limits when the retained
-            // operational-limit groups are assembled; this projection skips them.
             let OperationalLimitClassification::Accepted {
                 value,
                 kind,
