@@ -330,7 +330,7 @@ fn nconds_for(conn: &str, phases: usize) -> usize {
     if conn == "delta" && phases == 3 {
         phases
     } else {
-        phases + 1
+        phases.saturating_add(1)
     }
 }
 
@@ -3255,6 +3255,13 @@ fn load_voltage_bounds(model: &DistLoadVoltageModel, extras: &mut Extras) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nconds_for_max_phase_count_does_not_overflow() {
+        assert_eq!(nconds_for("wye", usize::MAX), usize::MAX);
+        assert_eq!(nconds_for("delta", 3), 3);
+        assert_eq!(nconds_for("delta", usize::MAX), usize::MAX);
+    }
     use crate::model::MulticonductorNetworkTables;
     use crate::model::{
         ControlVoltageReference, DistControlProfile, DistGenerator, DistIbr, DistLine,
