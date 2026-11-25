@@ -421,10 +421,6 @@ fn electrical_node(net: &MulticonductorNetwork, bus: &str, terminal: &str) -> No
     node(&bus.id, &terminal)
 }
 
-/// A split ideal-source phase may have a synthetic name. In a one-source,
-/// earth-referenced phase split, recover the parent source identity only when
-/// the phasor is consistent with a 120-degree phase offset. Ambiguous or
-/// electrically unrelated sources retain their own identity.
 fn split_ideal_source_parent<'a>(
     net: &'a MulticonductorNetwork,
     source: &powerio_dist::VoltageSource,
@@ -481,9 +477,6 @@ fn split_ideal_source_parent<'a>(
         .then_some(*candidate)
 }
 
-/// Generated source-only EMF buses are internal naming details. Normalize
-/// them by source identity when comparing voltage constraints across formats;
-/// ordinary network buses remain part of the key and must match exactly.
 fn source_node(
     net: &MulticonductorNetwork,
     source: &powerio_dist::VoltageSource,
