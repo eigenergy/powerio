@@ -214,7 +214,7 @@ fn opendss_linecode_source_definition_does_not_block_static_glm_emission() {
         r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
 New Linecode.lc nphases=4 r1=0.1 x1=0.1 r0=0.3 x0=0.3 units=km
 New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 linecode=lc phases=3 length=0.5 units=km
-New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
 ",
     );
     assert!(net.lines().iter().any(|line| line.name == "l1"));
@@ -247,7 +247,7 @@ fn opendss_solution_options_and_reporting_commands_are_dropped_with_diagnostics(
         r"Set DefaultBaseFrequency=50
 New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
 New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
-New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
 Set VoltageBases=[13.2]
 Set Mode=snapshot
 Set Frequency=50
@@ -284,7 +284,7 @@ Show Voltages LN
 fn opendss_source_metadata_is_dropped_but_unknown_extras_remain_blocking() {
     let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
 New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
-New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
 ";
     let mut net = dss_network(source);
     for key in ["nominal_phase_kv", "basemva"] {
@@ -313,7 +313,7 @@ New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
 fn opendss_load_metadata_is_dropped_only_when_materialized_and_valid() {
     let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
 New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
-New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
 ";
     let mut net = dss_network(source);
     let output = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
