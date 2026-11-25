@@ -12,6 +12,18 @@ on:
     branches: [ "main" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
+    # Skip pull requests that change only evaluation harnesses, fuzz targets, other
+    # workflows or the npm release scripts. Pushes to main still run everything.
+    paths:
+      - '**'
+      - '!evals/**'
+      - '!fuzz/**'
+      - '!.github/**'
+      - '.github/workflows/docs.yml'
+      - '.github/workflows/converter.yml'
+      - '!scripts/npm-bootstrap.sh'
+      - '!scripts/build-npm-package.sh'
+      - '!scripts/test-npm-workflow.py'
   workflow_dispatch:
 
 permissions:

@@ -2,6 +2,13 @@ name: Conversion Matrix
 
 on:
   pull_request:
+    # Only the crates and their fixtures decide a conversion cell.
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'powerio*/**'
+      - 'tests/data/**'
+      - '.github/workflows/conversion-matrix.yml'
   push:
     branches: [main]
   workflow_dispatch:
