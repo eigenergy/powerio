@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- XIIDM/JIIDM emission now rejects duplicate document-global equipment identifiers, including boundary, tie-line, and DC equipment records.
+
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
 ## 0.12.4
