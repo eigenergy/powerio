@@ -15,6 +15,8 @@
 
 - PyPSA: a `StorageUnit` `p_set` and `q_set` are injections, positive when the unit discharges. The reader now negates them into the storage `ps` and `qs`, which are positive when the unit charges. The writer negates them back. A discharging PyPSA unit read as a charging one in every other format. A charging unit wrote as a discharging one.
 
+- XIIDM and JIIDM: a `shuntNonLinearModel` section states the accumulated g and b with it and all previous sections active, as PowSybl reads it. The reader added the first `sectionCount` sections and the writer stated each block step on its own, so a shunt with sections of 0.002 and 0.004 S and `sectionCount` 2 read as 0.006 S and PowSybl read a written 10 plus 20 MVAr shunt as 20 MVAr. The reader now takes the shunt admittance from section `sectionCount` and the per step blocks from the differences of consecutive sections. The writer states running sums.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.

@@ -3874,20 +3874,21 @@ fn build_network(parsed: &ParsedXiidm, diagnostics: &mut Diagnostics) -> Result<
                             equipment.id
                         )));
                     }
-                    let (g_si, b_si) = equipment
-                        .shunt_sections
-                        .iter()
-                        .take(section_count)
-                        .fold((0.0, 0.0), |(ga, ba), (g, b)| (ga + g, ba + b));
+                    // IIDM states each section as the accumulated g and b with it and all
+                    // previous sections active. Blocks hold the per section increments.
+                    let (g_si, b_si) = section_count
+                        .checked_sub(1)
+                        .map_or((0.0, 0.0), |last| equipment.shunt_sections[last]);
                     let blocks = equipment
                         .shunt_sections
                         .iter()
-                        .map(|(g, b)| {
-                            ShuntBlock::with_admittance(
+                        .scan((0.0, 0.0), |previous, &(g, b)| {
+                            let (previous_g, previous_b) = std::mem::replace(previous, (g, b));
+                            Some(ShuntBlock::with_admittance(
                                 1,
-                                powerio_core::electrical::calc_rated_power(*g, nominal),
-                                powerio_core::electrical::calc_rated_power(*b, nominal),
-                            )
+                                powerio_core::electrical::calc_rated_power(g - previous_g, nominal),
+                                powerio_core::electrical::calc_rated_power(b - previous_b, nominal),
+                            ))
                         })
                         .collect();
                     (g_si, b_si, blocks)
@@ -12596,19 +12597,23 @@ fn write_shunt(
         ));
     } else {
         output.push_str("        <iidm:shuntNonLinearModel>\n");
+        // IIDM sections are accumulated: each states the total with it and all previous ones on.
+        let (mut total_g, mut total_b) = (0.0, 0.0);
         for block in &control.blocks {
             for _ in 0..block.steps {
+                total_g += block.g;
+                total_b += block.b;
                 let conductance = if conductance_omitted {
                     String::new()
                 } else {
                     format!(
                         " g=\"{}\"",
-                        number(powerio_core::electrical::calc_rated_admittance(block.g, kv))
+                        number(powerio_core::electrical::calc_rated_admittance(total_g, kv))
                     )
                 };
                 output.push_str(&format!(
                     "          <iidm:section{conductance} b=\"{}\"/>\n",
-                    number(powerio_core::electrical::calc_rated_admittance(block.b, kv)),
+                    number(powerio_core::electrical::calc_rated_admittance(total_b, kv)),
                 ));
             }
         }
@@ -17224,6 +17229,10 @@ mod tests {
         assert_eq!(network.areas()[0].area_type.as_deref(), Some("ControlArea"));
         assert_f64_close(network.areas()[0].net_interchange, 12.5);
         assert_eq!(network.buses()[0].area, 7);
+        // IIDM sections are accumulated, so sectionCount 2 is the second section alone
+        // and the second block is the increment from the first section to the second.
+        assert_f64_close(network.shunts()[0].g, 30.0);
+        assert_f64_close(network.shunts()[0].b, 40.0);
         let control = network.shunts()[0].control.as_ref().unwrap();
         assert_eq!(control.blocks.len(), 2);
         assert_eq!(
@@ -17232,7 +17241,7 @@ mod tests {
         );
         assert_eq!(
             control.blocks[1],
-            ShuntBlock::with_admittance(1, 30.0, 40.0)
+            ShuntBlock::with_admittance(1, 20.0, 20.0)
         );
         assert_eq!(
             control
@@ -17244,6 +17253,11 @@ mod tests {
 
         let emission = write_xiidm(&network).unwrap();
         assert!(emission.text.contains("<iidm:shuntNonLinearModel>"));
+        assert!(
+            emission
+                .text
+                .contains("<iidm:section g=\"0.003\" b=\"0.004\"/>")
+        );
         assert!(emission.text.contains("<iidm:area id=\"A7\""));
         assert!(emission.text.contains("<iidm:voltageLevelRef id=\"VL\"/>"));
         assert!(!emission.text.contains("load-model-source"));
