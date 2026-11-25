@@ -42,7 +42,10 @@ jobs:
       - name: Install the native oracle
         run: |
           python -m venv .venv-ravens
-          .venv-ravens/bin/python -m pip install ./mg-ravens-oracle -r evals/validation/ravens/requirements.txt
+          # The requirements file pins the oracle's whole runtime environment,
+          # including security releases newer than its declared ranges.
+          .venv-ravens/bin/python -m pip install -r evals/validation/ravens/requirements.txt
+          .venv-ravens/bin/python -m pip install --no-deps ./mg-ravens-oracle
       - name: Generate the unmodified upstream schema
         run: .venv-ravens/bin/python evals/validation/ravens/generate_schema.py mg-ravens-oracle target/ravens-upstream-schema.json
       - name: Check both profiles through PowerIO IR
