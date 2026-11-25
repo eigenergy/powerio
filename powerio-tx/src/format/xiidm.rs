@@ -8695,6 +8695,141 @@ fn collapse_cross_substation_transformers(
     Some(projected)
 }
 
+fn register_xiidm_document_id<'a>(
+    ids: &mut HashMap<&'a str, &'static str>,
+    id: &'a str,
+    kind: &'static str,
+) -> Result<()> {
+    if let Some(previous_kind) = ids.insert(id, kind) {
+        return Err(Error::Emit {
+            format: FORMAT,
+            message: format!(
+                "document id `{id}` is used by both {previous_kind} and {kind}; XIIDM document ids must be unique"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_xiidm_equipment_uid_uniqueness(
+    network: &BalancedNetwork,
+    emit_detailed_connectivity: bool,
+) -> Result<()> {
+    let mut omitted_calculation_ids = HashSet::<(&str, &str)>::new();
+    if emit_detailed_connectivity && let Some(detailed) = network.detailed_connectivity() {
+        for boundary in &detailed.boundary_lines {
+            if let Some(id) = &boundary.calculation_load {
+                omitted_calculation_ids.insert(("load", id.local_id()));
+            }
+            if let Some(id) = &boundary.calculation_generator {
+                omitted_calculation_ids.insert(("generator", id.local_id()));
+            }
+        }
+        for tie in &detailed.tie_lines {
+            if let Some(id) = &tie.calculation_branch {
+                omitted_calculation_ids.insert(("branch", id.local_id()));
+            }
+        }
+    }
+
+    let mut equipment_ids = HashMap::<&str, &'static str>::new();
+    if emit_detailed_connectivity && let Some(detailed) = network.detailed_connectivity() {
+        for boundary in &detailed.boundary_lines {
+            register_xiidm_document_id(
+                &mut equipment_ids,
+                boundary.component.local_id(),
+                "boundary line",
+            )?;
+        }
+        for tie in &detailed.tie_lines {
+            register_xiidm_document_id(&mut equipment_ids, tie.component.local_id(), "tie line")?;
+        }
+    }
+
+    macro_rules! register_ids {
+        ($records:expr, $kind:literal) => {
+            let mut observed_calculation_ids = HashSet::<&str>::new();
+            for record in $records {
+                if let Some(uid) = record.uid.as_deref() {
+                    if omitted_calculation_ids.contains(&($kind, uid)) {
+                        if !observed_calculation_ids.insert(uid) {
+                            return Err(Error::Emit {
+                                format: FORMAT,
+                                message: format!(
+                                    "calculation-only {} uid `{uid}` occurs in multiple records; XIIDM emission would omit duplicate equipment",
+                                    $kind
+                                ),
+                            });
+                        }
+                        continue;
+                    }
+                    register_xiidm_document_id(&mut equipment_ids, uid, $kind)?;
+                }
+            }
+        };
+    }
+    register_ids!(network.loads(), "load");
+    register_ids!(network.generators(), "generator");
+    register_ids!(network.storage(), "storage");
+    register_ids!(network.shunts(), "shunt");
+    register_ids!(network.static_var_compensators(), "static var compensator");
+    register_ids!(network.branches(), "branch");
+    register_ids!(network.switches(), "switch");
+    register_ids!(network.hvdc(), "HVDC line");
+
+    let mut detailed_vsc_ids = HashSet::new();
+    let mut detailed_lcc_ids = HashSet::new();
+    if emit_detailed_connectivity && let Some(detailed) = network.detailed_connectivity() {
+        for node in &detailed.dc_nodes {
+            register_xiidm_document_id(&mut equipment_ids, node.component.local_id(), "DC node")?;
+        }
+        for ground in &detailed.dc_grounds {
+            register_xiidm_document_id(
+                &mut equipment_ids,
+                ground.component.local_id(),
+                "DC ground",
+            )?;
+        }
+        for line in &detailed.dc_lines {
+            register_xiidm_document_id(&mut equipment_ids, line.component.local_id(), "DC line")?;
+        }
+        for switch in &detailed.dc_switches {
+            register_xiidm_document_id(
+                &mut equipment_ids,
+                switch.component.local_id(),
+                "DC switch",
+            )?;
+        }
+        for converter in &detailed.voltage_source_converters {
+            let id = converter.component.local_id();
+            register_xiidm_document_id(&mut equipment_ids, id, "VSC converter station")?;
+            detailed_vsc_ids.insert(id);
+        }
+        for converter in &detailed.line_commutated_converters {
+            let id = converter.component.local_id();
+            register_xiidm_document_id(&mut equipment_ids, id, "LCC converter station")?;
+            detailed_lcc_ids.insert(id);
+        }
+    }
+    for line in network.hvdc() {
+        for converter in [line.converter1.as_ref(), line.converter2.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            let id = converter.component.local_id();
+            let already_emitted = match converter.kind {
+                crate::network::HvdcConverterKind::Vsc => detailed_vsc_ids.contains(id),
+                crate::network::HvdcConverterKind::Lcc => detailed_lcc_ids.contains(id),
+            };
+            if !already_emitted {
+                register_xiidm_document_id(&mut equipment_ids, id, "HVDC converter station")?;
+            }
+        }
+    }
+    register_ids!(network.transformers_3w(), "three-winding transformer");
+    Ok(())
+}
+
 pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
     // Every ohm and siemens value is a per unit value times a base over the
     // system base; refuse a base none can be formed over.
@@ -8724,6 +8859,11 @@ pub(crate) fn write_xiidm(network: &BalancedNetwork) -> Result<TextEmission> {
         format: FORMAT,
         message: format!("network validation failed before XIIDM emission: {error}"),
     })?;
+    let emit_detailed_connectivity = network
+        .detailed_connectivity()
+        .as_deref()
+        .is_some_and(|detailed| network.buses().is_empty() || !detailed.voltage_levels.is_empty());
+    validate_xiidm_equipment_uid_uniqueness(network, emit_detailed_connectivity)?;
     let mut diagnostics = Diagnostics::new();
     diagnose_unwritten_bus_areas(network, &mut diagnostics);
     if (network.base_mva() - DEFAULT_BASE_MVA).abs() > 1e-9 {
@@ -17116,6 +17256,167 @@ mod tests {
     }
 
     #[test]
+    fn xiidm_emission_rejects_duplicate_equipment_uids_across_types() {
+        let mut network = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        let duplicate = network.branches()[0].uid.as_deref().unwrap().to_owned();
+        network.loads_mut()[0].uid = Some(duplicate.clone());
+
+        let expected = format!(
+            "document id `{duplicate}` is used by both load and branch; XIIDM document ids must be unique"
+        );
+        for error in [
+            write_xiidm(&network).unwrap_err(),
+            write_jiidm(&network).unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(message.contains(&expected), "{message}");
+        }
+    }
+
+    #[test]
+    fn xiidm_emission_rejects_hvdc_converter_station_id_collisions() {
+        let mut first = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        let first_id = first.hvdc()[0]
+            .converter1
+            .as_ref()
+            .expect("fixture has converter station 1")
+            .component
+            .local_id()
+            .to_owned();
+        first.generators_mut()[0].uid = Some(first_id.clone());
+        let expected = format!(
+            "document id `{first_id}` is used by both generator and HVDC converter station; XIIDM document ids must be unique"
+        );
+        for error in [
+            write_xiidm(&first).unwrap_err(),
+            write_jiidm(&first).unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(message.contains(&expected), "{message}");
+        }
+
+        let mut second = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
+        *second.detailed_connectivity_mut() = None;
+        let second_id = second.hvdc()[0]
+            .converter2
+            .as_ref()
+            .expect("fixture has converter station 2")
+            .component
+            .local_id()
+            .to_owned();
+        second.branches_mut()[0].uid = Some(second_id.clone());
+        let expected = format!(
+            "document id `{second_id}` is used by both branch and HVDC converter station; XIIDM document ids must be unique"
+        );
+        for error in [
+            write_xiidm(&second).unwrap_err(),
+            write_jiidm(&second).unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(message.contains(&expected), "{message}");
+        }
+    }
+
+    #[test]
+    fn xiidm_emission_rejects_duplicate_detailed_dc_equipment_ids() {
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+<iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="dc-only" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
+  <iidm:dcNode id="N1" nominalV="500"/>
+  <iidm:dcNode id="N2" nominalV="500"/>
+  <iidm:dcSwitch id="S" dcNode1="N1" dcNode2="N2" kind="BREAKER" open="false" r="0"/>
+</iidm:network>"#;
+        let mut network = parse_xiidm_source(source, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(network.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.dc_switches[0].component = component_id("dc_switch", "N1").unwrap();
+
+        let message = write_xiidm(&network).unwrap_err().to_string();
+        assert!(
+            message.contains(
+                "document id `N1` is used by both DC node and DC switch; XIIDM document ids must be unique"
+            ),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn xiidm_uid_validation_only_counts_detailed_equipment_when_emitted() {
+        let boundary = |id: &str, calculation_load: Option<ComponentId>| BoundaryLine {
+            component: component_id("boundary_line", id).unwrap(),
+            voltage_level: component_id("voltage_level", "VL1").unwrap(),
+            active_power_setpoint_mw: 0.0,
+            reactive_power_setpoint_mvar: 0.0,
+            resistance_ohm: 1.0,
+            reactance_ohm: 1.0,
+            conductance_siemens: 0.0,
+            susceptance_siemens: 0.0,
+            pairing_key: None,
+            generation: None,
+            calculation_load,
+            calculation_generator: None,
+        };
+
+        let mut omitted = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(omitted.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.voltage_levels.clear();
+        detailed.boundary_lines.push(boundary("BL", None));
+        omitted.loads_mut()[0].uid = Some("BL".to_owned());
+        validate_xiidm_equipment_uid_uniqueness(&omitted, false)
+            .expect("a boundary line omitted by derived emission does not own an emitted ID");
+        let error = validate_xiidm_equipment_uid_uniqueness(&omitted, true).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "document id `BL` is used by both boundary line and load; XIIDM document ids must be unique"
+            ),
+            "{error}"
+        );
+
+        let mut projection = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        let detailed = Arc::make_mut(projection.detailed_connectivity_mut().as_mut().unwrap());
+        detailed.voltage_levels.clear();
+        detailed
+            .boundary_lines
+            .push(boundary("U", Some(component_id("load", "U").unwrap())));
+        projection.loads_mut()[0].uid = Some("U".to_owned());
+        projection.branches_mut()[0].uid = Some("U".to_owned());
+        let error = validate_xiidm_equipment_uid_uniqueness(&projection, false).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "document id `U` is used by both load and branch; XIIDM document ids must be unique"
+            ),
+            "{error}"
+        );
+
+        let mut shared_projection =
+            parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
+        let calculation_id = component_id("load", "U").unwrap();
+        let detailed = Arc::make_mut(
+            shared_projection
+                .detailed_connectivity_mut()
+                .as_mut()
+                .unwrap(),
+        );
+        detailed
+            .boundary_lines
+            .push(boundary("BL1", Some(calculation_id.clone())));
+        detailed
+            .boundary_lines
+            .push(boundary("BL2", Some(calculation_id)));
+        shared_projection.loads_mut()[0].uid = Some("U".to_owned());
+        validate_xiidm_equipment_uid_uniqueness(&shared_projection, true)
+            .expect("one calculation record may be referenced by multiple boundaries");
+
+        let duplicate = shared_projection.loads()[0].clone();
+        shared_projection.loads_mut().push(duplicate);
+        let error = validate_xiidm_equipment_uid_uniqueness(&shared_projection, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("calculation-only load uid `U` occurs in multiple records"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn missing_area_records_diagnose_only_changed_bus_assignments() {
         let mut network = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
         network.buses_mut()[0].area = 1;
@@ -17278,6 +17579,42 @@ mod tests {
 </iidm:network>"#;
         let mut diagnostics = Diagnostics::new();
         let network = parse_xiidm_source(source, &mut diagnostics).unwrap();
+
+        let mut duplicate_calculation_load = network.clone();
+        let calculation_load = duplicate_calculation_load
+            .loads()
+            .iter()
+            .find(|load| load.uid.as_deref() == Some("U"))
+            .unwrap()
+            .clone();
+        duplicate_calculation_load
+            .loads_mut()
+            .push(calculation_load);
+        let error = write_xiidm(&duplicate_calculation_load)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("calculation-only load uid `U`"), "{error}");
+
+        let mut duplicate_boundary_id = network.clone();
+        let mut branch = duplicate_boundary_id.branches()[0].clone();
+        branch.uid = Some("U".to_owned());
+        duplicate_boundary_id.branches_mut().push(branch);
+        let error = write_xiidm(&duplicate_boundary_id).unwrap_err().to_string();
+        assert!(
+            error.contains("document id `U` is used by both boundary line and branch"),
+            "{error}"
+        );
+
+        let mut duplicate_tie_id = network.clone();
+        let mut load = duplicate_tie_id.loads()[0].clone();
+        load.uid = Some("TL".to_owned());
+        duplicate_tie_id.loads_mut().push(load);
+        let error = write_xiidm(&duplicate_tie_id).unwrap_err().to_string();
+        assert!(
+            error.contains("document id `TL` is used by both tie line and load"),
+            "{error}"
+        );
+
         let detailed = network.detailed_connectivity().as_ref().unwrap();
         assert_eq!(detailed.boundary_lines.len(), 3);
         assert_eq!(detailed.tie_lines.len(), 1);
