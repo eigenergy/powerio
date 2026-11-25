@@ -154,10 +154,6 @@ fn voltage(source: &VoltageSource) -> Option<(f64, f64, &'static str)> {
         .find(|kv| (kv * 1000.0 / factor).to_bits() == magnitude.to_bits())?;
     let degrees = crate::dss::source::NATIVE_DEGREES_PER_RADIAN;
     let angle = (source.v_angle[0] + std::f64::consts::TAU) * degrees - 360.0;
-    // OpenDSS's degrees-per-radian constant is truncated, so its 120-degree
-    // phase step differs from TAU/3. The phase that wraps through 360 degrees
-    // can accumulate that error twice. Allow only this conversion error plus
-    // floating-point reconstruction error; material unbalance remains refused.
     let phase_step_error = (120.0 / degrees - std::f64::consts::TAU / 3.0).abs();
     let tolerance = magnitude * (2.0 * phase_step_error + 8.0 * f64::EPSILON);
     for (name, direction) in [("positive", 1.0), ("negative", -1.0), ("zero", 0.0)] {
@@ -227,10 +223,6 @@ fn equivalent<'a>(net: &'a MulticonductorNetwork, source: &VoltageSource) -> Opt
         .line_codes()
         .iter()
         .find(|c| c.name.eq_ignore_ascii_case(&line.linecode))?;
-    // The branch is folded only when its complete series impedance is
-    // represented by the current typed matrices and the structural checks
-    // above and below establish that it is isolated from other equipment.
-    // Names and provenance do not participate in the electrical equivalence.
     if code.n_conductors != 3
         || code.i_max.is_some()
         || code.s_max.is_some()
