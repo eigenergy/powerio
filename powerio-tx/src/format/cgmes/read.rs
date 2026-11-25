@@ -5242,12 +5242,18 @@ fn read_linear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
             .round() as usize;
         // Siemens × kV² = MW/MVAr injected at nominal voltage, the model's
         // 1 p.u. convention.
-        let g_per_section = store
-            .f(id, "LinearShuntCompensator.gPerSection")?
-            .unwrap_or(0.0)
-        let b_per_section = store
-            .f(id, "LinearShuntCompensator.bPerSection")?
-            .unwrap_or(0.0)
+        let g_per_section = powerio_core::electrical::calc_rated_power(
+            store
+                .f(id, "LinearShuntCompensator.gPerSection")?
+                .unwrap_or(0.0),
+            kv,
+        );
+        let b_per_section = powerio_core::electrical::calc_rated_power(
+            store
+                .f(id, "LinearShuntCompensator.bPerSection")?
+                .unwrap_or(0.0),
+            kv,
+        );
         let blocks = vec![ShuntBlock::with_admittance(
             maximum_sections.min(u32::MAX as usize) as u32,
             g_per_section,
@@ -5274,7 +5280,7 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
             continue;
         };
         let store = mapper.store;
-        let kv2 = mapper.kv(bus).powi(2);
+        let kv = mapper.kv(bus);
         let sections = selected_sections(mapper, id, 0.0)?;
         let mut points: Vec<_> = store
             .referrers(
@@ -5289,12 +5295,18 @@ fn read_nonlinear_shunts(mapper: &mut Mapper<'_>) -> Result<Vec<Shunt>> {
                             .round() as usize;
                     (number > 0).then_some((
                         number,
-                        store
-                            .f(point, "NonlinearShuntCompensatorPoint.g")?
-                            .unwrap_or(0.0)
-                        store
-                            .f(point, "NonlinearShuntCompensatorPoint.b")?
-                            .unwrap_or(0.0)
+                        powerio_core::electrical::calc_rated_power(
+                            store
+                                .f(point, "NonlinearShuntCompensatorPoint.g")?
+                                .unwrap_or(0.0),
+                            kv,
+                        ),
+                        powerio_core::electrical::calc_rated_power(
+                            store
+                                .f(point, "NonlinearShuntCompensatorPoint.b")?
+                                .unwrap_or(0.0),
+                            kv,
+                        ),
                     ))
                 })
             })?
