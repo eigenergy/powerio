@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- GridLAB-D static emission now validates retained OpenDSS line-unit codes (0 through 8) before omitting them; malformed or unknown codes remain blocking rather than being silently discarded.
 - GridLAB-D canonical emission from an OpenDSS static snapshot now treats retained
   LineCode declarations and validated `nominal_phase_kv`/`basemva` source metadata as
   source-only after their electrical values have been materialized in the typed network.

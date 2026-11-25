@@ -749,7 +749,7 @@ impl Writer<'_> {
                         "dss_source_length" => value
                             .as_f64()
                             .is_some_and(|number| number.is_finite() && number >= 0.0),
-                        "dss_source_units" => value.as_str().is_some_and(|units| !units.is_empty()),
+                        "dss_source_units" => value.as_u64().is_some_and(|units| units <= 8),
                         "dss_flattened_properties" => value.is_array(),
                         _ => false,
                     };

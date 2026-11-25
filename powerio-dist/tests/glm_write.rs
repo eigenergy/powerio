@@ -244,7 +244,8 @@ New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
 #[test]
 fn opendss_solution_options_and_reporting_commands_are_dropped_with_diagnostics() {
     let net = dss_network(
-        r"Set DefaultBaseFrequency=50\nNew Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+        r"Set DefaultBaseFrequency=50
+New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
 New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
 New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
 Set VoltageBases=[13.2]
@@ -330,6 +331,29 @@ New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
                 "{label} {key} should be rejected, got: {error}"
             );
         }
+    }
+}
+
+#[test]
+fn opendss_source_units_metadata_requires_a_known_unit_code() {
+    let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+";
+    for (label, invalid) in [
+        ("negative", serde_json::json!(-1)),
+        ("out_of_range", serde_json::json!(9)),
+        ("nonnumeric", serde_json::Value::Null),
+    ] {
+        let mut net = dss_network(source);
+        net.lines_mut()[0]
+            .extras
+            .insert("dss_source_units".into(), invalid);
+        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+        assert!(
+            error.to_string().contains("dss_source_units"),
+            "{label} unit code should remain blocking: {error}"
+        );
     }
 }
 
