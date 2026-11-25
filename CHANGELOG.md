@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- GridLAB-D canonical emission from an OpenDSS static snapshot now treats retained
+  LineCode declarations and validated `nominal_phase_kv`/`basemva` source metadata as
+  source-only after their electrical values have been materialized in the typed network.
+  Omitted metadata, solution options and reporting commands are diagnosed. Retained
+  Open/Close/Enable/Disable commands and other unrecognized commands remain blocking
+  because their complete effects are not guaranteed to be represented in the typed
+  snapshot; untyped electrical equipment is also refused with the object identified
+  (#836).
+
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
 ## 0.12.4
