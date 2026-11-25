@@ -7522,8 +7522,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
 
 #[allow(clippy::too_many_lines)] // one XML pass classifies definitions and references by RDF role
 pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
-    const RDF_NS: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-    const MD_NS: &[u8] = b"http://iec.ch/TC57/61970-552/ModelDescription/1#";
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const MD_NS: &str = "http://iec.ch/TC57/61970-552/ModelDescription/1#";
 
     let mut fragment_definitions = HashMap::<String, &str>::new();
     let mut model_definitions = HashMap::<String, &str>::new();
@@ -7545,9 +7545,9 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                         ResolveResult::Bound(ref value) if value.as_ref() == MD_NS
                     );
                     let local_name = element.local_name();
-                    let is_full_model = is_model_namespace && local_name.as_ref() == b"FullModel";
+                    let is_full_model = is_model_namespace && local_name.as_ref() == "FullModel";
                     let is_model_dependency =
-                        is_model_namespace && local_name.as_ref() == b"Model.DependentOn";
+                        is_model_namespace && local_name.as_ref() == "Model.DependentOn";
 
                     for attribute in element.attributes().with_checks(true) {
                         let attribute = attribute.map_err(|error| {
@@ -7563,7 +7563,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                         ) {
                             continue;
                         }
-                        let value = crate::format::xml::attribute_value(&attribute, reader.decoder())
+                        let value = crate::format::xml::attribute_value(&attribute)
                             .map_err(|error| {
                                 emission_error(format!(
                                     "generated CGMES file `{name}` has an invalid RDF attribute value: {error}"
@@ -7571,7 +7571,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                             })?;
                         let value = value.as_ref();
                         match attribute_local_name.as_ref() {
-                            b"ID" => {
+                            "ID" => {
                                 let id = value.strip_prefix('_').unwrap_or(value);
                                 register_rdf_definition(
                                     &mut fragment_definitions,
@@ -7580,7 +7580,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                                     "mRID",
                                 )?;
                             }
-                            b"about" if is_full_model => {
+                            "about" if is_full_model => {
                                 let id = value.strip_prefix("urn:uuid:").ok_or_else(|| {
                                     emission_error(format!(
                                         "generated CGMES FullModel in `{name}` has rdf:about `{value}` instead of a urn:uuid identifier"
@@ -7593,7 +7593,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                                     "model UUID",
                                 )?;
                             }
-                            b"about" => {
+                            "about" => {
                                 if let Some(id) = rdf_object_reference_id(value) {
                                     fragment_references.push((
                                         name.as_str(),
@@ -7602,7 +7602,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                                     ));
                                 }
                             }
-                            b"resource" if is_model_dependency => {
+                            "resource" if is_model_dependency => {
                                 let id = value.strip_prefix("urn:uuid:").ok_or_else(|| {
                                     emission_error(format!(
                                         "generated CGMES model dependency in `{name}` has rdf:resource `{value}` instead of a urn:uuid identifier"
@@ -7610,7 +7610,7 @@ pub(super) fn validate_rdf_graph(files: &[(String, String)]) -> Result<()> {
                                 })?;
                                 model_references.push((name.as_str(), id.to_owned()));
                             }
-                            b"resource" => {
+                            "resource" => {
                                 if let Some(id) = rdf_object_reference_id(value) {
                                     fragment_references.push((
                                         name.as_str(),
