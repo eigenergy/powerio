@@ -1514,6 +1514,8 @@ fn branch_frames(
     let mut trafo_data = Vec::new();
     let mut charging = Vec::new();
     let mut negative_x_trafos = 0usize;
+    let mut unrated_transformers = 0usize;
+    let mut unrated_transformer_examples = Vec::with_capacity(5);
     for br in net.branches() {
         let v_from = *kv_of.get(&br.from).unwrap_or(&1.0);
         let v_to = *kv_of.get(&br.to).unwrap_or(&1.0);
@@ -1531,10 +1533,10 @@ fn branch_frames(
             {
                 value
             } else {
-                warnings.push(&F.value_substituted, format!(
-                    "transformer branch {}-{} rate_a = {} replaced by sn_mva = {}: pandapower requires a positive impedance base; this rating is not preserved",
-                    br.from, br.to, br.rate_a, net.base_mva()
-                ));
+                unrated_transformers += 1;
+                if unrated_transformer_examples.len() < 5 {
+                    unrated_transformer_examples.push(format!("{}-{}", br.from, br.to));
+                }
                 net.base_mva()
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
@@ -1634,6 +1636,22 @@ fn branch_frames(
                 Value::Null,
             ]);
         }
+    }
+    if unrated_transformers > 0 {
+        let examples = unrated_transformer_examples.join(", ");
+        let remaining = unrated_transformers - unrated_transformer_examples.len();
+        let remaining = if remaining > 0 {
+            format!(", and {remaining} more")
+        } else {
+            String::new()
+        };
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "sn_mva = {} substituted for {unrated_transformers} transformer(s) with no positive rate_a ({examples}{remaining}): pandapower requires a positive impedance base; these ratings are not preserved",
+                net.base_mva()
+            ),
+        );
     }
     if negative_x_trafos > 0 {
         warnings.push(&F.value_substituted, format!(
@@ -4230,9 +4248,9 @@ mod tests {
         let emitted = write_pandapower_json(&net);
         assert!(emitted.diagnostics.iter().any(|finding| {
             finding.code() == F.value_substituted.code
-                && finding
-                    .message()
-                    .contains("rate_a = inf replaced by sn_mva = 100")
+                && finding.message().contains(
+                    "sn_mva = 100 substituted for 1 transformer(s) with no positive rate_a (1-2)",
+                )
         }));
         assert!(
             !emitted
@@ -4256,6 +4274,46 @@ mod tests {
             (1.02, -5.0)
         );
         assert!((restored.network.branches()[0].rate_a - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_aggregates_unrated_transformer_substitutions() {
+        let buses = (1..=8)
+            .map(|id| test_bus(id, if id == 1 { BusType::Ref } else { BusType::Pq }))
+            .collect();
+        let mut net = test_net(buses);
+        for from in 1..=7 {
+            net.branches_mut().push(test_branch(from, from + 1, 1.05));
+        }
+
+        let emitted = write_pandapower_json(&net);
+        let findings: Vec<_> = emitted
+            .diagnostics
+            .iter()
+            .filter(|finding| finding.code() == F.value_substituted.code)
+            .collect();
+        assert_eq!(findings.len(), 1, "{:?}", emitted.render_diagnostics());
+        let message = findings[0].message();
+        assert!(
+            message
+                .contains("sn_mva = 100 substituted for 7 transformer(s) with no positive rate_a",)
+        );
+        for pair in ["1-2", "2-3", "3-4", "4-5", "5-6"] {
+            assert!(message.contains(pair), "missing {pair} in {message}");
+        }
+        assert!(
+            !message.contains("6-7"),
+            "unexpected extra example: {message}"
+        );
+        assert!(message.contains("and 2 more"), "{message}");
+
+        let trafo = written_frame(&emitted.text, "trafo");
+        assert_eq!(trafo.data.len(), 7);
+        assert!(
+            col(&trafo, "sn_mva")
+                .iter()
+                .all(|value| value.as_f64() == Some(100.0))
+        );
     }
 
     #[test]
