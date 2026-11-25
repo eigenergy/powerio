@@ -166,12 +166,12 @@ jobs:
             echo "::error::npm refused the trusted publish of $PACKAGE $VERSION. If the package has no trusted publisher yet, $publisher, then re-run this job. No token fallback exists."
             exit 1
           }
-          for _ in 1 2 3 4 5 6; do
+          for _ in $(seq 60); do
             if [ "$(npm view "$PACKAGE@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
               echo "published $PACKAGE $VERSION"
               exit 0
             fi
             sleep 10
           done
-          echo "$PACKAGE $VERSION is not visible on npm a minute after publishing" >&2
+          echo "$PACKAGE $VERSION is not visible on npm ten minutes after publishing" >&2
           exit 1
