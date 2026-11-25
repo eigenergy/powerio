@@ -7857,9 +7857,6 @@ fn derive_detailed_connectivity(
     Ok(detailed)
 }
 
-/// Refuse derived bus identifiers that collide with emitted equipment IDs.
-/// XIIDM identifiers are document-global; emitting both a derived bus "B1"
-/// and equipment uid "B1" creates a document PowSybl and PowerIO reject.
 fn validate_derived_xiidm_bus_equipment_ids(network: &BalancedNetwork) -> Result<()> {
     let mut equipment_ids = HashMap::<String, &'static str>::new();
     macro_rules! register_ids {
@@ -7879,8 +7876,6 @@ fn validate_derived_xiidm_bus_equipment_ids(network: &BalancedNetwork) -> Result
     register_ids!(network.branches(), "branch");
     register_ids!(network.switches(), "switch");
     register_ids!(network.hvdc(), "HVDC line");
-    // Converter stations are emitted as separate XIIDM equipment. Their IDs
-    // can collide with a derived bus even when the parent HVDC line does not.
     for line in network.hvdc() {
         for converter in [line.converter1.as_ref(), line.converter2.as_ref()]
             .into_iter()
@@ -17210,9 +17205,6 @@ mod tests {
 
     #[test]
     fn derived_xiidm_bus_ids_ignore_detailed_converter_stations_not_emitted() {
-        // This source has a detailed VSC but no reduced-model HVDC line. The
-        // derived hierarchy omits detailed-only converter stations, so its ID
-        // must not collide with a generated bus identifier.
         let source = r#"<?xml version="1.0" encoding="UTF-8"?>
 <iidm:network xmlns:iidm="http://www.powsybl.org/schema/iidm/1_17" id="detailed-vsc" caseDate="2026-01-01T00:00:00Z" forecastDistance="0" sourceFormat="test" minimumValidationLevel="STEADY_STATE_HYPOTHESIS">
   <iidm:dcNode id="N1" nominalV="500"/>
@@ -17247,8 +17239,6 @@ mod tests {
         terminal.equipment = collision_id;
         detailed.voltage_levels.clear();
 
-        // Exercise both actual derived-emission paths: XIIDM retains the
-        // generated bus B1, while both formats omit the detailed-only station.
         let xiidm =
             write_xiidm(&network).expect("omitted detailed converter must not block bus B1");
         assert!(xiidm.text.contains("<iidm:bus id=\"B1\""), "{}", xiidm.text);
