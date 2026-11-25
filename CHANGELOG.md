@@ -9,6 +9,8 @@
 
 - XIIDM and JIIDM: a three winding transformer leg ratio tap step `rho` divides the winding tap, as it does for a two winding transformer. The reader and writer multiplied it in, so a leg tap away from 1 was inverted on the way to and from PowSybl. A PSS/E `WINDV2` of 1.025 is now written as `rho` 1 / 1.025, as PowSybl's PSS/E importer writes it.
 
+- CGMES: a line, series compensator, load, machine, shunt, static var compensator or equivalent injection with a terminal at SSH `ACDCTerminal.connected` false reads out of service, also when SV or SSH states `inService` true. `inService` is availability. The reader kept such an open line joining its buses and such a load drawing power. Transformers already read this way.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
