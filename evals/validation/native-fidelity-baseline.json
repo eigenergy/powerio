@@ -1,0 +1,282 @@
+{
+  "schema": "powerio-native-fidelity",
+  "schema_version": 1,
+  "spec": "native-seeds-v1",
+  "provenance": {
+    "base_commit": "c3c576d2c5231cf0b3e641ac2c8a9b20fa5c11ba",
+    "head_commit": null,
+    "repository": "eigenergy/powerio",
+    "run_attempt": null,
+    "run_id": null,
+    "suite": "powerio-cli/tests/conversion_matrix_report.rs",
+    "tested_commit": "ae7ae753341ec609d7b7b2e910aed27b07cbfab1",
+    "worktree_dirty": false
+  },
+  "powerio_version": "0.12.5",
+  "oracles": {
+    "matpowercaseframes": "2.1.1",
+    "numpy": "2.5.5",
+    "pandas": "3.1.1",
+    "scipy": "1.18.1",
+    "opendssdirect.py": "0.9.4",
+    "dss-python": "0.15.7",
+    "dss-python-backend": "0.14.5",
+    "engine": "DSS C-API Library version 0.14.5 revision 87d85c2622c8281b92255335bc7c09b11191b21d based on OpenDSS SVN 3723 [FPC 3.2.2] (64-bit build) MVMULT INCREMENTAL_Y CONTEXT_API PM 20240329033829; License Status: Open"
+  },
+  "cases": {
+    "case14": {
+      "source": "matpower",
+      "target": "matpower",
+      "fixture": "tests/data/case14.m",
+      "provenance": "tests/data/README.md#matpower-cases-m-in-this-directory",
+      "digests": {
+        "tests/data/case14.m": "2ffc4e1b734ae6c5e92dbe68b4e36010ed695a4bbcc4d065c74c4fbc39fcf3c1"
+      },
+      "outside_scope": "Independent AC power flow, limits, and OPF costs.",
+      "score": {
+        "byte_replay": {
+          "passes": 1,
+          "verified": 1,
+          "applicable": 1
+        },
+        "fresh_write": {
+          "passes": 4,
+          "verified": 4,
+          "applicable": 4
+        },
+        "independent_validation": {
+          "passes": 6,
+          "verified": 6,
+          "applicable": 6
+        }
+      },
+      "checks": {
+        "retained_files": {
+          "leg": "byte_replay",
+          "scope": "Exact inventory and bytes of all original files.",
+          "status": "pass"
+        },
+        "source_parse": {
+          "leg": "fresh_write",
+          "scope": "PowerIO parses the original native fixture.",
+          "status": "pass"
+        },
+        "fresh_write": {
+          "leg": "fresh_write",
+          "scope": "Emit from the typed network with no retained bytes.",
+          "status": "pass"
+        },
+        "powerio_readback": {
+          "leg": "fresh_write",
+          "scope": "PowerIO parses the fresh output and sidecars.",
+          "status": "pass"
+        },
+        "matrix_invariants": {
+          "leg": "fresh_write",
+          "scope": "Matrix core counts and totals, AC Y_bus and connected bus injections with normalized tolerance 1e-8.",
+          "status": "pass"
+        },
+        "matpower_axes": {
+          "leg": "independent_validation",
+          "scope": "CaseFrames bus IDs, bus types, oriented branch endpoints and service flags agree in input order.",
+          "status": "pass",
+          "differing_axes": [],
+          "coverage": {
+            "buses": 14,
+            "branches": 20
+          }
+        },
+        "matpower_dc_bbus": {
+          "leg": "independent_validation",
+          "scope": "Maximum entrywise absolute residual for MATPOWER's bbus (including zeros).",
+          "tolerance": 1e-09,
+          "units": "per unit",
+          "comparison": "<",
+          "status": "pass",
+          "residual": 0.0,
+          "coverage": {
+            "shape": [
+              14,
+              14
+            ],
+            "entries": 196
+          }
+        },
+        "matpower_dc_bf": {
+          "leg": "independent_validation",
+          "scope": "Maximum entrywise absolute residual for MATPOWER's bf (including zeros).",
+          "tolerance": 1e-09,
+          "units": "per unit",
+          "comparison": "<",
+          "status": "pass",
+          "residual": 0.0,
+          "coverage": {
+            "shape": [
+              20,
+              14
+            ],
+            "entries": 280
+          }
+        },
+        "matpower_dc_pbusinj": {
+          "leg": "independent_validation",
+          "scope": "Maximum entrywise absolute residual for MATPOWER's pbusinj (including zeros).",
+          "tolerance": 1e-09,
+          "units": "per unit",
+          "comparison": "<",
+          "status": "pass",
+          "residual": 0.0,
+          "coverage": {
+            "shape": [
+              14
+            ],
+            "entries": 14
+          }
+        },
+        "matpower_dc_pfinj": {
+          "leg": "independent_validation",
+          "scope": "Maximum entrywise absolute residual for MATPOWER's pfinj (including zeros).",
+          "tolerance": 1e-09,
+          "units": "per unit",
+          "comparison": "<",
+          "status": "pass",
+          "residual": 0.0,
+          "coverage": {
+            "shape": [
+              20
+            ],
+            "entries": 20
+          }
+        },
+        "matpower_dc_ptdf": {
+          "leg": "independent_validation",
+          "scope": "Maximum entrywise absolute residual for MATPOWER's ptdf (including zeros).",
+          "tolerance": 1e-09,
+          "units": "unitless",
+          "comparison": "<",
+          "status": "pass",
+          "residual": 0.0,
+          "coverage": {
+            "shape": [
+              20,
+              14
+            ],
+            "entries": 280
+          }
+        }
+      }
+    },
+    "ieee13": {
+      "source": "dss",
+      "target": "dss",
+      "fixture": "tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss",
+      "provenance": "tests/data/dist/README.md#opendss",
+      "digests": {
+        "tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss": "033ccd4005c6538e9de5b2218e83001802ce14fbc5b6c312896ae8cbc5d4a504",
+        "tests/data/dist/opendss/ieee13/IEEELineCodes.DSS": "71bc16ef9c6084b9e3bab74fbdf967080b79624683465e1483b787ff160f58b3",
+        "tests/data/dist/opendss/ieee13/IEEE13Node_BusXY.csv": "f8dd1528c72f339ebf41bf1355ed64ef12fbe30864fcc839ed5e5e9dc527846e"
+      },
+      "outside_scope": "Independent voltage angles, branch powers, control trajectories, and coordinates.",
+      "score": {
+        "byte_replay": {
+          "passes": 1,
+          "verified": 1,
+          "applicable": 1
+        },
+        "fresh_write": {
+          "passes": 4,
+          "verified": 4,
+          "applicable": 4
+        },
+        "independent_validation": {
+          "passes": 1,
+          "verified": 2,
+          "applicable": 2
+        }
+      },
+      "checks": {
+        "retained_files": {
+          "leg": "byte_replay",
+          "scope": "Exact inventory and bytes of all original files.",
+          "status": "pass"
+        },
+        "source_parse": {
+          "leg": "fresh_write",
+          "scope": "PowerIO parses the original native fixture.",
+          "status": "pass"
+        },
+        "fresh_write": {
+          "leg": "fresh_write",
+          "scope": "Emit from the typed network with no retained bytes.",
+          "status": "pass"
+        },
+        "powerio_readback": {
+          "leg": "fresh_write",
+          "scope": "PowerIO parses the fresh output and sidecars.",
+          "status": "pass"
+        },
+        "matrix_invariants": {
+          "leg": "fresh_write",
+          "scope": "Matrix core counts/totals, source constraints (1e-9 \u00d7 max(|emf|, 1)), and line, switch, injection, shunt and transformer electrical projections (1e-9 \u00d7 max(|before|, |after|, 1e-12)).",
+          "status": "pass"
+        },
+        "opendss_nodes": {
+          "leg": "independent_validation",
+          "scope": "Native solves converge and their labelled conductor sets agree.",
+          "status": "pass",
+          "missing_nodes": [],
+          "extra_nodes": [],
+          "coverage": {
+            "reference": 41,
+            "candidate": 41,
+            "common": 41
+          }
+        },
+        "opendss_voltage_magnitude": {
+          "leg": "independent_validation",
+          "scope": "Maximum absolute voltage-magnitude residual across all labelled conductors.",
+          "tolerance": 0.001,
+          "units": "V",
+          "comparison": "<=",
+          "status": "fail",
+          "residual": 137.63058940665633,
+          "coverage": {
+            "reference": 41,
+            "candidate": 41,
+            "common": 41
+          },
+          "worst_node": "680.1",
+          "reference_volts": 2360.459061142607,
+          "candidate_volts": 2222.8284717359506
+        }
+      }
+    }
+  },
+  "negative_control": {
+    "status": "pass",
+    "check": "matpower_dc_bbus",
+    "branch": [
+      1,
+      2
+    ],
+    "field": "BR_X (pu)",
+    "before": 0.05917,
+    "after": 0.11834,
+    "result": {
+      "leg": "independent_validation",
+      "scope": "Maximum entrywise absolute residual for MATPOWER's bbus (including zeros).",
+      "tolerance": 1e-09,
+      "units": "per unit",
+      "comparison": "<",
+      "status": "fail",
+      "residual": 8.450228156160218,
+      "coverage": {
+        "shape": [
+          14,
+          14
+        ],
+        "entries": 196
+      }
+    }
+  }
+}
