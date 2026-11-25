@@ -69,9 +69,6 @@ fn combine_rate(a: f64, b: f64) -> f64 {
     }
 }
 
-/// Combine current limits. In this model zero means unlimited, unlike the
-/// ordinary MVA ratings (where zero is a binding limit). Invalid negative and
-/// NaN values remain invalid instead of being hidden by the unlimited sentinel.
 fn combine_current_rate(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         f64::NAN
@@ -86,9 +83,6 @@ fn combine_current_rate(a: f64, b: f64) -> f64 {
     }
 }
 
-/// The current through series sections is the same. Each A/B/C finite limit
-/// therefore takes the lower stated value; zero (unlimited) does not constrain
-/// the other section's limit.
 fn combine_current_ratings(
     a: Option<BranchCurrentRatings>,
     b: Option<BranchCurrentRatings>,
