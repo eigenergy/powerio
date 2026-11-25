@@ -310,6 +310,36 @@ New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
 }
 
 #[test]
+fn opendss_load_metadata_is_dropped_only_when_materialized_and_valid() {
+    let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+";
+    let mut net = dss_network(source);
+    let output = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
+    let findings = format!("{:?}", output.diagnostics());
+    assert!(findings.contains("load ld: retained OpenDSS kv metadata"));
+    assert!(findings.contains("load ld: retained OpenDSS phases metadata"));
+
+    for (key, invalid) in [
+        ("kv", serde_json::json!(0.0)),
+        ("phases", serde_json::json!(u64::MAX)),
+        ("pf", serde_json::json!(0.0)),
+        ("model", serde_json::json!(3)),
+        ("vendor_voltage_constraint", serde_json::json!(1.05)),
+    ] {
+        net = dss_network(source);
+        net.loads_mut()[0].extras.insert(key.into(), invalid);
+        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap())
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(key),
+            "expected {key} to remain blocking: {error}"
+        );
+    }
+}
+
+#[test]
 fn opendss_source_metadata_must_be_positive_finite_numbers() {
     let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
 New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
