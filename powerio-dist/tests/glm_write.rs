@@ -70,6 +70,17 @@ fn network() -> MulticonductorNetwork {
     net
 }
 
+fn dss_network(text: &str) -> MulticonductorNetwork {
+    let mut no_files = |_: &std::path::Path| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no included files in this test",
+        ))
+    };
+    let raw = powerio_dist::dss::__parse_raw_with(text, "case.dss", &mut no_files);
+    powerio_dist::dss::to_network_from_raw(&raw).0
+}
+
 fn text(net: &MulticonductorNetwork) -> String {
     let emission = emit_canonical(net, Destination::memory("case.glm").unwrap()).unwrap();
     assert_eq!(emission.fidelity(), Fidelity::Canonical);
@@ -195,6 +206,261 @@ fn unrepresented_physics_fails_before_writing_any_artifact() {
         assert!(!path.exists());
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
     }
+}
+
+#[test]
+fn opendss_linecode_source_definition_does_not_block_static_glm_emission() {
+    let net = dss_network(
+        r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Linecode.lc nphases=4 r1=0.1 x1=0.1 r0=0.3 x0=0.3 units=km
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 linecode=lc phases=3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
+",
+    );
+    assert!(net.lines().iter().any(|line| line.name == "l1"));
+    assert!(net.line_codes().iter().any(|code| {
+        code.source
+            .as_deref()
+            .is_some_and(|source| source.contains("OpenDSS Line."))
+    }));
+    assert!(
+        net.untyped_objects()
+            .iter()
+            .any(|object| { object.class.eq_ignore_ascii_case("linecode") && object.name == "lc" })
+    );
+
+    let output = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
+    let EmittedOutput::Memory { artifacts } = output.output() else {
+        panic!("expected memory output")
+    };
+    let text = std::str::from_utf8(artifacts[0].bytes()).unwrap();
+    assert!(text.contains("l1"));
+    assert!(output.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code() == "EMIT.GLM.FIELD_DROPPED"
+            && format!("{diagnostic:?}").contains("LineCode.lc")
+    }));
+}
+
+#[test]
+fn opendss_solution_options_and_reporting_commands_are_dropped_with_diagnostics() {
+    let net = dss_network(
+        r"Set DefaultBaseFrequency=50
+New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
+Set VoltageBases=[13.2]
+Set Mode=snapshot
+Set Frequency=50
+Solve
+CalcVoltageBases
+Show Voltages LN
+",
+    );
+    assert!(net.options().iter().any(|(name, _)| name == "voltagebases"));
+    assert!(net.options().iter().any(|(name, _)| name == "mode"));
+    assert!(net.options().iter().any(|(name, _)| name == "frequency"));
+    assert_eq!(net.base_frequency(), 50.0);
+    assert!(net.commands().iter().any(|(verb, _)| verb == "solve"));
+
+    let output = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
+    let findings = format!("{:?}", output.diagnostics());
+    for expected in [
+        "voltagebases",
+        "mode",
+        "frequency",
+        "solve",
+        "calcvoltagebases",
+        "show",
+    ] {
+        assert!(
+            findings.contains(expected),
+            "missing {expected}: {findings}"
+        );
+    }
+    assert!(findings.contains("EMIT.GLM.FIELD_DROPPED"));
+}
+
+#[test]
+fn opendss_source_metadata_is_dropped_but_unknown_extras_remain_blocking() {
+    let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
+";
+    let mut net = dss_network(source);
+    for key in ["nominal_phase_kv", "basemva"] {
+        assert!(net.sources()[0].extras.contains_key(key), "missing {key}");
+    }
+    let output = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
+    let findings = format!("{:?}", output.diagnostics());
+    for key in ["nominal_phase_kv", "basemva"] {
+        assert!(
+            findings.contains(key),
+            "missing diagnostic for {key}: {findings}"
+        );
+    }
+
+    net.sources_mut()[0]
+        .extras
+        .insert("vendor_voltage_constraint".into(), serde_json::json!(1.05));
+    let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+    assert!(
+        error.to_string().contains("vendor_voltage_constraint"),
+        "{error}"
+    );
+}
+
+#[test]
+fn opendss_load_metadata_is_dropped_only_when_materialized_and_valid() {
+    let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=2
+";
+    let mut net = dss_network(source);
+    let output = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap();
+    let findings = format!("{:?}", output.diagnostics());
+    assert!(findings.contains("load ld: retained OpenDSS kv metadata"));
+    assert!(findings.contains("load ld: retained OpenDSS phases metadata"));
+
+    for (key, invalid) in [
+        ("kv", serde_json::json!(0.0)),
+        ("phases", serde_json::json!(u64::MAX)),
+        ("pf", serde_json::json!(0.0)),
+        ("model", serde_json::json!(3)),
+        ("vendor_voltage_constraint", serde_json::json!(1.05)),
+    ] {
+        net = dss_network(source);
+        net.loads_mut()[0].extras.insert(key.into(), invalid);
+        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+        assert!(
+            error.to_string().contains(key),
+            "expected {key} to remain blocking: {error}"
+        );
+    }
+}
+
+#[test]
+fn opendss_source_metadata_must_be_positive_finite_numbers() {
+    let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+";
+    for key in ["nominal_phase_kv", "basemva"] {
+        for (label, invalid) in [
+            ("zero", serde_json::json!(0.0)),
+            ("negative", serde_json::json!(-1.0)),
+            ("nonnumeric", serde_json::Value::Null),
+        ] {
+            let mut net = dss_network(source);
+            net.sources_mut()[0].extras.insert(key.into(), invalid);
+            let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("invalid retained OpenDSS {key} metadata")),
+                "{label} {key} should be rejected, got: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn opendss_source_units_metadata_requires_a_known_unit_code() {
+    let source = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+";
+    for (label, invalid) in [
+        ("negative", serde_json::json!(-1)),
+        ("out_of_range", serde_json::json!(9)),
+        ("nonnumeric", serde_json::Value::Null),
+    ] {
+        let mut net = dss_network(source);
+        net.lines_mut()[0]
+            .extras
+            .insert("dss_source_units".into(), invalid);
+        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+        assert!(
+            error.to_string().contains("dss_source_units"),
+            "{label} unit code should remain blocking: {error}"
+        );
+    }
+}
+
+#[test]
+fn opendss_only_source_metadata_is_not_accepted_for_other_source_formats() {
+    let mut net = network();
+    net.sources_mut()[0]
+        .extras
+        .insert("basemva".into(), serde_json::json!(100.0));
+    let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+    assert!(
+        error.to_string().contains("basemva"),
+        "non-OpenDSS source metadata should remain blocking: {error}"
+    );
+}
+
+#[test]
+fn unknown_opendss_commands_remain_blocking_and_name_the_command() {
+    let net = dss_network(
+        r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+VendorRewriteCircuit custom-state
+",
+    );
+    let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+    assert!(
+        error.to_string().contains("VendorRewriteCircuit"),
+        "{error}"
+    );
+}
+
+#[test]
+fn topology_and_equipment_state_commands_remain_blocking() {
+    let base = r"New Circuit.t basekv=13.2 pu=1.0 phases=3 bus1=src.1.2.3.0
+New Line.l1 bus1=src.1.2.3.0 bus2=p1.1.2.3.0 phases=3 r1=0.1 x1=0.1 r0=0.3 x0=0.3 length=0.5 units=km
+New Load.ld bus1=p1.1.2.3.0 phases=3 kv=7.62 kw=50 kvar=10 model=1
+";
+    for command in [
+        "Open Line.l1 1",
+        "Close Line.l1 1",
+        "Disable Line.l1",
+        "Enable Line.l1",
+        "Disable Load.ld",
+        "Enable Load.ld",
+    ] {
+        let source = format!("{base}{command}\n");
+        let net = dss_network(&source);
+        let verb = command
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(
+            net.commands()
+                .iter()
+                .any(|(actual, _)| actual.eq_ignore_ascii_case(&verb)),
+            "test command was not parsed: {command}"
+        );
+        let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+        assert!(
+            error.to_string().to_ascii_lowercase().contains(&verb),
+            "{command} should block static emission, got: {error}"
+        );
+    }
+}
+
+#[test]
+fn non_dss_untyped_linecode_is_not_treated_as_a_retained_source_definition() {
+    let mut net = network();
+    net.untyped_objects_mut()
+        .push(powerio_dist::UntypedObject::new(
+            "linecode",
+            "manual",
+            Vec::new(),
+        ));
+    let error = emit_canonical(&net, Destination::memory("case.glm").unwrap()).unwrap_err();
+    assert!(error.to_string().contains("linecode.manual"), "{error}");
 }
 
 #[test]

@@ -159,6 +159,39 @@ fn unsupported(message: impl Into<String>) -> Error {
     Error::new(&codes::EMIT_GLM_UNSUPPORTED, message)
 }
 
+fn dss_static_profile_command_is_droppable(verb: &str) -> bool {
+    matches!(
+        verb.to_ascii_lowercase().as_str(),
+        "solve"
+            | "_solvenocontrol"
+            | "_solvedirect"
+            | "_solvepflow"
+            | "calcvoltagebases"
+            | "buildy"
+            | "show"
+            | "plot"
+            | "export"
+            | "save"
+            | "sample"
+            | "voltages"
+            | "currents"
+            | "powers"
+            | "seqvoltages"
+            | "seqcurrents"
+            | "seqpowers"
+            | "losses"
+            | "overloads"
+            | "about"
+            | "help"
+            | "?"
+            | "next"
+            | "panel"
+            | "makebuslist"
+            | "calcincmatrix"
+            | "calcincmatrix_o"
+    )
+}
+
 impl Writer<'_> {
     /// Whether an element's WYE neutral at `bus`
     /// ([`crate::calc_wye_neutral_position`] over the network's terminal
@@ -239,6 +272,78 @@ impl Writer<'_> {
         }
     }
 
+    fn inventory_source_objects(&mut self, dss_source: bool) -> Result<(), Error> {
+        if !self.net.capacitors().is_empty() {
+            return Err(unsupported(format!(
+                "capacitors table contains {} record(s) with no qualified GLM mapping",
+                self.net.capacitors().len()
+            )));
+        }
+        if !self.net.control_profiles().is_empty() {
+            return Err(unsupported(format!(
+                "control_profiles table contains {} record(s) with no qualified GLM mapping",
+                self.net.control_profiles().len()
+            )));
+        }
+        let mut retained_linecodes = Vec::new();
+        for object in self.net.untyped_objects() {
+            if dss_source && object.class.eq_ignore_ascii_case("linecode") {
+                retained_linecodes.push(object.name.clone());
+            } else {
+                return Err(unsupported(format!(
+                    "untyped object {}.{} has no qualified GLM mapping",
+                    object.class, object.name
+                )));
+            }
+        }
+        for name in retained_linecodes {
+            self.dropped(format!(
+                "OpenDSS LineCode.{name} is a retained source definition, not live equipment; any referenced Line's effective matrix is already materialized in the typed network"
+            ));
+        }
+        if !self.net.extras().is_empty() {
+            return Err(unsupported(
+                "network extras may contain unmodeled electrical data",
+            ));
+        }
+        Ok(())
+    }
+
+    fn inventory_source_settings(&mut self, dss_source: bool) -> Result<(), Error> {
+        if dss_source {
+            let options = self.net.options().clone();
+            for (name, value) in options {
+                self.dropped(format!(
+                    "OpenDSS Set {name}={value} is a solution option outside the static GLM circuit profile"
+                ));
+            }
+            let commands = self.net.commands().clone();
+            for (verb, args) in commands {
+                if dss_static_profile_command_is_droppable(&verb) {
+                    self.dropped(format!(
+                        "OpenDSS command {verb} {args} is not emitted by the static GLM circuit profile"
+                    ));
+                } else {
+                    return Err(unsupported(format!(
+                        "OpenDSS command {verb} with arguments {args:?} is not materialized in the static circuit"
+                    )));
+                }
+            }
+        } else {
+            if let Some((name, value)) = self.net.options().first() {
+                return Err(unsupported(format!(
+                    "network option {name}={value} is not qualified for the static GLM profile"
+                )));
+            }
+            if let Some((verb, args)) = self.net.commands().first() {
+                return Err(unsupported(format!(
+                    "network command {verb} {args} is not qualified for the static GLM profile"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn inventory(&mut self) -> Result<(), Error> {
         if self.net.buses().is_empty() {
             return Err(unsupported("GLM output needs at least one electrical bus"));
@@ -248,22 +353,9 @@ impl Writer<'_> {
                 "nominal frequencies other than 50 or 60 Hz are not qualified",
             ));
         }
-        if !self.net.capacitors().is_empty()
-            || !self.net.control_profiles().is_empty()
-            || !self.net.untyped_objects().is_empty()
-        {
-            return Err(unsupported(
-                "additional device tables need a qualified GLM mapping",
-            ));
-        }
-        if !self.net.extras().is_empty()
-            || !self.net.options().is_empty()
-            || !self.net.commands().is_empty()
-        {
-            return Err(unsupported(
-                "uninterpreted network extras, options or commands may affect physics",
-            ));
-        }
+        let dss_source = *self.net.source_format() == Some(crate::DistSourceFormat::Dss);
+        self.inventory_source_settings(dss_source)?;
+        self.inventory_source_objects(dss_source)?;
         if self.net.name().is_some() || self.net.geo().is_some() {
             self.dropped("network name/coordinate metadata is not emitted by this GLM profile");
         }
@@ -281,11 +373,15 @@ impl Writer<'_> {
                     bus.id
                 ));
             }
-            if bus.grounded.as_slice() != ["n"]
-                || bus.terminals.iter().filter(|t| t.as_str() == "n").count() != 1
-            {
+            let grounded_neutral = bus.grounded.len() == 1
+                && bus.grounded.first().is_some_and(|grounded| {
+                    bus.terminals.last() == Some(grounded)
+                        && bus.terminal_role(grounded, self.net.terminal_conventions())
+                            == crate::TerminalRole::Neutral
+                });
+            if !grounded_neutral {
                 return Err(unsupported(format!(
-                    "bus {} requires explicit conductor/ground interpretation",
+                    "bus {} requires exactly one grounded neutral as its final terminal",
                     bus.id
                 )));
             }
@@ -295,13 +391,8 @@ impl Writer<'_> {
                     "triplex buses need exactly two hot terminals and a grounded neutral",
                 ));
             }
-            let phases = phases(
-                &bus.terminals
-                    .iter()
-                    .filter(|t| *t != "n")
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )?;
+            let phase_terminals = self.phase_terminals(&bus.id, &bus.terminals);
+            let phases = phases(&phase_terminals)?;
             self.phases.insert(&bus.id, phases);
         }
         for line in self.net.lines() {
@@ -339,11 +430,27 @@ impl Writer<'_> {
             let bus = buses.get(source.bus.as_str()).ok_or_else(|| {
                 unsupported(format!("source {} has no exact bus identity", source.name))
             })?;
-            if !source.extras.is_empty() {
-                return Err(unsupported(format!(
-                    "source {} has uninterpreted electrical extras",
+            let dss_source = *self.net.source_format() == Some(crate::DistSourceFormat::Dss);
+            for (key, value) in &source.extras {
+                if !dss_source || !matches!(key.as_str(), "nominal_phase_kv" | "basemva") {
+                    return Err(unsupported(format!(
+                        "source {} has uninterpreted electrical extra {key}",
+                        source.name
+                    )));
+                }
+                if !value
+                    .as_f64()
+                    .is_some_and(|number| number.is_finite() && number > 0.0)
+                {
+                    return Err(unsupported(format!(
+                        "source {} has invalid retained OpenDSS {key} metadata",
+                        source.name
+                    )));
+                }
+                self.dropped(format!(
+                    "source {}: retained OpenDSS {key} metadata is outside the static GLM profile; the typed phasor and source-impedance branch are emitted",
                     source.name
-                )));
+                ));
             }
             if source
                 .reference_terminal
@@ -526,7 +633,8 @@ impl Writer<'_> {
                 "link {name} permutes endpoint phase identities"
             )));
         }
-        let terminals = phases(from_map)?;
+        let phase_terminals = self.phase_terminals(from, from_map);
+        let terminals = phases(&phase_terminals)?;
         for bus in [from, to] {
             let available = self
                 .phases
@@ -630,9 +738,35 @@ impl Writer<'_> {
                 unsupported(format!("line {} has no exact linecode identity", line.name))
             })?;
             used_codes.insert(code.name.as_str());
-            if !line.extras.is_empty() || !code.extras.is_empty() {
+            let dss_source = *self.net.source_format() == Some(crate::DistSourceFormat::Dss);
+            for (key, value) in &line.extras {
+                let droppable = dss_source
+                    && match key.as_str() {
+                        "normamps" => value
+                            .as_f64()
+                            .is_some_and(|number| number.is_finite() && number >= 0.0),
+                        "dss_switch" => value.as_bool() == Some(false),
+                        "dss_source_length" => value
+                            .as_f64()
+                            .is_some_and(|number| number.is_finite() && number >= 0.0),
+                        "dss_source_units" => value.as_u64().is_some_and(|units| units <= 8),
+                        "dss_flattened_properties" => value.is_array(),
+                        _ => false,
+                    };
+                if !droppable {
+                    return Err(unsupported(format!(
+                        "line {} has uninterpreted electrical extra {key}",
+                        line.name
+                    )));
+                }
+                self.dropped(format!(
+                    "line {}: retained OpenDSS {key} metadata is not emitted; resolved electrical state is materialized in the typed line and linecode",
+                    line.name
+                ));
+            }
+            if !code.extras.is_empty() {
                 return Err(unsupported(format!(
-                    "line {} has uninterpreted electrical extras",
+                    "line {} has uninterpreted linecode electrical extras",
                     line.name
                 )));
             }
@@ -730,12 +864,7 @@ impl Writer<'_> {
                     load.name
                 )));
             }
-            if !load.extras.is_empty() {
-                return Err(unsupported(format!(
-                    "load {} has uninterpreted electrical extras",
-                    load.name
-                )));
-            }
+            self.load_source_metadata(load)?;
             let phase_order = phases(&load.terminal_map[..load.terminal_map.len() - 1])?;
             let available = self.phases.get(load.bus.as_str()).ok_or_else(|| {
                 unsupported(format!("load {} has no exact bus identity", load.name))
@@ -800,6 +929,40 @@ impl Writer<'_> {
                 );
             }
             self.out.push_str("}\n");
+        }
+        Ok(())
+    }
+
+    fn load_source_metadata(&mut self, load: &crate::DistLoad) -> Result<(), Error> {
+        for (key, value) in &load.extras {
+            let droppable = *self.net.source_format() == Some(crate::DistSourceFormat::Dss)
+                && match key.as_str() {
+                    // These source properties are materialized in the typed load.
+                    "kv" => value
+                        .as_f64()
+                        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                        .is_some_and(|number: f64| number.is_finite() && number > 0.0),
+                    "phases" => value
+                        .as_u64()
+                        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                        .and_then(|phases: u64| usize::try_from(phases).ok())
+                        .is_some_and(|phases| phases == load.p_nom.len()),
+                    "pf" => value
+                        .as_f64()
+                        .is_some_and(|pf| pf.is_finite() && pf != 0.0 && pf.abs() <= 1.0),
+                    "model" => value.as_u64().is_some_and(|model| matches!(model, 1 | 2)),
+                    _ => false,
+                };
+            if !droppable {
+                return Err(unsupported(format!(
+                    "load {} has uninterpreted electrical extra {key}",
+                    load.name
+                )));
+            }
+            self.dropped(format!(
+                "load {}: retained OpenDSS {key} metadata is not emitted; its qualified electrical effect is materialized in the typed load",
+                load.name
+            ));
         }
         Ok(())
     }
