@@ -23,6 +23,32 @@
 
 - Storage power in a normalized network: `to_normalized` keeps storage `ps` and `qs` in MW and MVAr, as PowerModels does. `calc_stated_state_mismatch`, `build_ac_opf_preparation` and `BusMerge::calc_removed_flows` read them as per unit and were off by `base_mva` at every storage bus. They now convert them, so a network and its normalized copy give the same results. `BalancedNetwork::storage_power_scale` states the factor.
 
+- The three-phase pandapower reader maps the `trafo`, `shunt` and `switch`
+  tables (#846). Transformers of vector group `Dyn` or `YNyn` get a correction
+  in zero-sequence-only shunts. Their zero sequence then matches the T model of
+  pandapower. A `YNyn` LV winding whose correction has a series part gets a
+  neutral terminal of its own. `READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION`
+  reports a correction with a negative real part. Ratio and symmetrical tap
+  changers on the HV or LV side set the winding taps. A second changer `tap2`
+  multiplies the first, as in pandapower. With `tap_dependency_table` the
+  reader takes `vk_percent` and `vkr_percent` from `trafo_characteristic_table`
+  at `tap_pos`. Ideal and phase-shifting changers keep the nominal ratio. So do
+  the ratio and the angle of a characteristic row.
+  `READ.DIST.PANDAPOWER_APPROXIMATED` reports each of them. An in-service
+  transformer with `tap_dependency_table` and no `id_characteristic_table` is
+  refused, as pandapower refuses it. A shunt draws the power of its step. With
+  `step_dependency_table` that power comes from `shunt_characteristic_table`.
+  A bus-bus switch becomes a `DistSwitch`. A closed one with `z_ohm` becomes a
+  1 m line instead. An open line or transformer switch moves the element end
+  to an auxiliary bus. A three-phase network keeps the balanced reading for
+  fewer rows. These are `gen`, `storage` and `dcline` rows, a `trafo` row of
+  another vector group and a `shunt` row whose step has no characteristic row.
+  An in-service stepped `shunt` that names no table keeps it too. The balanced
+  reader must still accept the document. `powerio batch` names only in-service
+  `trafo3w`, `impedance` and unmapped `trafo` rows as a connectivity change. A
+  switch no longer counts. The OpenDSS writer keeps a closed switch ideal when
+  its extras also carry a `name` or `type`.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.

@@ -312,8 +312,8 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                 ) if powerio_tx::format::is_three_phase_pandapower(&text) => {
                     // A three-phase pandapower network reads multiconductor.
                     // It then lowers like any other distribution case, unless
-                    // the reading left out a transformer or switch that
-                    // joins or splits its buses: the export would describe
+                    // the reading left out a transformer or impedance that
+                    // joins its buses: the export would describe
                     // other islands than pandapower solves.
                     let unmapped = powerio::tnd::formats::pandapower::unmapped_connections(&text);
                     let source = powerio_core::Source::from_memory(
