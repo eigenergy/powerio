@@ -153,7 +153,6 @@ where
     (own - mutual, own + mutual * 2.0)
 }
 
-/// Whether a three-phase admittance matrix contains mutual phase terms.
 pub(crate) fn has_off_diagonal(matrix: &[Vec<f64>]) -> bool {
     matrix.iter().enumerate().any(|(i, row)| {
         row.iter()
@@ -162,7 +161,6 @@ pub(crate) fn has_off_diagonal(matrix: &[Vec<f64>]) -> bool {
     })
 }
 
-/// Whether a terminal map names A, B, and C exactly once, in any order.
 pub(crate) fn is_abc_terminal_map(terminal_map: &[String]) -> bool {
     if terminal_map.len() != 3 {
         return false;
@@ -185,19 +183,6 @@ pub(crate) fn is_abc_terminal_map(terminal_map: &[String]) -> bool {
     seen.into_iter().all(|present| present)
 }
 
-/// Positive- and zero-sequence diagonal values retained when a reciprocal
-/// three-phase matrix is reduced to scalar sequence properties.
-///
-/// For row i, the per-phase positive-sequence projection is the self term
-/// minus the mean of its two mutual terms. The mean of those three projected
-/// entries equals the Fortescue positive-sequence diagonal. The zero-sequence
-/// diagonal is one third of the sum of all matrix entries. Inter-sequence
-/// coupling is not represented by these scalar diagonals.
-///
-/// Only finite, reciprocal 3×3 matrices are accepted. A caller must also
-/// verify that its terminal map is exactly A, B, C.
-/// Positive- and zero-sequence diagonal values retained by a scalar
-/// representation of a reciprocal three-phase admittance matrix.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SequenceDiagonalProjection {
     pub(crate) positive_by_phase: [f64; 3],
@@ -205,8 +190,6 @@ pub(crate) struct SequenceDiagonalProjection {
     pub(crate) zero: f64,
 }
 
-/// Compute positive- and zero-sequence diagonals for a finite reciprocal
-/// 3×3 matrix. The caller must verify that the terminal map is exactly ABC.
 pub(crate) fn sequence_diagonal_projection(
     matrix: &[Vec<f64>],
 ) -> Option<SequenceDiagonalProjection> {
@@ -214,8 +197,6 @@ pub(crate) fn sequence_diagonal_projection(
     let positive =
         positive_by_phase[0] / 3.0 + positive_by_phase[1] / 3.0 + positive_by_phase[2] / 3.0;
 
-    // Scale before summing so large finite matrix entries do not overflow
-    // merely because the nine terms are accumulated before division by 3.
     let scale = matrix
         .iter()
         .flatten()
@@ -237,8 +218,6 @@ pub(crate) fn sequence_diagonal_projection(
     })
 }
 
-/// The per-phase diagonal that retains a reciprocal three-phase matrix's
-/// positive-sequence admittance when a target cannot carry mutual terms.
 pub(crate) fn positive_sequence_projection(matrix: &[Vec<f64>]) -> Option<[f64; 3]> {
     if matrix.len() != 3
         || matrix
