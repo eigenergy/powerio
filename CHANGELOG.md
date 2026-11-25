@@ -21,6 +21,8 @@
 
 - Surge JSON: a storage unit's `p` and `q` are generator output, positive when it discharges, next to `pmin` as the negative charge limit. The reader took them as `Storage.ps` and `qs`, which are positive when charging. The writer did the inverse. So a charging unit became a discharging one in both directions. Both now flip the sign of `p`, `q`, `qmin` and `qmax`, as the XIIDM battery mapping does.
 
+- Storage power in a normalized network: `to_normalized` keeps storage `ps` and `qs` in MW and MVAr, as PowerModels does. `calc_stated_state_mismatch`, `build_ac_opf_preparation` and `BusMerge::calc_removed_flows` read them as per unit and were off by `base_mva` at every storage bus. They now convert them, so a network and its normalized copy give the same results. `BalancedNetwork::storage_power_scale` states the factor.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
