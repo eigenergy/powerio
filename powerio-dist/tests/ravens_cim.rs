@@ -432,7 +432,7 @@ fn lines_with_mismatched_nodes(dss: &str) -> Vec<&str> {
 }
 
 #[test]
-fn dss_helper_lines_name_the_same_nodes_at_both_ends() {
+fn dss_lines_name_the_same_nodes_at_both_ends() {
     // #765: a RAVENS or CIM source has a grounded neutral, so the OpenDSS
     // writer states it as one single phase source per conductor behind a
     // helper line. That line joined node 1 of its private bus to phase B or
@@ -442,7 +442,10 @@ fn dss_helper_lines_name_the_same_nodes_at_both_ends() {
     let (_, cim) = to_cim(&ravens);
     for (what, net) in [("ravens", &ravens), ("cim", &cim)] {
         let dss = net.emit_value(DistTargetFormat::Dss).text;
-        assert!(dss.contains("_pio_ideal_"), "{what}: {dss}");
+        assert!(
+            dss.contains("New Line."),
+            "{what}: expected line statements: {dss}"
+        );
         let mismatched = lines_with_mismatched_nodes(&dss);
         assert!(mismatched.is_empty(), "{what}: {mismatched:#?}");
     }

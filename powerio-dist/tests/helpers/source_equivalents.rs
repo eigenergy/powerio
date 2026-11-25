@@ -421,6 +421,93 @@ fn electrical_node(net: &MulticonductorNetwork, bus: &str, terminal: &str) -> No
     node(&bus.id, &terminal)
 }
 
+/// A split ideal-source phase may have a synthetic name. In a one-source,
+/// earth-referenced phase split, recover the parent source identity only when
+/// the phasor is consistent with a 120-degree phase offset. Ambiguous or
+/// electrically unrelated sources retain their own identity.
+fn split_ideal_source_parent<'a>(
+    net: &'a MulticonductorNetwork,
+    source: &powerio_dist::VoltageSource,
+    terminal: &str,
+) -> Option<&'a powerio_dist::VoltageSource> {
+    if !source.name.starts_with("_pio_ideal_")
+        || source.terminal_map.len() != 1
+        || source.terminal_map[0] != terminal
+        || !matches!(terminal.parse::<u32>().ok(), Some(2 | 3))
+        || source.v_magnitude.len() != 1
+        || source.v_angle.len() != 1
+        || !source.v_magnitude[0].is_finite()
+        || source.v_magnitude[0] <= 0.0
+        || !source.v_angle[0].is_finite()
+    {
+        return None;
+    }
+    let earth_referenced = |candidate: &powerio_dist::VoltageSource| {
+        candidate
+            .reference_terminal
+            .as_ref()
+            .is_none_or(|reference| {
+                net.bus(&candidate.bus)
+                    .is_some_and(|bus| bus.grounded.iter().any(|ground| ground == reference))
+            })
+    };
+    if !earth_referenced(source) {
+        return None;
+    }
+    let candidates: Vec<_> = net
+        .sources()
+        .iter()
+        .filter(|candidate| {
+            !candidate.name.starts_with("_pio_ideal_")
+                && candidate.terminal_map.len() == 1
+                && candidate.terminal_map[0].parse::<u32>().ok() == Some(1)
+                && candidate.v_magnitude.len() == 1
+                && candidate.v_angle.len() == 1
+                && candidate.v_magnitude[0].is_finite()
+                && candidate.v_magnitude[0] > 0.0
+                && candidate.v_angle[0].is_finite()
+                && earth_referenced(candidate)
+        })
+        .collect();
+    let [candidate] = candidates.as_slice() else {
+        return None;
+    };
+    let base = Complex64::from_polar(candidate.v_magnitude[0], candidate.v_angle[0]);
+    let phase = Complex64::from_polar(source.v_magnitude[0], source.v_angle[0]);
+    let tolerance = 1e-9 * base.norm().max(phase.norm()).max(1.0);
+    [std::f64::consts::TAU / 3.0, -std::f64::consts::TAU / 3.0]
+        .iter()
+        .any(|offset| (phase - base * Complex64::from_polar(1.0, *offset)).norm() <= tolerance)
+        .then_some(*candidate)
+}
+
+/// Generated source-only EMF buses are internal naming details. Normalize
+/// them by source identity when comparing voltage constraints across formats;
+/// ordinary network buses remain part of the key and must match exactly.
+fn source_node(
+    net: &MulticonductorNetwork,
+    source: &powerio_dist::VoltageSource,
+    terminal: &str,
+) -> Node {
+    let electrical = electrical_node(net, &source.bus, terminal);
+    if electrical.0.is_empty() {
+        return electrical;
+    }
+    let bus = source.bus.to_ascii_lowercase();
+    let generated = (bus.starts_with("_pio_ravens_") && bus.ends_with("_emf"))
+        || (bus.starts_with("_pio_vsource_") && bus.ends_with("_emf"))
+        || bus.starts_with("_pio_ideal_");
+    if generated {
+        let identity = split_ideal_source_parent(net, source, terminal).map_or_else(
+            || source.name.to_ascii_lowercase(),
+            |parent| parent.name.to_ascii_lowercase(),
+        );
+        node(&format!("_pio_source_emf_{identity}"), &electrical.1)
+    } else {
+        electrical
+    }
+}
+
 fn constraints(net: &MulticonductorNetwork) -> BTreeMap<(Node, Node), Complex64> {
     let mut result = BTreeMap::new();
     for source in net.sources() {
@@ -428,7 +515,7 @@ fn constraints(net: &MulticonductorNetwork) -> BTreeMap<(Node, Node), Complex64>
         assert_eq!(source.terminal_map.len(), source.v_angle.len());
         let reference = source.reference_terminal.as_ref().map_or_else(
             || (String::new(), "earth".into()),
-            |t| electrical_node(net, &source.bus, t),
+            |t| source_node(net, source, t),
         );
         for ((terminal, &magnitude), &angle) in source
             .terminal_map
@@ -436,7 +523,7 @@ fn constraints(net: &MulticonductorNetwork) -> BTreeMap<(Node, Node), Complex64>
             .zip(&source.v_magnitude)
             .zip(&source.v_angle)
         {
-            let phase = electrical_node(net, &source.bus, terminal);
+            let phase = source_node(net, source, terminal);
             let emf = Complex64::from_polar(magnitude, angle);
             if phase == reference {
                 assert_eq!(
@@ -585,4 +672,71 @@ pub fn contract_transformer_pairs(network: &MulticonductorNetwork) -> Multicondu
         });
     }
     net
+}
+
+#[cfg(test)]
+mod source_node_tests {
+    use super::*;
+    use powerio_dist::{DistBus, VoltageSource};
+
+    fn split_source_network(angle: f64) -> MulticonductorNetwork {
+        let mut net = MulticonductorNetwork::default();
+        net.buses_mut()
+            .push(DistBus::new("sourcebus", vec!["1".into()]));
+        let mut emf = DistBus::new(
+            "_pio_vsource__pio_ideal_1_emf",
+            vec!["2".into(), "0".into()],
+        );
+        emf.grounded.push("0".into());
+        net.buses_mut().push(emf);
+        net.sources_mut().push(VoltageSource::new(
+            "source",
+            "sourcebus",
+            vec!["1".into()],
+            vec![230.0],
+            vec![0.0],
+        ));
+        net.sources_mut().push(VoltageSource::new(
+            "_pio_ideal_1",
+            "_pio_vsource__pio_ideal_1_emf",
+            vec!["2".into()],
+            vec![230.0],
+            vec![angle],
+        ));
+        net
+    }
+
+    #[test]
+    fn split_ideal_phase_uses_parent_source_identity_when_phasor_matches() {
+        let net = split_source_network(-std::f64::consts::TAU / 3.0);
+        assert_eq!(
+            source_node(&net, &net.sources()[1], "2"),
+            node("_pio_source_emf_source", "2")
+        );
+    }
+
+    #[test]
+    fn split_ideal_phase_keeps_synthetic_identity_when_phasor_is_unrelated() {
+        let net = split_source_network(0.0);
+        assert_eq!(
+            source_node(&net, &net.sources()[1], "2"),
+            node("_pio_source_emf__pio_ideal_1", "2")
+        );
+    }
+
+    #[test]
+    fn split_ideal_phase_does_not_guess_between_multiple_parent_sources() {
+        let mut net = split_source_network(-std::f64::consts::TAU / 3.0);
+        net.sources_mut().push(VoltageSource::new(
+            "other",
+            "sourcebus",
+            vec!["1".into()],
+            vec![230.0],
+            vec![0.0],
+        ));
+        assert_eq!(
+            source_node(&net, &net.sources()[1], "2"),
+            node("_pio_source_emf__pio_ideal_1", "2")
+        );
+    }
 }
