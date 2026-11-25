@@ -153,6 +153,122 @@ where
     (own - mutual, own + mutual * 2.0)
 }
 
+/// Whether a three-phase admittance matrix contains mutual phase terms.
+pub(crate) fn has_off_diagonal(matrix: &[Vec<f64>]) -> bool {
+    matrix.iter().enumerate().any(|(i, row)| {
+        row.iter()
+            .enumerate()
+            .any(|(j, value)| i != j && *value != 0.0)
+    })
+}
+
+/// Whether a terminal map names A, B, and C exactly once, in any order.
+pub(crate) fn is_abc_terminal_map(terminal_map: &[String]) -> bool {
+    if terminal_map.len() != 3 {
+        return false;
+    }
+    let mut seen = [false; 3];
+    for terminal in terminal_map {
+        let Some(phase) = powerio_core::cim::terminal_phase(terminal) else {
+            return false;
+        };
+        let index = match phase {
+            "A" => 0,
+            "B" => 1,
+            "C" => 2,
+            _ => return false,
+        };
+        if std::mem::replace(&mut seen[index], true) {
+            return false;
+        }
+    }
+    seen.into_iter().all(|present| present)
+}
+
+/// Positive- and zero-sequence diagonal values retained when a reciprocal
+/// three-phase matrix is reduced to scalar sequence properties.
+///
+/// For row i, the per-phase positive-sequence projection is the self term
+/// minus the mean of its two mutual terms. The mean of those three projected
+/// entries equals the Fortescue positive-sequence diagonal. The zero-sequence
+/// diagonal is one third of the sum of all matrix entries. Inter-sequence
+/// coupling is not represented by these scalar diagonals.
+///
+/// Only finite, reciprocal 3×3 matrices are accepted. A caller must also
+/// verify that its terminal map is exactly A, B, C.
+/// Positive- and zero-sequence diagonal values retained by a scalar
+/// representation of a reciprocal three-phase admittance matrix.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SequenceDiagonalProjection {
+    pub(crate) positive_by_phase: [f64; 3],
+    pub(crate) positive: f64,
+    pub(crate) zero: f64,
+}
+
+/// Compute positive- and zero-sequence diagonals for a finite reciprocal
+/// 3×3 matrix. The caller must verify that the terminal map is exactly ABC.
+pub(crate) fn sequence_diagonal_projection(
+    matrix: &[Vec<f64>],
+) -> Option<SequenceDiagonalProjection> {
+    let positive_by_phase = positive_sequence_projection(matrix)?;
+    let positive =
+        positive_by_phase[0] / 3.0 + positive_by_phase[1] / 3.0 + positive_by_phase[2] / 3.0;
+
+    // Scale before summing so large finite matrix entries do not overflow
+    // merely because the nine terms are accumulated before division by 3.
+    let scale = matrix
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |scale, value| scale.max(value.abs()));
+    let zero = if scale == 0.0 {
+        0.0
+    } else {
+        let scaled_sum = matrix
+            .iter()
+            .flatten()
+            .map(|value| value / scale)
+            .sum::<f64>();
+        (scaled_sum / 3.0) * scale
+    };
+    (positive.is_finite() && zero.is_finite()).then_some(SequenceDiagonalProjection {
+        positive_by_phase,
+        positive,
+        zero,
+    })
+}
+
+/// The per-phase diagonal that retains a reciprocal three-phase matrix's
+/// positive-sequence admittance when a target cannot carry mutual terms.
+pub(crate) fn positive_sequence_projection(matrix: &[Vec<f64>]) -> Option<[f64; 3]> {
+    if matrix.len() != 3
+        || matrix
+            .iter()
+            .any(|row| row.len() != 3 || row.iter().any(|v| !v.is_finite()))
+    {
+        return None;
+    }
+    for (i, row) in matrix.iter().enumerate() {
+        for (j, upper) in row.iter().enumerate().skip(i + 1) {
+            let lower = matrix[j][i];
+            let upper = *upper;
+            let tolerance =
+                64.0 * f64::EPSILON * upper.abs().max(lower.abs()).max(f64::MIN_POSITIVE);
+            if (upper - lower).abs() > tolerance {
+                return None;
+            }
+        }
+    }
+    let projected = [
+        matrix[0][0] - matrix[0][1] * 0.5 - matrix[0][2] * 0.5,
+        matrix[1][1] - matrix[1][0] * 0.5 - matrix[1][2] * 0.5,
+        matrix[2][2] - matrix[2][0] * 0.5 - matrix[2][1] * 0.5,
+    ];
+    projected
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(projected)
+}
+
 /// The rotation operator `a` a symmetrical component transform is built
 /// on. The variants are the same transform to within their rounding of
 /// `sin 120°`; the reference tools use several, so a reader reproducing one
@@ -441,6 +557,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn coupled_matrix_projection_matches_fortescue_sequence_diagonals() {
+        let matrix = vec![
+            vec![4.0, 1.0, 2.0],
+            vec![1.0, 5.0, 3.0],
+            vec![2.0, 3.0, 6.0],
+        ];
+        let complex = matrix
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| Complex64::new(*value, 0.0))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let sequence = calc_sequence_matrix(&complex);
+        let projection = sequence_diagonal_projection(&matrix).unwrap();
+
+        assert_eq!(projection.positive_by_phase, [2.5, 3.0, 3.5]);
+        assert!((projection.positive - sequence[1][1].re).abs() < 1e-12);
+        assert!((projection.zero - sequence[0][0].re).abs() < 1e-12);
+    }
+
+    #[test]
+    fn coupled_matrix_projection_handles_zero_sequence_only_and_rejects_invalid_values() {
+        let zero_sequence_only = vec![vec![2.0; 3]; 3];
+        let projection = sequence_diagonal_projection(&zero_sequence_only).unwrap();
+        assert_eq!(projection.positive, 0.0);
+        assert_eq!(projection.zero, 6.0);
+
+        let asymmetric = vec![
+            vec![4.0, 1.0, 2.0],
+            vec![1.1, 5.0, 3.0],
+            vec![2.0, 3.0, 6.0],
+        ];
+        assert!(sequence_diagonal_projection(&asymmetric).is_none());
+
+        let mut non_finite = zero_sequence_only.clone();
+        non_finite[0][0] = f64::NAN;
+        assert!(sequence_diagonal_projection(&non_finite).is_none());
+
+        let unrepresentable_zero = vec![vec![f64::MAX; 3]; 3];
+        assert_eq!(
+            positive_sequence_projection(&unrepresentable_zero),
+            Some([0.0; 3])
+        );
+        assert!(sequence_diagonal_projection(&unrepresentable_zero).is_none());
+    }
+
+    #[test]
     fn the_transform_pair_inverts() {
         let (positive, zero) = (Complex64::new(0.1, 0.4), Complex64::new(0.3, 1.2));
         let matrix = calc_phase_from_sequence(3, positive, zero, SequenceThird::Divide);
@@ -581,5 +746,60 @@ mod tests {
             source.calc_line_to_line_voltage(&[0, 1], LineVoltageForm::FirstPhase),
             Some(240.0)
         );
+    }
+    #[test]
+    fn coupled_shunt_projection_preserves_the_positive_sequence() {
+        let matrix = vec![
+            vec![4.0, 1.0, 2.0],
+            vec![1.0, 5.0, 3.0],
+            vec![2.0, 3.0, 6.0],
+        ];
+        let projected = positive_sequence_projection(&matrix).unwrap();
+        assert_eq!(projected, [2.5, 3.0, 3.5]);
+        let average = projected[0] / 3.0 + projected[1] / 3.0 + projected[2] / 3.0;
+        let complex: Vec<Vec<Complex64>> = matrix
+            .iter()
+            .map(|row| row.iter().map(|v| Complex64::new(*v, 0.0)).collect())
+            .collect();
+        assert!((average - calc_sequence_matrix(&complex)[1][1].re).abs() < 1e-12);
+
+        let zero_sequence_only = vec![vec![-5.1667; 3]; 3];
+        assert_eq!(
+            positive_sequence_projection(&zero_sequence_only),
+            Some([0.0; 3])
+        );
+    }
+
+    #[test]
+    fn coupled_shunt_projection_refuses_asymmetric_or_invalid_matrices() {
+        assert_eq!(
+            positive_sequence_projection(&[
+                vec![4.0, 1.0, 2.0],
+                vec![0.5, 5.0, 3.0],
+                vec![2.0, 3.0, 6.0],
+            ]),
+            None
+        );
+        assert_eq!(
+            positive_sequence_projection(&[vec![1.0; 2], vec![1.0; 2]]),
+            None
+        );
+        assert_eq!(
+            positive_sequence_projection(&[
+                vec![1.0, f64::NAN, 0.0],
+                vec![f64::NAN, 1.0, 0.0],
+                vec![0.0, 0.0, 1.0],
+            ]),
+            None
+        );
+    }
+
+    #[test]
+    fn abc_terminal_map_is_order_independent_and_rejects_neutral_or_duplicates() {
+        assert!(is_abc_terminal_map(&["1".into(), "2".into(), "3".into()]));
+        assert!(is_abc_terminal_map(&["3".into(), "1".into(), "2".into()]));
+        assert!(!is_abc_terminal_map(&["1".into(), "2".into(), "4".into()]));
+        assert!(!is_abc_terminal_map(&["1".into(), "1".into(), "3".into()]));
+        assert!(!is_abc_terminal_map(&["1".into(), "2".into()]));
     }
 }

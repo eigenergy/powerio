@@ -20,6 +20,7 @@ use crate::model::{
     ConductorMatrix, Configuration, DistLoadVoltageModel, DistTransformer, DistWindingConn, Extras,
     IbrPrimeMover, MulticonductorNetwork,
 };
+use crate::sequence::{has_off_diagonal, is_abc_terminal_map, sequence_diagonal_projection};
 
 use super::{CIM_MRID_KEY, MRID_KEY, NORMAL_OPEN_KEY, det_mrid, terminal_phase};
 
@@ -1401,51 +1402,96 @@ impl Writer {
             if !self.representable_map(&what, &shunt.terminal_map) {
                 continue;
             }
+            let n = shunt.terminal_map.len().max(1);
+            let diag = |m: &ConductorMatrix, k: usize| {
+                m.get(k).and_then(|r| r.get(k)).copied().unwrap_or(0.0)
+            };
+            let coupled = has_off_diagonal(&shunt.g) || has_off_diagonal(&shunt.b);
+            let (b, g, b0, g0) = if coupled {
+                if !is_abc_terminal_map(&shunt.terminal_map) {
+                    self.warn(
+                        &C::EMIT_RAVENS_DIST_RECORD_DROPPED,
+                        format!(
+                            "{what}: coupled admittance cannot be projected without exactly one A, B, and C terminal; record dropped"
+                        ),
+                    );
+                    continue;
+                }
+                let (Some(g_projection), Some(b_projection)) = (
+                    sequence_diagonal_projection(&shunt.g),
+                    sequence_diagonal_projection(&shunt.b),
+                ) else {
+                    self.warn(
+                        &C::EMIT_RAVENS_DIST_RECORD_DROPPED,
+                        format!(
+                            "{what}: mutual admittance sequence diagonals are not representable as finite values; record dropped"
+                        ),
+                    );
+                    continue;
+                };
+                let g_phase = g_projection.positive_by_phase;
+                let b_phase = b_projection.positive_by_phase;
+                let g = g_projection.positive;
+                let b = b_projection.positive;
+                let g0 = g_projection.zero;
+                let b0 = b_projection.zero;
+                if g == 0.0 && b == 0.0 {
+                    self.warn(
+                        &C::EMIT_RAVENS_DIST_RECORD_DROPPED,
+                        format!(
+                            "{what}: coupled admittance is zero in positive sequence (zero-sequence-only); record dropped"
+                        ),
+                    );
+                    continue;
+                }
+                let uneven = g_phase.iter().zip(b_phase.iter()).skip(1).any(|(g, b)| {
+                    (*g - g_phase[0]).abs() > f64::EPSILON * g_phase[0].abs().max(1.0)
+                        || (*b - b_phase[0]).abs() > f64::EPSILON * b_phase[0].abs().max(1.0)
+                });
+                if uneven {
+                    self.warn(
+                        &C::EMIT_RAVENS_DIST_VALUE_COLLAPSED,
+                        format!(
+                            "{what}: per-phase positive-sequence equivalents differ; MG-RAVENS carries one scalar, so their mean is written"
+                        ),
+                    );
+                }
+                self.warn(
+                    &C::EMIT_RAVENS_DIST_VALUE_COLLAPSED,
+                    format!(
+                        "{what}: mutual admittance has no MG-RAVENS matrix property; positive- and zero-sequence diagonals are written, while inter-sequence coupling is not represented"
+                    ),
+                );
+                (b, g, b0, g0)
+            } else {
+                let b = diag(&shunt.b, 0);
+                let g = diag(&shunt.g, 0);
+                let uneven = (1..n).any(|k| {
+                    (diag(&shunt.b, k) - b).abs() > f64::EPSILON * b.abs().max(1.0)
+                        || (diag(&shunt.g, k) - g).abs() > f64::EPSILON * g.abs().max(1.0)
+                });
+                if uneven {
+                    self.warn(
+                        &C::EMIT_RAVENS_DIST_VALUE_COLLAPSED,
+                        format!(
+                            "{what}: per-phase admittances differ; MG-RAVENS carries one per-section \
+                         value, so the first phase represents the bank"
+                        ),
+                    );
+                }
+                (b, g, b, g)
+            };
             let mut obj = identified(
                 "LinearShuntCompensator",
                 &shunt.name,
                 imported_mrid(&shunt.extras),
             );
-            let n = shunt.terminal_map.len().max(1);
-            let diag = |m: &ConductorMatrix, k: usize| {
-                m.get(k).and_then(|r| r.get(k)).copied().unwrap_or(0.0)
-            };
-            let b = diag(&shunt.b, 0);
-            let g = diag(&shunt.g, 0);
-            let uneven = (1..n).any(|k| {
-                (diag(&shunt.b, k) - b).abs() > f64::EPSILON * b.abs().max(1.0)
-                    || (diag(&shunt.g, k) - g).abs() > f64::EPSILON * g.abs().max(1.0)
-            });
-            if uneven {
-                self.warn(
-                    &C::EMIT_RAVENS_DIST_VALUE_COLLAPSED,
-                    format!(
-                        "{what}: per-phase susceptances differ; MG-RAVENS carries one per-section \
-                     value, so the first phase represents the bank"
-                    ),
-                );
-            }
-            let off_diagonal = shunt
-                .b
-                .iter()
-                .enumerate()
-                .any(|(i, row)| row.iter().enumerate().any(|(j, v)| i != j && v.abs() > 0.0));
-            if off_diagonal {
-                self.warn(
-                    &C::EMIT_RAVENS_DIST_VALUE_COLLAPSED,
-                    format!(
-                        "{what}: off-diagonal susceptance (a delta bank's geometry) has no \
-                     MG-RAVENS slot; only the diagonal is carried"
-                    ),
-                );
-            }
-
             let delta = shunt
                 .extras
                 .get("conn")
                 .and_then(Value::as_str)
                 .is_some_and(|c| c.eq_ignore_ascii_case("delta"));
-            // nomU = cap.kV * 1000 (opendss2xml), i.e. the dss `kv` directly:
+            // nomU = cap.kV * 1000 (opendss2xml), i.e. the dss kv directly:
             // line-to-line for a multi-phase bank, line-to-neutral for a
             // single-phase one. No √3 — the reader inverts with nomU/1000.
             let nom_u =
@@ -1467,11 +1513,12 @@ impl Writer {
             }
             let bv = self.num(b, &what);
             let gv = self.num(g, &what);
-            obj.insert("LinearShuntCompensator.bPerSection".into(), bv.clone());
-            obj.insert("LinearShuntCompensator.gPerSection".into(), gv.clone());
-            // `Yn` is a wye bank whose neutral is grounded at the bus, `Y` one
-            // on an ungrounded neutral conductor; the reader grounds the node
-            // for `Yn` only.
+            let b0v = self.num(b0, &what);
+            let g0v = self.num(g0, &what);
+            obj.insert("LinearShuntCompensator.bPerSection".into(), bv);
+            obj.insert("LinearShuntCompensator.gPerSection".into(), gv);
+            // Yn is a wye bank whose neutral is grounded at the bus; Y is
+            // one on an ungrounded neutral conductor.
             obj.insert(
                 "ShuntCompensator.phaseConnection".into(),
                 Value::String(format!(
@@ -1485,8 +1532,8 @@ impl Writer {
                     }
                 )),
             );
-            obj.insert("LinearShuntCompensator.b0PerSection".into(), bv);
-            obj.insert("LinearShuntCompensator.g0PerSection".into(), gv);
+            obj.insert("LinearShuntCompensator.b0PerSection".into(), b0v);
+            obj.insert("LinearShuntCompensator.g0PerSection".into(), g0v);
             obj.insert("ShuntCompensator.normalSections".into(), Value::from(1));
             obj.insert("ShuntCompensator.maximumSections".into(), Value::from(1));
             obj.insert("Equipment.inService".into(), Value::Bool(true));
