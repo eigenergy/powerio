@@ -414,12 +414,14 @@ fn storage_gen_obj(storage: &Storage, counts: &mut BTreeMap<BusId, usize>) -> Va
         );
     }
     obj.insert("bus".into(), Value::from(storage.bus.0 as u64));
-    obj.insert("p".into(), jnum(storage.ps));
-    obj.insert("q".into(), jnum(storage.qs));
+    // Surge states storage as a generator, output positive. Storage.ps, qs,
+    // qmin and qmax are withdrawal positive. `0.0 - x` keeps a zero at +0.0.
+    obj.insert("p".into(), jnum(0.0 - storage.ps));
+    obj.insert("q".into(), jnum(0.0 - storage.qs));
     obj.insert("pmax".into(), jnum(storage.discharge_rating));
     obj.insert("pmin".into(), jnum(-storage.charge_rating));
-    obj.insert("qmax".into(), jnum(storage.qmax));
-    obj.insert("qmin".into(), jnum(storage.qmin));
+    obj.insert("qmax".into(), jnum(0.0 - storage.qmin));
+    obj.insert("qmin".into(), jnum(0.0 - storage.qmax));
     obj.insert("voltage_setpoint_pu".into(), jnum(1.0));
     obj.insert(
         "machine_base_mva".into(),
@@ -1024,8 +1026,9 @@ fn read_storage(
     let energy_rating = f_map_alias_or(obj, &["energy_capacity_mwh", "soc_max_mwh"], 0.0)?;
     let mut out = Storage {
         bus,
-        ps: pg,
-        qs: qg,
+        // The generator's output positive p and q, as withdrawal.
+        ps: 0.0 - pg,
+        qs: 0.0 - qg,
         energy: f_map_or(obj, "soc_initial_mwh", 0.0)?,
         energy_rating,
         charge_rating: if pmin < 0.0 { -pmin } else { 0.0 },
@@ -1034,8 +1037,8 @@ fn read_storage(
         discharge_efficiency: f_map_or(obj, "discharge_efficiency", split_efficiency)?,
         thermal_rating: pmax.abs().max(pmin.abs()),
         current_rating: f_map_opt(obj, "current_rating")?,
-        qmin,
-        qmax,
+        qmin: 0.0 - qmax,
+        qmax: 0.0 - qmin,
         r: 0.0,
         x: 0.0,
         p_loss: 0.0,
