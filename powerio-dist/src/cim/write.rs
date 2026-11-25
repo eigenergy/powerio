@@ -13,7 +13,10 @@
 //! profile set, and the routing reads a header-less document with per phase
 //! classes as distribution CIM.
 
-use crate::sequence::{SequenceThird, calc_phase_from_sequence};
+use crate::sequence::{
+    SequenceThird, calc_phase_from_sequence, has_off_diagonal, is_abc_terminal_map,
+    positive_sequence_projection,
+};
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 
@@ -637,10 +640,61 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
     }
 
     for shunt in net.shunts() {
-        let id = doc.mrid_of(&shunt.extras, "shunt", &shunt.name);
         let what = format!("shunt {}", shunt.name);
-        doc.named("LinearShuntCompensator", &id, &shunt.name);
         let delta = balanced_delta(&shunt.terminal_map, &shunt.g, &shunt.b);
+        let coupled = delta.is_none() && (has_off_diagonal(&shunt.g) || has_off_diagonal(&shunt.b));
+        let stated_delta = shunt
+            .extras
+            .get("conn")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|connection| connection.eq_ignore_ascii_case("delta"));
+        if coupled && stated_delta {
+            doc.warn(
+                &C::EMIT_CIM_DIST_RECORD_DROPPED,
+                format!(
+                    "{what}: coupled delta admittance is not a balanced delta branch matrix; record dropped"
+                ),
+            );
+            continue;
+        }
+        let projected = if coupled {
+            if !is_abc_terminal_map(&shunt.terminal_map) {
+                doc.warn(
+                    &C::EMIT_CIM_DIST_RECORD_DROPPED,
+                    format!(
+                        "{what}: coupled admittance cannot be projected without exactly one A, B, and C terminal; record dropped"
+                    ),
+                );
+                continue;
+            }
+            let (Some(g), Some(b)) = (
+                positive_sequence_projection(&shunt.g),
+                positive_sequence_projection(&shunt.b),
+            ) else {
+                doc.warn(
+                    &C::EMIT_CIM_DIST_RECORD_DROPPED,
+                    format!(
+                        "{what}: mutual admittance is not a finite reciprocal 3×3 matrix; record dropped"
+                    ),
+                );
+                continue;
+            };
+            if g.iter().all(|value| *value == 0.0) && b.iter().all(|value| *value == 0.0) {
+                doc.warn(
+                    &C::EMIT_CIM_DIST_RECORD_DROPPED,
+                    format!(
+                        "{what}: coupled admittance is zero in positive sequence (zero-sequence-only); record dropped"
+                    ),
+                );
+                continue;
+            }
+            Some((g, b))
+        } else {
+            None
+        };
+
+        let id = doc.mrid_of(&shunt.extras, "shunt", &shunt.name);
+        doc.named("LinearShuntCompensator", &id, &shunt.name);
         doc.enumeration(
             "ShuntCompensator.phaseConnection",
             if delta.is_some() {
@@ -689,26 +743,20 @@ pub(crate) fn emit_cim_dist_text(net: &MulticonductorNetwork) -> TextEmission {
                 "ShuntCompensatorPhase.phase",
                 &format!("SinglePhaseKind.{phase}"),
             );
-            doc.number(
-                &what,
-                "LinearShuntCompensatorPhase.bPerSection",
-                diag(&shunt.b, n),
+            let (g, b) = projected.map_or_else(
+                || (diag(&shunt.g, n), diag(&shunt.b, n)),
+                |(g, b)| (g[n], b[n]),
             );
-            doc.number(
-                &what,
-                "LinearShuntCompensatorPhase.gPerSection",
-                diag(&shunt.g, n),
-            );
+            doc.number(&what, "LinearShuntCompensatorPhase.bPerSection", b);
+            doc.number(&what, "LinearShuntCompensatorPhase.gPerSection", g);
             doc.close("LinearShuntCompensatorPhase");
         }
         doc.unnamed_conductors("shunt", &shunt.name, &shunt.terminal_map);
-        if has_off_diagonal(&shunt.b) || has_off_diagonal(&shunt.g) {
+        if coupled {
             doc.warn(
                 &C::EMIT_CIM_DIST_VALUE_COLLAPSED,
                 format!(
-                    "shunt {}: off diagonal admittance has no per phase CIM property; the \
-                     diagonal is written",
-                    shunt.name
+                    "{what}: mutual admittance has no per-phase CIM property; per-phase positive-sequence equivalents are written, while zero-sequence and inter-sequence coupling are not represented"
                 ),
             );
         }
@@ -1859,10 +1907,4 @@ fn balanced_delta(map: &[String], g: &ConductorMatrix, b: &ConductorMatrix) -> O
         branch(g)?
     };
     Some((g, b))
-}
-
-fn has_off_diagonal(m: &ConductorMatrix) -> bool {
-    m.iter()
-        .enumerate()
-        .any(|(i, row)| row.iter().enumerate().any(|(j, v)| i != j && *v != 0.0))
 }

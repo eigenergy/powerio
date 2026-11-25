@@ -6,7 +6,10 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use powerio_dist::{Configuration, DiagnosticSeverity, DistTargetFormat, DistWindingConn};
+use powerio_dist::{
+    Configuration, DiagnosticSeverity, DistBus, DistShunt, DistTargetFormat, DistWindingConn,
+    MulticonductorNetwork,
+};
 
 mod helpers;
 use helpers::{emit_value, parse_file, parse_str};
@@ -2543,4 +2546,108 @@ fn a_cim16_layout_locates_buses_and_routes_segments() {
             net.warnings
         );
     }
+}
+
+#[test]
+fn cim_drops_a_zero_sequence_only_coupled_shunt() {
+    let mut net = MulticonductorNetwork::new();
+    let terminals = vec!["1".into(), "2".into(), "3".into()];
+    net.buses_mut().push(DistBus::new("bus", terminals.clone()));
+    net.shunts_mut().push(DistShunt::new(
+        "zero_seq_only",
+        "bus",
+        terminals,
+        vec![vec![0.0; 3]; 3],
+        vec![vec![-5.1667; 3]; 3],
+    ));
+
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(
+        findings(&out.warnings, "EMIT.CIM_DIST.RECORD_DROPPED")
+            .iter()
+            .any(|finding| finding.contains("zero_seq_only")
+                && finding.contains("zero-sequence-only")
+                && finding.contains("positive sequence")),
+        "{:#?}",
+        out.warnings
+    );
+    assert!(!out.text.contains("zero_seq_only"), "{}", out.text);
+    assert!(!out.text.contains("LinearShuntCompensatorPhase"));
+}
+
+#[test]
+fn cim_writes_coupled_shunts_with_their_positive_sequence_equivalent() {
+    let mut net = MulticonductorNetwork::new();
+    let terminals = vec!["1".into(), "2".into(), "3".into()];
+    net.buses_mut().push(DistBus::new("bus", terminals.clone()));
+    net.shunts_mut().push(DistShunt::new(
+        "coupled",
+        "bus",
+        terminals,
+        vec![
+            vec![4.0, 1.0, 1.0],
+            vec![1.0, 4.0, 1.0],
+            vec![1.0, 1.0, 4.0],
+        ],
+        vec![
+            vec![2.0, 0.5, 0.5],
+            vec![0.5, 2.0, 0.5],
+            vec![0.5, 0.5, 2.0],
+        ],
+    ));
+
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(
+        findings(&out.warnings, "EMIT.CIM_DIST.VALUE_COLLAPSED")
+            .iter()
+            .any(|finding| finding.contains("positive-sequence equivalents")),
+        "{:#?}",
+        out.warnings
+    );
+    let back = parse_str(&out.text, "cim-dist").unwrap();
+    assert_eq!(back.shunts().len(), 1);
+    let shunt = &back.shunts()[0];
+    for (i, g_row) in shunt.g.iter().enumerate() {
+        let b_row = &shunt.b[i];
+        assert!(close(g_row[i], 3.0));
+        assert!(close(b_row[i], 1.5));
+        for (j, (g, b)) in g_row.iter().zip(b_row).enumerate() {
+            if i != j {
+                assert_eq!(*g, 0.0);
+                assert_eq!(*b, 0.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn cim_drops_a_coupled_delta_shunt_without_a_balanced_delta_representation() {
+    let mut net = MulticonductorNetwork::new();
+    let terminals = vec!["1".into(), "2".into(), "3".into()];
+    net.buses_mut().push(DistBus::new("bus", terminals.clone()));
+    let mut shunt = DistShunt::new(
+        "unrepresentable_delta",
+        "bus",
+        terminals,
+        vec![vec![0.0; 3]; 3],
+        vec![
+            vec![2.0, -0.5, -0.5],
+            vec![-0.5, 2.0, -0.5],
+            vec![-0.5, -0.5, 2.0],
+        ],
+    );
+    shunt.extras.insert("conn".into(), "delta".into());
+    net.shunts_mut().push(shunt);
+
+    let out = emit_value(&net, DistTargetFormat::CimDist);
+    assert!(
+        findings(&out.warnings, "EMIT.CIM_DIST.RECORD_DROPPED")
+            .iter()
+            .any(|finding| {
+                finding.contains("unrepresentable_delta") && finding.contains("coupled delta")
+            }),
+        "{:#?}",
+        out.warnings
+    );
+    assert!(!out.text.contains("unrepresentable_delta"), "{}", out.text);
 }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Distribution CIM writes per-phase positive-sequence equivalents for reciprocal coupled shunts; MG-RAVENS also preserves their zero-sequence diagonal in `b0PerSection`/`g0PerSection`. Both diagnose lost inter-sequence coupling, and zero-sequence-only shunts are dropped rather than written as false positive-sequence admittance (#865).
+
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
 ## 0.12.4

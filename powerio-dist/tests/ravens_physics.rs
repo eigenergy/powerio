@@ -3,7 +3,7 @@
 mod helpers;
 
 use helpers::{emit_value, parse_dss_str, parse_str};
-use powerio_dist::{DistBus, DistSwitch, DistTargetFormat, MulticonductorNetwork};
+use powerio_dist::{DistBus, DistShunt, DistSwitch, DistTargetFormat, MulticonductorNetwork};
 use serde_json::{Value, json};
 
 fn terminal(bus: &str, phases: &str) -> Value {
@@ -522,4 +522,175 @@ Solve
     let back = parse_str(&doc.to_string(), "ravens-json").unwrap();
     let imag = back.transformers()[0].extras["%imag"].as_f64().unwrap();
     assert!((imag - 1.1).abs() < 1e-12, "{imag}");
+}
+
+#[test]
+fn ravens_drops_a_zero_sequence_only_coupled_shunt() {
+    let mut net = MulticonductorNetwork::new();
+    let terminals = vec!["1".into(), "2".into(), "3".into()];
+    net.buses_mut().push(DistBus::new("bus", terminals.clone()));
+    net.shunts_mut().push(DistShunt::new(
+        "zero_seq_only",
+        "bus",
+        terminals,
+        vec![vec![0.0; 3]; 3],
+        vec![vec![-5.1667; 3]; 3],
+    ));
+
+    let out = emit_value(&net, DistTargetFormat::RavensJson);
+    assert!(
+        out.warnings.iter().any(|finding| {
+            finding.starts_with("EMIT.RAVENS_DIST.RECORD_DROPPED")
+                && finding.contains("zero_seq_only")
+                && finding.contains("zero-sequence-only")
+                && finding.contains("positive sequence")
+        }),
+        "{:#?}",
+        out.warnings
+    );
+    assert!(!out.text.contains("zero_seq_only"), "{}", out.text);
+}
+
+#[test]
+fn ravens_writes_the_positive_sequence_equivalent_of_a_coupled_shunt() {
+    let mut net = MulticonductorNetwork::new();
+    let terminals = vec!["1".into(), "2".into(), "3".into()];
+    net.buses_mut().push(DistBus::new("bus", terminals.clone()));
+    net.shunts_mut().push(DistShunt::new(
+        "coupled",
+        "bus",
+        terminals,
+        vec![
+            vec![4.0, 1.0, 1.0],
+            vec![1.0, 4.0, 1.0],
+            vec![1.0, 1.0, 4.0],
+        ],
+        vec![
+            vec![2.0, 0.5, 0.5],
+            vec![0.5, 2.0, 0.5],
+            vec![0.5, 0.5, 2.0],
+        ],
+    ));
+
+    let out = emit_value(&net, DistTargetFormat::RavensJson);
+    assert!(
+        out.warnings.iter().any(|finding| {
+            finding.starts_with("EMIT.RAVENS_DIST.VALUE_COLLAPSED")
+                && finding.contains("positive- and zero-sequence diagonals")
+        }),
+        "{:#?}",
+        out.warnings
+    );
+    let document: Value = serde_json::from_str(&out.text).unwrap();
+    let object = &document["PowerSystemResource"]["Equipment"]["ConductingEquipment"]["EnergyConnection"]
+        ["RegulatingCondEq"]["ShuntCompensator"]["coupled"];
+    assert_eq!(
+        object["LinearShuntCompensator.gPerSection"].as_f64(),
+        Some(3.0)
+    );
+    assert_eq!(
+        object["ShuntCompensator.phaseConnection"].as_str(),
+        Some("PhaseShuntConnectionKind.Y")
+    );
+    assert_eq!(
+        object["LinearShuntCompensator.bPerSection"].as_f64(),
+        Some(1.5)
+    );
+    let back = parse_str(&out.text, "ravens-json").unwrap();
+    assert_eq!(back.shunts().len(), 1);
+    assert_eq!(back.shunts()[0].g[0][0], 3.0);
+    assert_eq!(back.shunts()[0].b[0][0], 1.5);
+}
+
+#[test]
+fn ravens_preserves_positive_and_zero_sequence_when_a_coupled_shunt_is_collapsed() {
+    let mut net = MulticonductorNetwork::new();
+    let terminals = vec!["1".into(), "2".into(), "3".into()];
+    net.buses_mut().push(DistBus::new("bus", terminals.clone()));
+    let shunt = DistShunt::new(
+        "coupled",
+        "bus",
+        terminals,
+        vec![vec![0.0; 3]; 3],
+        vec![
+            vec![4.0, 1.0, 2.0],
+            vec![1.0, 5.0, 3.0],
+            vec![2.0, 3.0, 6.0],
+        ],
+    );
+    net.shunts_mut().push(shunt);
+
+    let out = emit_value(&net, DistTargetFormat::RavensJson);
+    assert!(
+        out.warnings.iter().any(|finding| {
+            finding.starts_with("EMIT.RAVENS_DIST.VALUE_COLLAPSED")
+                && finding.contains("coupled")
+                && finding.contains("positive- and zero-sequence diagonals")
+        }),
+        "{:#?}",
+        out.warnings
+    );
+    let document: Value = serde_json::from_str(&out.text).unwrap();
+    let object = &document["PowerSystemResource"]["Equipment"]["ConductingEquipment"]["EnergyConnection"]
+        ["RegulatingCondEq"]["ShuntCompensator"]["coupled"];
+    assert_eq!(
+        object["ShuntCompensator.phaseConnection"].as_str(),
+        Some("PhaseShuntConnectionKind.Y")
+    );
+    assert_eq!(
+        object["LinearShuntCompensator.bPerSection"].as_f64(),
+        Some(3.0)
+    );
+    assert_eq!(
+        object["LinearShuntCompensator.b0PerSection"].as_f64(),
+        Some(9.0)
+    );
+    assert_eq!(
+        object["LinearShuntCompensator.g0PerSection"].as_f64(),
+        Some(0.0)
+    );
+
+    let back = parse_str(&out.text, "ravens-json").unwrap();
+    let matrix = &back.shunts()[0].b;
+    let trace = matrix[0][0] + matrix[1][1] + matrix[2][2];
+    let mutual = matrix[0][1] + matrix[0][2] + matrix[1][2];
+    let positive_sequence = (trace - mutual) / 3.0;
+    assert!((positive_sequence - 3.0).abs() < 1e-12);
+}
+
+#[test]
+fn ravens_emits_zero_sequence_zero_for_a_balanced_delta_shunt() {
+    let mut net = MulticonductorNetwork::new();
+    let terminals = vec!["1".into(), "2".into(), "3".into()];
+    net.buses_mut().push(DistBus::new("bus", terminals.clone()));
+    let mut shunt = DistShunt::new(
+        "balanced_delta",
+        "bus",
+        terminals,
+        vec![vec![0.0; 3]; 3],
+        vec![
+            vec![2.0, -1.0, -1.0],
+            vec![-1.0, 2.0, -1.0],
+            vec![-1.0, -1.0, 2.0],
+        ],
+    );
+    shunt.extras.insert("conn".into(), "delta".into());
+    net.shunts_mut().push(shunt);
+
+    let out = emit_value(&net, DistTargetFormat::RavensJson);
+    let document: Value = serde_json::from_str(&out.text).unwrap();
+    let object = &document["PowerSystemResource"]["Equipment"]["ConductingEquipment"]["EnergyConnection"]
+        ["RegulatingCondEq"]["ShuntCompensator"]["balanced_delta"];
+    assert_eq!(
+        object["ShuntCompensator.phaseConnection"].as_str(),
+        Some("PhaseShuntConnectionKind.D")
+    );
+    assert_eq!(
+        object["LinearShuntCompensator.bPerSection"].as_f64(),
+        Some(3.0)
+    );
+    assert_eq!(
+        object["LinearShuntCompensator.b0PerSection"].as_f64(),
+        Some(0.0)
+    );
 }
