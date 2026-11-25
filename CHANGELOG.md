@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Passthrough-bus reduction preserves current ratings on the equivalent branch,
+  taking the lower A/B/C limit across series sections.
+
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
 ## 0.12.4
