@@ -576,7 +576,7 @@ fn ravens_writes_the_positive_sequence_equivalent_of_a_coupled_shunt() {
     assert!(
         out.warnings.iter().any(|finding| {
             finding.starts_with("EMIT.RAVENS_DIST.VALUE_COLLAPSED")
-                && finding.contains("positive-sequence equivalent")
+                && finding.contains("positive- and zero-sequence diagonals")
         }),
         "{:#?}",
         out.warnings
