@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- OpenDSS output now folds an isolated, balanced source-impedance branch into a native `Circuit` when the typed impedance reconstructs exactly. This includes MG-RAVENS sources without depending on source-line names or provenance.
+
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
 
 ## 0.12.4

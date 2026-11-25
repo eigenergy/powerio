@@ -154,6 +154,8 @@ fn voltage(source: &VoltageSource) -> Option<(f64, f64, &'static str)> {
         .find(|kv| (kv * 1000.0 / factor).to_bits() == magnitude.to_bits())?;
     let degrees = crate::dss::source::NATIVE_DEGREES_PER_RADIAN;
     let angle = (source.v_angle[0] + std::f64::consts::TAU) * degrees - 360.0;
+    let phase_step_error = (120.0 / degrees - std::f64::consts::TAU / 3.0).abs();
+    let tolerance = magnitude * (2.0 * phase_step_error + 8.0 * f64::EPSILON);
     for (name, direction) in [("positive", 1.0), ("negative", -1.0), ("zero", 0.0)] {
         // atan2/norm and polar reconstruction incur a few floating-point ulps.
         // This is not a balance tolerance: material unbalance uses the general
@@ -169,7 +171,7 @@ fn voltage(source: &VoltageSource) -> Option<(f64, f64, &'static str)> {
                     (360.0 + angle - direction * i as f64 * 120.0) / degrees,
                 );
                 let typed = Complex64::from_polar(m, a);
-                (native - typed).norm() <= 8.0 * f64::EPSILON * magnitude
+                (native - typed).norm() <= tolerance
             })
         {
             return Some((kv, angle, name));
@@ -206,8 +208,7 @@ fn equivalent<'a>(net: &'a MulticonductorNetwork, source: &VoltageSource) -> Opt
         .lines()
         .iter()
         .find(|l| l.bus_from.eq_ignore_ascii_case(&source.bus))?;
-    if line.name != "_pio_vsource_source_impedance"
-        || line.terminal_map_from != source.terminal_map
+    if line.terminal_map_from != source.terminal_map
         || line.terminal_map_to.len() != 3
         || line.route.is_some()
         || line.i_max.is_some()
@@ -222,10 +223,7 @@ fn equivalent<'a>(net: &'a MulticonductorNetwork, source: &VoltageSource) -> Opt
         .line_codes()
         .iter()
         .find(|c| c.name.eq_ignore_ascii_case(&line.linecode))?;
-    // Provenance only identifies a compiler-created internal branch. It never
-    // supplies electrical parameters or overrides the edited typed matrices.
-    if code.source.as_deref() != Some("OpenDSS Vsource.source Thevenin impedance")
-        || code.n_conductors != 3
+    if code.n_conductors != 3
         || code.i_max.is_some()
         || code.s_max.is_some()
         || !code.extras.is_empty()
@@ -329,7 +327,7 @@ impl DssWriter {
             self.native_source_code = Some(native.line.linecode.clone());
         }
         self.warn(&C::EMIT_DSS_SOURCE_EQUIVALENT, format!(
-            "source {} and internal series branch {} emitted as native Vsource.source from their current typed voltages and impedance",
+            "source {} and isolated series branch {} emitted as native Vsource.source from their current typed voltages and impedance",
             source.name, native.line.name,
         ));
         for key in source.extras.keys() {
@@ -397,6 +395,74 @@ mod tests {
             .unwrap();
         assert_eq!(after_code.r_series, before_code.r_series);
         assert_eq!(after_code.x_series, before_code.x_series);
+    }
+
+    #[test]
+    fn retained_disabled_state_prevents_source_impedance_folding() {
+        let mut net = model();
+        net.lines_mut()
+            .iter_mut()
+            .find(|line| line.name == "_pio_vsource_source_impedance")
+            .expect("source impedance branch")
+            .extras
+            .insert("enabled".into(), serde_json::Value::String("no".into()));
+        assert!(equivalent(&net, &net.sources()[0]).is_none());
+    }
+
+    #[test]
+    fn native_voltage_accepts_only_open_dss_phase_step_rounding() {
+        let source = VoltageSource::new(
+            "source",
+            "sourcebus",
+            vec!["1".into(), "2".into(), "3".into()],
+            vec![230.0; 3],
+            vec![
+                0.0,
+                -std::f64::consts::TAU / 3.0,
+                std::f64::consts::TAU / 3.0,
+            ],
+        );
+        assert!(voltage(&source).is_some());
+
+        let mut unbalanced = source;
+        unbalanced.v_angle[2] += 1e-6;
+        assert!(voltage(&unbalanced).is_none());
+    }
+
+    #[test]
+    fn ravens_source_impedance_is_folded_into_native_circuit() {
+        let input = powerio_core::Source::from_memory(
+            "case3_balanced.json",
+            include_str!("../../../../tests/data/dist/ravens/case3_balanced.json")
+                .as_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        let net = crate::parse(input).unwrap().value().clone();
+        let source = net
+            .sources()
+            .iter()
+            .find(|source| source.name.eq_ignore_ascii_case("source"))
+            .expect("RAVENS source");
+        let line = net
+            .lines()
+            .iter()
+            .find(|line| line.name.starts_with("_pio_ravens_source_impedance"))
+            .expect("RAVENS source impedance branch");
+        let code = net
+            .line_codes()
+            .iter()
+            .find(|code| code.name.eq_ignore_ascii_case(&line.linecode))
+            .expect("RAVENS source impedance linecode");
+        assert!(code.source.is_none());
+        assert!(equivalent(&net, source).is_some());
+
+        let emitted = emit_staged_sources(&net).unwrap();
+        assert!(emitted.text.contains("New Circuit."));
+        let text = &emitted.text;
+        assert!(!text.contains("New Line._pio_ravens_source_impedance"));
+        assert!(!text.contains("New Linecode._pio_ravens_source_impedance"));
+        assert!(!emitted.text.contains("New Vsource._pio_ideal_"));
     }
 
     #[test]

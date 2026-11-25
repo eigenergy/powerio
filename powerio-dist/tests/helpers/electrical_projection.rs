@@ -149,6 +149,55 @@ fn close(a: f64, b: f64) -> bool {
     a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1e-12)
 }
 
+fn generated_source_identity(bus: &str) -> Option<String> {
+    let id = bus.to_ascii_lowercase();
+    if let Some(source) = id.strip_prefix("_pio_source_emf_") {
+        return Some(source.to_owned());
+    }
+    let rest = id
+        .strip_prefix("_pio_ravens_")
+        .or_else(|| id.strip_prefix("_pio_vsource_"))?;
+    let (source, suffix) = rest.rsplit_once("_emf")?;
+    let collision_suffix = suffix.is_empty()
+        || suffix
+            .strip_prefix('_')
+            .is_some_and(|n| n.parse::<usize>().is_ok());
+    (collision_suffix && !source.is_empty()).then(|| source.to_owned())
+}
+
+fn generated_name_matches(name: &str, base: &str) -> bool {
+    name == base
+        || name.strip_prefix(base).is_some_and(|suffix| {
+            suffix
+                .strip_prefix('_')
+                .is_some_and(|n| n.parse::<usize>().is_ok())
+        })
+}
+
+fn source_impedance_line_identity(line: &powerio_dist::DistLine) -> Option<String> {
+    if line.terminal_map_from.len() != 3 || line.terminal_map_to.len() != 3 {
+        return None;
+    }
+    let source = generated_source_identity(&line.bus_from)?;
+    let name = line.name.to_ascii_lowercase();
+    let generated_names = [
+        format!("_pio_source_impedance_{source}"),
+        format!("_pio_ravens_{source}_impedance"),
+        format!("_pio_vsource_{source}_impedance"),
+    ];
+    generated_names
+        .iter()
+        .any(|base| generated_name_matches(&name, base))
+        .then(|| format!("_pio_source_impedance_{source}"))
+}
+
+fn canonical_bus(bus: &str) -> String {
+    generated_source_identity(bus).map_or_else(
+        || bus.to_ascii_lowercase(),
+        |source| format!("_pio_source_emf_{source}"),
+    )
+}
+
 fn port(net: &MulticonductorNetwork, bus: &str, terminal: &str) -> String {
     let Some(node) = net.bus(bus) else {
         return format!("undeclared bus {bus}:{terminal}");
@@ -170,7 +219,7 @@ fn port(net: &MulticonductorNetwork, bus: &str, terminal: &str) -> String {
             |i| i.to_string(),
         )
     };
-    format!("{}:{terminal}", bus.to_ascii_lowercase())
+    format!("{}:{terminal}", canonical_bus(bus))
 }
 
 fn compare_values(
@@ -205,6 +254,8 @@ fn line_values(net: &MulticonductorNetwork) -> Result<BTreeMap<String, f64>, Str
                 line.name
             ));
         }
+        let identity =
+            source_impedance_line_identity(line).unwrap_or_else(|| line.name.to_ascii_lowercase());
         let conductors: Vec<_> = line
             .terminal_map_from
             .iter()
@@ -231,10 +282,8 @@ fn line_values(net: &MulticonductorNetwork) -> Result<BTreeMap<String, f64>, Str
             for (i, row) in matrix.iter().enumerate() {
                 for (j, value) in row.iter().enumerate() {
                     let key = format!(
-                        "line {} {field} [{}, {}]",
-                        line.name.to_ascii_lowercase(),
-                        conductors[i],
-                        conductors[j]
+                        "line {identity} {field} [{}, {}]",
+                        conductors[i], conductors[j]
                     );
                     if values.insert(key.clone(), value * line.length).is_some() {
                         return Err(format!("duplicate electrical identity: {key}"));
@@ -482,4 +531,126 @@ pub fn differences(before: &MulticonductorNetwork, after: &MulticonductorNetwork
         }
     }
     problems
+}
+
+#[cfg(test)]
+mod source_impedance_identity_tests {
+    use super::*;
+    use powerio_dist::{DistBus, DistLine, DistLineCode, VoltageSource};
+
+    fn network(
+        source_name: &str,
+        source_bus: &str,
+        line_name: &str,
+        linecode: &str,
+        r_scale: f64,
+    ) -> MulticonductorNetwork {
+        let mut net = MulticonductorNetwork::default();
+        let phases = vec!["1".to_owned(), "2".to_owned(), "3".to_owned()];
+        net.buses_mut()
+            .push(DistBus::new(source_bus, phases.clone()));
+        net.buses_mut()
+            .push(DistBus::new("sourcebus", phases.clone()));
+        net.sources_mut().push(VoltageSource::new(
+            source_name,
+            source_bus,
+            phases.clone(),
+            vec![230.0; 3],
+            vec![
+                0.0,
+                -2.0 * std::f64::consts::PI / 3.0,
+                2.0 * std::f64::consts::PI / 3.0,
+            ],
+        ));
+        let r = vec![
+            vec![0.1 * r_scale, 0.02 * r_scale, 0.02 * r_scale],
+            vec![0.02 * r_scale, 0.1 * r_scale, 0.02 * r_scale],
+            vec![0.02 * r_scale, 0.02 * r_scale, 0.1 * r_scale],
+        ];
+        let x = vec![
+            vec![0.3, 0.04, 0.04],
+            vec![0.04, 0.3, 0.04],
+            vec![0.04, 0.04, 0.3],
+        ];
+        net.line_codes_mut().push(DistLineCode::new(linecode, r, x));
+        net.lines_mut().push(DistLine::new(
+            line_name,
+            source_bus,
+            "sourcebus",
+            phases.clone(),
+            phases,
+            linecode,
+            1.0,
+        ));
+        net
+    }
+
+    #[test]
+    fn generated_source_impedance_names_compare_across_ravens_and_dss() {
+        let ravens = network(
+            "source",
+            "_pio_ravens_source_emf",
+            "_pio_ravens_source_impedance",
+            "ravens_source_z",
+            1.0,
+        );
+        let dss = network(
+            "source",
+            "_pio_vsource_source_emf",
+            "_pio_vsource_source_impedance",
+            "dss_source_z",
+            1.0,
+        );
+        assert!(
+            differences(&ravens, &dss).is_empty(),
+            "same source impedance must compare equal across generated names"
+        );
+    }
+
+    #[test]
+    fn generated_source_impedance_names_with_delimiters_and_collision_suffixes_compare_equal() {
+        let source = "source_impedance_emf";
+        let ravens = network(
+            source,
+            "_pio_ravens_source_impedance_emf_emf_1",
+            "_pio_ravens_source_impedance_emf_impedance_1",
+            "ravens_source_z",
+            1.0,
+        );
+        let dss = network(
+            source,
+            "_pio_vsource_source_impedance_emf_emf_2",
+            "_pio_vsource_source_impedance_emf_impedance_2",
+            "dss_source_z",
+            1.0,
+        );
+        assert!(
+            differences(&ravens, &dss).is_empty(),
+            "source names containing generated delimiters and collision suffixes must compare equal"
+        );
+    }
+
+    #[test]
+    fn generated_source_impedance_comparison_still_detects_model_changes() {
+        let ravens = network(
+            "source",
+            "_pio_ravens_source_emf",
+            "_pio_ravens_source_impedance",
+            "ravens_source_z",
+            1.0,
+        );
+        let changed = network(
+            "source",
+            "_pio_vsource_source_emf",
+            "_pio_vsource_source_impedance",
+            "dss_source_z",
+            1.01,
+        );
+        assert!(
+            differences(&ravens, &changed)
+                .iter()
+                .any(|problem| problem.contains("R (ohm)")),
+            "normalization must not hide impedance changes"
+        );
+    }
 }
