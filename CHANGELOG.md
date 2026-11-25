@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- The native conversion fidelity pilot reports byte replay, fresh-write
-  checks, and independent validation of MATPOWER case14 and the IEEE 13-bus
-  OpenDSS feeder ([#957](https://github.com/eigenergy/powerio/issues/957)).
+- New tests show what PowerIO preserves when it rewrites MATPOWER case14
+  and the IEEE 13-bus OpenDSS feeder in their original formats
+  ([#957](https://github.com/eigenergy/powerio/issues/957)).
 
 ## 0.12.5
 

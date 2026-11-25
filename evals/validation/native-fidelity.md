@@ -1,12 +1,16 @@
-# Native conversion fidelity pilot
+# What PowerIO preserves when it rewrites two grid cases
 
-The pilot measures two native format pairs from [#957](https://github.com/eigenergy/powerio/issues/957).
-The inputs are the vendored MATPOWER case14 and the official IEEE 13-bus
-OpenDSS project. The scorecard pins SHA-256 digests for the MATPOWER case,
-the OpenDSS deck, its redirected line codes, and its bus coordinates. The
-fixture READMEs record upstream provenance and license terms.
+| Input | Output | Original files copied unchanged | PowerIO wrote and checked new files | External tool result |
+| --- | --- | --- | --- | --- |
+| MATPOWER case14 | MATPOWER | Yes, the case file was identical | Passed 4 of 4 checks | CaseFrames and the MATPOWER formulas agreed on the bus and branch order and all five DC calculations |
+| IEEE 13-bus feeder in OpenDSS | OpenDSS | Yes, all three project files were identical | Passed 4 of 4 checks | OpenDSS solved both versions on the same 41 conductors. At bus 680, phase 1, the voltage magnitude changed from 2360.459 V to 2222.828 V. The 137.631 V difference exceeded the 0.001 V limit |
 
-## Reproduce the scorecard
+These are two same-format tests for [#957](https://github.com/eigenergy/powerio/issues/957).
+Tests that write either case to a different format are still open. PowerIO
+reported dropping three OpenDSS voltage regulator controls (`RegControl`)
+when it generated the new files.
+
+## Run these checks again
 
 Run from the repository root with Python 3.12 and the repository's Rust
 toolchain.
@@ -21,50 +25,44 @@ python3 scripts/conversion-matrix-plan.py target/native-fidelity.json \
   --output target/native-fidelity-backlog.json
 ```
 
-The terminal scorecard shows passes and verified checks over the fixed
-applicable count. A measured failure counts toward coverage. A missing
-check stays in the denominator. The JSON records each check, matrix
-diagnostics and model differences, numerical residuals, and the tested
-Git revision, fixture hashes, and oracle versions. The checked-in baseline
-uses `--compact` to omit the detailed matrix diagnostics. To regenerate it,
-run the same command with `--compact` on the baseline's recorded revision.
+The terminal lists how many checks passed and how many ran. Both numbers
+use the same total, even if a check is skipped. The JSON records the result
+and tolerance for each check, the files' SHA-256 hashes, the tested Git
+revision, and the versions of the external tools. It also includes PowerIO's
+warnings and the differences it found when it read its own output.
 
-The runner writes evidence even when a check observes a fidelity loss.
-It exits with an error if the run leaves an applicable check missing or the
-negative control fails to detect the mutation. An explicit
-`--skip-independent` run reports the skipped checks and exits successfully
-if it completed the requested checks.
+The script writes the report even when a comparison fails, as OpenDSS does
+here. The exit code signals whether it collected the requested results and
+whether the deliberate error was detected. `--skip-independent` explicitly
+requests a run without the external tool checks.
 
-## Check scope
+## What the tests do
 
-- **Byte replay** compares every original file byte for byte. The OpenDSS
-  emission places the files under a generated redirect entrypoint.
-- **Fresh write** emits from the typed network and uses the existing
-  conversion-matrix readback and electrical checks. The grouped matrix check
-  covers typed core counts and totals, plus AC admittance and connected
-  bus injections for MATPOWER or the source constraints and physical
-  component projections for OpenDSS. The JSON also lists source, write,
-  and readback findings and observed typed-model changes.
-- **Independent validation** reads the source and fresh MATPOWER files with
-  CaseFrames and reuses the MATPOWER `makeBdc` and `makePTDF` transcriptions
-  from `validate_dc_matpower.py`. It checks the row axes, `Bbus`, `Bf`,
-  both shift injection vectors, and PTDF. Case14's original shift vectors
-  are zero. For OpenDSS, it reuses the nonlinear snapshot solve from
-  `validate_opendss.py` and checks the labelled node set and every node's
-  voltage magnitude. Applicability and numeric comparison rules are declared
-  in `check_spec`.
+- **Copy the originals.** Ask PowerIO to return the original files it saved
+  when it opened the case. Compare those files byte for byte. For OpenDSS,
+  that includes the circuit file, line code definitions, and bus coordinates.
+- **Write and check new files.** Read the original files with PowerIO, write
+  new files from the network it parsed, and read those files back with
+  PowerIO. Compare equipment counts, power totals, and the electrical
+  quantities covered by the existing conversion tests. For MATPOWER these
+  include AC admittance and the load and generation at each bus. The OpenDSS
+  checks compare the modeled sources, lines, switches, injections, shunts,
+  and transformers.
+- **Use tools outside PowerIO.** For case14, read both files with CaseFrames
+  and use the existing implementations of MATPOWER's `makeBdc` and
+  `makePTDF`. The five calculated quantities have zero difference at a
+  tolerance of 1e-9. Case14 has no nonzero branch phase shifts. For the feeder,
+  solve both versions in OpenDSS and compare the voltage magnitude on every
+  conductor.
 
-The baseline measures zero residual for all five MATPOWER metrics. Both
-OpenDSS decks solve and have the same 41 conductors. The maximum voltage
-magnitude difference is 137.631 V at `680.1`, above the 0.001 V tolerance.
-The fresh-write findings include three dropped `RegControl` records.
+## Deliberate error
 
-The runner also doubles branch 1–2's reactance from 0.05917 to 0.11834 pu
-in a temporary copy of the fresh case14 output. The same independent
-`matpower_dc_bbus` check moves from a zero residual to 8.45023 pu,
-above its 1e-9 tolerance. The control is outside the score.
+The script doubles branch 1–2's reactance from 0.05917 to 0.11834 per unit
+in a temporary copy of the generated case14 file. The `matpower_dc_bbus`
+check measures a difference of 8.45023 per unit, up from zero, and fails.
+The table above records the checks on the unmodified output.
 
-## Inspect a coverage delta
+## See which checks stopped running
 
 ```sh
 .venv-native-fidelity/bin/python evals/validation/native_fidelity.py \
@@ -75,6 +73,6 @@ python3 scripts/conversion-matrix-plan.py target/native-fidelity-partial.json \
 python3 -c 'import json; r=json.load(open("target/native-fidelity-coverage-delta.json")); print(*("{case}/{check}".format(**c) for c in r["changes"] if c["coverage_reduced"]), sep="\n")'
 ```
 
-The comparison lists all eight independent checks with reduced coverage.
-It also exposes check-level status, residual, rule, and applicability
-changes and flags different corpora or oracle versions.
+The comparison lists all eight external checks that ran the first time and
+were skipped the second time. It also shows changes to individual results,
+the rules for passing, the input files, or the versions of the tools.

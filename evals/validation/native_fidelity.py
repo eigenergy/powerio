@@ -37,7 +37,20 @@ CASES = {
         "outside_scope": "Independent voltage angles, branch powers, control trajectories, and coordinates.",
     },
 }
-LEGS = ("byte_replay", "fresh_write", "independent_validation")
+TEST_LABELS = {
+    "byte_replay": "Copy the original files unchanged",
+    "fresh_write": "Write new files and check them in PowerIO",
+    "independent_validation": "Compare original and new files using external tools",
+}
+LEGS = tuple(TEST_LABELS)
+METRIC_LABELS = {
+    "matpower_dc_bbus": "Bus susceptance matrix (Bbus)",
+    "matpower_dc_bf": "Branch flow matrix (Bf)",
+    "matpower_dc_pbusinj": "Bus phase-shift injections",
+    "matpower_dc_pfinj": "Branch phase-shift injections",
+    "matpower_dc_ptdf": "Power transfer distribution factors",
+    "opendss_voltage_magnitude": "Voltage magnitude",
+}
 COLOURS = {"pass": "🟢", "fail": "🔴", "missing": "🟡"}
 B_BUS_CHECK = "matpower_dc_bbus"
 DC_TOL = 1e-9
@@ -313,28 +326,41 @@ def run(directory, skip_independent, compact):
 
 
 def print_scorecard(report):
-    print("\n| Case | Format pair | Leg | Passes / applicable | Verified / applicable |")
+    print("\n| Input | Output format | What the test does | Checks passed | Checks run |")
     print("| --- | --- | --- | ---: | ---: |")
     for name, case in report["cases"].items():
         for leg, counts in case["score"].items():
             p, v, a = (counts[k] for k in ("passes", "verified", "applicable"))
             status = "fail" if p < v else "missing" if v < a else "pass"
-            print(f"| {name} | {case['source']} → {case['target']} | {leg} | {COLOURS[status]} {p}/{a} | {v}/{a} |")
+            print(f"| {name} ({case['source']}) | {case['target']} | {TEST_LABELS[leg]} "
+                  f"| {COLOURS[status]} {p}/{a} | {v}/{a} |")
+    print()
     for name, case in report["cases"].items():
         for key, check in case["checks"].items():
             if "residual" in check:
-                residual = "non-finite" if check["residual"] is None else f"{check['residual']:.6g}"
-                print(f"{name}/{key}: {COLOURS[check['status']]} {residual} {check['units']} "
-                      f"(required {check['comparison']} {check['tolerance']:.6g})")
+                label = f"{COLOURS[check['status']]} {name} — {METRIC_LABELS[key]}"
+                if check["residual"] is None:
+                    print(f"{label} produced a non-finite difference.")
+                    continue
+                location = f" at node {check['worst_node']}" if "worst_node" in check else ""
+                print(f"{label}. Largest difference "
+                      f"{check['residual']:.6g} {check['units']}{location} "
+                      f"(required {check['comparison']} {check['tolerance']:.6g} {check['units']}).")
+                if check.get("reference_volts") is not None and check.get("candidate_volts") is not None:
+                    print(f"   Original {check['reference_volts']:.3f} V, new {check['candidate_volts']:.3f} V.")
             elif check["status"] != "pass":
-                print(f"{name}/{key}: {COLOURS[check['status']]} {check['status']}")
+                detail = check.get("detail", check["scope"])
+                print(f"{COLOURS[check['status']]} {name}/{key} {check['status']}. {detail}")
     control = report["negative_control"]
     if "result" in control:
-        print(f"Negative control: {control['check']} {control['result']['status']} with "
-              f"BR_X {control['before']} → {control['after']} pu "
-              f"(residual {control['result'].get('residual')}).")
+        result = control["result"]
+        print(f"For the deliberate error test, the script changed case14 branch 1–2 reactance "
+              f"from {control['before']} to {control['after']} per unit.")
+        print(f"{control['check']} returned {result['status']}.")
+        if result.get("residual") is not None:
+            print(f"The matrix differed by {result['residual']:.6g} per unit.")
     elif "detail" in control:
-        print(f"Negative control: {control['detail']}")
+        print(f"The deliberate error test failed. {control['detail']}")
 
 
 def main():
