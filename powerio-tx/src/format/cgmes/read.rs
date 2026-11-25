@@ -4135,7 +4135,6 @@ fn limit_kind<'a>(store: &'a Store, limit_type: &str, version: CgmesVersion) -> 
     }
 }
 
-///
 #[derive(Debug)]
 enum OperationalLimitClassification<'a> {
     Accepted {
