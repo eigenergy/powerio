@@ -218,11 +218,16 @@ are from the field listed; integers and floats are little endian.
 | offset | type | value | meaning |
 |---|---|---|---|
 | 0x00 | u64 | 15000 | magic / format constant |
-| 0x08 | u64 | varies | writer format constant. Decoded constants: 338, 368, 425, 483, 508, 537, 550, 551, 554. Other older samples carry 196, 191, 134, or a different header shape. The constant does not pin the record layout; record flags and table anchors do. |
+| 0x08 | u64 | varies | writer format constant. Decoded constants: 338, 368, 425, 483, 508, 537, 550, 551, 554, 577. Other older samples carry 305, 196, 191, 134, or a different header shape. The constant does not pin the record layout; record flags and table anchors do. |
 | 0x10 | u64 | 20 | format constant |
 | 0x18 | 16 bytes | 0 | unknown |
 | 0x28 | f64 | varies | Delphi TDateTime of the save (days since 1899-12-30); matches each file's export date |
 | 0x30.. | | | case description block: a small count, then u32 length prefixed text paragraphs |
+
+PowerWorld Simulator 24 (build 2026-05-20) names the constant of each layout
+it saves. Its own `SaveCase` type `PWB` (and `PWB24`) writes 577, and the
+older types write `PWB16` 305, `PWB17` 338, `PWB18` 368, `PWB19` 425, `PWB20`
+483, `PWB21` 508, `PWB22` 537, and `PWB23` 554.
 
 ### Strings
 
@@ -344,7 +349,9 @@ four byte field insertion: the 2021 era generator record carries the
 regulated bus number as a second u32 after the terminal bus, and the
 probe had keyed the record start one field late, reading the regulated
 bus as the terminal bus. Plants regulating a remote bus (184 of 731
-machines) are what made "a quarter" of the records look wrong. With the
+machines) are what made "a quarter" of the records look wrong. The older
+eras store the same pair, and their reader had the same fault until its
+record start was re-fit the same way (see the generator record section). With the
 boundary re-fit, every Texas7k table decodes against the same day aux:
 buses (6717), loads (5095, values exact at f32 precision), generators
 (731, every field plus the in service bit), shunts (634), branches
@@ -391,6 +398,52 @@ bytes, the shared f32 generator block, then the same status/RMPCT tail. Its
 branch table count can include one trailing non branch record; the accepted
 branch run still has to pass the normal branch record validation and end check.
 
+### Header 577 (Simulator 24's own layout)
+
+Established with PowerWorld Simulator 24 through SimAuto: each case was
+written as aux by PowerIO's writer, loaded with `ProcessAuxFile`, and saved
+with `SaveCase` as `PWB` (577), `PWB23` (554), `PWB21` (508), and `PWB20`
+(483), so the four saves of a case hold the same data.
+`GetParametersMultipleElement` on the loaded case is the oracle for every
+field. The cases: MATPOWER's
+case9, case14, case30, case57, case118, and case2869pegase, ACTIVSg200 from
+its vendored aux, and case14 with three machines given a remote regulated bus.
+
+577 changes no decoded record head. The bus, load, generator, shunt, and
+branch heads and table glues are the 554 ones byte for byte; the one change
+in the decoded tables is one byte inserted in every undecoded bus record
+tail, which the record resync skips. Where it goes depends on the record:
+25 bytes into the tail in ACTIVSg200 (tails of 106 bytes become 107), 57 in
+the PowerIO written cases, whose tails carry the voltage limit lists noted
+under the open questions. Every case decodes in all four layouts to the
+same records, and every decoded value equals Simulator's own at f32
+precision, with three
+exceptions that are not layout dependent: Simulator reports zero output
+(`GenMW`, `GenMVR`) for the nine open ACTIVSg200 machines whose records
+store their setpoints (the decode reads the setpoint and the open status,
+as the vendored aux states them), and pegase's shunt G and transformer
+phase shift read zero (see the shunt and branch sections).
+
+Three reader changes came out of the comparison:
+
+- 577 is admitted with 554's rules.
+- 483, 554, and 577 admit both regulated generator records. Simulator 24
+  writes the record without the presence byte (`+11` and `+12` zero) for
+  every PowerIO written case in all three layouts, and the presence byte
+  record (`+11` = 1) for ACTIVSg200; the 2021 era Texas7k export (483) uses
+  the latter. Before the change, a 483 save of any PowerIO written case and
+  a 554 or 577 save of ACTIVSg200 failed with "no table chain matches".
+- A generator limit slot accepts exactly the +-1e10 MVA sentinel the aux
+  writer states for an infinite limit (f32 1e8 per unit). pegase's four
+  machines with infinite MVAr limits failed the plausibility bound, the
+  table walk lost four records, and the chain search exhausted its budget
+  in every layout.
+
+The remote regulator variant of case14 pins the terminal bus: every layout
+stores the terminal bus first, and the decodes place the three machines on
+their terminal buses, the 508 save through the older generator record
+reader (see the generator record section).
+
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
 u32 BusNum, variable length ShortString LoadID, one undecoded byte, then
@@ -404,14 +457,52 @@ per load value parity against their auxes at f32 precision.
 
 ### Generator record (validated on all 49 + 282 + 545 machines of three files)
 
-u32 BusNum, GenID as ShortString[2] (fixed three byte field), then flag
-bytes whose count varies, then eight consecutive f32 per unit values
-anchored at +9 or +10 (2016/2017 exports; the gap varies per record) or +11
-(2018) from the record start: MW setpoint, MVAr setpoint, MVRMax, MVRMin,
-GenVoltSet (p.u., scale 1), GenMVABase (MVA, scale 1), MWMax, MWMin. The
-voltage setpoint and MVA base ranges pick the anchor per record. In the
-2018 file also verified: GenRMPCT at +53, GenZR/GenZX as f64 near
-+147/+193. Record length varies with embedded strings.
+u32 BusNum (the terminal bus), u32 GenRegNum (the regulated bus), GenID as
+ShortString[2] (fixed three byte field), then bytes whose count varies, then
+eight consecutive f32 per unit values anchored at +13 or +14 (2016/2017
+exports; the gap varies per record) or +15 (2018) from the record start: MW
+setpoint, MVAr setpoint, MVRMax, MVRMin, GenVoltSet (p.u., scale 1),
+GenMVABase (MVA, scale 1), MWMax, MWMin. The voltage setpoint and MVA base
+ranges pick the anchor per record. In the 2018 file also verified: GenRMPCT
+at +57, GenZR/GenZX as f64 near +151/+197. Record length varies with
+embedded strings.
+
+The record starts at the terminal bus. An earlier model started it at the
+regulated bus (u32 BusNum, the ID, the block at +9 to +12), which reads
+the same on a machine that regulates its own bus, as every machine of the
+three files above does; on a remote regulator it read the regulated bus as
+the machine's bus. In every generator table of the 338, 368, 425, 508, and
+537 files in the corpus the ID follows two bus numbers, equal except on the
+remote regulators, and the bytes between the ID and the block take four
+shapes:
+
+| bytes after the ID | block at | records |
+|---|---|---|
+| `00 00` | +13 | the June 2016 export (28 of 282), RTS-GMLC (160), the IEEE 300 bus sample (69, header 338), the IEEE RTS-96 sample (33), a 13 bus 508 save (1 of 5), a 7 bus 537 save (5), and every Simulator 24 save of a PowerIO written case |
+| `01 xx 00` | +14 | the June 2016 export (254 of 282), v19 (545) |
+| `01 xx 02 yy` | +15 | ACTIVSg200 (49), the 13 bus 508 save (4 of 5) |
+| `04 00` | +13 | the 39 bus sample (10, header 425) |
+
+The first three are the heads of the 2021 era record below with and
+without its presence byte, and one table can mix them, so the byte after
+the ID reads as a flag whose bit 0 brings in the varying byte and the
+presence byte. The reader does not decode that byte; it keeps probing the
+anchors, now counted from the terminal bus, and requires the regulated bus
+to be a known bus as it requires the terminal one.
+
+Three sources pin the terminal bus. Simulator 24 saved three remote
+regulator cases through SimAuto as `PWB17`, `PWB18`, `PWB19`, `PWB21`, and
+`PWB22` (338, 368, 425, 508, 537), and as `PWB20`, `PWB23`, and `PWB` for
+comparison: case14 with the machines at 2, 6, and 8 regulating 4, 13, and 7
+(the committed fixtures), the same case with an open remote regulator, a
+second machine on bus 6 with ID `10`, and a machine on bus 8 with ID `12`
+regulating bus 14, and case118 with 27 of its 54 machines regulating a
+neighbour, every third with a two character ID and every seventh open.
+Every save decodes every machine onto the terminal bus and with the status
+`GetParametersMultipleElement` reports. The 13 bus 508 save above, written
+by Simulator 21 (2020 build), has one remote regulator; its PSS/E export,
+from the same Simulator, puts the machine on bus 5 with `IREG` 6, and the
+decode reads it on bus 5 (the earlier model read bus 6).
 
 Some writers of this era follow the f32 block with the same status tail the
 2021 era regulated record carries: a zero byte at block +32, the status byte
@@ -434,12 +525,12 @@ bus type and the reader derives it from the closed machines.
 ### Generator record, 2021 era (validated on 731 ×3 + 1058 ×2 machines of five files)
 
 The 2021 era writer (Texas7k export and every later save of the family)
-inserts the regulated bus and pins the layout to fixed offsets:
+pins the layout to fixed offsets:
 
 | offset | type | field |
 |---|---|---|
 | +0 | u32 | BusNum (terminal bus) |
-| +4 | u32 | GenRegNum (the inserted field; equals BusNum except on the 184 remote regulating machines) |
+| +4 | u32 | GenRegNum (equals BusNum except on the 184 remote regulating machines) |
 | +8 | ShortString[2] | GenID |
 | +11 | u8 | constant 1 |
 | +12 | u8 | varies per record (7 through 37 observed), undecoded |
@@ -452,6 +543,17 @@ inserts the regulated bus and pins the layout to fixed offsets:
 The record tail (undecoded) carries the piecewise cost curve as f32
 pairs and per record strings; tail lengths run 238 to 274 bytes in the
 2021 export.
+
+The older eras' records start the same way (see the section above): the
+vendored 2018 ACTIVSg200 save stores terminal bus 49, regulated bus 49, the
+ID, then `01 01 02 12` before the f32 block, which is this record with
+presence bit 1 and without the status tail.
+
+The f32 block's limit slots (MVRMax, MVRMin, MWMax, MWMin) may hold exactly
+the +-1e10 MVA sentinel the aux writer states for an infinite limit, stored
+as f32 1e8 per unit; the reader accepts that magnitude and no other past
+its 1e6 per unit bound. case2869pegase's four machines with infinite MVAr
+limits are the evidence.
 
 ### Branch records (validated on all 246 + 3043 + 3202 branches of three files)
 
@@ -487,6 +589,12 @@ byte before the kind byte for the kind, which made every 2018 line read as
 a zero tap transformer in extras until the v19 parallel circuits exposed
 both.
 
+case2869pegase is the first case with a nonzero phase shift. In its
+Simulator 24 saves (483, 508, 554, 577) each of the 12 phase shifting
+transformers stores `LinePhase` in degrees as the f32 right after the tap.
+The reader still reads `shift = 0`; decoding the slot waits for a check
+against the older corpus, whose transformers all store zero phase.
+
 Paired export precision matters for transformer parity: the aux transformer
 Branch section prints impedances at 6 decimals while the line section prints
 the f64 widening of the stored f32 at 20 decimals. The binary stores the
@@ -501,8 +609,12 @@ RAW at full precision.
 u32 BusNum, ShortString ShuntID, with the nominal MVAr as f32 in per unit
 at +24 from the record start in every vintage. The slot at +20 is 0.0 in
 the Simulator 20 era files but 0.99 in the 2016 export (a regulation
-target, not a power), so the nominal MW slot is unlocated; every available
-case stores zero shunt MW and the reader sets G = 0.
+target, not a power), so the nominal MW slot is unlocated in that corpus,
+and the reader sets G = 0. case2869pegase is the first case with shunt MW:
+in its Simulator 24 saves (483, 508, 554, 577) every one of the 46 shunts
+with nonzero `SSNMW` stores it per unit as an f32 at +7, after a one
+character ID and its unused capacity byte. The decode waits for a check of
+that slot against the older corpus.
 
 ### Open questions (inventoried, not guessed)
 
@@ -523,7 +635,12 @@ case stores zero shunt MW and the reader sets G = 0.
 - The 2021 era generator record's presence gated values (bits 0 and 5
   insert f32s, bit 1 a byte; observed values 4.0/5.0 and 1.17) and its
   constant +11/+12 bytes.
-- The gen record's variable flag byte gap (+9/+10 within one 2016 file).
+- The older generator record's bytes between the ID and the f32 block
+  (`00 00`, `01 xx 00`, and `01 xx 02 yy`, mixed within one table, and
+  `04 00` in one file): what the flag byte's other bits mean, and whether
+  the presence byte inserts here what it inserts in the 2021 era record.
+- The generator's regulated bus is read and checked against the bus table
+  but not kept (`regulated_bus` stays `None` in every era).
 - Whether load IDs are also fixed capacity (every observed load ID already
   fills two characters or parses either way).
 - Table glue blocks between count and first record (the v21 resave's bus
@@ -534,7 +651,14 @@ case stores zero shunt MW and the reader sets G = 0.
   0.95/1.04 and 1.00/1.06 in the other), and no f32 at any fixed offset from
   either the bus record start or the decoded head end tracks them across
   both saves, so they are not stored in the bus record at a constant offset.
-  Buses keep the 1.1/0.9 defaults.
+  Buses keep the 1.1/0.9 defaults. The Simulator 24 saves of PowerIO
+  written cases do carry them in the bus tail: 16 bytes past the decoded
+  head sit a byte 1, a count 4, four f32 low limits, a count 4, and four
+  f32 high limits, and the first entry of each list equals the MATPOWER
+  `VMIN`/`VMAX` on all 3001 buses of case14, case118, and case2869pegase
+  (the 577 saves; the 554 tails are identical up to that point).
+  ACTIVSg200's tails hold a 0 byte there instead, consistent with the
+  empty per rating set limits of its aux. Decoding the lists is open.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 
@@ -650,6 +774,14 @@ rejected, out of scope.
 | Texas7k 2030 saved as v22 | local only | 537 | 0x66-0x167 | aux, offline strict alignment | decoded, counts committed | 7132 buses, 9555 branches |
 | Texas7k 2021 scenario snapshot | local only | 537 | 0x66-0x167 | same grid as the 2021 export | decoded, counts match the 2021 case | 6717 buses, 9140 branches |
 | IEEE 14 PowerWorld save | local only | 554 | 0x06/0x07 | standard IEEE 14 topology | decoded offline | 14 buses, 20 branches |
+| case14_v577.pwb | vendored (Simulator 24 save, cut) | 577 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses | 14 buses, 20 branches |
+| case14_v483.pwb | vendored (Simulator 24 `PWB20` save, cut) | 483 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses | 14 buses, 20 branches |
+| case14_v338.pwb, case14_v368.pwb, case14_v425.pwb, case14_v508.pwb, case14_v537.pwb | vendored (Simulator 24 `PWB17`, `PWB18`, `PWB19`, `PWB21`, `PWB22` saves, cut) | 338, 368, 425, 508, 537 | 0x06/0x07 | case14.m; Simulator's own field values | decoded, parity on every quantity including three remote regulators' terminal buses (older generator reader); the same records as case14_v577.pwb | 14 buses, 20 branches |
+| Simulator 24 saves of three remote regulator cases (two case14 variants, case118) | local only (generated) | 338, 368, 425, 483, 508, 537, 554, 577 | 0x06/0x07 | Simulator's own Gen field values through SimAuto | decoded; every machine on its terminal bus with its status, including open remote regulators and two character IDs; the same records in all eight layouts | 14 and 118 buses |
+| 13 bus case saved by Simulator 21 | local only | 508 | 0x3026-0x3067 | its PSS/E export from the same Simulator | decoded; generator terminal buses match the export's, including its one remote regulator | 13 buses, 19 branches |
+| Simulator 24 saves of case9, case14, case30, case57, case118, case2869pegase, ACTIVSg200 | local only (generated) | 577, 554, 508, 483 | 0x06/0x07 | Simulator's own field values through SimAuto | decoded, parity on every quantity except pegase shunt G and phase shift (undecoded) and the open ACTIVSg200 machines' reported output | up to 2869 buses, 4582 branches |
+| Simulator 24 `PWB17`/`PWB18`/`PWB19`/`PWB22` saves of case2869pegase and the remote regulator case14 | local only (generated) | 338, 368, 425, 537 | 0x06/0x07 | the 554 save of the same case | decoded, same records as the 554 save | up to 2869 buses, 4582 branches |
+| Simulator 24 `PWB16` saves | local only (generated) | 305 | — | — | rejected: header constant | |
 | 39 bus sample case | local only | 425 | 0x06/0x07 | paired RAW/EPC exports | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
 | 118 bus sample case | local only | 338 | 0x06 family | paired RAW/EPC exports | decoded; counts, totals, and branch topology match | 118 buses, 186 branches |
 | 12 bus course case | local only | 134 | — | — | rejected: header constant | |
