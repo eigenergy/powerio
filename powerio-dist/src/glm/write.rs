@@ -865,8 +865,7 @@ impl Writer<'_> {
                 )));
             }
             for (key, value) in &load.extras {
-                let droppable = *self.net.source_format()
-                    == Some(crate::DistSourceFormat::Dss)
+                let droppable = *self.net.source_format() == Some(crate::DistSourceFormat::Dss)
                     && match key.as_str() {
                         // The reader materializes these source properties into
                         // the typed terminal map, nominal voltage, power and
@@ -881,12 +880,10 @@ impl Writer<'_> {
                             .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
                             .and_then(|phases: u64| usize::try_from(phases).ok())
                             .is_some_and(|phases| phases == load.p_nom.len()),
-                        "pf" => value.as_f64().is_some_and(|pf| {
-                            pf.is_finite() && pf != 0.0 && pf.abs() <= 1.0
-                        }),
-                        "model" => value
-                            .as_u64()
-                            .is_some_and(|model| matches!(model, 1 | 2)),
+                        "pf" => value
+                            .as_f64()
+                            .is_some_and(|pf| pf.is_finite() && pf != 0.0 && pf.abs() <= 1.0),
+                        "model" => value.as_u64().is_some_and(|model| matches!(model, 1 | 2)),
                         _ => false,
                     };
                 if !droppable {
