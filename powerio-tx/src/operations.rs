@@ -21,8 +21,8 @@ use serde_json::Value;
 use crate::diagnostics::Diagnostic;
 use crate::merge::{BusMergeRule, MergeSurvivor, ZeroImpedanceRule, kind_priority};
 use crate::network::{
-    BalancedNetwork, BalancedNetworkTables, Branch, BranchRatingSet, Bus, BusId, BusType, Extras,
-    IMPEDANCE_CORRECTION_APPLIED_EXTRA, IMPEDANCE_CORRECTION_NOMINAL_EXTRA,
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchCurrentRatings, BranchRatingSet, Bus,
+    BusId, BusType, Extras, IMPEDANCE_CORRECTION_APPLIED_EXTRA, IMPEDANCE_CORRECTION_NOMINAL_EXTRA,
     ImpedanceCorrectionVariable, SourceFormat, current_correction_nominal,
 };
 
@@ -66,6 +66,35 @@ fn combine_rate(a: f64, b: f64) -> f64 {
         f64::NAN
     } else {
         a.min(b)
+    }
+}
+
+fn combine_current_rate(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else if a < 0.0 || b < 0.0 {
+        a.min(b)
+    } else if a == 0.0 {
+        b
+    } else if b == 0.0 {
+        a
+    } else {
+        a.min(b)
+    }
+}
+
+fn combine_current_ratings(
+    a: Option<BranchCurrentRatings>,
+    b: Option<BranchCurrentRatings>,
+) -> Option<BranchCurrentRatings> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(BranchCurrentRatings::new(
+            combine_current_rate(a.c_rating_a, b.c_rating_a),
+            combine_current_rate(a.c_rating_b, b.c_rating_b),
+            combine_current_rate(a.c_rating_c, b.c_rating_c),
+        )),
+        (Some(ratings), None) | (None, Some(ratings)) => Some(ratings),
+        (None, None) => None,
     }
 }
 
@@ -697,7 +726,7 @@ impl BalancedNetwork {
             rate_b: combine_rate(s1.rate_b, s2.rate_b),
             rate_c: combine_rate(s1.rate_c, s2.rate_c),
             rating_sets: combine_rating_sets(&s1.rating_sets, &s2.rating_sets),
-            current_ratings: None,
+            current_ratings: combine_current_ratings(s1.current_ratings, s2.current_ratings),
             tap: 0.0,
             shift: 0.0,
             in_service: true,
@@ -875,8 +904,8 @@ impl BalancedNetwork {
 mod tests {
     use super::*;
     use crate::network::{
-        Area, BusType, Extras, Generator, GeneratorEnergySource, Impedance, Load, Transformer3W,
-        Winding,
+        Area, BranchCurrentRatings, BusType, Extras, Generator, GeneratorEnergySource, Impedance,
+        Load, Transformer3W, Winding,
     };
 
     fn bus(id: usize, area: usize, base_kv: f64) -> Bus {
@@ -1215,6 +1244,94 @@ mod tests {
             assert!(rate_c.is_nan() || rate_c < 0.0, "{invalid}: {rate_c}");
             assert!(net.validate().is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn reduce_passthrough_combines_current_ratings_through_a_section_chain() {
+        let mut s1 = line(1, 2);
+        s1.current_ratings = Some(BranchCurrentRatings::new(100.0, 80.0, 70.0));
+        let mut s2 = line(2, 3);
+        s2.current_ratings = Some(BranchCurrentRatings::new(90.0, 90.0, 60.0));
+        let mut s3 = line(3, 4);
+        s3.current_ratings = Some(BranchCurrentRatings::new(95.0, 70.0, 65.0));
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![
+                bus(1, 1, 230.0),
+                bus(2, 1, 230.0),
+                bus(3, 1, 230.0),
+                bus(4, 1, 230.0),
+            ],
+            vec![s1, s2, s3],
+        );
+
+        assert_eq!(net.reduce_passthrough_buses(), 2);
+        assert_eq!(
+            net.branches()[0].current_ratings,
+            Some(BranchCurrentRatings::new(90.0, 70.0, 60.0)),
+            "each rating category is limited by the lowest section rating"
+        );
+    }
+
+    #[test]
+    fn reduce_passthrough_keeps_current_ratings_when_only_one_section_states_them() {
+        let mut rated = line(1, 2);
+        rated.current_ratings = Some(BranchCurrentRatings::new(120.0, 100.0, 80.0));
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![rated, line(2, 3)],
+        );
+
+        assert_eq!(net.reduce_passthrough_buses(), 1);
+        assert_eq!(
+            net.branches()[0].current_ratings,
+            Some(BranchCurrentRatings::new(120.0, 100.0, 80.0)),
+            "an unrated section does not erase the other section's limits"
+        );
+    }
+
+    #[test]
+    fn reduce_passthrough_current_rating_zero_is_unlimited() {
+        let mut s1 = line(1, 2);
+        s1.current_ratings = Some(BranchCurrentRatings::new(0.0, 80.0, 0.0));
+        let mut s2 = line(2, 3);
+        s2.current_ratings = Some(BranchCurrentRatings::new(100.0, 0.0, 40.0));
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![s1, s2],
+        );
+
+        assert_eq!(net.reduce_passthrough_buses(), 1);
+        assert_eq!(
+            net.branches()[0].current_ratings,
+            Some(BranchCurrentRatings::new(100.0, 80.0, 40.0)),
+            "zero means unlimited for current ratings, so the other section binds"
+        );
+    }
+
+    #[test]
+    fn reduce_passthrough_preserves_invalid_current_ratings_for_validation() {
+        let mut s1 = line(1, 2);
+        s1.current_ratings = Some(BranchCurrentRatings::new(f64::NAN, -1.0, 50.0));
+        let mut s2 = line(2, 3);
+        s2.current_ratings = Some(BranchCurrentRatings::new(0.0, 0.0, 60.0));
+        let mut net = BalancedNetwork::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![s1, s2],
+        );
+
+        assert_eq!(net.reduce_passthrough_buses(), 1);
+        let ratings = net.branches()[0].current_ratings.unwrap();
+        assert!(ratings.c_rating_a.is_nan());
+        assert_eq!(ratings.c_rating_b, -1.0);
+        assert_eq!(ratings.c_rating_c, 50.0);
     }
 
     #[test]
