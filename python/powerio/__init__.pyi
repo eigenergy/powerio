@@ -113,6 +113,7 @@ __all__ = [
     "from_ppc",
     "parse",
     "parse_geo",
+    "powerworld",
     "resolve_format",
     "serialize",
     "versions",
@@ -1109,6 +1110,7 @@ class FormatInfo(NamedTuple):
 Format = str
 
 from . import dist as dist
+from . import powerworld as powerworld
 from .dist import MulticonductorNetwork as MulticonductorNetwork
 
 def resolve_format(name: str) -> Optional[FormatInfo]: ...

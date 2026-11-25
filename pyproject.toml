@@ -53,6 +53,10 @@ gridfm = ["polars>=1"]
 # Compatibility read path for downstream code that expects pandas DataFrames.
 # pyarrow fixes current advisories in 23.0.1.
 pandas = ["pandas>=2", "pyarrow>=23.0.1"]
+# powerio.powerworld.write_pwb drives PowerWorld Simulator's SimAuto COM server,
+# which runs only on Windows; Simulator and its SimAuto license are installed
+# separately.
+simauto = ["pywin32>=306; sys_platform == 'win32'"]
 # The MCP server exposes the powerio.mcp tool surface.
 # The server targets the 2.0 API (`mcp.server.mcpserver.MCPServer`); 1.x
 # shipped the decorator server as `mcp.server.fastmcp`, which 2.0 removed.
