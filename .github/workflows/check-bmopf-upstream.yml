@@ -22,7 +22,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         id: app
         with:
           app-id: ${{ vars.POWERIO_RELEASE_APP_ID }}

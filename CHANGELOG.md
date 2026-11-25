@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
+
 - The three-phase pandapower reader maps `trafo` rows of vector group `Dyn`
   or `YNyn` (#846). A correction in zero-sequence-only shunts makes their zero
   sequence match the T model of pandapower. A `YNyn` LV winding whose
