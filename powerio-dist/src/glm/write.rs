@@ -874,10 +874,12 @@ impl Writer<'_> {
                         // but are not independent GLM electrical state.
                         "kv" => value
                             .as_f64()
-                            .is_some_and(|number| number.is_finite() && number > 0.0),
+                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                            .is_some_and(|number: f64| number.is_finite() && number > 0.0),
                         "phases" => value
                             .as_u64()
-                            .and_then(|phases| usize::try_from(phases).ok())
+                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                            .and_then(|phases: u64| usize::try_from(phases).ok())
                             .is_some_and(|phases| phases == load.p_nom.len()),
                         "pf" => value.as_f64().is_some_and(|pf| {
                             pf.is_finite() && pf != 0.0 && pf.abs() <= 1.0
