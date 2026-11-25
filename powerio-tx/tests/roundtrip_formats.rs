@@ -235,7 +235,11 @@ fn branch_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<BranchValue
                     .is_finite()
                     .then_some(branch.rate_c)
                     .map(round_value),
-                tap: round_value(branch.tap),
+                tap: round_value(if psse_line_record(branch, target) {
+                    branch.calc_effective_tap()
+                } else {
+                    branch.tap
+                }),
                 shift: round_value(branch.shift),
                 in_service: branch.in_service,
                 angmin: round_value(branch.angmin),
@@ -245,6 +249,23 @@ fn branch_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<BranchValue
         .collect();
     branches.sort_by_key(|b| (b.from, b.to, b.occurrence));
     branches
+}
+
+/// Whether PSS/E output states `branch` as a BRANCH record although its tap
+/// field makes it a transformer: a unit ratio, no shift, no tap control, and
+/// charging at the to end (#940). It reads back as a line, tap 0, which is
+/// the same ratio; `EMIT.PSSE.ELEMENT_RELABELED` reports the relabel. Such a
+/// branch reads back with its charging, so the read side satisfies the test
+/// too.
+// Exactly one, as the writer tests it.
+#[allow(clippy::float_cmp)]
+fn psse_line_record(branch: &powerio_tx::Branch, target: TargetFormat) -> bool {
+    let charging = branch.calc_terminal_charging();
+    matches!(target, TargetFormat::Psse { .. } | TargetFormat::PsseRawx)
+        && branch.calc_effective_tap() == 1.0
+        && branch.shift == 0.0
+        && branch.control.is_none()
+        && (charging.g_to != 0.0 || charging.b_to != 0.0)
 }
 
 fn generator_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<GeneratorValue> {
