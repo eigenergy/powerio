@@ -519,8 +519,9 @@ fn pypsa_csv_folder_reads_storage_units() {
     assert_eq!(st.discharge_rating, 25.0);
     assert_eq!(st.charge_efficiency, 0.91);
     assert_eq!(st.discharge_efficiency, 0.92);
-    assert_eq!(st.ps, 3.0);
-    assert_eq!(st.qs, 1.5);
+    // PyPSA p_set 3 discharges 3 MW. Storage ps is positive when charging.
+    assert_eq!(st.ps, -3.0);
+    assert_eq!(st.qs, -1.5);
     assert_eq!(st.energy, 20.0);
     assert!(!st.in_service);
 }
@@ -1967,7 +1968,8 @@ fn pypsa_genuine_export_reads() {
     let st = &net.storage()[0];
     assert_eq!(st.charge_rating, 25.0);
     assert_eq!(st.energy_rating, 100.0);
-    assert_eq!(st.ps, 3.0);
+    // PyPSA p_set 3 discharges 3 MW. Storage ps is positive when charging.
+    assert_eq!(st.ps, -3.0);
     assert_eq!(st.energy, 20.0);
 
     // link -> Hvdc, with the one fidelity warning.

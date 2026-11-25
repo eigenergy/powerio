@@ -407,8 +407,11 @@ fn read_pypsa_csv_static(
             let max_hours = row.f("max_hours").unwrap_or(0.0);
             storage.push(Storage {
                 bus: bus_ref("storage_units.csv", i + 1, row, "bus", &id_of_name)?,
-                ps: row.f("p_set").unwrap_or(0.0),
-                qs: row.f("q_set").unwrap_or(0.0),
+                // PyPSA p_set and q_set are injections (positive discharges).
+                // Storage ps and qs are withdrawals (positive charges).
+                // `0.0 - x` keeps a zero at +0.0.
+                ps: 0.0 - row.f("p_set").unwrap_or(0.0),
+                qs: 0.0 - row.f("q_set").unwrap_or(0.0),
                 energy: row.f("state_of_charge_initial").unwrap_or(0.0),
                 energy_rating: p_nom * max_hours,
                 charge_rating: p_nom,
@@ -1134,8 +1137,9 @@ fn storage_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String
             key_for(key_of, st.bus),
             p_nom,
             max_hours,
-            st.ps,
-            st.qs,
+            // PyPSA p_set and q_set are injections: negate the withdrawals.
+            0.0 - st.ps,
+            0.0 - st.qs,
             st.energy,
             st.charge_efficiency,
             st.discharge_efficiency
@@ -2355,7 +2359,7 @@ mod tests {
         );
         assert_eq!(
             text.lines().nth(1).unwrap(),
-            "storage_1,1,25,4,3,1.5,20,0.91,0.92,false"
+            "storage_1,1,25,4,-3,-1.5,20,0.91,0.92,false"
         );
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
         let st = &back.storage()[0];
