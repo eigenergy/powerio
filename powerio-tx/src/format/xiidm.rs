@@ -8695,7 +8695,6 @@ fn collapse_cross_substation_transformers(
     Some(projected)
 }
 
-/// Register an identifier that the XIIDM writer will emit into the document.
 fn register_xiidm_document_id<'a>(
     ids: &mut HashMap<&'a str, &'static str>,
     id: &'a str,
@@ -8712,15 +8711,10 @@ fn register_xiidm_document_id<'a>(
     Ok(())
 }
 
-/// Refuse duplicate identifiers before emitting document-global XIIDM ids.
 fn validate_xiidm_equipment_uid_uniqueness(
     network: &BalancedNetwork,
     emit_detailed_connectivity: bool,
 ) -> Result<()> {
-    // Boundary-line calculation loads/generators and tie-line calculation
-    // branches are internal projections. The XIIDM writer emits their
-    // boundaryLine/tieLine records instead, so their shared source UID is not
-    // a duplicate document ID.
     let mut omitted_calculation_ids = HashSet::<(&str, &str)>::new();
     if emit_detailed_connectivity && let Some(detailed) = network.detailed_connectivity() {
         for boundary in &detailed.boundary_lines {
@@ -8739,9 +8733,6 @@ fn validate_xiidm_equipment_uid_uniqueness(
     }
 
     let mut equipment_ids = HashMap::<&str, &'static str>::new();
-    // Boundary and tie lines are emitted equipment too. Register them before
-    // their calculation-only projections are skipped below, so an ordinary
-    // load, branch, or other equipment cannot reuse their document IDs.
     if emit_detailed_connectivity && let Some(detailed) = network.detailed_connectivity() {
         for boundary in &detailed.boundary_lines {
             register_xiidm_document_id(
@@ -8761,10 +8752,6 @@ fn validate_xiidm_equipment_uid_uniqueness(
             for record in $records {
                 if let Some(uid) = record.uid.as_deref() {
                     if omitted_calculation_ids.contains(&($kind, uid)) {
-                        // Several boundary records may reference the same
-                        // calculation component, but it is still one source
-                        // record. The writer filters by UID, so a second
-                        // record with that UID would also be omitted silently.
                         if !observed_calculation_ids.insert(uid) {
                             return Err(Error::Emit {
                                 format: FORMAT,
@@ -8790,15 +8777,9 @@ fn validate_xiidm_equipment_uid_uniqueness(
     register_ids!(network.switches(), "switch");
     register_ids!(network.hvdc(), "HVDC line");
 
-    // A detailed XIIDM source carries converter stations separately from the
-    // balanced HVDC line. Register those emitted IDs directly, then register
-    // reduced-model converter IDs only when no matching detailed station is
-    // present; otherwise the same logical station would be counted twice.
     let mut detailed_vsc_ids = HashSet::new();
     let mut detailed_lcc_ids = HashSet::new();
     if emit_detailed_connectivity && let Some(detailed) = network.detailed_connectivity() {
-        // These DC-side records are emitted as independent XIIDM equipment
-        // and share the same document-global ID namespace as AC equipment.
         for node in &detailed.dc_nodes {
             register_xiidm_document_id(&mut equipment_ids, node.component.local_id(), "DC node")?;
         }
@@ -17294,8 +17275,6 @@ mod tests {
 
     #[test]
     fn xiidm_emission_rejects_hvdc_converter_station_id_collisions() {
-        // Converter station IDs are separate XIIDM equipment IDs, not covered
-        // by the parent HVDC line's UID.
         let mut first = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
         let first_id = first.hvdc()[0]
             .converter1
@@ -17317,8 +17296,6 @@ mod tests {
         }
 
         let mut second = parse_xiidm_source(EQUIPMENT_COVERAGE, &mut Diagnostics::new()).unwrap();
-        // Without detailed connectivity, the emitted station IDs come from
-        // the reduced HVDC converter records instead.
         *second.detailed_connectivity_mut() = None;
         let second_id = second.hvdc()[0]
             .converter2
@@ -17378,9 +17355,6 @@ mod tests {
             calculation_generator: None,
         };
 
-        // With no detailed voltage levels, the writer derives a fresh
-        // hierarchy and omits retained boundary-line records. Their IDs must
-        // not reject an ordinary equipment UID that is actually emitted.
         let mut omitted = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
         let detailed = Arc::make_mut(omitted.detailed_connectivity_mut().as_mut().unwrap());
         detailed.voltage_levels.clear();
@@ -17396,8 +17370,6 @@ mod tests {
             "{error}"
         );
 
-        // A calculation projection is not omitted when its detailed boundary
-        // record is omitted; it remains an emitted load in the derived view.
         let mut projection = parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
         let detailed = Arc::make_mut(projection.detailed_connectivity_mut().as_mut().unwrap());
         detailed.voltage_levels.clear();
@@ -17414,9 +17386,6 @@ mod tests {
             "{error}"
         );
 
-        // Multiple boundary records may reference one calculation component,
-        // but they do not justify multiple source records with the same UID:
-        // the writer filters every matching record out by UID.
         let mut shared_projection =
             parse_xiidm_source(BUS_BREAKER, &mut Diagnostics::new()).unwrap();
         let calculation_id = component_id("load", "U").unwrap();
@@ -17611,9 +17580,6 @@ mod tests {
         let mut diagnostics = Diagnostics::new();
         let network = parse_xiidm_source(source, &mut diagnostics).unwrap();
 
-        // The writer omits calculation-only boundary loads by UID. A second
-        // record with that same UID would be omitted as well, silently losing
-        // real equipment unless the validator checks projection multiplicity.
         let mut duplicate_calculation_load = network.clone();
         let calculation_load = duplicate_calculation_load
             .loads()
@@ -17629,9 +17595,6 @@ mod tests {
             .to_string();
         assert!(error.contains("calculation-only load uid `U`"), "{error}");
 
-        // A boundaryLine is itself emitted with its component ID. A real
-        // branch must not reuse that ID even though the boundary's calculation
-        // load and generator are intentionally omitted.
         let mut duplicate_boundary_id = network.clone();
         let mut branch = duplicate_boundary_id.branches()[0].clone();
         branch.uid = Some("U".to_owned());
@@ -17642,8 +17605,6 @@ mod tests {
             "{error}"
         );
 
-        // The same document-global rule applies to a tieLine ID and ordinary
-        // equipment; its calculation branch is only an internal projection.
         let mut duplicate_tie_id = network.clone();
         let mut load = duplicate_tie_id.loads()[0].clone();
         load.uid = Some("TL".to_owned());
