@@ -13391,6 +13391,14 @@ fn write_transformer(
     let zbase = powerio_core::electrical::calc_impedance_base(to.base_kv, index.base_mva)
         .unwrap_or(f64::NAN);
     let charging = branch.calc_terminal_charging();
+    if charging.g_to != 0.0 || charging.b_to != 0.0 {
+        diagnostics.push(
+            &codes::EMIT_XIIDM.value_collapsed,
+            format!(
+                "transformer `{id}` to-side charging combined into the single XIIDM transformer shunt; terminal admittances change"
+            ),
+        );
+    }
     let mut taps = transformer_tap_changers(index, &component, 1);
     let synthesized = if taps.is_empty() {
         branch.control.as_ref().and_then(|control| {
@@ -13436,8 +13444,8 @@ fn write_transformer(
         identifiable_attributes_with_name(metadata, branch.name.as_deref()),
         number(unapply(branch.r * zbase, resistance_factor)),
         number(unapply(branch.x * zbase, reactance_factor)),
-        number(unapply(charging.g_fr / zbase, conductance_factor)),
-        number(unapply(charging.b_fr / zbase, susceptance_factor)),
+        number(unapply(charging.calc_total_g() / zbase, conductance_factor)),
+        number(unapply(charging.calc_total_b() / zbase, susceptance_factor)),
         number(from.base_kv * branch.calc_effective_tap() * rho_factor),
         number(to.base_kv),
         branch_solution_attributes(index, &component, branch.solution),
@@ -16239,6 +16247,27 @@ mod tests {
 
         let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
         assert_f64_close(reparsed.branches()[0].calc_effective_tap(), 1.1);
+    }
+
+    #[test]
+    fn transformer_shunt_keeps_both_terminal_charging_values() {
+        let source = BUS_BREAKER.replace(
+            "    <iidm:voltageLevel id=\"VL2\"",
+            "  </iidm:substation>\n  <iidm:substation id=\"S2\">\n    <iidm:voltageLevel id=\"VL2\"",
+        );
+        let mut network = parse_xiidm_source(&source, &mut Diagnostics::new()).unwrap();
+        let branch = &mut network.branches_mut()[0];
+        branch.tap = 1.02;
+        branch.b = 0.2;
+        branch.charging = Some(BranchCharging::new(0.0, 0.1, 0.0, 0.1));
+
+        let emission = write_xiidm(&network).unwrap();
+        assert!(emission.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code() == codes::EMIT_XIIDM.value_collapsed.code
+                && diagnostic.message().contains("to-side charging")
+        }));
+        let reparsed = parse_xiidm_source(&emission.text, &mut Diagnostics::new()).unwrap();
+        assert_f64_close(reparsed.branches()[0].calc_total_charging_b(), 0.2);
     }
 
     #[test]

@@ -17,6 +17,8 @@
 
 - XIIDM and JIIDM: a `shuntNonLinearModel` section states the accumulated g and b with it and all previous sections active, as PowSybl reads it. The reader added the first `sectionCount` sections and the writer stated each block step on its own, so a shunt with sections of 0.002 and 0.004 S and `sectionCount` 2 read as 0.006 S and PowSybl read a written 10 plus 20 MVAr shunt as 20 MVAr. The reader now takes the shunt admittance from section `sectionCount` and the per step blocks from the differences of consecutive sections. The writer states running sums.
 
+- XIIDM and JIIDM: a two winding transformer writes the sum of both terminal charging values into its one `g` and `b` shunt. The writer kept only the from side, so half of a MATPOWER transformer `BR_B` disappeared. A nonzero to side now reports `EMIT.XIIDM.VALUE_COLLAPSED` or `EMIT.JIIDM.VALUE_COLLAPSED`, as the CGMES writer does.
+
 ## 0.12.4
 
 - `check_sddm` reports false for a matrix with a NaN or infinite stored value. A NaN off the diagonal, or a NaN or infinite diagonal, passed before, so the CLI, the TUI and the pipeline's `sddm` field could state true for such a matrix.
