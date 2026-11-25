@@ -864,39 +864,7 @@ impl Writer<'_> {
                     load.name
                 )));
             }
-            for (key, value) in &load.extras {
-                let droppable = *self.net.source_format() == Some(crate::DistSourceFormat::Dss)
-                    && match key.as_str() {
-                        // The reader materializes these source properties into
-                        // the typed terminal map, nominal voltage, power and
-                        // voltage law. They remain useful to a DSS round-trip,
-                        // but are not independent GLM electrical state.
-                        "kv" => value
-                            .as_f64()
-                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-                            .is_some_and(|number: f64| number.is_finite() && number > 0.0),
-                        "phases" => value
-                            .as_u64()
-                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-                            .and_then(|phases: u64| usize::try_from(phases).ok())
-                            .is_some_and(|phases| phases == load.p_nom.len()),
-                        "pf" => value
-                            .as_f64()
-                            .is_some_and(|pf| pf.is_finite() && pf != 0.0 && pf.abs() <= 1.0),
-                        "model" => value.as_u64().is_some_and(|model| matches!(model, 1 | 2)),
-                        _ => false,
-                    };
-                if !droppable {
-                    return Err(unsupported(format!(
-                        "load {} has uninterpreted electrical extra {key}",
-                        load.name
-                    )));
-                }
-                self.dropped(format!(
-                    "load {}: retained OpenDSS {key} metadata is not emitted; its qualified electrical effect is materialized in the typed load",
-                    load.name
-                ));
-            }
+            self.load_source_metadata(load)?;
             let phase_order = phases(&load.terminal_map[..load.terminal_map.len() - 1])?;
             let available = self.phases.get(load.bus.as_str()).ok_or_else(|| {
                 unsupported(format!("load {} has no exact bus identity", load.name))
@@ -961,6 +929,40 @@ impl Writer<'_> {
                 );
             }
             self.out.push_str("}\n");
+        }
+        Ok(())
+    }
+
+    fn load_source_metadata(&mut self, load: &crate::DistLoad) -> Result<(), Error> {
+        for (key, value) in &load.extras {
+            let droppable = *self.net.source_format() == Some(crate::DistSourceFormat::Dss)
+                && match key.as_str() {
+                    // These source properties are materialized in the typed load.
+                    "kv" => value
+                        .as_f64()
+                        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                        .is_some_and(|number: f64| number.is_finite() && number > 0.0),
+                    "phases" => value
+                        .as_u64()
+                        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                        .and_then(|phases: u64| usize::try_from(phases).ok())
+                        .is_some_and(|phases| phases == load.p_nom.len()),
+                    "pf" => value
+                        .as_f64()
+                        .is_some_and(|pf| pf.is_finite() && pf != 0.0 && pf.abs() <= 1.0),
+                    "model" => value.as_u64().is_some_and(|model| matches!(model, 1 | 2)),
+                    _ => false,
+                };
+            if !droppable {
+                return Err(unsupported(format!(
+                    "load {} has uninterpreted electrical extra {key}",
+                    load.name
+                )));
+            }
+            self.dropped(format!(
+                "load {}: retained OpenDSS {key} metadata is not emitted; its qualified electrical effect is materialized in the typed load",
+                load.name
+            ));
         }
         Ok(())
     }
