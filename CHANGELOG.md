@@ -2,87 +2,6 @@
 
 ## Unreleased
 
-- Sienna emission aggregates named branch and three-winding rating-set loss warnings
-  by affected component count.
-
-- pandapower JSON: unrated transformer `sn_mva` substitutions are reported in one counted diagnostic with representative bus pairs instead of one warning per transformer.
-
-- The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata.
-
-- XIIDM and JIIDM: a three winding transformer leg ratio tap step `rho` divides the winding tap, as it does for a two winding transformer. The reader and writer multiplied it in, so a leg tap away from 1 was inverted on the way to and from PowSybl. A PSS/E `WINDV2` of 1.025 is now written as `rho` 1 / 1.025, as PowSybl's PSS/E importer writes it.
-
-- CGMES: a line, series compensator, load, machine, shunt, static var compensator or equivalent injection with a terminal at SSH `ACDCTerminal.connected` false reads out of service, also when SV or SSH states `inService` true. `inService` is availability. The reader kept such an open line joining its buses and such a load drawing power. Transformers already read this way.
-
-- PyPSA: a `StorageUnit` `p_set` and `q_set` are injections, positive when the unit discharges. The reader now negates them into the storage `ps` and `qs`, which are positive when the unit charges. The writer negates them back. A discharging PyPSA unit read as a charging one in every other format. A charging unit wrote as a discharging one.
-
-- XIIDM and JIIDM: a `shuntNonLinearModel` section states the accumulated g and b with it and all previous sections active, as PowSybl reads it. The reader added the first `sectionCount` sections and the writer stated each block step on its own, so a shunt with sections of 0.002 and 0.004 S and `sectionCount` 2 read as 0.006 S and PowSybl read a written 10 plus 20 MVAr shunt as 20 MVAr. The reader now takes the shunt admittance from section `sectionCount` and the per step blocks from the differences of consecutive sections. The writer states running sums.
-
-- XIIDM and JIIDM: a two winding transformer writes the sum of both terminal charging values into its one `g` and `b` shunt. The writer kept only the from side, so half of a MATPOWER transformer `BR_B` disappeared. A nonzero to side now reports `EMIT.XIIDM.VALUE_COLLAPSED` or `EMIT.JIIDM.VALUE_COLLAPSED`, as the CGMES writer does.
-
-- Surge JSON: a storage unit's `p` and `q` are generator output, positive when it discharges, next to `pmin` as the negative charge limit. The reader took them as `Storage.ps` and `qs`, which are positive when charging. The writer did the inverse. So a charging unit became a discharging one in both directions. Both now flip the sign of `p`, `q`, `qmin` and `qmax`, as the XIIDM battery mapping does.
-
-- Storage power in a normalized network: `to_normalized` keeps storage `ps` and `qs` in MW and MVAr, as PowerModels does. `calc_stated_state_mismatch`, `build_ac_opf_preparation` and `BusMerge::calc_removed_flows` read them as per unit and were off by `base_mva` at every storage bus. They now convert them, so a network and its normalized copy give the same results. `BalancedNetwork::storage_power_scale` states the factor.
-
-- The three-phase pandapower reader maps the `trafo`, `shunt` and `switch`
-  tables (#846). Transformers of vector group `Dyn` or `YNyn` get a correction
-  in zero-sequence-only shunts. Their zero sequence then matches the T model of
-  pandapower. A `YNyn` LV winding whose correction has a series part gets a
-  neutral terminal of its own. `READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION`
-  reports a correction with a negative real part. Ratio and symmetrical tap
-  changers on the HV or LV side set the winding taps. A second changer `tap2`
-  multiplies the first, as in pandapower. With `tap_dependency_table` the
-  reader takes `vk_percent` and `vkr_percent` from `trafo_characteristic_table`
-  at `tap_pos`. Ideal and phase-shifting changers keep the nominal ratio. So do
-  the ratio and the angle of a characteristic row.
-  `READ.DIST.PANDAPOWER_APPROXIMATED` reports each of them. An in-service
-  transformer with `tap_dependency_table` and no `id_characteristic_table` is
-  refused, as pandapower refuses it. A shunt draws the power of its step. With
-  `step_dependency_table` that power comes from `shunt_characteristic_table`.
-  A bus-bus switch becomes a `DistSwitch`. A closed one with `z_ohm` becomes a
-  1 m line instead. An open line or transformer switch moves the element end
-  to an auxiliary bus. A three-phase network keeps the balanced reading for
-  fewer rows. These are `gen`, `storage` and `dcline` rows, a `trafo` row of
-  another vector group and a `shunt` row whose step has no characteristic row.
-  An in-service stepped `shunt` that names no table keeps it too. The balanced
-  reader must still accept the document. `powerio batch` names only in-service
-  `trafo3w`, `impedance` and unmapped `trafo` rows as a connectivity change. A
-  switch no longer counts. The OpenDSS writer keeps a closed switch ideal when
-  its extras also carry a `name` or `type`.
-
-- `emit` returns an element map that says which written row each bus,
-  branch, and generator became (#916). `EmitResult::element_map()` in Rust,
-  `EmitResult.id_map` in Python, `pio_emit_result_element_map` in the C ABI,
-  and `powerio convert --id-map PATH` give it as JSON: for each element `uid`,
-  in module order, the target table, the 0-based row index in that table as
-  written, the target's own key for the row where it has one, and for a branch
-  whether the row's first end is the element's `to` bus. The writer records
-  each row as it writes it, so two parallel branches or two generators on one
-  bus no longer have to be told apart by position. The `matpower`, `psse`,
-  `pandapower-json`, `pypsa-csv`, `surge-json`, `egret-json`, and
-  `powersystems-json` writers record maps, and `serialize` returns the
-  identity map over the IR network's `buses`, `branches`, and `generators`.
-  Other targets, and an emission that returns the retained source bytes, have
-  no map. An element a writer writes no row for maps to `null` with
-  `EMIT.ELEMENT_MAP.UNMAPPED`. `key` is always a string; look egret and
-  pandapower rows up by key. The guide's Element maps section gives each
-  target's tables, indices, and keys. No written byte changes.
-
-- Surge JSON output states bus shunts on the bus and branch charging once.
-  The writer put every bus shunt only in `fixed_shunts`, which Surge does not
-  add to its admittance matrix, so a Surge solve of case14 or case118 ran with
-  no shunts; it now writes each bus's in service shunt total on the bus record
-  and keeps a `fixed_shunts` record only for equipment with an identity of its
-  own (a Surge or PSS/E shunt id, switching control, out of service status, a
-  second shunt on one bus, or a shunt on a bus whose shunts cancel). The writer also repeated each end's half of the
-  line charging in `b_shunt_from` / `b_shunt_to`, which Surge adds on top of
-  `b/2`; those fields now carry only charging beyond the even split, zero for a
-  plain pi branch. The reader matches: it reads end charging as
-  `b/2 + b_shunt_*` and `g_pi/2 + g_shunt_*`, so a Surge branch with `b` and
-  zero end shunts keeps its charging, and it no longer counts an in service
-  `fixed_shunts` record twice. Files written by PowerIO 0.12.4 and earlier
-  still read with their old meaning and report `READ.SURGE.LEGACY_LAYOUT`
-  (#919).
-
 ## 0.12.5
 
 - Surge JSON output gives parallel branches distinct circuits. Every branch
@@ -171,6 +90,125 @@
 
 - The locked Arrow/Parquet dependency set is updated to 60.2.0 to resolve
   RUSTSEC-2026-0595 affecting encrypted Parquet Bloom-filter metadata (#909).
+
+- Sienna emission aggregates named branch and three-winding rating-set loss warnings
+  by affected component count (#908, @BurhanAbdullah).
+
+- pandapower JSON: unrated transformer `sn_mva` substitutions are reported in one counted diagnostic with representative bus pairs instead of one warning per transformer (#922, #923, @BurhanAbdullah).
+
+- XIIDM and JIIDM: a three winding transformer leg ratio tap step `rho` divides the winding tap, as it does for a two winding transformer. The reader and writer multiplied it in, so a leg tap away from 1 was inverted on the way to and from PowSybl. A PSS/E `WINDV2` of 1.025 is now written as `rho` 1 / 1.025, as PowSybl's PSS/E importer writes it (#912, @stkotum).
+
+- CGMES: a line, series compensator, load, machine, shunt, static var compensator or equivalent injection with a terminal at SSH `ACDCTerminal.connected` false reads out of service, also when SV or SSH states `inService` true. `inService` is availability. The reader kept such an open line joining its buses and such a load drawing power. Transformers already read this way (#913, @stkotum).
+
+- PyPSA: a `StorageUnit` `p_set` and `q_set` are injections, positive when the unit discharges. The reader now negates them into the storage `ps` and `qs`, which are positive when the unit charges. The writer negates them back. A discharging PyPSA unit read as a charging one in every other format. A charging unit wrote as a discharging one (#914, @stkotum).
+
+- XIIDM and JIIDM: a `shuntNonLinearModel` section states the accumulated g and b with it and all previous sections active, as PowSybl reads it. The reader added the first `sectionCount` sections and the writer stated each block step on its own, so a shunt with sections of 0.002 and 0.004 S and `sectionCount` 2 read as 0.006 S and PowSybl read a written 10 plus 20 MVAr shunt as 20 MVAr. The reader now takes the shunt admittance from section `sectionCount` and the per step blocks from the differences of consecutive sections. The writer states running sums (#943, #944, @stkotum).
+
+- XIIDM and JIIDM: a two winding transformer writes the sum of both terminal charging values into its one `g` and `b` shunt. The writer kept only the from side, so half of a MATPOWER transformer `BR_B` disappeared. A nonzero to side now reports `EMIT.XIIDM.VALUE_COLLAPSED` or `EMIT.JIIDM.VALUE_COLLAPSED`, as the CGMES writer does (#945, #946, @stkotum).
+
+- Surge JSON: a storage unit's `p` and `q` are generator output, positive when it discharges, next to `pmin` as the negative charge limit. The reader took them as `Storage.ps` and `qs`, which are positive when charging. The writer did the inverse. So a charging unit became a discharging one in both directions. Both now flip the sign of `p`, `q`, `qmin` and `qmax`, as the XIIDM battery mapping does (#947, #948, @stkotum).
+
+- Storage power in a normalized network: `to_normalized` keeps storage `ps` and `qs` in MW and MVAr, as PowerModels does. `calc_stated_state_mismatch`, `build_ac_opf_preparation` and `BusMerge::calc_removed_flows` read them as per unit and were off by `base_mva` at every storage bus. They now convert them, so a network and its normalized copy give the same results. `BalancedNetwork::storage_power_scale` states the factor (#949, #950, @stkotum).
+
+- The three-phase pandapower reader maps the `trafo`, `shunt` and `switch`
+  tables (#846; #879, #880, #900, #901, @stkotum). Transformers of vector group `Dyn` or `YNyn` get a correction
+  in zero-sequence-only shunts. Their zero sequence then matches the T model of
+  pandapower. A `YNyn` LV winding whose correction has a series part gets a
+  neutral terminal of its own. `READ.DIST.PANDAPOWER_NONPASSIVE_CORRECTION`
+  reports a correction with a negative real part. Ratio and symmetrical tap
+  changers on the HV or LV side set the winding taps. A second changer `tap2`
+  multiplies the first, as in pandapower. With `tap_dependency_table` the
+  reader takes `vk_percent` and `vkr_percent` from `trafo_characteristic_table`
+  at `tap_pos`. Ideal and phase-shifting changers keep the nominal ratio. So do
+  the ratio and the angle of a characteristic row.
+  `READ.DIST.PANDAPOWER_APPROXIMATED` reports each of them. An in-service
+  transformer with `tap_dependency_table` and no `id_characteristic_table` is
+  refused, as pandapower refuses it. A shunt draws the power of its step. With
+  `step_dependency_table` that power comes from `shunt_characteristic_table`.
+  A bus-bus switch becomes a `DistSwitch`. A closed one with `z_ohm` becomes a
+  1 m line instead. An open line or transformer switch moves the element end
+  to an auxiliary bus. A three-phase network keeps the balanced reading for
+  fewer rows. These are `gen`, `storage` and `dcline` rows, a `trafo` row of
+  another vector group and a `shunt` row whose step has no characteristic row.
+  An in-service stepped `shunt` that names no table keeps it too. The balanced
+  reader must still accept the document. `powerio batch` names only in-service
+  `trafo3w`, `impedance` and unmapped `trafo` rows as a connectivity change. A
+  switch no longer counts. The OpenDSS writer keeps a closed switch ideal when
+  its extras also carry a `name` or `type`.
+
+- The C ABI refuses a byte buffer whose stated length exceeds the largest
+  Rust slice (`isize::MAX`) with `BIND.CAPI.INVALID_ARGUMENT` before reading
+  it (#903, @BurhanAbdullah).
+
+- Python: `AcOtsInstance.branch_order` and `initial_closed` give the stable
+  branch IDs and initial switch positions in the order of every topology
+  vector, and `AcOtsSolution.ac_solution` returns the typed AC OPF solution on
+  the selected topology (#906).
+
+- The SINCAL reader's bundled SQLite binding `rusqlite` is updated to
+  0.43.0 (#893).
+
+**PowerWorld**
+
+- The `.aux` writer uses the field names PowerWorld Simulator defines and
+  requires to create each object. Simulator 24 loaded the earlier output with
+  no load, shunt, or generator (it requires `LoadSMW`/`LoadSMVR`, the
+  `SSStatus`/`SSCMode`/`SSNMVR` switched shunt fields, and
+  `GenAGCAble`/`GenAVRAble`), no transformer tap (`LineXFRatio` is not a
+  Simulator field), no bus voltage limit, and no slack bus, so the case it
+  held did not solve. The writer now states `LoadSMW`/`LoadSMVR`, fixed
+  switched shunts, generator AGC and AVR flags (AVR follows the bus type, so
+  a machine on a PQ bus holds its Mvar output as in MATPOWER), `BusSlack`,
+  bus specific voltage limits, `LineTap`, and ratings B and C as
+  `LineAMVA:1`/`LineAMVA:2`. It also states the system base as Simulator's
+  `SBase` option, which the reader now reads, and names an unnamed bus by its
+  number because Simulator refuses a blank bus name; both PowerWorld readers
+  read a name equal to the bus number as no name. The reader still accepts
+  the names earlier releases wrote (#868; #869, #870, @qian-harvard).
+- The `.aux` writer numbers loads, shunts, and generators per bus. Simulator's
+  device IDs are two characters and it truncates a longer one, so the
+  positional IDs of the whole table merged devices from the hundredth on:
+  ACTIVSg200 written from PSS/E loaded 139 of its 160 loads. Both readers
+  read an ID equal to its per bus position as the default (#868; #869, #870, @qian-harvard).
+- The `.aux` writer gives a reversed parallel branch its own circuit.
+  Simulator identifies a branch by its two buses in either order plus its
+  circuit, so the two `case2869pegase` lines written 5289 to 3113 and 3113 to
+  5289, both as circuit 1, loaded as one branch, and Simulator logged
+  nothing. Both readers count positional circuits the same way (#868; #869, #870, @qian-harvard).
+- A case with a branch whose resistance and reactance are both at or below
+  Simulator's default zero impedance threshold (0.0002 pu) states the
+  threshold at Simulator's floor (0.00005 pu). Simulator otherwise regulates
+  the buses such a branch joins as one group and overrides all but one
+  generator set point; `case2869pegase` solved 5.6e-5 pu away from MATPOWER.
+  A branch at or below the floor is reported, and so are the values
+  Simulator substitutes: a nominal voltage that is not positive (it loads
+  138 kV) and area or zone 0 (it loads 1) (#868; #869, #870, @qian-harvard).
+- `evals/validation/validate_powerworld_simauto.py` loads written cases into
+  Simulator through SimAuto and checks the load log, the object counts,
+  every written field, and a power flow against PowerIO's own network. All
+  17 MATPOWER, PGLib, PSS/E, and PowerWorld fixtures pass with Simulator 24
+  (#868; #869, #870, @qian-harvard).
+
+- The `.pwb` reader reads PowerWorld Simulator 24's default save layout
+  (header word 577), Simulator 20 layout (`PWB20`) saves of small cases, and
+  generator limits saved as unlimited. These files used to fail to
+  parse (#868; #872, #875, @qian-harvard).
+- The `.pwb` reader places a generator that regulates a remote bus on its own
+  terminal bus in files with header words 338, 368, 425, 508, and 537
+  (Simulator 17 through 22 layouts). It used to place such a machine on the
+  bus it regulates (#868; #872, #875, @qian-harvard).
+
+**Python**
+
+- `powerio.powerworld.write_pwb` writes a PowerWorld `.pwb` case through
+  PowerWorld Simulator's SimAuto server on Windows: it emits the module as
+  `.aux`, has Simulator load it, and has Simulator save the binary case, in
+  the running Simulator's layout or an older one (`version=23`, which
+  `powerio.parse` reads back). A field or object that Simulator's load log
+  reports lost raises `powerworld.SimAutoError` with code
+  `BIND.PY.SIMAUTO`, and nothing is written. The new `simauto` extra
+  installs pywin32; `import powerio` imports nothing new (#868; #869, #870,
+  @qian-harvard).
 
 ## 0.12.4
 
@@ -882,58 +920,6 @@
   connectivity a dropped transformer or switch changes. An element on an
   out-of-service bus is kept with `in_service` false.
 
-**PowerWorld**
-
-- The `.aux` writer uses the field names PowerWorld Simulator defines and
-  requires to create each object. Simulator 24 loaded the earlier output with
-  no load, shunt, or generator (it requires `LoadSMW`/`LoadSMVR`, the
-  `SSStatus`/`SSCMode`/`SSNMVR` switched shunt fields, and
-  `GenAGCAble`/`GenAVRAble`), no transformer tap (`LineXFRatio` is not a
-  Simulator field), no bus voltage limit, and no slack bus, so the case it
-  held did not solve. The writer now states `LoadSMW`/`LoadSMVR`, fixed
-  switched shunts, generator AGC and AVR flags (AVR follows the bus type, so
-  a machine on a PQ bus holds its Mvar output as in MATPOWER), `BusSlack`,
-  bus specific voltage limits, `LineTap`, and ratings B and C as
-  `LineAMVA:1`/`LineAMVA:2`. It also states the system base as Simulator's
-  `SBase` option, which the reader now reads, and names an unnamed bus by its
-  number because Simulator refuses a blank bus name; both PowerWorld readers
-  read a name equal to the bus number as no name. The reader still accepts
-  the names earlier releases wrote (#868).
-- The `.aux` writer numbers loads, shunts, and generators per bus. Simulator's
-  device IDs are two characters and it truncates a longer one, so the
-  positional IDs of the whole table merged devices from the hundredth on:
-  ACTIVSg200 written from PSS/E loaded 139 of its 160 loads. Both readers
-  read an ID equal to its per bus position as the default (#868).
-- The `.aux` writer gives a reversed parallel branch its own circuit.
-  Simulator identifies a branch by its two buses in either order plus its
-  circuit, so the two `case2869pegase` lines written 5289 to 3113 and 3113 to
-  5289, both as circuit 1, loaded as one branch, and Simulator logged
-  nothing. Both readers count positional circuits the same way (#868).
-- A case with a branch whose resistance and reactance are both at or below
-  Simulator's default zero impedance threshold (0.0002 pu) states the
-  threshold at Simulator's floor (0.00005 pu). Simulator otherwise regulates
-  the buses such a branch joins as one group and overrides all but one
-  generator set point; `case2869pegase` solved 5.6e-5 pu away from MATPOWER.
-  A branch at or below the floor is reported, and so are the values
-  Simulator substitutes: a nominal voltage that is not positive (it loads
-  138 kV) and area or zone 0 (it loads 1) (#868).
-- `evals/validation/validate_powerworld_simauto.py` loads written cases into
-  Simulator through SimAuto and checks the load log, the object counts,
-  every written field, and a power flow against PowerIO's own network. All
-  17 MATPOWER, PGLib, PSS/E, and PowerWorld fixtures pass with Simulator 24
-  (#868).
-
-**Python**
-
-- `powerio.powerworld.write_pwb` writes a PowerWorld `.pwb` case through
-  PowerWorld Simulator's SimAuto server on Windows: it emits the module as
-  `.aux`, has Simulator load it, and has Simulator save the binary case, in
-  the running Simulator's layout or an older one (`version=23`, which
-  `powerio.parse` reads back). A field or object that Simulator's load log
-  reports lost raises `powerworld.SimAutoError` with code
-  `BIND.PY.SIMAUTO`, and nothing is written. The new `simauto` extra
-  installs pywin32; `import powerio` imports nothing new (#868).
-
 ## 0.12.0
 
 PowerIO 0.12.0 starts the 0.12.x release series. Before 1.0, the public
@@ -1351,16 +1337,6 @@ every change that needs action.
 - @samtalki integrated the release, compatibility migration, adapters, and
   review follow-ups in #821 and #823. Original contributor commits and
   coauthor attribution are retained.
-
-**PowerWorld**
-
-- The `.pwb` reader reads PowerWorld Simulator 24's default save layout
-  (header word 577), Simulator 20 layout (`PWB20`) saves of small cases, and
-  generator limits saved as unlimited. These files used to fail to parse (#868).
-- The `.pwb` reader places a generator that regulates a remote bus on its own
-  terminal bus in files with header words 338, 368, 425, 508, and 537
-  (Simulator 17 through 22 layouts). It used to place such a machine on the
-  bus it regulates (#868).
 
 ## 0.11.12
 
