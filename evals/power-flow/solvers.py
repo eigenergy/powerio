@@ -259,7 +259,7 @@ def powsybl(path):
     try:
         models = powsybl_island_models(pp, network, results, models)
         answer["admittance"] = powsybl_admittance(models, bus_ids, voltage, terminal_powers)
-    except (ValueError, KeyError, ZeroDivisionError) as error:
+    except (ValueError, KeyError, ZeroDivisionError, pp.PyPowsyblError) as error:
         answer["admittance_detail"] = str(error)
     return answer
 

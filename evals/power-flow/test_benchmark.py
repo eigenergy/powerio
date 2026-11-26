@@ -92,6 +92,16 @@ class PowsyblAdmittance(unittest.TestCase):
         self.assertEqual(set(result["admittance"]["labels"]), {f"B{i}" for i in range(1, 15)})
         self.assertEqual(result["admittance"]["branch_stamps_checked_against_solved_flows"], 17)
 
+    def test_keeps_power_flow_results_if_diagnostic_recovery_fails(self):
+        from pypowsybl import PyPowsyblError
+
+        with patch("solvers.powsybl_island_models", side_effect=PyPowsyblError("could not export the island")):
+            result = powsybl(ROOT / "tests/data/psse/case14_v35.raw")
+
+        self.assertEqual(len(result["voltage"]), 14)
+        self.assertNotIn("admittance", result)
+        self.assertEqual(result["admittance_detail"], "could not export the island")
+
 
 if __name__ == "__main__":
     unittest.main()
