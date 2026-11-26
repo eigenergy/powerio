@@ -1,5 +1,8 @@
-"""Read and solve the files themselves, without calling PowerIO."""
+"""Run external power flow solvers and collect their numerical results."""
 
+import cmath
+import csv
+from functools import cache
 import importlib.metadata
 import json
 import math
@@ -7,6 +10,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+from tempfile import TemporaryDirectory
+from xml.etree import ElementTree
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -20,8 +26,8 @@ def package(name):
     return f"{name} {importlib.metadata.version(name)}"
 
 
-def command(args, **kwargs):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=180, **kwargs)
+def command(args, *, timeout=180, **kwargs):
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, **kwargs)
     if result.returncode:
         raise RuntimeError((result.stderr.strip() or result.stdout.strip()
                             or f"{Path(args[0]).name} exited with status {result.returncode}")[-3000:])
@@ -74,11 +80,88 @@ def matpower_solutions(requests, project):
     return json.loads(response.read_text())
 
 
+def powsybl_admittance(models, bus_ids, voltage, terminal_powers):
+    from scipy.sparse import lil_matrix
+
+    labels = list(voltage)
+    index = {label: i for i, label in enumerate(labels)}
+    ybus = lil_matrix((len(labels), len(labels)), dtype=complex)
+    seen = set()
+    checked = 0
+    for model in models:
+        nodes = {}
+        for bus in model["buses"]:
+            if bus.get("disabled"):
+                continue
+            configured = bus_ids.get(bus["id"], [])
+            if len(configured) != 1 or configured[0] in seen:
+                raise ValueError(f"No unique configured bus for PowSybl bus {bus['id']}")
+            label = configured[0]
+            seen.add(label)
+            nodes[bus["num"]] = label
+            for kind in ("shunt", "controllerShunt", "svcShunt"):
+                shunt = bus.get(kind, {})
+                if not shunt.get("disabled"):
+                    ybus[index[label], index[label]] += complex(shunt.get("g", 0), shunt.get("b", 0))
+        for branch in model["branches"]:
+            if branch.get("disabled"):
+                continue
+            a, b = (nodes.get(branch.get(f"num{i}")) if branch.get(f"connectedSide{i}", True) else None
+                    for i in (1, 2))
+            if a is None and b is None:
+                continue
+            z = complex(branch.get("r", 0), branch.get("x", 0))
+            if z == 0:
+                raise ValueError(f"PowSybl treats {branch['id']} as an ideal connection")
+            y = 1 / z
+            ratio = branch.get("modifiedR1", branch.get("r1", 1))
+            shift = branch.get("modifiedA1", branch.get("a1", 0))
+            tap = cmath.rect(ratio, shift)
+            aa = ratio**2 * (y + complex(branch.get("g1", 0), branch.get("b1", 0)))
+            bb = y + complex(branch.get("g2", 0), branch.get("b2", 0))
+            ab, ba = -y * tap.conjugate(), -y * tap
+            if b is None:
+                ybus[index[a], index[a]] += aa - ab * ba / bb
+            elif a is None:
+                ybus[index[b], index[b]] += bb - ba * ab / aa
+            else:
+                i, j = index[a], index[b]
+                ybus[i, i] += aa
+                ybus[i, j] += ab
+                ybus[j, i] += ba
+                ybus[j, j] += bb
+                if branch["id"] in terminal_powers:
+                    va, vb = (cmath.rect(voltage[label][0], math.radians(voltage[label][1]))
+                              for label in (a, b))
+                    calculated = (va * (aa * va + ab * vb).conjugate(),
+                                  vb * (ba * va + bb * vb).conjugate())
+                    # PowSybl's internal network uses a 100 MVA base. Check
+                    # orientation and tap conventions against its solved flows.
+                    actual = terminal_powers[branch["id"]]
+                    if any(abs(p * 100 - q) > 1e-5 for p, q in zip(calculated, actual, strict=True)):
+                        raise ValueError(f"Admittance stamp disagrees with PowSybl flows on {branch['id']}")
+                    checked += 1
+    if seen != set(labels):
+        raise ValueError("The PowSybl debug model does not identify every solved bus")
+    return {**admittance(ybus, labels, "network-pu", 100.0),
+            "method": "Assembled from the PowSybl OpenLoadFlow debug model",
+            "branch_stamps_checked_against_solved_flows": checked}
+
+
 def powsybl(path):
     import pypowsybl as pp
 
+    cgmes_names = {}
     if path.is_dir():
         # CGMES consists of several XML profiles. PowSybl accepts their ZIP.
+        for file in path.glob("*.xml"):
+            for node in ElementTree.parse(file).getroot().findall("{*}TopologicalNode"):
+                container = node.find("{*}TopologicalNode.ConnectivityNodeContainer")
+                name = node.findtext("{*}IdentifiedObject.name")
+                if container is not None and name:
+                    rdf = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+                    mrid = container.get(rdf + "resource", "").removeprefix("#").removeprefix("_")
+                    cgmes_names.setdefault(mrid, []).append(name.strip())
         zip_path = path.with_name(path.name + "-powsybl.zip")
         shutil.make_archive(str(zip_path.with_suffix("")), "zip", root_dir=path)
         path = zip_path
@@ -88,13 +171,15 @@ def powsybl(path):
         network = pp.network.load(str(path), {"psse.import.ignore-base-voltage": "true"})
     else:
         network = pp.network.load(str(path))
-    options = pp.loadflow.Parameters(
-        use_reactive_limits=False, distributed_slack=False, transformer_voltage_control_on=False,
-        phase_shifter_regulation_on=False, shunt_compensator_voltage_control_on=False,
-        connected_component_mode=pp.loadflow.ConnectedComponentMode.ALL,
-        provider_parameters={"newtonRaphsonConvEpsPerEq": "1e-10"},
-    )
-    results = pp.loadflow.run_ac(network, options)
+    with TemporaryDirectory() as debug:
+        options = pp.loadflow.Parameters(
+            use_reactive_limits=False, distributed_slack=False, transformer_voltage_control_on=False,
+            phase_shifter_regulation_on=False, shunt_compensator_voltage_control_on=False,
+            connected_component_mode=pp.loadflow.ConnectedComponentMode.ALL,
+            provider_parameters={"newtonRaphsonConvEpsPerEq": "1e-10", "debugDir": debug},
+        )
+        results = pp.loadflow.run_ac(network, options)
+        models = [json.loads(item.read_text()) for item in sorted(Path(debug).glob("lfnetwork-*.json"))]
     if not results or any(item.status.name != "CONVERGED" for item in results):
         raise RuntimeError(f"PowSybl did not converge: {results}")
     nominal = network.get_voltage_levels()["nominal_v"]
@@ -104,6 +189,10 @@ def powsybl(path):
         for key, row in buses.iterrows()
     )
     aliases = {str(key): str(row["name"]).strip() for key, row in buses.iterrows() if row["name"]}
+    for key, row in buses.iterrows():
+        names = cgmes_names.get(row.voltage_level_id, [])
+        if len(names) == 1:
+            aliases[str(key)] = names[0]
     if path.suffix.lower() in (".raw", ".rawx"):
         # PowSybl's PSS/E importer labels configured buses B<bus number>.
         aliases.update({label: label[1:] for label in voltage if label.startswith("B") and label[1:].isdigit()})
@@ -112,14 +201,21 @@ def powsybl(path):
         if str(key) in voltage:
             bus_ids.setdefault(row.bus_id, []).append(str(key))
     powers = []
+    terminal_powers = {}
     for table in (network.get_lines(), network.get_2_windings_transformers()):
         for row in table.itertuples():
             a, b = bus_ids.get(row.bus1_id, []), bus_ids.get(row.bus2_id, [])
             values = (row.p1, row.q1, row.p2, row.q2)
             if len(a) == len(b) == 1 and all(math.isfinite(v) for v in values):
                 powers.append([a[0], b[0], *values])
-    return {"solver": package("pypowsybl"), "units": "pu", "voltage": voltage, "aliases": aliases,
-            "branch_power": powers, "one_island": len(results) == 1}
+                terminal_powers[row.Index] = (complex(*values[:2]), complex(*values[2:]))
+    answer = {"solver": package("pypowsybl"), "units": "pu", "voltage": voltage, "aliases": aliases,
+              "branch_power": powers, "one_island": len(results) == 1}
+    try:
+        answer["admittance"] = powsybl_admittance(models, bus_ids, voltage, terminal_powers)
+    except (ValueError, KeyError, ZeroDivisionError) as error:
+        answer["admittance_detail"] = str(error)
+    return answer
 
 
 def pandapower(path, three_phase=False):
@@ -282,6 +378,104 @@ def opendss(path):
         os.chdir(cwd)
 
 
+def gridlabd(path):
+    version = package("gridlabd")
+    with TemporaryDirectory() as directory:
+        run = Path(directory)
+        output = run / "voltages.csv"
+        model = run / "measure.glm"
+        model.write_text(f'#include "{path}"\nobject voltdump {{ filename "{output}"; mode RECT; }}\n')
+        text = command([sys.executable, __file__, str(model)], timeout=30, cwd=run)
+        source_count = int(text.rpartition("reference_buses=")[2].strip())
+        with output.open() as file:
+            next(file)  # comments describing the snapshot
+            rows = []
+            for row in csv.DictReader(file):
+                for i, phase in enumerate("ABC", start=1):
+                    voltage = complex(float(row[f"volt{phase}_real"]), float(row[f"volt{phase}_imag"]))
+                    # The phase dump includes zero placeholders for absent phases.
+                    if voltage != 0:
+                        rows.append((f"{row['node_name'].lower()}.{i}", abs(voltage),
+                                     math.degrees(cmath.phase(voltage))))
+    return {"solver": f"PNNL {version}", "units": "V", "voltage": points(rows),
+            "one_island": source_count == 1, "admittance_detail": "The GLM voltage dump does not expose the Y-bus"}
+
+
+def gridlabd_run(path):
+    import gridlabd as engine
+
+    simulation = engine.GridLabD()
+    try:
+        if any(f() for f in (simulation.setup_before_load, lambda: simulation.load_glm(path, quiet=True),
+                             simulation.run)):
+            errors = [message["message"] for message in simulation.get_messages() if message["type"] == "ERROR"]
+            raise RuntimeError("GridLAB-D failed: " + "; ".join(errors[-4:]))
+        slack = set()
+        for kind in ("node", "meter", "load", "triplex_node", "triplex_meter", "triplex_load"):
+            slack.update(name for name, value in simulation.get_properties_by_class(kind, "bustype").items()
+                         if value == "SWING")
+        print(f"reference_buses={len(slack)}")
+    finally:
+        simulation.stop()
+
+
+@cache
+def tellegen_version(binary):
+    info = json.loads(command([binary, "describe"]))
+    return f"Tellegen {info['tellegen_version']} with PowerIO {info['powerio_version']}"
+
+
+def tellegen(request, bmopf=False):
+    _, path, ir, operating_point = request
+    binary = os.environ.get("TELLEGEN") or executable("tellegen")
+    version = tellegen_version(binary)
+    module = json.loads(ir.read_text()) if ir and ir.is_file() else None
+    network = module["value"]["data"] if module else {}
+    if bmopf:
+        data = path.read_text()
+        reader = "Tellegen BMOPF reader (PowerIO)"
+    else:
+        if not module:
+            raise Unavailable("Tellegen needs a parsed PowerIO multiconductor model")
+        for source in network.get("sources", []):
+            # PowerIO preserves CIM identifiers in extras. They do not enter
+            # the electrical model and Tellegen rejects unknown source extras.
+            source.get("extras", {}).pop("ravens_mrid", None)
+        if operating_point == "nominal":
+            # This fixture's schedule is deliberately disabled for the static
+            # test. Other controls remain subject to Tellegen's normal checks.
+            network["untyped"] = [item for item in network.get("untyped", [])
+                                  if (item["class"], item["name"]) != ("EnergyConsumerSchedule", "ls1")]
+            for load in network.get("loads", []):
+                for key in ("daily", "yearly"):
+                    if load.get("extras", {}).get(key) == "ls1":
+                        del load["extras"][key]
+        data = json.dumps(module)
+        reader = "PowerIO reads the case, Tellegen solves the parsed grid"
+    settings = {"output": "tables", "tolerance": 1e-9}
+    result = json.loads(command([binary, "solve-mc-bmopf" if bmopf else "solve-mc", json.dumps(settings)],
+                                input=data))
+    summary, table = result["summary"], result["tables"]
+    if (not summary["converged"] or summary["load_model"]["status"] != "original"
+            or table["excluded_islands"]):
+        raise RuntimeError("Tellegen could not solve the full network with the original load models")
+    strings = table["strings"]
+    volts = table["terminal_voltage"]
+    grounded = {(bus["id"].lower(), str(terminal))
+                for bus in network.get("buses", []) for terminal in bus.get("grounded", [])}
+    rows = []
+    for i, (bus, terminal) in enumerate(zip(table["terminal_bus"], table["terminal_name"], strict=True)):
+        v = complex(volts[2 * i], volts[2 * i + 1])
+        labels = (strings[bus].lower(), strings[terminal])
+        if labels not in grounded:
+            rows.append((".".join(labels), abs(v), math.degrees(cmath.phase(v))))
+    return {"solver": version, "reader": reader, "units": "V", "voltage": points(rows),
+            "shared_powerio_reader": True,
+            "one_island": len(set(table["source_name"])) == 1,
+            "operating_point": operating_point,
+            "solver_settings": summary["load_model"]["options"]}
+
+
 def julia_solutions(requests, scheme, project):
     """Solve a batch in one Julia process; only the two package readers see these files."""
     request = project / f"{scheme}-requests.json"
@@ -305,38 +499,57 @@ SOLVERS = {
     "powermodels-json": "powermodels", "pandapower-json": "pandapower", "pandapower-3ph": "pandapower-3ph",
     "pypsa-csv": "pypsa", "dss": "opendss", "pmd-json": "pmd", "pmd-math-json": "pmd",
     "egret-json": "egret", "surge-json": "surge", "pslf": "surge", "psse-rawx": "powsybl",
-    "ieee-cdf": "powsybl", "powersystems-json": "powersystems",
+    "ieee-cdf": "powsybl", "powersystems-json": "powersystems", "dss-pmd": "pmd",
+    "bmopf-json": "tellegen-bmopf", "ravens-distribution": "tellegen",
+    "cim-dist": "tellegen", "gridlabd": "gridlabd", "gridlabd-arras": "gridlabd",
+    "sincal-multiconductor": "tellegen",
+    "powermodels-via-powerio": "powermodels",
 }
 
 
 def solve_many(requests, work):
     results = {}
     groups = {}
-    for key, (format, path) in requests.items():
+    for key, request in requests.items():
+        format = request[0]
         solver = SOLVERS.get(format)
         if solver:
-            groups.setdefault(solver, {})[key] = path
+            groups.setdefault(solver, {})[key] = request
         else:
             results[key] = {"status": "unavailable", "detail": f"No independent solver configured for {format}"}
     for solver, cases in groups.items():
         if solver in ("matpower", "powermodels", "pmd", "powersystems"):
+            paths = {key: req[1] for key, req in cases.items()}
             try:
-                batch = matpower_solutions(cases, work) if solver == "matpower" else julia_solutions(cases, solver, work)
+                batch = matpower_solutions(paths, work) if solver == "matpower" else julia_solutions(paths, solver, work)
                 if batch.keys() != cases.keys():
                     raise RuntimeError(f"{solver} returned a different set of cases than requested")
+                for key, result in batch.items():
+                    if cases[key][0] == "powermodels-via-powerio":
+                        result.update(reader="PowerIO reads the case and exports PowerModels JSON",
+                                      shared_powerio_reader=True)
                 results.update(batch)
             except (Unavailable, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
                 for key in cases:
                     results[key] = {"status": "unavailable", "detail": str(error)}
             continue
-        fn = {"powsybl": powsybl, "opendss": opendss,
-              "egret": egret, "pypsa": pypsa, "pandapower": pandapower, "surge": surge,
-              "pandapower-3ph": lambda p: pandapower(p, three_phase=True)}[solver]
-        for key, path in cases.items():
+        for key, request in cases.items():
             try:
-                results[key] = {"status": "solved", **fn(path)}
-            except (ImportError, Unavailable) as error:
+                if solver in ("tellegen", "tellegen-bmopf"):
+                    solution = tellegen(request, bmopf=solver == "tellegen-bmopf")
+                else:
+                    fn = {"powsybl": powsybl, "opendss": opendss,
+                          "egret": egret, "pypsa": pypsa, "pandapower": pandapower, "surge": surge,
+                          "gridlabd": gridlabd,
+                          "pandapower-3ph": lambda p: pandapower(p, three_phase=True)}[solver]
+                    solution = fn(request[1])
+                results[key] = {"status": "solved", **solution}
+            except (ImportError, importlib.metadata.PackageNotFoundError, Unavailable) as error:
                 results[key] = {"status": "unavailable", "detail": str(error)}
             except Exception as error:
                 results[key] = {"status": "solve_failed", "detail": str(error)[-3000:]}
     return results
+
+
+if __name__ == "__main__":
+    gridlabd_run(sys.argv[1])

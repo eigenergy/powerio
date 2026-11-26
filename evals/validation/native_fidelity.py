@@ -1,4 +1,4 @@
-"""Measure byte replay, fresh writes, and native oracles on two vendored cases."""
+"""Check file recovery, parsed grid data, and electrical results on two reference cases."""
 
 import argparse
 import hashlib
@@ -210,9 +210,9 @@ def opendss_checks(source, target):
     return results
 
 
-def negative_control(fresh, normal):
-    """Inject one branch reactance error into a copy of the fresh MATPOWER deck."""
-    text = fresh.read_text()
+def write_reactance_error(case, output):
+    """Double the series reactance of the case14 branch from bus 1 to bus 2."""
+    text = case.read_text()
     header, table = text.split("mpc.branch = [", 1)
     branch_table, end = table.split("];", 1)
     lines = branch_table.splitlines(keepends=True)
@@ -224,8 +224,17 @@ def negative_control(fresh, normal):
     original = float(fields[3])
     fields[3] = str(2 * original)
     lines[row] = "\t" + "\t".join(fields) + "\n"
+    # Octave uses the first function in the file. Keep its name aligned with
+    # the file name when the copy is read by MATPOWER.
+    if case.stem != output.stem:
+        header = header.replace(f"mpc = {case.stem}", f"mpc = {output.stem}", 1)
+    output.write_text(header + "mpc.branch = [" + "".join(lines) + "];" + end)
+    return original
+
+
+def negative_control(fresh, normal):
     corrupt = fresh.with_name("case14_mutated.m")
-    corrupt.write_text(header + "mpc.branch = [" + "".join(lines) + "];" + end)
+    original = write_reactance_error(fresh, corrupt)
     result = matpower_checks(fixture("case14"), corrupt).get(B_BUS_CHECK, {"status": "missing"})
     detected = (
         normal[B_BUS_CHECK]["status"] == "pass"

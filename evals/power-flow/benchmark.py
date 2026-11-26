@@ -10,7 +10,10 @@ from pathlib import Path
 import subprocess
 import sys
 
-from solvers import HERE, ROOT, solve_many
+from solvers import HERE, ROOT, SOLVERS, solve_many
+
+sys.path.insert(0, str(ROOT / "evals/validation"))
+from native_fidelity import write_reactance_error
 
 # A file extension of None indicates a multi-file format. A target's
 # availability here describes PowerIO's writer, independent of solver coverage.
@@ -36,6 +39,8 @@ TOLERANCE = {"voltage_pu": 1e-9, "voltage_V": 1e-3, "angle_deg": math.degrees(1e
 DISPLAY = {"agree": "🟢", "different": "🔴", "unavailable": "—", "solve_failed": "🔴",
            "conversion_failed": "🔴", "not_comparable": "—", "not_applicable": "—",
            "partial": "◐"}
+PAIRWISE = ("direct", "round_trip", "target_vs_return")
+MEASURED = {"agree", "different"}
 
 
 def record(status, detail=None, **fields):
@@ -76,6 +81,18 @@ def cli(binary, *args):
 
 def to_ir(binary, path, format, output):
     return cli(binary, "serialize", str(path), "--from", format, "-o", str(output))
+
+
+def solver_input(binary, format, path, ir, operating_point, family, evidence):
+    if format not in SOLVERS and family == "transmission" and ir.is_file():
+        # Keep a separate solve for formats without a native reader. Record all
+        # warnings from converting the parsed model to PowerModels JSON.
+        bridge = ir.with_suffix(".powermodels.json")
+        evidence["project_for_solver"] = cli(binary, "convert", str(ir), "--to", "powermodels-json",
+                                             "-o", str(bridge))
+        if evidence["project_for_solver"]["status"] == "ok":
+            return ("powermodels-via-powerio", bridge, ir, operating_point)
+    return (format, path, ir, operating_point)
 
 
 def convert(binary, path, src, target, directory, extension):
@@ -131,6 +148,9 @@ def json_differences(old, new, pointer=""):
                 yield location
             else:
                 yield from json_differences(old[key], new[key], location)
+    elif isinstance(old, list) and isinstance(new, list) and len(old) == len(new):
+        for index, (before, after) in enumerate(zip(old, new, strict=True)):
+            yield from json_differences(before, after, f"{pointer}/{index}")
     elif old != new:
         yield pointer or "/"
 
@@ -142,7 +162,8 @@ def check_written_data(binary, original, output, format, path):
     before = json.loads(original.read_text())["value"]
     after = json.loads(path.read_text())["value"]
     differences = list(json_differences(before, after))
-    return record("different" if differences else "agree", changed_fields=differences)
+    return record("different" if differences else "agree", changed_field_count=len(differences),
+                  changed_fields=differences[:200], diagnostics=parsed["diagnostics"])
 
 
 def unique_labels(points, aliases, candidates):
@@ -169,7 +190,7 @@ def match_labels(source, target, original_ir, element_map):
         if output:
             other = unique_labels(actual, target.get("aliases", {}), {str(output.get("key"))})
         else:
-            other = set()
+            other = unique_labels(actual, target.get("aliases", {}), labels)
         if not other and bus.get("name"):
             other = unique_labels(actual, target.get("aliases", {}), {bus["name"].strip()})
         if len(identity) == len(other) == 1:
@@ -234,7 +255,9 @@ def compare_admittance(source, target, pairing):
 
     a, b = source.get("admittance"), target.get("admittance")
     if not a or not b:
-        return record("unavailable", "One of the tools did not report an admittance matrix")
+        missing = [f"{item['solver']}: {item.get('admittance_detail', 'matrix unavailable')}"
+                   for item in (source, target) if not item.get("admittance")]
+        return record("unavailable", "; ".join(missing))
     if a["basis"] != b["basis"]:
         return record("not_comparable", "The admittance matrices use different definitions or bases")
     scale = 1.0
@@ -280,7 +303,7 @@ def compare_admittance(source, target, pairing):
     tolerance = TOLERANCE["admittance_relative_2_norm"]
     return record("agree" if difference <= tolerance else "different",
                   relative_error=difference, tolerance=tolerance, order=len(labels), basis=a["basis"],
-                  output_scale=scale)
+                  output_scale=scale, matrix_methods=[item.get("method") for item in (a, b)])
 
 
 def compare(source, target, original_ir=None, element_map=None, pairing=None):
@@ -290,7 +313,10 @@ def compare(source, target, original_ir=None, element_map=None, pairing=None):
         return record("unavailable", "The reference file did not have an external solution", output_solver=target["solver"])
     expected, actual = source["voltage"], target["voltage"]
     pairing = pairing or match_labels(source, target, original_ir, element_map)
-    solvers = {"original_solver": source["solver"], "output_solver": target["solver"]}
+    solvers = {"original_solver": source["solver"], "output_solver": target["solver"],
+               "original_reader": source.get("reader", "External solver reads the original format"),
+               "output_reader": target.get("reader", "External solver reads the output format"),
+               "independent_readers": not (source.get("shared_powerio_reader") or target.get("shared_powerio_reader"))}
     if source["units"] != target["units"]:
         return record("not_comparable", "Voltage units differ and no common voltage base is established", **solvers)
     if not pairing:
@@ -353,12 +379,29 @@ def prepare_case(binary, case, corpus, work, selected_targets):
             raise ValueError(f"Digest changed for {case['id']}/{file['name']}")
     result["input"] = record("ok", sha256=files)
     format = case["format"]
-    solver_format = case.get("solver_format", format)
+    distribution = case["family"] == "distribution"
+    solver_format = "ravens-distribution" if distribution and format == "ravens-json" else case.get("solver_format", format)
+    operating_point = "nominal" if case.get("companion") else "as read"
     original = root / "source.pio.json"
     parsed = to_ir(binary, source, format, original)
     result["read_original"] = parsed
     result["recover_original_files"] = recover_original(binary, case, source, files, root)
-    requests[f"{case['id']}/source"] = (solver_format, source)
+    requests[f"{case['id']}/source"] = solver_input(
+        binary, solver_format, source, original, operating_point, case["family"], result)
+    if case["id"] == "matpower-case14":
+        path = root / "case14_mutated.m"
+        original_x = write_reactance_error(source, path)
+        result["deliberate_error"] = {"branch": [1, 2], "field": "reactance_pu",
+                                      "before": original_x, "after": 2 * original_x}
+        requests[f"{case['id']}/deliberate-error"] = ("matpower", path, None, operating_point)
+    if case["id"] == "opendss-ieee13":
+        requests[f"{case['id']}/pmd-source"] = ("dss-pmd", source, original, operating_point)
+    if companion := case.get("companion"):
+        path = corpus / companion["external"]
+        if path.is_file():
+            if sha(path) != companion["sha256"]:
+                raise ValueError(f"Digest changed for {path.name}")
+            requests[f"{case['id']}/companion"] = ("dss", path, None, "nominal")
     if parsed["status"] != "ok":
         for pair in pairs.values():
             pair["direct"] = record("conversion_failed", "PowerIO could not read the source")
@@ -374,10 +417,14 @@ def prepare_case(binary, case, corpus, work, selected_targets):
             pair["direct"] = record("conversion_failed", "PowerIO could not write the target file")
             continue
         key = f"{case['id']}/{target}"
-        requests[key + "/direct"] = (target, forward)
-        ready[key + "/direct"] = (target, "direct", original, element_map)
         target_ir = cell / "target.pio.json"
         pair["check_target_data"] = check_written_data(binary, original, forward, target, target_ir)
+        output_solver_format = "ravens-distribution" if distribution and target == "ravens-json" else target
+        requests[key + "/direct"] = solver_input(
+            binary, output_solver_format, forward, target_ir, operating_point, case["family"], pair["check_target_data"])
+        if case["id"] == "opendss-ieee13" and target == "dss":
+            requests[key + "/pmd-direct"] = ("dss-pmd", forward, target_ir, operating_point)
+        ready[key + "/direct"] = (target, "direct", original, element_map)
         if target == format:
             pair["round_trip"] = record("not_applicable", "The direct test already wrote the original format")
             pair["target_vs_return"] = pair["round_trip"]
@@ -398,9 +445,11 @@ def prepare_case(binary, case, corpus, work, selected_targets):
             pair["round_trip"] = record("conversion_failed", "PowerIO could not write the source format again")
             pair["target_vs_return"] = pair["round_trip"]
             continue
-        requests[key + "/round_trip"] = (solver_format, back)
+        returned_ir = cell / "return.pio.json"
         ready[key + "/round_trip"] = (target, "round_trip", original, None)
-        pair["check_returned_data"] = check_written_data(binary, original, back, format, cell / "return.pio.json")
+        pair["check_returned_data"] = check_written_data(binary, original, back, format, returned_ir)
+        requests[key + "/round_trip"] = solver_input(
+            binary, solver_format, back, returned_ir, operating_point, case["family"], pair["check_returned_data"])
     return result, requests, ready
 
 
@@ -437,6 +486,65 @@ def markdown(report):
     return "\n".join(lines)
 
 
+def summary_markdown(report, changes):
+    def reading(comparison, *metrics):
+        for key, unit in metrics:
+            value = comparison.get("metrics", {}).get(key, {})
+            if value.get("status") not in MEASURED:
+                continue
+            error = value.get("maximum_difference", value.get("relative_error"))
+            return f"{error:.3g}{unit} ({'pass' if value['status'] == 'agree' else 'differs'})"
+        return "—"
+
+    cases = report["cases"]
+    comparisons = [pair[direction] for case in cases.values() for pair in case["conversions"].values()
+                   for direction in PAIRWISE]
+    voltage_checks = [c for c in comparisons if c.get("nodes_compared", 0) > 0]
+    lines = ["## AC power flow and admittance", "",
+             f"{sum(c['input']['status'] == 'ok' for c in cases.values())} of {len(cases)} source profiles have fixtures. "
+             f"{sum(c['original_solution']['status'] == 'solved' for c in cases.values())} original cases were solved. "
+             f"{len(voltage_checks)} comparisons measured bus or conductor voltages, including "
+             f"{sum(c['independent_readers'] for c in voltage_checks)} with independent readers for both files. "
+             f"{sum(c.get('metrics', {}).get('admittance_relative_2_norm', {}).get('status') in MEASURED for c in comparisons)} "
+             "comparisons measured admittance.", ""]
+    if changes is not None:
+        reduced = sum(change["coverage_reduced"] for change in changes["changes"])
+        lines += [f"Compared with `{changes['baseline_revision'][:12]}`, {reduced} checks lost coverage. "
+                  "See `changes.json` for changes in measurements, inputs, and solver versions.", ""]
+    else:
+        lines += ["No earlier report was available for this run.", ""]
+    lines += ["Maximum absolute voltage difference and relative admittance 2-norm", "",
+              "| Input | Output | Original vs converted voltage | Original vs converted admittance | "
+              "Original vs converted back voltage | Converted vs converted back voltage |",
+              "| --- | --- | --- | --- | --- | --- |"]
+    for name, case in cases.items():
+        if name not in ("matpower-case14", "opendss-ieee13", "mg-ravens-case3"):
+            continue
+        for target, pair in case["conversions"].items():
+            direct, returned, final = [pair[d] for d in PAIRWISE]
+            volts = [reading(c, ("voltage_pu", " p.u."), ("voltage_V", " V")) for c in (direct, returned, final)]
+            ybus = reading(direct, ("admittance_relative_2_norm", ""))
+            if volts != ["—"] * 3 or ybus != "—":
+                lines.append(f"| {name} | {target} | {volts[0]} | {ybus} | {volts[1]} | {volts[2]} |")
+    for name, key, description in (
+        ("mg-ravens-case3", "upstream_companion_comparison", "MG-RAVENS nominal load in Tellegen vs upstream OpenDSS example"),
+        ("opendss-ieee13", "same_file_in_pmd", "IEEE 13-bus source solved in OpenDSS and PowerModelsDistribution"),
+    ):
+        if name in cases and key in cases[name]:
+            result = cases[name][key]
+            value = reading(result, ("voltage_V", " V"))
+            lines += ["", f"- {description} — {value} across {result.get('nodes_compared', 0)} matched nodes."]
+    if control := cases.get("matpower-case14", {}).get("deliberate_error"):
+        result = control["comparison"].get("metrics", {}).get("admittance_relative_2_norm", {})
+        residual = result.get("relative_error")
+        if residual is not None:
+            lines += ["", f"- Deliberate error test {'passed' if control['detected'] else 'failed'}. "
+                      f"Doubling branch 1–2 reactance gave a relative admittance difference of {residual:.3g}."]
+    lines += ["", "— means that quantity was not measured. The full matrix gives all three comparisons for "
+              "every route. The JSON gives each metric, tolerance, solver, and reason for missing coverage."]
+    return "\n".join(lines)
+
+
 def compare_target_and_return(pair, converted, returned):
     a = pair["direct"].get("matched_labels", {})
     b = pair["round_trip"].get("matched_labels", {})
@@ -445,24 +553,47 @@ def compare_target_and_return(pair, converted, returned):
     return compare(converted, returned, pairing=pairing)
 
 
+def compare_companion(original, companion, labels):
+    for solution in (original, companion):
+        if solution["status"] != "solved":
+            return solution
+        missing = set(labels) - solution["voltage"].keys()
+        if missing:
+            return record("not_comparable", f"Missing physical phase nodes: {', '.join(sorted(missing))}")
+    result = compare(original, companion, pairing={label: label for label in labels})
+    result["scope"] = "The nine physical phase nodes, excluding the internal source and grounded neutral"
+    return result
+
+
 def report_changes(previous, current):
     def measurements(report):
         checks = {}
+
+        def compare_metrics(case, target, direction, result):
+            checks[(case, target, direction, "overall")] = result["status"]
+            if "independent_readers" in result:
+                checks[(case, target, direction, "independent_readers")] = (
+                    "agree" if result["independent_readers"] else "not_applicable")
+            for metric, reading in result.get("metrics", {}).items():
+                checks[(case, target, direction, metric)] = (
+                    reading["status"], reading.get("maximum_difference", reading.get("relative_error")),
+                    reading.get("branches_compared", reading.get("order", result["nodes_compared"])),
+                )
+
         for case, spec in report["cases"].items():
+            for check in ("recover_original_files", "upstream_companion_comparison", "same_file_in_pmd"):
+                if check in spec:
+                    compare_metrics(case, spec["source"]["format"], check, spec[check])
             for target, cell in spec["conversions"].items():
-                for direction in ("direct", "round_trip", "target_vs_return"):
-                    result = cell[direction]
-                    checks[(case, target, direction, "overall")] = result["status"]
-                    for metric, reading in result.get("metrics", {}).items():
-                        checks[(case, target, direction, metric)] = (
-                            reading["status"], reading.get("maximum_difference", reading.get("relative_error")),
-                            reading.get("branches_compared", reading.get("order", result["nodes_compared"])),
-                        )
+                for check in (*PAIRWISE, "check_target_data", "check_returned_data", "same_solver_pmd"):
+                    if check in cell:
+                        compare_metrics(case, target, check, cell[check])
         return checks
 
     a, b = measurements(previous), measurements(current)
     measured = {"agree", "different", "partial"}
     return {
+        "baseline_revision": previous["git_revision"],
         "reason_to_review": {
             "tolerances_changed": previous["tolerances"] != current["tolerances"],
             "inputs_changed": {
@@ -487,6 +618,28 @@ def report_changes(previous, current):
             for case, target, direction, metric in [key]
         ],
     }
+
+
+def measured_differences(report):
+    findings = []
+    for name, case in report["cases"].items():
+        for target, pair in case["conversions"].items():
+            for stage in PAIRWISE:
+                result = pair[stage]
+                differences = {key: value for key, value in result.get("metrics", {}).items()
+                               if value["status"] == "different"}
+                if not differences:
+                    continue
+                findings.append({
+                    "input": name, "output_format": target, "comparison": stage,
+                    "independent_readers": result["independent_readers"], "checks": differences,
+                    "diagnostic_codes": sorted({item["code"] for key in ("read_original", "write_target",
+                                                                        "write_source_format", "check_target_data")
+                                                for item in pair.get(key, case.get(key, {})).get("diagnostics", [])
+                                                if item.get("code")}),
+                    "changed_fields": pair.get("check_target_data", {}).get("changed_fields", []),
+                })
+    return findings
 
 
 def main():
@@ -524,21 +677,39 @@ def main():
         name = case["source"]["id"]
         reference = solved.get(f"{name}/source", record("unavailable", "Reference case is missing"))
         case["original_solution"] = reference
+        if control := case.get("deliberate_error"):
+            control["comparison"] = compare(reference, solved[f"{name}/deliberate-error"])
+            ybus = control["comparison"].get("metrics", {}).get("admittance_relative_2_norm", {})
+            control["detected"] = ybus.get("status") == "different"
+        if companion := case["source"].get("companion"):
+            case["upstream_companion_comparison"] = compare_companion(
+                reference, solved.get(f"{name}/companion", record("unavailable", "The companion file is missing")),
+                companion["nodes"])
+        if f"{name}/pmd-source" in solved:
+            case["same_file_in_pmd"] = compare(reference, solved[f"{name}/pmd-source"])
         for key, (target, direction, ir, element_map) in ready.items():
             case["conversions"][target][direction] = compare(reference, solved[key], ir, element_map)
         for target, pair in case["conversions"].items():
             route = f"{name}/{target}"
+            if route + "/pmd-direct" in solved:
+                pair["same_solver_pmd"] = compare(solved[f"{name}/pmd-source"], solved[route + "/pmd-direct"])
+            if f"{name}/pmd-source" in solved and target in ("pmd-json", "pmd-math-json") and route + "/direct" in solved:
+                pair["same_solver_pmd"] = compare(solved[f"{name}/pmd-source"], solved[route + "/direct"])
             if route + "/direct" in solved and route + "/round_trip" in solved:
                 pair["target_vs_return"] = compare_target_and_return(pair, solved[route + "/direct"], solved[route + "/round_trip"])
         report["cases"][name] = case
     (work / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    (work / "measured-differences.json").write_text(json.dumps(measured_differences(report), indent=2) + "\n")
     (work / "matrix.md").write_text(markdown(report) + "\n")
+    changes = None
     if args.previous:
         previous = json.loads(args.previous.read_text())
         if (previous.get("schema"), previous.get("version")) != (report["schema"], report["version"]):
             parser.error("The previous report uses a different schema")
-        (work / "changes.json").write_text(json.dumps(report_changes(previous, report), indent=2) + "\n")
-    for direction in ("direct", "round_trip", "target_vs_return"):
+        changes = report_changes(previous, report)
+        (work / "changes.json").write_text(json.dumps(changes, indent=2) + "\n")
+    (work / "summary.md").write_text(summary_markdown(report, changes) + "\n")
+    for direction in PAIRWISE:
         counts = Counter(pair[direction]["status"] for c in report["cases"].values() for pair in c["conversions"].values())
         print(direction, dict(sorted(counts.items())))
     print(work / "matrix.md")

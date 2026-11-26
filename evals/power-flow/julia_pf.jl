@@ -52,9 +52,9 @@ end
 
 function distribution(path)
     PMD = PowerModelsDistribution
-    data = PMD.parse_file(path)
+    data = PMD.parse_file(isdir(path) ? joinpath(path, "case.dss") : path)
     engineering = PMD.iseng(data)
-    result = PMD.compute_mc_pf(data; make_si=engineering)
+    result = PMD.compute_mc_pf(data; make_si=engineering, stat_tol=1e-10)
     string(result["termination_status"]) == "PF_CONVERGED" || error("PowerModelsDistribution did not converge: $(result["termination_status"])")
     voltage = Dict{String,Vector{Float64}}()
     for (key, row) in result["solution"]["bus"]
@@ -68,13 +68,39 @@ function distribution(path)
             error("Voltage results do not identify all terminals at bus $key")
         for (terminal, vm, va) in zip(terminals, row["vm"], row["va"])
             terminal in ground && continue
-            scale = engineering ? data["settings"]["voltage_scale_factor"] : 1
+            scale = data["settings"]["voltage_scale_factor"] * (engineering ? 1 : bus["vbase"])
             label = engineering ? key : get(bus, "name", key)
             voltage["$(lowercase(label)).$terminal"] = [vm * scale, engineering ? va : rad2deg(va)]
         end
     end
-    return Dict("solver" => "PowerModelsDistribution $(Base.pkgversion(PMD))", "units" => engineering ? "V" : "pu",
-                "voltage" => voltage)
+    answer = Dict{String,Any}("solver" => "PowerModelsDistribution $(Base.pkgversion(PMD))",
+                             "units" => "V", "voltage" => voltage,
+                             "one_island" => engineering ? length(data["voltage_source"]) == 1 :
+                                 count(bus -> bus["bus_type"] == 3, values(data["bus"])) == 1)
+    try
+        math_data = engineering ? PMD.transform_data_model(data) : deepcopy(data)
+        PMD.add_start_voltage!(math_data; coordinates=:rectangular, epsilon=0, explicit_neutral=false)
+        pfd = PMD.PowerFlowData(math_data, PMD._bts_to_start_voltage(math_data), false)
+        labels = String[]
+        bases = Float64[]
+        for node in pfd.indexed_nodes
+            node isa Tuple || error("Matrix contains internal voltage constraints without physical node labels")
+            bus, terminal = node
+            record = math_data["bus"][string(bus)]
+            push!(labels, "$(lowercase(get(record, "name", string(bus)))).$terminal")
+            push!(bases, record["vbase"] * math_data["settings"]["voltage_scale_factor"])
+        end
+        sbase = math_data["settings"]["sbase"] * math_data["settings"]["power_scale_factor"]
+        rows, cols, entries = findnz(pfd.Y0)
+        values_si = [y * sbase / (bases[r] * bases[c]) for (r, c, y) in zip(rows, cols, entries)]
+        answer["admittance"] = Dict("basis" => "PowerModelsDistribution network Y0, in siemens",
+                                    "base_mva" => nothing, "labels" => labels,
+                                    "method" => "PowerModelsDistribution PowerFlowData.Y0",
+                                    "entries" => [[r-1, c-1, real(v), imag(v)] for (r, c, v) in zip(rows, cols, values_si)])
+    catch e
+        answer["admittance_detail"] = sprint(showerror, e)
+    end
+    return answer
 end
 
 results = Dict{String,Any}()

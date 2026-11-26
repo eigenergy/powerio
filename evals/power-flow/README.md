@@ -15,6 +15,8 @@ solves the original case14 and the file converted back from Egret. Egret solves
 the intermediate JSON file. Agreement after converting back alone can miss an
 error that affected the intermediate file. This is a numerical application of
 [translation validation](https://weizmann.esploro.exlibrisgroup.com/esploro/outputs/conferenceProceeding/Translation-validation/993262143603596).
+This checks a specific conversion on a specific case and operating point. Run
+it after changing a reader, writer, or the intermediate representation.
 
 There are two additional file checks. One asks PowerIO to recover the original
 files exactly. The other asks PowerIO to write a new case from the grid data it
@@ -35,9 +37,21 @@ The first snapshot is used where a format stores a series.
 
 Independent tools include MATPOWER in GNU Octave, Egret with Ipopt, PowerModels,
 PowSybl, Surge, pandapower, PyPSA, PowerFlows, OpenDSS, and
-PowerModelsDistribution. PowSybl also reads PSS/E RAW and RAWX files, so those
-comparisons use an open-source solver. Surge's source is available under its
-published license. [Surge license](https://github.com/amptimal/surge/blob/main/LICENSE)
+PowerModelsDistribution, PNNL GridLAB-D, and Tellegen. PowSybl also reads PSS/E
+RAW and RAWX files. PNNL GridLAB-D reads the GLM syntax it shares with Arras.
+The report identifies both file readers in every comparison. If a format
+has no configured independent reader, PowerModels can solve a balanced
+network exported by PowerIO and Tellegen can solve a multiconductor network
+parsed by PowerIO. These comparisons check the resulting electrical model.
+They count separately from comparisons that use independent readers for
+both files. Tellegen's BMOPF reader also uses PowerIO.
+
+The MG-RAVENS example uses the nominal demand in its three load records.
+Tellegen solves a copy of the parsed model with the example's load schedule
+disabled for this static comparison. The results also compare its nine
+physical phase nodes with the upstream OpenDSS example at the same nominal
+demand. The original file and the files written for the conversion tests
+retain their respective schedules.
 
 A comparison can be unavailable because the reference file, a solver, or a
 reliable way to match the buses is missing. The matrix also reports cases that
@@ -61,6 +75,11 @@ Success requires all reported quantities to be available and within their limits
   matrices on different system MVA bases are rescaled to the reference.
   OpenDSS's matrix is its `SystemY` after solving, which includes source and
   load contributions. It is compared only with another OpenDSS `SystemY`.
+  PowSybl's matrix is assembled from the solver's internal network dump.
+  The harness checks the branch stamps against the terminal powers PowSybl
+  calculates at the solved voltages. PowerModelsDistribution's `Y0` excludes
+  generator and load contributions and is converted to siemens using the
+  voltage base for each node.
 - Voltage limits, controls, and operating modes are part of a case. The
   benchmark records tool results and their differences. For transmission,
   tools with an option to disable reactive limit enforcement use it. The
@@ -70,7 +89,7 @@ Success requires all reported quantities to be available and within their limits
 ## Run the benchmark
 
 Run from the repository root with Python 3.12. Install GNU Octave, Ipopt,
-Zstandard, and Julia separately. Install MATPOWER 8.1 from its official tag.
+Zstandard, and Julia separately.
 With Conda on macOS, set `OCTAVE_HOME` to the Octave environment directory if
 Octave needs it. The Surge wheel on macOS also needs SuiteSparse libraries.
 
@@ -79,19 +98,29 @@ cargo build --locked -p powerio-cli
 python3.12 -m venv .venv-power-flow
 .venv-power-flow/bin/python -m pip install -r evals/power-flow/requirements.txt
 julia --startup-file=no --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
-julia --startup-file=no --project=target/pf-julia-pmd -e 'using Pkg; Pkg.add([PackageSpec(name="PowerModelsDistribution", version="0.16.0"), PackageSpec(name="JSON")])'
+julia --startup-file=no --project=powerio-dist/tools/pmd -e 'using Pkg; Pkg.instantiate()'
 julia --startup-file=no --project=target/pf-julia-powersystems -e 'using Pkg; Pkg.add([PackageSpec(name="PowerSystems", version="5.12.5"), PackageSpec(name="PowerFlows", version="0.25.5"), PackageSpec(name="JSON")])'
 .venv-power-flow/bin/python evals/power-flow/prepare_corpus.py \
   --powersystems-project target/pf-julia-powersystems
-export MATPOWER_PATH=/path/to/matpower-8.1
-export PMD_PROJECT="$PWD/target/pf-julia-pmd"
+export MATPOWER_PATH="$PWD/target/ac-power-flow-corpus/matpower-8.1"
+bash evals/power-flow/install_matpower.sh
+export PMD_PROJECT="$PWD/powerio-dist/tools/pmd"
 export POWERSYSTEMS_PROJECT="$PWD/target/pf-julia-powersystems"
+export TELLEGEN=/path/to/tellegen
 .venv-power-flow/bin/python evals/power-flow/benchmark.py --output target/power-flow-report
+.venv-power-flow/bin/python evals/power-flow/check_coverage.py target/power-flow-report/report.json
 ```
+
+The GitHub Conversion Matrix workflow builds Tellegen at
+`7f7551b1839695165e86183969ef918a093856ba`. To use the same version locally,
+check out that commit and run `cargo build --locked -p tellegen-cli` from its
+repository, then point `TELLEGEN` at the resulting executable.
 
 Open `target/power-flow-report/matrix.md` for the matrix. The detailed
 `report.json` includes the numerical differences, changed grid fields, input
 hashes, and conversion warnings. `solutions.json` records the measured values.
+`measured-differences.json` lists the checks outside tolerance with their
+conversion diagnostics and changed grid fields.
 To examine one conversion after changing PowerIO, rebuild it and run:
 
 ```sh
@@ -104,3 +133,10 @@ Use `changes.json` to see which measurements changed and which stopped
 running. Since this second command selects a single cell, the comparison will
 also show the cells that were left out. Use the same cases and target formats
 in both runs when comparing code revisions.
+
+GitHub also adds the electrical results to the existing Conversion Matrix PR
+comment. Download its evidence from the link in the comment. If a successful
+run for the base commit has electrical evidence, the workflow includes
+`changes.json`. Use the named differences and the conversion diagnostics to
+pick a reader, writer, or model change to test. A second run then shows any
+new differences or checks that stopped running.

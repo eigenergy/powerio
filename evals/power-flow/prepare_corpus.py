@@ -5,12 +5,14 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 from solvers import HERE, ROOT
 
 
 def download(url, expected=None):
-    data = subprocess.run(["curl", "-fsSL", "--max-time", "45", "--max-filesize", "10485760", url],
+    data = subprocess.run(["curl", "-fsSL", "--retry", "2", "--max-time", "45",
+                           "--max-filesize", "10485760", url],
                           capture_output=True, check=True).stdout
     if len(data) > 10 * 1024 * 1024 or (expected and hashlib.sha256(data).hexdigest() != expected):
         raise ValueError(f"Reference file at {url} does not match its SHA-256 hash")
@@ -26,12 +28,18 @@ def main():
     corpus = args.output.resolve()
     corpus.mkdir(parents=True, exist_ok=True)
     cases = json.loads((HERE / "corpus.json").read_text())
-    for case in cases:
+    for case in cases + [case["companion"] for case in cases if "companion" in case]:
         if "url" in case:
             path = corpus / case["external"]
             if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == case["sha256"]:
                 continue
-            data = download(case["url"], case.get("download_sha256"))
+            try:
+                data = download(case["url"], case.get("download_sha256"))
+            except subprocess.CalledProcessError as error:
+                if path.exists():
+                    raise
+                print(f"Cannot download {path.name}: {error.stderr.decode().strip()}", file=sys.stderr)
+                continue
             if case.get("compression") == "zstd":
                 data = subprocess.run(["zstd", "-dc"], input=data, capture_output=True, check=True).stdout
             if case.get("extract") == "activsg200":

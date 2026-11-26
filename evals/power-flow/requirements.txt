@@ -10,3 +10,4 @@ surge-py==0.1.9
 opendssdirect.py==0.9.4
 dss-python==0.15.7
 dss-python-backend==0.14.5
+gridlabd==6.0.0
