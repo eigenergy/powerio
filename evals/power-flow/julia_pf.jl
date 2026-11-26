@@ -52,11 +52,17 @@ end
 
 function distribution(path)
     PMD = PowerModelsDistribution
-    data = PMD.parse_file(isdir(path) ? joinpath(path, "case.dss") : path)
+    input = isdir(path) ? joinpath(path, "case.dss") : path
+    # Name JSON explicitly so schema errors are not reported as DSS syntax
+    # errors. Keep the native DSS neutral instead of reducing it out.
+    explicit_neutral = endswith(lowercase(input), ".dss")
+    data = explicit_neutral ? PMD.parse_file(input) : open(PMD.parse_json, input)
     engineering = PMD.iseng(data)
-    result = PMD.compute_mc_pf(data; make_si=engineering, stat_tol=1e-10)
+    result = PMD.compute_mc_pf(data; make_si=engineering, stat_tol=1e-10,
+                               kron_reduce=!explicit_neutral, explicit_neutral=explicit_neutral)
     string(result["termination_status"]) == "PF_CONVERGED" || error("PowerModelsDistribution did not converge: $(result["termination_status"])")
     voltage = Dict{String,Vector{Float64}}()
+    voltage_pu = Dict{String,Float64}()
     for (key, row) in result["solution"]["bus"]
         bus = data["bus"][key]
         terminals = bus["terminals"]
@@ -70,17 +76,25 @@ function distribution(path)
             terminal in ground && continue
             scale = data["settings"]["voltage_scale_factor"] * (engineering ? 1 : bus["vbase"])
             label = engineering ? key : get(bus, "name", key)
-            voltage["$(lowercase(label)).$terminal"] = [vm * scale, engineering ? va : rad2deg(va)]
+            node = "$(lowercase(label)).$terminal"
+            voltage[node] = [vm * scale, engineering ? va : rad2deg(va)]
+            if !engineering
+                voltage_pu[node] = vm
+            end
         end
     end
     answer = Dict{String,Any}("solver" => "PowerModelsDistribution $(Base.pkgversion(PMD))",
                              "units" => "V", "voltage" => voltage,
+                             "solver_settings" => Dict("explicit_neutral" => explicit_neutral, "stat_tol" => 1e-10),
                              "one_island" => engineering ? length(data["voltage_source"]) == 1 :
                                  count(bus -> bus["bus_type"] == 3, values(data["bus"])) == 1)
+    if !engineering
+        answer["voltage_pu"] = voltage_pu
+    end
     try
-        math_data = engineering ? PMD.transform_data_model(data) : deepcopy(data)
-        PMD.add_start_voltage!(math_data; coordinates=:rectangular, epsilon=0, explicit_neutral=false)
-        pfd = PMD.PowerFlowData(math_data, PMD._bts_to_start_voltage(math_data), false)
+        math_data = engineering ? PMD.transform_data_model(data; kron_reduce=!explicit_neutral) : deepcopy(data)
+        PMD.add_start_voltage!(math_data; coordinates=:rectangular, epsilon=0, explicit_neutral=explicit_neutral)
+        pfd = PMD.PowerFlowData(math_data, PMD._bts_to_start_voltage(math_data), explicit_neutral)
         labels = String[]
         bases = Float64[]
         for node in pfd.indexed_nodes

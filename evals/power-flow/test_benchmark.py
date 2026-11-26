@@ -1,6 +1,6 @@
 import unittest
 
-from benchmark import compare, compare_admittance, compare_target_and_return, json_differences
+from benchmark import compare, compare_admittance, compare_target_and_return, json_differences, report_changes
 
 
 def solution(voltage, entries, *, base=100, branches=None):
@@ -54,6 +54,28 @@ class Comparisons(unittest.TestCase):
 
     def test_identifies_changed_fields_in_new_files(self):
         self.assertEqual(list(json_differences({"a/b": 1}, {"a/b": 2})), ["/a~1b"])
+        self.assertEqual(list(json_differences({"bus": [{"gs": 1}]}, {"bus": [{"gs": 2}]})), ["/bus/0/gs"])
+
+    def test_identifies_coverage_loss_separately_from_failed_checks(self):
+        case = {"source": {"format": "matpower"}, "input": {"status": "ok"}}
+        base = {"git_revision": "before", "tolerances": {}, "solvers": []}
+        before = {"status": "agree", "nodes_compared": 14,
+                  "metrics": {"voltage_pu": {"status": "agree", "maximum_difference": 0}}}
+        after = {"status": "different", "nodes_compared": 12,
+                 "metrics": {"voltage_pu": {"status": "different", "maximum_difference": 0.1}}}
+        old, new = ({**base, "cases": {"case14": {**case, "conversions": {"xiidm": {"direct": result}}}}}
+                    for result in (before, after))
+        checks = {change["metric"]: change for change in report_changes(old, new)["changes"]}
+        self.assertFalse(checks["overall"]["coverage_reduced"])
+        self.assertTrue(checks["voltage_pu"]["coverage_reduced"])
+        before["metrics"]["voltage_pu"] = {"status": "unavailable"}
+        checks = {change["metric"]: change for change in report_changes(old, new)["changes"]}
+        self.assertFalse(checks["voltage_pu"]["coverage_reduced"])
+
+    def test_matching_a_subset_cannot_pass_the_whole_case(self):
+        result = compare(self.original, self.original, pairing={"1": "1"})
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["unmatched_output_nodes"], ["2"])
 
 
 if __name__ == "__main__":

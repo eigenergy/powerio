@@ -37,7 +37,7 @@ The first snapshot is used where a format stores a series.
 
 Independent tools include MATPOWER in GNU Octave, Egret with Ipopt, PowerModels,
 PowSybl, Surge, pandapower, PyPSA, PowerFlows, OpenDSS, and
-PowerModelsDistribution, PNNL GridLAB-D, and Tellegen. PowSybl also reads PSS/E
+PowerModelsDistribution, PNNL GridLAB-D, LightSim2Grid, and Tellegen. PowSybl also reads PSS/E
 RAW and RAWX files. PNNL GridLAB-D reads the GLM syntax it shares with Arras.
 The report identifies both file readers in every comparison. If a format
 has no configured independent reader, PowerModels can solve a balanced
@@ -45,6 +45,8 @@ network exported by PowerIO and Tellegen can solve a multiconductor network
 parsed by PowerIO. These comparisons check the resulting electrical model.
 They count separately from comparisons that use independent readers for
 both files. Tellegen's BMOPF reader also uses PowerIO.
+LightSim2Grid uses pandapower's file reader and admittance. Its additional
+comparison checks the AC power flow solution.
 
 The MG-RAVENS example uses the nominal demand in its three load records.
 Tellegen solves a copy of the parsed model with the example's load schedule
@@ -134,9 +136,15 @@ running. Since this second command selects a single cell, the comparison will
 also show the cells that were left out. Use the same cases and target formats
 in both runs when comparing code revisions.
 
+Use `--merge-buses switches` or `--merge-buses exact` to test PowerIO's bus
+merging during the forward balanced conversion. Use `--missing-gen-cost
+quadratic --default-gen-cost 0.01,2,0` to check the generated files with that
+cost policy. The report records these options. A topology change can prevent
+node-by-node comparison when there is no one-to-one bus correspondence.
+
 GitHub also adds the electrical results to the existing Conversion Matrix PR
 comment. Download its evidence from the link in the comment. If a successful
-run for the base commit has electrical evidence, the workflow includes
-`changes.json`. Use the named differences and the conversion diagnostics to
+run for the base commit or the previous revision of the branch has electrical
+evidence, the workflow includes `changes.json`. Use the named differences and the conversion diagnostics to
 pick a reader, writer, or model change to test. A second run then shows any
 new differences or checks that stopped running.

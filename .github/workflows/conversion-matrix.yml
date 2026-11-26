@@ -118,13 +118,16 @@ jobs:
     - name: Find previous results for the base commit
       env:
         GH_TOKEN: ${{ github.token }}
+        HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
       run: |
-        previous=$(gh run list --workflow conversion-matrix.yml --commit "$POWERIO_MATRIX_BASE_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
-        if [[ -n "$previous" ]]; then
+        base=$(gh run list --workflow conversion-matrix.yml --commit "$POWERIO_MATRIX_BASE_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+        branch=$(gh run list --workflow conversion-matrix.yml --branch "$HEAD_BRANCH" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+        for previous in $base $branch; do
           if gh run download "$previous" -n power-flow-conversion-evidence -D target/previous-power-flow; then
             echo "PREVIOUS_REPORT=$PWD/target/previous-power-flow/report.json" >> "$GITHUB_ENV"
+            break
           fi
-        fi
+        done
     - name: Run all conversion comparisons
       shell: bash -el {0}
       env:

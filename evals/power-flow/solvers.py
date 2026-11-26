@@ -218,21 +218,28 @@ def powsybl(path):
     return answer
 
 
-def pandapower(path, three_phase=False):
+def pandapower(path, three_phase=False, lightsim=False):
     import pandapower as pp
 
     network = pp.from_json(str(path))
     if three_phase:
         pp.runpp_3ph(network, enforce_q_lims=False, tolerance_mva=1e-9)
         rows = (
-            (f"{key}.{phase}", row[f"vm_{phase}_pu"], row[f"va_{phase}_degree"])
-            for key, row in network.res_bus_3ph.iterrows() for phase in "abc"
+            (f"{key}.{i}", row[f"vm_{phase}_pu"] * network.bus.at[key, "vn_kv"] * 1000 / math.sqrt(3),
+             row[f"va_{phase}_degree"])
+            for key, row in network.res_bus_3ph.iterrows() for i, phase in enumerate("abc", 1)
         )
     else:
         pp.runpp(network, enforce_q_lims=False, calculate_voltage_angles=True, tolerance_mva=1e-9,
-                 numba=False)
+                 numba=False, lightsim2grid=lightsim)
         rows = ((str(key), row.vm_pu, row.va_degree) for key, row in network.res_bus.iterrows())
-    answer = {"solver": package("pandapower"), "units": "pu", "voltage": points(rows)}
+    answer = {"solver": package("pandapower"), "units": "V" if three_phase else "pu", "voltage": points(rows)}
+    if three_phase:
+        answer["one_island"] = len(network.ext_grid[network.ext_grid.in_service]) == 1
+    if lightsim:
+        if not network._options["lightsim2grid"]:
+            raise RuntimeError("pandapower did not use the LightSim2Grid solver")
+        answer.update(solver=package("lightsim2grid"), reader=f"{package('pandapower')} file reader")
     if not three_phase:
         powers = []
         for devices, table, a, b, ports in (
@@ -249,8 +256,10 @@ def pandapower(path, three_phase=False):
         y = network._ppc["internal"]["Ybus"]
         indices = network._pd2ppc_lookups["bus"]
         lookup = {int(indices[int(key)]): key for key in answer["voltage"] if indices[int(key)] >= 0}
-        if set(lookup) == set(range(y.shape[0])) and len(lookup) == len(answer["voltage"]):
+        if not lightsim and set(lookup) == set(range(y.shape[0])) and len(lookup) == len(answer["voltage"]):
             answer["admittance"] = admittance(y, [lookup[i] for i in range(y.shape[0])], "network-pu", network.sn_mva)
+        if lightsim:
+            answer["admittance_detail"] = "The pandapower integration exposes its own Y-bus, shared by both solvers"
     return answer
 
 
@@ -369,6 +378,24 @@ def opendss(path):
 
         answer = {"solver": dss.Basic.Version().strip(), "units": "V", "voltage": points(rows),
                   "one_island": dss.Vsources.Count() == 1}
+        powers = []
+        for group, names in (("Line", dss.Lines.AllNames()), ("Transformer", dss.Transformers.AllNames())):
+            for name in names:
+                if dss.Circuit.SetActiveElement(f"{group}.{name}") < 0:
+                    continue
+                element = dss.CktElement
+                if not element.Enabled() or element.NumTerminals() != 2:
+                    continue
+                frm, to = (bus.split(".", 1)[0].lower() for bus in element.BusNames())
+                n = element.NumConductors()
+                nodes = element.NodeOrder()
+                values = element.Powers()  # kW and kvar, both ends into the branch
+                for i in range(n):
+                    a, b = f"{frm}.{nodes[i]}", f"{to}.{nodes[n + i]}"
+                    if a in answer["voltage"] and b in answer["voltage"]:
+                        quantities = [values[2 * k + part] / 1000 for k in (i, n + i) for part in (0, 1)]
+                        powers.append([a, b, *quantities])
+        answer["branch_power"] = powers
         ylabels = [name.lower() for name in dss.Circuit.YNodeOrder()]
         values, indices, indptr = dss.YMatrix.getYsparse()
         matrix = csc_matrix((values, indices, indptr), shape=(len(ylabels), len(ylabels)))
@@ -379,6 +406,8 @@ def opendss(path):
 
 
 def gridlabd(path):
+    if path.is_dir():
+        path = path / "case.glm"
     version = package("gridlabd")
     with TemporaryDirectory() as directory:
         run = Path(directory)
@@ -503,7 +532,7 @@ SOLVERS = {
     "bmopf-json": "tellegen-bmopf", "ravens-distribution": "tellegen",
     "cim-dist": "tellegen", "gridlabd": "gridlabd", "gridlabd-arras": "gridlabd",
     "sincal-multiconductor": "tellegen",
-    "powermodels-via-powerio": "powermodels",
+    "powermodels-via-powerio": "powermodels", "pandapower-lightsim": "lightsim",
 }
 
 
@@ -541,6 +570,7 @@ def solve_many(requests, work):
                     fn = {"powsybl": powsybl, "opendss": opendss,
                           "egret": egret, "pypsa": pypsa, "pandapower": pandapower, "surge": surge,
                           "gridlabd": gridlabd,
+                          "lightsim": lambda p: pandapower(p, lightsim=True),
                           "pandapower-3ph": lambda p: pandapower(p, three_phase=True)}[solver]
                     solution = fn(request[1])
                 results[key] = {"status": "solved", **solution}

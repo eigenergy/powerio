@@ -30,7 +30,7 @@ TARGETS = {
     },
     "distribution": {
         "dss": ".dss", "pmd-json": ".json", "pmd-math-json": ".json", "bmopf-json": ".json",
-        "ravens-json": ".json", "cim-dist": ".xml", "gridlabd": ".glm", "gridlabd-arras": ".glm",
+        "ravens-json": ".json", "cim-dist": ".xml", "gridlabd": None, "gridlabd-arras": None,
     },
 }
 TOLERANCE = {"voltage_pu": 1e-9, "voltage_V": 1e-3, "angle_deg": math.degrees(1e-9),
@@ -41,6 +41,7 @@ DISPLAY = {"agree": "🟢", "different": "🔴", "unavailable": "—", "solve_fa
            "partial": "◐"}
 PAIRWISE = ("direct", "round_trip", "target_vs_return")
 MEASURED = {"agree", "different"}
+REFERENCE_CASES = ("matpower-case14", "opendss-ieee13", "mg-ravens-case3")
 
 
 def record(status, detail=None, **fields):
@@ -80,6 +81,8 @@ def cli(binary, *args):
 
 
 def to_ir(binary, path, format, output):
+    if format in ("gridlabd", "gridlabd-arras") and path.is_dir():
+        path = path / "case.glm"
     return cli(binary, "serialize", str(path), "--from", format, "-o", str(output))
 
 
@@ -95,7 +98,7 @@ def solver_input(binary, format, path, ir, operating_point, family, evidence):
     return (format, path, ir, operating_point)
 
 
-def convert(binary, path, src, target, directory, extension):
+def convert(binary, path, src, target, directory, extension, options=()):
     directory.mkdir(parents=True, exist_ok=True)
     # Egret takes the case name from the input filename. Use a stem that is
     # also a valid MATPOWER function name when the case is converted back.
@@ -107,7 +110,7 @@ def convert(binary, path, src, target, directory, extension):
         if len(folders) == 1:
             output = folders[0]
     else:
-        args = ["convert", str(path), "--to", target, "-o", str(output)]
+        args = ["convert", str(path), "--to", target, "-o", str(output), *options]
         if src:
             args += ["--from", src]
         if target in TARGETS["transmission"]:
@@ -127,7 +130,9 @@ def recover_original(binary, case, source, files, out):
     if result["status"] != "ok":
         status = "unavailable" if not case.get("writes", True) else "conversion_failed"
         return record(status, "PowerIO could not return this source in its original format", **{"diagnostics": result["diagnostics"]})
-    if output.is_file() and len(files) == 1:
+    if format == "dss" and output.is_file() and (output.parent / "source").is_dir():
+        matches = files == inventory(output.parent / "source")
+    elif output.is_file() and len(files) == 1:
         matches = sha(output) == next(iter(files.values()))
     elif output.is_dir():
         written = inventory(output)
@@ -176,11 +181,18 @@ def match_labels(source, target, original_ir, element_map):
     expected, actual = source["voltage"], target["voltage"]
     if expected.keys() == actual.keys():
         return {name: name for name in expected}
-    if not original_ir or (not element_map and not target.get("aliases")):
+    if not original_ir:
         return None
-    original = json.loads(original_ir.read_text())["value"]["data"]
+    value = json.loads(original_ir.read_text())["value"]
+    original = value["data"]
     if not isinstance(original, dict) or "buses" not in original:
         return None
+    if value["type"] == "powerio.MulticonductorNetwork":
+        # Some tools expose internal source, switch, or transformer nodes.
+        # Require all original ungrounded conductors before comparing a subset.
+        physical = {f"{bus['id'].lower()}.{terminal}" for bus in original["buses"]
+                    for terminal in bus["terminals"] if terminal not in bus["grounded"]}
+        return {name: name for name in sorted(physical)} if physical <= expected.keys() & actual.keys() else None
     by_uid = json.loads(element_map.read_text()).get("bus", {}) if element_map else {}
     result = {}
     for bus in original["buses"]:
@@ -342,17 +354,29 @@ def compare(source, target, original_ir=None, element_map=None, pairing=None):
         metrics[key] = record("agree" if difference <= TOLERANCE[key] else "different",
                               maximum_difference=difference, tolerance=TOLERANCE[key], worst_node=worst,
                               original_voltage=expected[worst], output_voltage=actual[pairing[worst]])
+    if source.get("voltage_pu") and target.get("voltage_pu"):
+        pu_a, pu_b = source["voltage_pu"], target["voltage_pu"]
+        difference, worst = max((abs(pu_a[a] - pu_b[b]), a) for a, b in pairing.items())
+        limit = TOLERANCE["voltage_pu"]
+        metrics["voltage_pu"] = record("agree" if difference <= limit else "different",
+                                       maximum_difference=difference, tolerance=limit, worst_node=worst,
+                                       original_voltage=pu_a[worst], output_voltage=pu_b[pairing[worst]])
     metrics.update(compare_branch_powers(source, target, pairing))
     power_flow = {m["status"] for m in metrics.values()}
     metrics["admittance_relative_2_norm"] = compare_admittance(source, target, pairing)
     statuses = {m["status"] for m in metrics.values()}
-    status = "different" if "different" in statuses else "agree" if statuses == {"agree"} else "partial"
-    power_flow_status = "different" if "different" in power_flow else "agree" if power_flow == {"agree"} else "partial"
+    full_nodes = len(pairing) == len(expected) == len(actual)
+    status = "different" if "different" in statuses else "agree" if full_nodes and statuses == {"agree"} else "partial"
+    power_flow_status = ("different" if "different" in power_flow else
+                         "agree" if full_nodes and power_flow == {"agree"} else "partial")
     return record(status, power_flow_status=power_flow_status, nodes_compared=len(pairing),
+                  original_nodes=len(expected), output_nodes=len(actual),
+                  unmatched_original_nodes=sorted(expected.keys() - pairing.keys()),
+                  unmatched_output_nodes=sorted(actual.keys() - set(pairing.values())),
                   metrics=metrics, matched_labels=pairing, **solvers)
 
 
-def prepare_case(binary, case, corpus, work, selected_targets):
+def prepare_case(binary, case, corpus, work, selected_targets, balanced_options=()):
     formats = TARGETS[case["family"]]
     root = work / case["id"]
     root.mkdir()
@@ -396,6 +420,8 @@ def prepare_case(binary, case, corpus, work, selected_targets):
         requests[f"{case['id']}/deliberate-error"] = ("matpower", path, None, operating_point)
     if case["id"] == "opendss-ieee13":
         requests[f"{case['id']}/pmd-source"] = ("dss-pmd", source, original, operating_point)
+    if solver_format == "pandapower-json":
+        requests[f"{case['id']}/lightsim-source"] = ("pandapower-lightsim", source, original, operating_point)
     if companion := case.get("companion"):
         path = corpus / companion["external"]
         if path.is_file():
@@ -411,7 +437,8 @@ def prepare_case(binary, case, corpus, work, selected_targets):
         cell = root / target
         input_path, input_format = (source, format) if target == "gridfm" else (original, None)
         forward, pair["write_target"], element_map = convert(
-            binary, input_path, input_format, target, cell / "target", formats[target]
+            binary, input_path, input_format, target, cell / "target", formats[target],
+            () if distribution else balanced_options,
         )
         if pair["write_target"]["status"] != "ok":
             pair["direct"] = record("conversion_failed", "PowerIO could not write the target file")
@@ -424,6 +451,8 @@ def prepare_case(binary, case, corpus, work, selected_targets):
             binary, output_solver_format, forward, target_ir, operating_point, case["family"], pair["check_target_data"])
         if case["id"] == "opendss-ieee13" and target == "dss":
             requests[key + "/pmd-direct"] = ("dss-pmd", forward, target_ir, operating_point)
+        if target == "pandapower-json":
+            requests[key + "/lightsim-direct"] = ("pandapower-lightsim", forward, target_ir, operating_point)
         ready[key + "/direct"] = (target, "direct", original, element_map)
         if target == format:
             pair["round_trip"] = record("not_applicable", "The direct test already wrote the original format")
@@ -439,7 +468,7 @@ def prepare_case(binary, case, corpus, work, selected_targets):
             continue
         input_path, input_format = (forward, target) if format == "gridfm" else (target_ir, None)
         back, pair["write_source_format"], _ = convert(
-            binary, input_path, input_format, format, cell / "return", formats[format]
+            binary, input_path, input_format, format, cell / "return", formats[format],
         )
         if pair["write_source_format"]["status"] != "ok":
             pair["round_trip"] = record("conversion_failed", "PowerIO could not write the source format again")
@@ -500,7 +529,17 @@ def summary_markdown(report, changes):
     comparisons = [pair[direction] for case in cases.values() for pair in case["conversions"].values()
                    for direction in PAIRWISE]
     voltage_checks = [c for c in comparisons if c.get("nodes_compared", 0) > 0]
-    lines = ["## AC power flow and admittance", "",
+    lines = ["## Original files and new files in the same format", "",
+             "| Input | Original files recovered exactly | Grid data after writing and reading new files |",
+             "| --- | --- | --- |"]
+    for name in REFERENCE_CASES:
+        if name in cases:
+            case = cases[name]
+            same = case["conversions"].get(case["source"]["format"], {})
+            recovery = case.get("recover_original_files", case["input"])["status"]
+            data = same.get("check_target_data", {"status": "unavailable"})["status"]
+            lines.append(f"| {name} | {recovery} | {data} |")
+    lines += ["", "## AC power flow and admittance", "",
              f"{sum(c['input']['status'] == 'ok' for c in cases.values())} of {len(cases)} source profiles have fixtures. "
              f"{sum(c['original_solution']['status'] == 'solved' for c in cases.values())} original cases were solved. "
              f"{len(voltage_checks)} comparisons measured bus or conductor voltages, including "
@@ -518,7 +557,7 @@ def summary_markdown(report, changes):
               "Original vs converted back voltage | Converted vs converted back voltage |",
               "| --- | --- | --- | --- | --- | --- |"]
     for name, case in cases.items():
-        if name not in ("matpower-case14", "opendss-ieee13", "mg-ravens-case3"):
+        if name not in REFERENCE_CASES:
             continue
         for target, pair in case["conversions"].items():
             direct, returned, final = [pair[d] for d in PAIRWISE]
@@ -529,17 +568,26 @@ def summary_markdown(report, changes):
     for name, key, description in (
         ("mg-ravens-case3", "upstream_companion_comparison", "MG-RAVENS nominal load in Tellegen vs upstream OpenDSS example"),
         ("opendss-ieee13", "same_file_in_pmd", "IEEE 13-bus source solved in OpenDSS and PowerModelsDistribution"),
+        ("pandapower-example", "same_file_in_lightsim", "pandapower source solved in pandapower and LightSim2Grid"),
     ):
         if name in cases and key in cases[name]:
             result = cases[name][key]
-            value = reading(result, ("voltage_V", " V"))
-            lines += ["", f"- {description} — {value} across {result.get('nodes_compared', 0)} matched nodes."]
+            value = reading(result, ("voltage_V", " V"), ("voltage_pu", " p.u."))
+            detail = (result.get("detail", result["status"]) if value == "—" else
+                      f"{value} across {result['nodes_compared']} matched nodes")
+            detail = " ".join(detail.split())[:200].rstrip(".")
+            lines += ["", f"- {description} — {detail}."]
     if control := cases.get("matpower-case14", {}).get("deliberate_error"):
         result = control["comparison"].get("metrics", {}).get("admittance_relative_2_norm", {})
         residual = result.get("relative_error")
         if residual is not None:
             lines += ["", f"- Deliberate error test {'passed' if control['detected'] else 'failed'}. "
                       f"Doubling branch 1–2 reactance gave a relative admittance difference of {residual:.3g}."]
+    lightsim = (cases.get("matpower-case14", {}).get("conversions", {})
+                .get("pandapower-json", {}).get("in_lightsim", {}))
+    if value := lightsim.get("metrics", {}).get("voltage_pu"):
+        lines += ["", f"- MATPOWER and LightSim2Grid on the converted case14 — "
+                  f"{value['maximum_difference']:.3g} p.u. across {lightsim['nodes_compared']} buses."]
     lines += ["", "— means that quantity was not measured. The full matrix gives all three comparisons for "
               "every route. The JSON gives each metric, tolerance, solver, and reason for missing coverage."]
     return "\n".join(lines)
@@ -549,11 +597,10 @@ def compare_target_and_return(pair, converted, returned):
     a = pair["direct"].get("matched_labels", {})
     b = pair["round_trip"].get("matched_labels", {})
     common = {label: b[original] for original, label in a.items() if original in b}
-    pairing = common if common.keys() == converted.get("voltage", {}).keys() and set(common.values()) == returned.get("voltage", {}).keys() else None
-    return compare(converted, returned, pairing=pairing)
+    return compare(converted, returned, pairing=common or None)
 
 
-def compare_companion(original, companion, labels):
+def compare_on_nodes(original, companion, labels, scope):
     for solution in (original, companion):
         if solution["status"] != "solved":
             return solution
@@ -561,7 +608,9 @@ def compare_companion(original, companion, labels):
         if missing:
             return record("not_comparable", f"Missing physical phase nodes: {', '.join(sorted(missing))}")
     result = compare(original, companion, pairing={label: label for label in labels})
-    result["scope"] = "The nine physical phase nodes, excluding the internal source and grounded neutral"
+    result["scope"] = scope
+    result["original_solver_nodes"] = len(original["voltage"])
+    result["output_solver_nodes"] = len(companion["voltage"])
     return result
 
 
@@ -575,17 +624,21 @@ def report_changes(previous, current):
                 checks[(case, target, direction, "independent_readers")] = (
                     "agree" if result["independent_readers"] else "not_applicable")
             for metric, reading in result.get("metrics", {}).items():
+                error = reading.get("maximum_difference", reading.get("relative_error"))
                 checks[(case, target, direction, metric)] = (
-                    reading["status"], reading.get("maximum_difference", reading.get("relative_error")),
-                    reading.get("branches_compared", reading.get("order", result["nodes_compared"])),
+                    reading["status"], error, reading.get("branches_compared",
+                                                          reading.get("order", result["nodes_compared"]))
+                    if error is not None else None,
                 )
 
         for case, spec in report["cases"].items():
-            for check in ("recover_original_files", "upstream_companion_comparison", "same_file_in_pmd"):
+            for check in ("recover_original_files", "upstream_companion_comparison", "same_file_in_pmd",
+                          "same_file_in_lightsim"):
                 if check in spec:
                     compare_metrics(case, spec["source"]["format"], check, spec[check])
             for target, cell in spec["conversions"].items():
-                for check in (*PAIRWISE, "check_target_data", "check_returned_data", "same_solver_pmd"):
+                for check in (*PAIRWISE, "check_target_data", "check_returned_data", "same_solver_pmd",
+                              "in_lightsim"):
                     if check in cell:
                         compare_metrics(case, target, check, cell[check])
         return checks
@@ -602,14 +655,16 @@ def report_changes(previous, current):
                 if previous["cases"].get(name, {}).get("input") != current["cases"].get(name, {}).get("input")
             },
             "solvers_changed": previous["solvers"] != current["solvers"],
+            "conversion_options_changed": previous.get("balanced_conversion_options", []) !=
+                                          current.get("balanced_conversion_options", []),
         },
         "changes": [
             {"input": case, "output_format": target, "comparison": direction, "metric": metric,
              "before": a.get(key), "after": b.get(key),
              "coverage_reduced": (
-                 isinstance(a.get(key), tuple) and (
+                 isinstance(a.get(key), tuple) and a[key][0] in measured and (
                      not isinstance(b.get(key), tuple)
-                     or (a[key][0] in measured and b[key][0] not in measured)
+                     or b[key][0] not in measured
                      or (a[key][2] is not None and b[key][2] is not None and b[key][2] < a[key][2])
                  )
                  or isinstance(a.get(key), str) and a[key] in measured and b.get(key) not in measured
@@ -650,6 +705,12 @@ def main():
     parser.add_argument("--source", action="append", help="reference case ID, repeat to select more than one")
     parser.add_argument("--target", action="append", help="target format, repeat to select more than one")
     parser.add_argument("--previous", type=Path, help="compare against an earlier report.json")
+    parser.add_argument("--merge-buses", metavar="SPEC",
+                        help="PowerIO bus merge policy for balanced conversions (for example, switches or exact)")
+    parser.add_argument("--missing-gen-cost", choices=("preserve", "require", "zero", "quadratic"),
+                        help="PowerIO policy for generators without a cost row in balanced conversions")
+    parser.add_argument("--default-gen-cost", metavar="C2,C1,C0",
+                        help="PowerIO default cost for the quadratic policy")
     args = parser.parse_args()
     # Resolve all paths before a simulator can change its process working directory.
     binary, corpus, work = args.powerio.resolve(), args.corpus.resolve(), args.output.resolve()
@@ -660,17 +721,27 @@ def main():
         parser.error("Unknown reference case ID")
     if args.target and set(args.target) - set().union(*TARGETS.values()):
         parser.error("Unknown target format")
+    if (args.missing_gen_cost == "quadratic") != (args.default_gen_cost is not None):
+        parser.error("--default-gen-cost is required with --missing-gen-cost quadratic")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
     version = subprocess.check_output([binary, "--version"], text=True).strip()
+    balanced_options = []
+    if args.merge_buses is not None:
+        balanced_options += ["--merge-buses", args.merge_buses]
+    if args.missing_gen_cost is not None:
+        balanced_options += ["--missing-gen-cost", args.missing_gen_cost]
+    if args.default_gen_cost is not None:
+        balanced_options += ["--default-gen-cost", args.default_gen_cost]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        measured = list(pool.map(lambda c: prepare_case(binary, c, corpus, work, args.target), selected))
+        measured = list(pool.map(lambda c: prepare_case(binary, c, corpus, work, args.target, balanced_options), selected))
     requests = {key: value for _, subset, _ in measured for key, value in subset.items()}
     print(f"PowerIO prepared {len(requests)} files for external tools", flush=True)
     solved = solve_many(requests, work)
     (work / "solutions.json").write_text(json.dumps(solved, allow_nan=False) + "\n")
     report = {"schema": "powerio-ac-power-flow", "version": 1, "git_revision": revision,
               "worktree_dirty": dirty, "powerio_version": version, "tolerances": TOLERANCE,
+              "balanced_conversion_options": balanced_options,
               "solvers": sorted({result["solver"] for result in solved.values() if "solver" in result}),
               "cases": {}}
     for case, _, ready in measured:
@@ -682,11 +753,15 @@ def main():
             ybus = control["comparison"].get("metrics", {}).get("admittance_relative_2_norm", {})
             control["detected"] = ybus.get("status") == "different"
         if companion := case["source"].get("companion"):
-            case["upstream_companion_comparison"] = compare_companion(
+            case["upstream_companion_comparison"] = compare_on_nodes(
                 reference, solved.get(f"{name}/companion", record("unavailable", "The companion file is missing")),
-                companion["nodes"])
+                companion["nodes"], "Nine physical phase nodes, excluding the internal source and grounded neutral")
         if f"{name}/pmd-source" in solved:
-            case["same_file_in_pmd"] = compare(reference, solved[f"{name}/pmd-source"])
+            case["same_file_in_pmd"] = compare_on_nodes(
+                reference, solved[f"{name}/pmd-source"], reference.get("voltage", {}),
+                "All physical nodes reported by OpenDSS. PMD's internal nodes are excluded.")
+        if f"{name}/lightsim-source" in solved:
+            case["same_file_in_lightsim"] = compare(reference, solved[f"{name}/lightsim-source"])
         for key, (target, direction, ir, element_map) in ready.items():
             case["conversions"][target][direction] = compare(reference, solved[key], ir, element_map)
         for target, pair in case["conversions"].items():
@@ -695,6 +770,10 @@ def main():
                 pair["same_solver_pmd"] = compare(solved[f"{name}/pmd-source"], solved[route + "/pmd-direct"])
             if f"{name}/pmd-source" in solved and target in ("pmd-json", "pmd-math-json") and route + "/direct" in solved:
                 pair["same_solver_pmd"] = compare(solved[f"{name}/pmd-source"], solved[route + "/direct"])
+            if route + "/lightsim-direct" in solved:
+                key = route + "/direct"
+                _, _, ir, element_map = ready[key]
+                pair["in_lightsim"] = compare(reference, solved[route + "/lightsim-direct"], ir, element_map)
             if route + "/direct" in solved and route + "/round_trip" in solved:
                 pair["target_vs_return"] = compare_target_and_return(pair, solved[route + "/direct"], solved[route + "/round_trip"])
         report["cases"][name] = case
