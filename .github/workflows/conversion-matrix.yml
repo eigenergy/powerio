@@ -74,6 +74,8 @@ jobs:
   electrical:
     name: Compare AC power flow and admittance
     runs-on: ubuntu-latest
+    env:
+      GRIDLABD_BIN: ${{ github.workspace }}/target/gridlabd-5.3.0/bin/gridlabd
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -82,11 +84,31 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         key: electrical-matrix
+        cache-on-failure: true
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: '3.12'
         cache: pip
         cache-dependency-path: evals/power-flow/requirements.txt
+    - name: Confirm the native GridLAB-D solver
+      run: |
+        bash evals/power-flow/install_gridlabd.sh target/gridlabd-5.3.0
+        PYTHONPATH=evals/power-flow python - <<'PY'
+        import json
+        from pathlib import Path
+        from prepare_corpus import download
+        from solvers import gridlabd
+
+        base = Path("target/ac-power-flow-corpus").resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        cases = json.loads(Path("evals/power-flow/corpus.json").read_text())
+        case = next(case for case in cases if case["id"] == "gridlabd-ieee4")
+        path = base / case["external"]
+        path.write_bytes(download(case["url"], case["sha256"]))
+        solution = gridlabd(path)
+        assert len(solution["voltage"]) == 12
+        print(solution["solver"], "solved all 12 phase nodes")
+        PY
     - uses: mamba-org/setup-micromamba@add3a49764cedee8ee24e82dfde87f5bc2914462 # v2
       with:
         environment-name: power-flow

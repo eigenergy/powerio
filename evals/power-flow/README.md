@@ -39,6 +39,9 @@ Independent tools include MATPOWER in GNU Octave, Egret with Ipopt, PowerModels,
 PowSybl, Surge, pandapower, PyPSA, PowerFlows, OpenDSS, and
 PowerModelsDistribution, PNNL GridLAB-D, LightSim2Grid, and Tellegen. PowSybl also reads PSS/E
 RAW and RAWX files. PNNL GridLAB-D reads the GLM syntax it shares with Arras.
+The Linux workflow uses the official GridLAB-D 5.3.0 executable. The default
+local setup uses the GridLAB-D 6.0.0 Python package. Set `GRIDLABD_BIN` to
+use an installed executable and record that version in the report.
 The report identifies both file readers in every comparison. If a format
 has no configured independent reader, PowerModels can solve a balanced
 network exported by PowerIO and Tellegen can solve a multiconductor network

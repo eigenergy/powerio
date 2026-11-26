@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -408,14 +409,17 @@ def opendss(path):
 def gridlabd(path):
     if path.is_dir():
         path = path / "case.glm"
-    version = package("gridlabd")
     with TemporaryDirectory() as directory:
         run = Path(directory)
         output = run / "voltages.csv"
         model = run / "measure.glm"
         model.write_text(f'#include "{path}"\nobject voltdump {{ filename "{output}"; mode RECT; }}\n')
-        text = command([sys.executable, __file__, str(model)], timeout=30, cwd=run)
-        source_count = int(text.rpartition("reference_buses=")[2].strip())
+        if binary := os.environ.get("GRIDLABD_BIN"):
+            version, source_count = gridlabd_cli(Path(binary).resolve(), run, model)
+        else:
+            version = package("gridlabd")
+            text = command([sys.executable, __file__, str(model)], timeout=30, cwd=run)
+            source_count = int(text.rpartition("reference_buses=")[2].strip())
         with output.open() as file:
             next(file)  # comments describing the snapshot
             rows = []
@@ -428,6 +432,21 @@ def gridlabd(path):
                                      math.degrees(cmath.phase(voltage))))
     return {"solver": f"PNNL {version}", "units": "V", "voltage": points(rows),
             "one_island": source_count == 1, "admittance_detail": "The GLM voltage dump does not expose the Y-bus"}
+
+
+def gridlabd_cli(binary, directory, model):
+    root = binary.parent.parent
+    env = os.environ.copy()
+    for key, subdirectories in (("GLPATH", ("lib", "share")), ("LD_LIBRARY_PATH", ("lib",))):
+        paths = [str(root / name) for name in subdirectories if (root / name).is_dir()]
+        if env.get(key):
+            paths.append(env[key])
+        env[key] = os.pathsep.join(paths)
+    state = directory / "state.glm"
+    version = command([binary, "--version"], env=env, timeout=15).strip()
+    command([binary, "--quiet", "--output", state, model], env=env, timeout=30, cwd=directory)
+    source_count = len(re.findall(r"^\s*bustype\s+SWING\s*;", state.read_text(), re.MULTILINE))
+    return version, source_count
 
 
 def gridlabd_run(path):
