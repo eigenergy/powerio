@@ -5,6 +5,9 @@
 - New tests show what PowerIO preserves when it rewrites MATPOWER case14
   and the IEEE 13-bus OpenDSS feeder in their original formats
   ([#957](https://github.com/eigenergy/powerio/issues/957)).
+- The conversion benchmark compares AC power flow and admittance for
+  original, converted, and converted-back files using external solvers
+  ([#957](https://github.com/eigenergy/powerio/issues/957)).
 
 ## 0.12.5
 

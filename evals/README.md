@@ -6,6 +6,8 @@ excludes it (`exclude = ["fuzz", "evals"]` in the root manifest), and the
 minimal fixtures for ordinary tests stay beside those tests under
 `tests/data`.
 
+- [`power-flow/`](power-flow/README.md) compares AC power flow and admittance
+  for original, converted, and converted-back cases using external solvers.
 - `validation/` is the cross tool correctness matrix: powerio's parse and
   write against PowerModels.jl, ExaPowerIO.jl, Egret, pandapower, PyPSA,
   OpenDSS, the BMOPF schema, and the matrix oracles. `run_validation.sh` is
