@@ -84,6 +84,8 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         key: electrical-matrix
+        # Keep the cache cleanup inside Cargo's build directory.
+        workspaces: ". -> target/power-flow-cargo"
         cache-on-failure: true
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
@@ -109,7 +111,7 @@ jobs:
         assert len(solution["voltage"]) == 12
         print(solution["solver"], "solved all 12 phase nodes")
         PY
-    - uses: mamba-org/setup-micromamba@add3a49764cedee8ee24e82dfde87f5bc2914462 # v2
+    - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
       with:
         environment-name: power-flow
         create-args: >-
@@ -127,7 +129,7 @@ jobs:
         persist-credentials: false
     - name: Build PowerIO and Tellegen
       run: |
-        cargo build --locked -p powerio-cli
+        cargo build --locked -p powerio-cli --target-dir target/power-flow-cargo
         cd target/tellegen-source
         cargo build --locked -p tellegen-cli
     - name: Install Python and Julia solvers
@@ -165,7 +167,8 @@ jobs:
         if [[ -n "${PREVIOUS_REPORT:-}" && -f "$PREVIOUS_REPORT" ]]; then
           options+=(--previous "$PREVIOUS_REPORT")
         fi
-        target/power-flow-venv/bin/python evals/power-flow/benchmark.py --output target/power-flow-report "${options[@]}"
+        target/power-flow-venv/bin/python evals/power-flow/benchmark.py \
+          --powerio target/power-flow-cargo/debug/powerio --output target/power-flow-report "${options[@]}"
         target/power-flow-venv/bin/python evals/power-flow/check_coverage.py target/power-flow-report/report.json
     - name: Add electrical results to run summary
       if: always() && hashFiles('target/power-flow-report/matrix.md') != ''

@@ -541,20 +541,20 @@ def summary_markdown(report, changes):
             lines.append(f"| {name} | {recovery} | {data} |")
     lines += ["", "## AC power flow and admittance", "",
              f"{sum(c['input']['status'] == 'ok' for c in cases.values())} of {len(cases)} source profiles have fixtures. "
-             f"{sum(c['original_solution']['status'] == 'solved' for c in cases.values())} original cases were solved. "
-             f"{len(voltage_checks)} comparisons measured bus or conductor voltages, including "
-             f"{sum(c['independent_readers'] for c in voltage_checks)} with independent readers for both files. "
-             f"{sum(c.get('metrics', {}).get('admittance_relative_2_norm', {}).get('status') in MEASURED for c in comparisons)} "
-             "comparisons measured admittance.", ""]
+             + f"{sum(c['original_solution']['status'] == 'solved' for c in cases.values())} original cases were solved. "
+             + f"{len(voltage_checks)} comparisons measured bus or conductor voltages, including "
+             + f"{sum(c['independent_readers'] for c in voltage_checks)} with independent readers for both files. "
+             + f"{sum(c.get('metrics', {}).get('admittance_relative_2_norm', {}).get('status') in MEASURED for c in comparisons)} "
+             + "comparisons measured admittance.", ""]
     if changes is not None:
         reduced = sum(change["coverage_reduced"] for change in changes["changes"])
         lines += [f"Compared with `{changes['baseline_revision'][:12]}`, {reduced} checks lost coverage. "
-                  "See `changes.json` for changes in measurements, inputs, and solver versions.", ""]
+                  + "See `changes.json` for changes in measurements, inputs, and solver versions.", ""]
     else:
         lines += ["No earlier report was available for this run.", ""]
     lines += ["Maximum absolute voltage difference and relative admittance 2-norm", "",
               "| Input | Output | Original vs converted voltage | Original vs converted admittance | "
-              "Original vs converted back voltage | Converted vs converted back voltage |",
+              + "Original vs converted back voltage | Converted vs converted back voltage |",
               "| --- | --- | --- | --- | --- | --- |"]
     for name, case in cases.items():
         if name not in REFERENCE_CASES:
@@ -582,14 +582,14 @@ def summary_markdown(report, changes):
         residual = result.get("relative_error")
         if residual is not None:
             lines += ["", f"- Deliberate error test {'passed' if control['detected'] else 'failed'}. "
-                      f"Doubling branch 1–2 reactance gave a relative admittance difference of {residual:.3g}."]
+                      + f"Doubling branch 1–2 reactance gave a relative admittance difference of {residual:.3g}."]
     lightsim = (cases.get("matpower-case14", {}).get("conversions", {})
                 .get("pandapower-json", {}).get("in_lightsim", {}))
     if value := lightsim.get("metrics", {}).get("voltage_pu"):
         lines += ["", f"- MATPOWER and LightSim2Grid on the converted case14 — "
-                  f"{value['maximum_difference']:.3g} p.u. across {lightsim['nodes_compared']} buses."]
+                  + f"{value['maximum_difference']:.3g} p.u. across {lightsim['nodes_compared']} buses."]
     lines += ["", "— means that quantity was not measured. The full matrix gives all three comparisons for "
-              "every route. The JSON gives each metric, tolerance, solver, and reason for missing coverage."]
+              + "every route. The JSON gives each metric, tolerance, solver, and reason for missing coverage."]
     return "\n".join(lines)
 
 
@@ -795,4 +795,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
