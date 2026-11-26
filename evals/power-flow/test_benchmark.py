@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from benchmark import compare, compare_admittance, compare_target_and_return, json_differences, report_changes
+from solvers import ROOT, powsybl, powsybl_run
 
 
 def solution(voltage, entries, *, base=100, branches=None):
@@ -76,6 +78,19 @@ class Comparisons(unittest.TestCase):
         result = compare(self.original, self.original, pairing={"1": "1"})
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["unmatched_output_nodes"], ["2"])
+
+
+class PowsyblAdmittance(unittest.TestCase):
+    def test_recovers_when_one_island_dump_is_missing(self):
+        def drop_one_dump(pp, network):
+            results, models = powsybl_run(pp, network)
+            return results, models[:1] if len(results) > 1 else models
+
+        with patch("solvers.powsybl_run", side_effect=drop_one_dump):
+            result = powsybl(ROOT / "tests/data/psse/case14_v35.raw")
+
+        self.assertEqual(set(result["admittance"]["labels"]), {f"B{i}" for i in range(1, 15)})
+        self.assertEqual(result["admittance"]["branch_stamps_checked_against_solved_flows"], 17)
 
 
 if __name__ == "__main__":

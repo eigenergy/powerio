@@ -149,6 +149,58 @@ def powsybl_admittance(models, bus_ids, voltage, terminal_powers):
             "branch_stamps_checked_against_solved_flows": checked}
 
 
+def powsybl_run(pp, network):
+    with TemporaryDirectory() as debug:
+        options = pp.loadflow.Parameters(
+            use_reactive_limits=False, distributed_slack=False, transformer_voltage_control_on=False,
+            phase_shifter_regulation_on=False, shunt_compensator_voltage_control_on=False,
+            component_mode=pp.loadflow.ComponentMode.ALL_CONNECTED,
+            provider_parameters={"newtonRaphsonConvEpsPerEq": "1e-10", "debugDir": debug},
+        )
+        results = pp.loadflow.run_ac(network, options)
+        models = [json.loads(item.read_text()) for item in sorted(Path(debug).glob("lfnetwork-*.json"))]
+    return results, models
+
+
+def powsybl_island_models(pp, network, results, models):
+    # OpenLoadFlow names the dumps by time to millisecond precision. A later
+    # island can overwrite an earlier one. Export missing islands separately
+    # when keeping their voltage levels preserves all connected equipment.
+    if len(models) >= len(results) or len(results) == 1:
+        return models
+    buses = network.get_buses()
+    components = list(buses.groupby("connected_component"))
+    level_components = buses.groupby("voltage_level_id")["connected_component"].nunique()
+    if (len(components) != len(results) or (level_components > 1).any()
+            or not network.get_hvdc_lines().empty or not network.get_3_windings_transformers().empty):
+        raise ValueError("PowSybl's diagnostic dumps are incomplete and the islands cannot be isolated by voltage level")
+    level_island = dict(zip(buses.voltage_level_id, buses.connected_component, strict=True))
+    branches = network.get_branches()
+    active = branches[branches.connected1 | branches.connected2]
+    if any(level_island.get(row.voltage_level1_id) != level_island.get(row.voltage_level2_id)
+           for row in active.itertuples()):
+        raise ValueError("PowSybl's diagnostic dumps are incomplete and a branch crosses the island boundary")
+
+    def bus_ids(model):
+        return {bus["id"] for bus in model["buses"] if not bus.get("disabled")}
+
+    present = {frozenset(bus_ids(model)) for model in models}
+    original = network.save_to_string("XIIDM")
+    completed = list(models)
+    for _, island in components:
+        expected = set(island.index)
+        if frozenset(expected) in present:
+            continue
+        reduced = pp.network.load_from_string("island.xiidm", original)
+        reduced.reduce_by_ids(island.voltage_level_id.unique().tolist())
+        isolated, dumps = powsybl_run(pp, reduced)
+        if (len(isolated) != 1 or isolated[0].status.name != "CONVERGED"
+                or len(dumps) != 1 or bus_ids(dumps[0]) != expected):
+            raise ValueError("PowSybl could not recover a complete diagnostic dump for the missing island")
+        completed.extend(dumps)
+    return completed
+
+
 def powsybl(path):
     import pypowsybl as pp
 
@@ -172,15 +224,7 @@ def powsybl(path):
         network = pp.network.load(str(path), {"psse.import.ignore-base-voltage": "true"})
     else:
         network = pp.network.load(str(path))
-    with TemporaryDirectory() as debug:
-        options = pp.loadflow.Parameters(
-            use_reactive_limits=False, distributed_slack=False, transformer_voltage_control_on=False,
-            phase_shifter_regulation_on=False, shunt_compensator_voltage_control_on=False,
-            connected_component_mode=pp.loadflow.ConnectedComponentMode.ALL,
-            provider_parameters={"newtonRaphsonConvEpsPerEq": "1e-10", "debugDir": debug},
-        )
-        results = pp.loadflow.run_ac(network, options)
-        models = [json.loads(item.read_text()) for item in sorted(Path(debug).glob("lfnetwork-*.json"))]
+    results, models = powsybl_run(pp, network)
     if not results or any(item.status.name != "CONVERGED" for item in results):
         raise RuntimeError(f"PowSybl did not converge: {results}")
     nominal = network.get_voltage_levels()["nominal_v"]
@@ -213,6 +257,7 @@ def powsybl(path):
     answer = {"solver": package("pypowsybl"), "units": "pu", "voltage": voltage, "aliases": aliases,
               "branch_power": powers, "one_island": len(results) == 1}
     try:
+        models = powsybl_island_models(pp, network, results, models)
         answer["admittance"] = powsybl_admittance(models, bus_ids, voltage, terminal_powers)
     except (ValueError, KeyError, ZeroDivisionError) as error:
         answer["admittance_detail"] = str(error)

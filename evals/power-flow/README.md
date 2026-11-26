@@ -82,7 +82,9 @@ Success requires all reported quantities to be available and within their limits
   load contributions. It is compared only with another OpenDSS `SystemY`.
   PowSybl's matrix is assembled from the solver's internal network dump.
   The harness checks the branch stamps against the terminal powers PowSybl
-  calculates at the solved voltages. PowerModelsDistribution's `Y0` excludes
+  calculates at the solved voltages. If PowSybl overwrites an island's dump,
+  the harness requests it separately when its voltage levels and connected
+  equipment are entirely within that island. PowerModelsDistribution's `Y0` excludes
   generator and load contributions and is converted to siemens using the
   voltage base for each node.
 - Voltage limits, controls, and operating modes are part of a case. The

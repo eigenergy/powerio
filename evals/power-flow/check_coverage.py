@@ -27,6 +27,8 @@ def main(path):
         failed.append("case14 admittance comparison did not detect the changed branch reactance")
     require_metric(case14["conversions"]["pandapower-json"]["in_lightsim"],
                    "case14 in LightSim2Grid", "voltage_pu")
+    raw35 = cases["psse-raw35-case14"]["conversions"]["psse35"]["direct"]
+    require_metric(raw35, "PSS/E RAW 35 case14 with two islands", "admittance_relative_2_norm")
     ieee13 = cases["opendss-ieee13"]["conversions"]["dss"]["direct"]
     require_metric(ieee13, "IEEE 13-bus in OpenDSS", "voltage_V")
     require_metric(ieee13, "IEEE 13-bus in OpenDSS", "admittance_relative_2_norm")
