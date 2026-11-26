@@ -2,12 +2,14 @@ name: Conversion Matrix
 
 on:
   pull_request:
-    # Only the crates and their fixtures decide a conversion cell.
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'powerio*/**'
       - 'tests/data/**'
+      - 'evals/power-flow/**'
+      - 'evals/validation/**'
+      - 'scripts/*conversion-matrix-plan.py'
       - '.github/workflows/conversion-matrix.yml'
   push:
     branches: [main]
@@ -32,8 +34,6 @@ concurrency:
 permissions:
   actions: read
   contents: read
-  issues: write
-  pull-requests: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -65,66 +65,182 @@ jobs:
       with:
         name: conversion-matrix-warning-details
         path: |
+          ${{ env.POWERIO_CONVERSION_MATRIX_REPORT }}
           ${{ env.POWERIO_CONVERSION_MATRIX_DETAILS }}
           ${{ env.POWERIO_CONVERSION_MATRIX_JSON }}
           target/conversion-backlog.json
         if-no-files-found: ignore
-    - name: Comment on PR
-      if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
-      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+
+  electrical:
+    name: Compare AC power flow and admittance
+    runs-on: ubuntu-latest
+    env:
+      GRIDLABD_BIN: ${{ github.workspace }}/target/gridlabd-5.3.0/bin/gridlabd
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        key: electrical-matrix
+        # Keep the cache cleanup inside Cargo's build directory.
+        workspaces: ". -> target/power-flow-cargo"
+        cache-on-failure: true
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.12'
+        cache: pip
+        cache-dependency-path: evals/power-flow/requirements.txt
+    - name: Confirm the native GridLAB-D solver
+      run: |
+        bash evals/power-flow/install_gridlabd.sh target/gridlabd-5.3.0
+        PYTHONPATH=evals/power-flow python - <<'PY'
+        import json
+        from pathlib import Path
+        from prepare_corpus import download
+        from solvers import gridlabd
+
+        base = Path("target/ac-power-flow-corpus").resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        cases = json.loads(Path("evals/power-flow/corpus.json").read_text())
+        case = next(case for case in cases if case["id"] == "gridlabd-ieee4")
+        path = base / case["external"]
+        path.write_bytes(download(case["url"], case["sha256"]))
+        solution = gridlabd(path)
+        assert len(solution["voltage"]) == 12
+        print(solution["solver"], "solved all 12 phase nodes")
+        PY
+    - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
+      with:
+        environment-name: power-flow
+        create-args: >-
+          -c conda-forge octave=10.3.0 ipopt=3.14.20 zstd
+        cache-environment: true
+    - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      with:
+        version: '1.12'
+    - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: eigenergy/tellegen
+        ref: 7f7551b1839695165e86183969ef918a093856ba
+        path: target/tellegen-source
+        persist-credentials: false
+    - name: Build PowerIO and Tellegen
+      run: |
+        cargo build --locked -p powerio-cli --target-dir target/power-flow-cargo
+        cd target/tellegen-source
+        cargo build --locked -p tellegen-cli
+    - name: Install Python and Julia solvers
+      run: |
+        python -m venv target/power-flow-venv
+        target/power-flow-venv/bin/python -m pip install -r evals/power-flow/requirements.txt
+        julia --startup-file=no --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
+        julia --startup-file=no --project=powerio-dist/tools/pmd -e 'using Pkg; Pkg.instantiate()'
+        julia --startup-file=no --project=target/pf-julia-powersystems -e 'using Pkg; Pkg.add([PackageSpec(name="PowerSystems", version="5.12.5"), PackageSpec(name="PowerFlows", version="0.25.5"), PackageSpec(name="JSON")])'
+    - name: Find previous results for the base commit
+      env:
+        GH_TOKEN: ${{ github.token }}
+        HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+      run: |
+        base=$(gh run list --workflow conversion-matrix.yml --commit "$POWERIO_MATRIX_BASE_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+        branch=$(gh run list --workflow conversion-matrix.yml --branch "$HEAD_BRANCH" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+        for previous in $base $branch; do
+          if gh run download "$previous" -n power-flow-conversion-evidence -D target/previous-power-flow; then
+            echo "PREVIOUS_REPORT=$PWD/target/previous-power-flow/report.json" >> "$GITHUB_ENV"
+            break
+          fi
+        done
+    - name: Run all conversion comparisons
+      shell: bash -el {0}
+      env:
+        MATPOWER_PATH: ${{ github.workspace }}/target/ac-power-flow-corpus/matpower-8.1
+        PMD_PROJECT: ${{ github.workspace }}/powerio-dist/tools/pmd
+        POWERSYSTEMS_PROJECT: ${{ github.workspace }}/target/pf-julia-powersystems
+        TELLEGEN: ${{ github.workspace }}/target/tellegen-source/target/debug/tellegen
+      run: |
+        bash evals/power-flow/install_matpower.sh
+        target/power-flow-venv/bin/python -m unittest discover -s evals/power-flow
+        target/power-flow-venv/bin/python evals/power-flow/prepare_corpus.py --powersystems-project "$POWERSYSTEMS_PROJECT"
+        options=()
+        if [[ -n "${PREVIOUS_REPORT:-}" && -f "$PREVIOUS_REPORT" ]]; then
+          options+=(--previous "$PREVIOUS_REPORT")
+        fi
+        target/power-flow-venv/bin/python evals/power-flow/benchmark.py \
+          --powerio target/power-flow-cargo/debug/powerio --output target/power-flow-report "${options[@]}"
+        target/power-flow-venv/bin/python evals/power-flow/check_coverage.py target/power-flow-report/report.json
+    - name: Add electrical results to run summary
+      if: always() && hashFiles('target/power-flow-report/matrix.md') != ''
+      run: cat target/power-flow-report/summary.md target/power-flow-report/matrix.md >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload electrical comparison results
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: power-flow-conversion-evidence
+        path: |
+          target/power-flow-report/report.json
+          target/power-flow-report/solutions.json
+          target/power-flow-report/summary.md
+          target/power-flow-report/matrix.md
+          target/power-flow-report/changes.json
+          target/power-flow-report/measured-differences.json
+        if-no-files-found: ignore
+
+  publish:
+    name: Publish conversion matrix on PR
+    if: always() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
+    needs: [report, electrical]
+    permissions:
+      actions: read
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: '*conversion*'
+        path: evidence
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ELECTRICAL_STATUS: ${{ needs.electrical.result }}
       with:
         script: |
           const fs = require("fs");
           const marker = "<!-- powerio-conversion-matrix-report -->";
-          const reportPath = process.env.POWERIO_CONVERSION_MATRIX_REPORT;
-          const detailsPath = process.env.POWERIO_CONVERSION_MATRIX_DETAILS;
-          let body;
-          if (fs.existsSync(reportPath)) {
-            body = fs.readFileSync(reportPath, "utf8");
-          } else {
-            body = `${marker}\n\n## Conversion Matrix\n\nMatrix generation failed before writing the report. See the workflow logs.`;
-          }
-
           const issue_number = context.payload.pull_request.number;
           const { owner, repo } = context.repo;
           const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-          if (fs.existsSync(detailsPath)) {
-            let detailsUrl = runUrl;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner,
-              repo,
-              run_id: context.runId,
-              per_page: 100,
-            });
-            const detailsArtifact = artifacts.find((artifact) =>
-              artifact.name === "conversion-matrix-warning-details"
-            );
-            if (detailsArtifact) {
-              detailsUrl = `${runUrl}/artifacts/${detailsArtifact.id}`;
-            }
-            body += `\n\nMachine-readable evidence, ranked findings, and full warning details: [download \`conversion-matrix-warning-details\`](${detailsUrl}) for this workflow run.`;
+          const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+            owner, repo, run_id: context.runId, per_page: 100,
+          });
+          const link = (name) => {
+            const artifact = artifacts.find((entry) => entry.name === name);
+            return artifact ? `${runUrl}/artifacts/${artifact.id}` : runUrl;
+          };
+          const read = (path) => fs.existsSync(path) ? fs.readFileSync(path, "utf8") : "";
+          const diagnostics = "conversion-matrix-warning-details";
+          const electrical = "power-flow-conversion-evidence";
+          const report = read(`evidence/${diagnostics}/conversion-matrix-report.md`);
+          const summary = read(`evidence/${electrical}/summary.md`);
+          const fullMatrix = read(`evidence/${electrical}/matrix.md`);
+          let body = report || `${marker}\n\n## Conversion Matrix\n\nThe conversion report could not be generated.`;
+          body += `\n\n[Conversion diagnostics and ranked findings](${link(diagnostics)})`;
+          body += summary ? `\n\n${summary}` : "\n\n## AC power flow and admittance\n\nThis run did not generate a report.";
+          if (process.env.ELECTRICAL_STATUS !== "success") {
+            body += `\n\nThe electrical comparison job failed. [See workflow logs](${runUrl}).`;
           }
+          body += `\n\n[Full electrical matrix and numerical evidence](${link(electrical)})`;
+          const details = `\n\n<details><summary>All source and output formats</summary>\n\n${fullMatrix}\n</details>`;
+          if (fullMatrix && body.length + details.length < 60000) body += details;
           const comments = await github.paginate(github.rest.issues.listComments, {
-            owner,
-            repo,
-            issue_number,
-            per_page: 100,
+            owner, repo, issue_number, per_page: 100,
           });
           const existing = comments.find((comment) =>
             comment.user?.type === "Bot" && comment.body?.includes(marker)
           );
           if (existing) {
-            await github.rest.issues.updateComment({
-              owner,
-              repo,
-              comment_id: existing.id,
-              body,
-            });
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
           } else {
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number,
-              body,
-            });
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
           }
