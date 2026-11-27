@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- PowerSystems JSON writes the first in-service local regulator's setpoint on each
+  PV or reference bus and reports conflicting setpoints. Reading the file
+  restores the original bus voltage magnitude (#955).
+
 ## 0.12.5
 
 - Surge JSON output gives parallel branches distinct circuits. Every branch

@@ -254,10 +254,14 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
         .as_array()
         .ok_or_else(|| error("PowerSystems data.components must be an array"))?;
     let mut ids = BTreeMap::new();
+    let mut bus_numbers = BTreeMap::new();
     for (i, row) in components.iter().enumerate() {
         let key = row["internal"]["uuid"]["value"]
             .as_str()
             .ok_or_else(|| error("component requires internal UUID"))?;
+        if type_name(row)? == "ACBus" {
+            bus_numbers.insert(key, integer(row, "number")?);
+        }
         if ids
             .insert(
                 key,
@@ -336,6 +340,16 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
             super::metadata::ext_mut(&mut doc, id)["uid"] = json!(format!("powersystems:{key}"));
         }
         super::metadata::ext_mut(&mut doc, id)["native_uuid"] = json!(key);
+        let extra = super::metadata::ext_mut(&mut doc, id)
+            .as_object_mut()
+            .expect("validated ext");
+        if let Some(target) = extra.remove("regulated_bus_uuid") {
+            let number = target
+                .as_str()
+                .and_then(|uuid| bus_numbers.get(uuid))
+                .ok_or_else(|| error("generator references missing regulated ACBus UUID"))?;
+            extra.insert("regulated_bus".into(), json!(number));
+        }
         // A transformer's secondary-terminal shunt names its transformer by
         // UUID in PowerSystems output; the Sienna reader expects the circuit id.
         if let Some(uuid) = super::metadata::ext(&doc, id)["transformer_uuid"]
@@ -754,6 +768,17 @@ pub(in crate::format) fn write(
                 .as_object()
                 .cloned()
                 .map_or(json!({}), Value::Object);
+            if let Some(extra) = row["ext"]
+                .get_mut(super::metadata::KEY)
+                .and_then(Value::as_object_mut)
+                && let Some(target) = extra.remove("regulated_bus_component")
+            {
+                let uuid = target
+                    .as_i64()
+                    .and_then(|id| refs.get(&id))
+                    .ok_or_else(|| error("generator references missing regulated ACBus"))?;
+                extra.insert("regulated_bus_uuid".into(), json!(uuid));
+            }
             // PowerSystems components have no Sienna ids: a secondary-terminal
             // shunt names its transformer by the UUID that circuit is written with.
             if kind == "FixedAdmittance"

@@ -29,6 +29,11 @@ pub(super) const WRITTEN_FIELDS: &[&str] = &[
     "section_count",
     "control",
     "vg",
+    "bus_vm",
+    "voltage_regulation_on",
+    "regulated_bus",
+    "regulated_bus_component",
+    "regulated_bus_uuid",
     "caps",
     "number",
     "slack_bus",
@@ -146,6 +151,8 @@ impl Restore for Generator {
         match key {
             "uid" => self.uid = serde_json::from_value(value)?,
             "vg" => self.vg = serde_json::from_value(value)?,
+            "voltage_regulation_on" => self.voltage_regulation_on = serde_json::from_value(value)?,
+            "regulated_bus" => self.regulated_bus = serde_json::from_value(value)?,
             "caps" => {
                 // GenCaps uses the network's named-column serde representation.
                 let mut shell = serde_json::to_value(Generator::new(self.bus))?;
