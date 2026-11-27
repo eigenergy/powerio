@@ -100,7 +100,7 @@ read -r -p "Type $PACKAGE to publish: " answer
 [ "$answer" = "$PACKAGE" ] || fail "not published"
 npm publish "$tarball" --access public
 
-for _ in 1 2 3 4 5 6; do
+for _ in $(seq 60); do
     if [ "$(npm view "$PACKAGE@$version" version 2>/dev/null)" = "$version" ]; then
         cat <<EOF
 
@@ -119,4 +119,4 @@ EOF
     fi
     sleep 10
 done
-fail "$PACKAGE $version is not visible on npm a minute after publishing; check npmjs.com"
+fail "$PACKAGE $version is not visible on npm ten minutes after publishing; check npmjs.com"

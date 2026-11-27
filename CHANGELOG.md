@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- PowerSystems JSON writes the first in-service local regulator's setpoint on each
+  PV or reference bus and reports conflicting setpoints. Reading the file
+  restores the original bus voltage magnitude (#955).
+
 - PSS/E RAW and RAWX output gives every branch between one pair of buses its
   own circuit id. PSS/E names a non-transformer branch and a two winding
   transformer alike by their two buses, in either order, and the circuit id,

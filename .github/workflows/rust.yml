@@ -7,6 +7,19 @@ on:
   # and retargeting to main after the parent merges fires only `edited`, which
   # never re-triggers filtered workflows. Run on every PR instead.
   pull_request:
+    # Skip pull requests that touch none of this workflow's inputs: the evaluation
+    # harnesses, the pure Python package (python.yml), other workflows and the npm
+    # release scripts. Pushes to main still run everything.
+    paths:
+      - '**'
+      - '!evals/**'
+      - '!python/**'
+      - '!pyproject.toml'
+      - '!.github/**'
+      - '.github/workflows/rust.yml'
+      - '!scripts/npm-bootstrap.sh'
+      - '!scripts/build-npm-package.sh'
+      - '!scripts/test-npm-workflow.py'
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it

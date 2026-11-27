@@ -46,6 +46,10 @@ for name in ["case9", "case14", "case30", "case57", "case118"]
     # Native 4.x input is tested by Rust; fresh native output targets format 5.
     if pkgversion(PowerSystems).major >= 5
         restored = System(joinpath(exports, "powersystems-5", name * ".json"))
+        if name == "case9"
+            magnitudes = Dict(get_number(bus) => get_magnitude(bus) for bus in get_components(ACBus, restored))
+            @test [magnitudes[n] for n in 1:3] ≈ [1.04, 1.025, 1.025]
+        end
         write_ybus(restored, joinpath(inputs, name * ".export-ybus.json"))
         write_costs(restored, joinpath(inputs, name * ".export-costs.json"))
         @test length(get_components(ACBus, restored)) == length(get_components(ACBus, reference))

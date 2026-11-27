@@ -18,6 +18,14 @@ on:
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
     types: [ opened, synchronize, reopened, labeled, unlabeled ]
+    # Only the crates (public Rust API, powerio.h) and this check's own scripts.
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'powerio*/**'
+      - 'scripts/check-semver.sh'
+      - 'scripts/check-capi-header.py'
+      - '.github/workflows/semver.yml'
   workflow_dispatch:
 
 concurrency:
