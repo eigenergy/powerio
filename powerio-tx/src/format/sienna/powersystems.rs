@@ -340,9 +340,13 @@ pub(in crate::format) fn to_schema(root: &Value) -> Result<Value> {
             super::metadata::ext_mut(&mut doc, id)["uid"] = json!(format!("powersystems:{key}"));
         }
         super::metadata::ext_mut(&mut doc, id)["native_uuid"] = json!(key);
-        let extra = super::metadata::ext_mut(&mut doc, id).as_object_mut().expect("validated ext");
+        let extra = super::metadata::ext_mut(&mut doc, id)
+            .as_object_mut()
+            .expect("validated ext");
         if let Some(target) = extra.remove("regulated_bus_uuid") {
-            let number = target.as_str().and_then(|uuid| bus_numbers.get(uuid))
+            let number = target
+                .as_str()
+                .and_then(|uuid| bus_numbers.get(uuid))
                 .ok_or_else(|| error("generator references missing regulated ACBus UUID"))?;
             extra.insert("regulated_bus".into(), json!(number));
         }
@@ -764,10 +768,14 @@ pub(in crate::format) fn write(
                 .as_object()
                 .cloned()
                 .map_or(json!({}), Value::Object);
-            if let Some(extra) = row["ext"][super::metadata::KEY].as_object_mut()
+            if let Some(extra) = row["ext"]
+                .get_mut(super::metadata::KEY)
+                .and_then(Value::as_object_mut)
                 && let Some(target) = extra.remove("regulated_bus_component")
             {
-                let uuid = target.as_i64().and_then(|id| refs.get(&id))
+                let uuid = target
+                    .as_i64()
+                    .and_then(|id| refs.get(&id))
                     .ok_or_else(|| error("generator references missing regulated ACBus"))?;
                 extra.insert("regulated_bus_uuid".into(), json!(uuid));
             }

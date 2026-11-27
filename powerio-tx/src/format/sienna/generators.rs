@@ -53,7 +53,8 @@ pub(super) fn record_voltage_and_caps(
     };
     super::metadata::record(doc, id, g, fields)?;
     if let Some(buses) = powersystems_buses
-        && (!g.voltage_regulation_on || g.regulated_bus.is_some()) {
+        && (!g.voltage_regulation_on || g.regulated_bus.is_some())
+    {
         let extra = super::metadata::ext_mut(doc, id);
         extra["voltage_regulation_on"] = json!(g.voltage_regulation_on);
         if let Some(bus) = g.regulated_bus {

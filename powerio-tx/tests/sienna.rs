@@ -528,7 +528,12 @@ fn powersystems_uses_case9_generator_setpoints_and_restores_bus_state() {
             .unwrap();
         assert_eq!(g.vg, source.vg);
     }
-    assert!(back.value().buses().iter().all(|b| (b.vm - 1.0).abs() < f64::EPSILON));
+    assert!(
+        back.value()
+            .buses()
+            .iter()
+            .all(|b| (b.vm - 1.0).abs() < f64::EPSILON)
+    );
 
     // Editing the setpoint in PowerSystems changes Vg while the original Vm survives.
     let bus = doc["data"]["components"]
@@ -653,13 +658,24 @@ fn powersystems_uses_the_first_local_regulator_and_retains_other_setpoints() {
 
     // PowerSystems identifies the remote bus by UUID, even if it is renumbered.
     let mut renumbered = doc;
-    let pq = renumbered["data"]["components"].as_array_mut().unwrap().iter_mut()
-        .find(|r| r["__metadata__"]["type"] == "ACBus" && r["number"] == 2).unwrap();
+    let pq = renumbered["data"]["components"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["__metadata__"]["type"] == "ACBus" && r["number"] == 2)
+        .unwrap();
     pq["number"] = serde_json::json!(20);
-    let back = powerio_tx::parse(Source::from_memory("system.json", serde_json::to_vec(&renumbered).unwrap()).unwrap()).unwrap();
-    let remote = back.value().generators().iter().find(|g| g.uid.as_deref() == Some("remote")).unwrap();
+    let back = powerio_tx::parse(
+        Source::from_memory("system.json", serde_json::to_vec(&renumbered).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let remote = back
+        .value()
+        .generators()
+        .iter()
+        .find(|g| g.uid.as_deref() == Some("remote"))
+        .unwrap();
     assert_eq!(remote.regulated_bus, Some(powerio_tx::network::BusId(20)));
-
 }
 
 #[test]
