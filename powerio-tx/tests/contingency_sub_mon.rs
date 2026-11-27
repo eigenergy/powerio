@@ -1133,28 +1133,24 @@ fn a_shared_index_binds_and_expands_like_the_borrowed_one() {
 }
 
 #[test]
-fn a_terminal_pair_naming_two_branches_binds_to_neither() {
+fn a_reversed_parallel_branch_is_monitored_by_its_own_circuit() {
     let mut net = select_network();
-    // A second branch stored the other way round takes circuit '1' too,
-    // because the writer allocates ids per stored terminal pair.
+    // Rows 0 and 1 are 101-102 circuits '1' and '2'. PSS/E names a branch by
+    // its two buses in either order, so a third branch stored 102-101 takes
+    // circuit '3', and each statement names one branch (#939).
     let mut reversed = net.branches()[0].clone();
     std::mem::swap(&mut reversed.from, &mut reversed.to);
     reversed.uid = Some("reversed-101-102".to_owned());
     net.branches_mut().push(reversed);
 
     let subsystems = SubsystemSet::default();
-    let parsed = MonitoredSet::parse("MONITOR BRANCHES\n101 102 1\nEND\nEND\n").expect("parse");
-    let resolution = parsed.set.resolve(&net, &subsystems);
-    assert!(resolution.branch_rows.is_empty());
-    assert_eq!(
-        resolution.unresolved[0].reason,
-        UnresolvedMonitorReason::AmbiguousBranch {
-            from: BusId(101),
-            to: BusId(102),
-            circuit: "1".into(),
-            matches: 2,
-        }
-    );
+    for (statement, row) in [("101 102 1", 0), ("102 101 3", 6), ("101 102 3", 6)] {
+        let parsed = MonitoredSet::parse(&format!("MONITOR BRANCHES\n{statement}\nEND\nEND\n"))
+            .expect("parse");
+        let resolution = parsed.set.resolve(&net, &subsystems);
+        assert_eq!(rows(&resolution.branch_rows), [row], "{statement}");
+        assert!(resolution.unresolved.is_empty(), "{statement}");
+    }
 }
 
 #[test]

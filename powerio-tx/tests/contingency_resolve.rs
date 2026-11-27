@@ -215,30 +215,25 @@ fn every_statement_binds_to_the_element_psse_would_address() {
 }
 
 #[test]
-fn a_terminal_pair_and_circuit_naming_two_branches_binds_to_neither() {
+fn a_reversed_parallel_branch_takes_the_next_circuit_id() {
     let mut net = resolve_network();
-    // Row 0 is the branch stored 1-2 circuit '1'. A second branch stored the
-    // other way round takes circuit '1' too, because the writer allocates ids
-    // per stored terminal pair, so a statement naming 1 to 2 circuit 1 now
-    // names both.
+    // Rows 0 and 1 are the branches stored 1-2 as circuits '1' and '2'. PSS/E
+    // names a branch by its two buses in either order, so a third branch
+    // stored 2-1 takes circuit '3', and a statement naming 1 to 2 circuit 1
+    // still names row 0 alone (#939).
     let mut reversed = net.branches()[0].clone();
     std::mem::swap(&mut reversed.from, &mut reversed.to);
     reversed.uid = Some("reversed-1-2".to_owned());
     net.branches_mut().push(reversed);
 
     let index = PsseEquipmentIndex::new(&net);
-    assert_eq!(index.branch_rows(BusId(1), BusId(2), "1"), vec![0, 5]);
+    assert_eq!(index.circuit_ids(), ["1", "2", "1", "BL", "1", "3"]);
+    assert_eq!(index.branch_rows(BusId(1), BusId(2), "1"), vec![0]);
+    assert_eq!(index.branch_rows(BusId(2), BusId(1), "3"), vec![5]);
+    assert_eq!(index.branch_rows(BusId(1), BusId(2), "3"), vec![5]);
 
-    let set = resolve_cases();
-    let resolution = set.resolve(&net);
-    assert_eq!(
-        case(&resolution, "BR_1_2_C1").unresolved[0].reason,
-        UnresolvedReason::AmbiguousBranch { matches: 2 }
-    );
-    assert_eq!(
-        case(&resolution, "BR_1_2_C1").components,
-        [] as [powerio_tx::ResolvedComponent; 0]
-    );
+    let resolution = resolve_cases().resolve(&net);
+    assert_eq!(bound(&resolution, "BR_1_2_C1"), [("branch", 0, true)]);
 }
 
 /// The component type strings `powerio_prob`'s update resolver requires are
@@ -507,11 +502,12 @@ fn two_transformers_on_one_bus_triple_bind_to_neither() {
 }
 
 #[test]
-fn a_line_and_a_two_winding_transformer_on_one_pair_are_keyed_apart() {
+fn a_line_and_a_two_winding_transformer_on_one_pair_share_the_circuit_ids() {
     let mut net = resolve_network();
-    // The writer allocates the line ids and the transformer ids in separate
-    // namespaces, so a transformer between buses 1 and 2 takes circuit '1'
-    // just as the line stored 1-2 already does.
+    // PSS/E names a line and a two winding transformer by the same (I, J,
+    // CKT), so the writer allocates one set of ids per bus pair across both
+    // sections: a transformer between buses 1 and 2 takes circuit '3' after
+    // the two lines stored 1-2 (#939).
     let mut transformer = net.branches()[0].clone();
     transformer.uid = Some("xf-1-2".to_owned());
     transformer.extras.remove("id");
@@ -519,14 +515,20 @@ fn a_line_and_a_two_winding_transformer_on_one_pair_are_keyed_apart() {
     net.branches_mut().push(transformer);
 
     let index = PsseEquipmentIndex::new(&net);
-    assert_eq!(index.circuit_ids(), ["1", "2", "1", "BL", "1", "1"]);
-    // The lines answer the statement; the transformer answers only a circuit
-    // id no line carries.
+    assert_eq!(index.circuit_ids(), ["1", "2", "1", "BL", "1", "3"]);
     assert_eq!(index.branch_rows(BusId(1), BusId(2), "1"), vec![0]);
     assert_eq!(index.branch_rows(BusId(1), BusId(2), "2"), vec![1]);
+    assert_eq!(index.branch_rows(BusId(2), BusId(1), "3"), vec![5]);
 
     let resolution = resolve_cases().resolve(&net);
     assert_eq!(bound(&resolution, "BR_1_2_C1"), [("branch", 0, true)]);
+
+    // The ids are the ones a RAW file written from the network states.
+    let emitted = helpers::emit_psse_rev(&net, 33).text;
+    assert!(
+        emitted.contains("\n1, 2, 0, '3',"),
+        "the transformer record states circuit '3':\n{emitted}"
+    );
 }
 
 /// Set the retained PSS/E id of one generator, the property the index reads

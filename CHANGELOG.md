@@ -6,6 +6,24 @@
   PV or reference bus and reports conflicting setpoints. Reading the file
   restores the original bus voltage magnitude (#955).
 
+- PSS/E RAW and RAWX output gives every branch between one pair of buses its
+  own circuit id. PSS/E names a non-transformer branch and a two winding
+  transformer alike by their two buses, in either order, and the circuit id,
+  but the writer numbered each section and each direction apart: the
+  antiparallel branches of `case2869pegase` and `case_ACTIVSg2000`, and the
+  line beside a transformer in `case_ACTIVSg2000`, were each written twice as
+  circuit `1`. The `.con` and `.mon` binding follows the same numbering, so a
+  statement no longer names two branches (#939).
+
+- PSS/E RAW and RAWX output writes a branch with a tap of exactly 1, no phase
+  shift, no tap control, and charging at its to end as a BRANCH record. As a
+  transformer record its charging became the magnetizing admittance, which
+  PSS/E connects at winding 1's bus, so half of `case118`'s 68-116 charging
+  (0.082 pu) moved from bus 116 to bus 68. `EMIT.PSSE.ELEMENT_RELABELED` lists
+  the restated branches. A transformer with another ratio or a shift still
+  puts its to end charging at winding 1's bus, and `EMIT.PSSE.VALUE_COLLAPSED`
+  now reports it for MATPOWER's symmetric `b` too (#940).
+
 ## 0.12.5
 
 - Surge JSON output gives parallel branches distinct circuits. Every branch

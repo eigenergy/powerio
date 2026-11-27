@@ -23,7 +23,8 @@ use powerio_core::ComponentId;
 
 use crate::diagnostics::{Diagnostic, codes};
 use crate::format::psse::{
-    detailed_source_property, quoted_circuit_id, quoted_device_id, transformer_3w_id,
+    branch_circuit_ids, detailed_source_property, quoted_circuit_id, quoted_device_id,
+    transformer_3w_id,
 };
 use crate::network::{BalancedNetwork, BusId, BusType};
 
@@ -73,8 +74,9 @@ struct EquipmentTables {
     switch_ids: Vec<String>,
     transformer_3w_ids: Vec<String>,
     bus_rows: BTreeMap<BusId, usize>,
-    /// Keyed on the stored terminal order, as the writer keys it. A lookup
-    /// reads both orientations.
+    /// Keyed on the two buses in ascending order, as the writer allocates
+    /// circuit ids per unordered pair, so a lookup in either orientation
+    /// finds the branch.
     branch_rows: BranchRows,
     /// System switching device rows keyed on the stored terminal pair and
     /// the circuit id. A lookup reads both orientations.
@@ -102,15 +104,13 @@ fn sorted_triple(buses: [BusId; 3]) -> [BusId; 3] {
 /// gives two rows on one bus two trimmed ids, so a trimmed id names one row.
 type DeviceRows = BTreeMap<BusId, Vec<(String, usize)>>;
 
-/// Branch rows keyed by the stored terminal pair, whether the branch is a two
-/// winding transformer, and the circuit id.
+/// Branch rows keyed by their two buses in ascending order and the circuit id.
 ///
-/// The RAW writer allocates the line ids and the transformer ids in separate
-/// namespaces, so a line and a two winding transformer on the same terminal
-/// pair both take circuit `1`; keying the two families apart keeps each row
-/// reachable. Parallel branches of one family stored in opposite terminal
-/// orders can still take the same circuit id, so a key holds a list.
-type BranchRows = BTreeMap<(BusId, BusId, bool, String), Vec<usize>>;
+/// The RAW writer allocates one set of circuit ids per unordered bus pair,
+/// shared by the lines and the two winding transformers, as PSS/E names both
+/// by `(I, J, CKT)` in either order. A key therefore names one row; it holds
+/// a list so a lookup states every row it found.
+type BranchRows = BTreeMap<(BusId, BusId, String), Vec<usize>>;
 
 /// Rows of the generators, keyed by bus and machine id.
 type MachineRows = BTreeMap<(BusId, String), usize>;
@@ -149,43 +149,22 @@ pub(crate) fn machine_index(
 }
 
 /// The circuit id of every branch, aligned with `net.branches()`, and the rows
-/// each `(from, to, circuit)` key names.
+/// each `(bus pair, circuit)` key names.
 ///
-/// The writer states the lines first and the two winding transformers after
-/// them, each family with its own id allocation, both keyed on the stored
-/// terminal pair. Walking the table twice reproduces that order while keeping
-/// the ids aligned with the table.
+/// The ids are the RAW writer's own: one allocation per unordered bus pair
+/// shared by the lines and the two winding transformers, so a key names at
+/// most one row.
 fn branch_index(net: &BalancedNetwork, sanitized: &mut usize) -> (Vec<String>, BranchRows) {
-    let mut ids = vec![String::new(); net.branches().len()];
+    let ids = branch_circuit_ids(net, sanitized);
     let mut rows: BranchRows = BTreeMap::new();
-    let mut line_ids = BTreeMap::new();
-    let mut transformer_ids = BTreeMap::new();
-    for transformers in [false, true] {
-        for (row, branch) in net.branches().iter().enumerate() {
-            if branch.is_transformer() != transformers {
-                continue;
-            }
-            let retained = transformers
-                .then(|| {
-                    detailed_source_property(net, "transformer", branch.uid.as_deref(), "psse_eqid")
-                })
-                .flatten();
-            let preferred = branch
-                .extras
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .or(retained);
-            let used = if transformers {
-                &mut transformer_ids
-            } else {
-                &mut line_ids
-            };
-            let id = quoted_circuit_id(preferred, (branch.from, branch.to), used, sanitized);
-            rows.entry((branch.from, branch.to, transformers, id.trim().to_owned()))
-                .or_default()
-                .push(row);
-            ids[row] = id;
-        }
+    for (row, (branch, id)) in net.branches().iter().zip(&ids).enumerate() {
+        rows.entry((
+            branch.from.min(branch.to),
+            branch.from.max(branch.to),
+            id.trim().to_owned(),
+        ))
+        .or_default()
+        .push(row);
     }
     (ids, rows)
 }
@@ -357,21 +336,17 @@ impl<'n> PsseEquipmentIndex<'n> {
     }
 
     /// The rows of `net.branches()` joining `from` and `to` on `circuit`, in
-    /// either orientation. A self-loop is counted once. More than one row
-    /// means the statement names several branches and binds to none of them.
-    ///
-    /// The lines answer first and the two winding transformers only when no
-    /// line carries the circuit id, because the RAW writer allocates the two
-    /// families apart and a `.con` statement names a branch without saying
-    /// which table it sits in.
+    /// either orientation, lines and two winding transformers alike. The RAW
+    /// writer gives every branch on one bus pair its own circuit id, so at
+    /// most one row answers; more than one would mean the statement names
+    /// several branches and binds to none of them.
     #[must_use]
     pub fn branch_rows(&self, from: BusId, to: BusId, circuit: &str) -> Vec<usize> {
-        let lines = self.family_rows(from, to, circuit, false);
-        if lines.is_empty() {
-            self.family_rows(from, to, circuit, true)
-        } else {
-            lines
-        }
+        self.tables
+            .branch_rows
+            .get(&(from.min(to), from.max(to), circuit.trim().to_owned()))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The rows of `net.switches()` joining `from` and `to` on `circuit`, in
@@ -388,29 +363,6 @@ impl<'n> PsseEquipmentIndex<'n> {
         }
         if from != to
             && let Some(reverse) = self.tables.switch_rows.get(&(to, from, circuit.to_owned()))
-        {
-            rows.extend_from_slice(reverse);
-        }
-        rows
-    }
-
-    /// The rows of one branch family joining `from` and `to` on `circuit`, in
-    /// either orientation.
-    fn family_rows(&self, from: BusId, to: BusId, circuit: &str, transformer: bool) -> Vec<usize> {
-        let circuit = circuit.trim();
-        let mut rows = Vec::new();
-        if let Some(forward) =
-            self.tables
-                .branch_rows
-                .get(&(from, to, transformer, circuit.to_owned()))
-        {
-            rows.extend_from_slice(forward);
-        }
-        if from != to
-            && let Some(reverse) =
-                self.tables
-                    .branch_rows
-                    .get(&(to, from, transformer, circuit.to_owned()))
         {
             rows.extend_from_slice(reverse);
         }

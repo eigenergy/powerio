@@ -472,6 +472,25 @@ impedance and tap control range are referred across \\(t_2\\): the impedance
 scales by \\(t_2^2\\) and the range divides by \\(t_2\\), so the branch states
 the same two port admittance as the PSS/E circuit.
 
+Because the transformer record states its one magnetizing admittance at
+winding 1's bus, fresh output writes a branch with a tap of exactly 1, no
+phase shift, no tap control, no impedance correction table, and charging at
+its to end (MATPOWER's `b` included) as a BRANCH record, which states the
+charging at both ends, and lists those branches under
+`EMIT.PSSE.ELEMENT_RELABELED`. A transformer with any other ratio or a phase
+shift that states charging at its to end keeps the total at winding 1's bus,
+which moves the to end's part to the from bus; `EMIT.PSSE.VALUE_COLLAPSED`
+lists those transformers.
+
+PSS/E names a non-transformer branch and a two winding transformer alike by
+`(I, J, CKT)`, with the two buses in either order. Fresh output therefore
+allocates circuit ids per unordered bus pair across the BRANCH and
+TRANSFORMER sections: a retained id is kept while it is still free on its
+pair, and every other branch takes the lowest free number in the order the
+records are written. Two MATPOWER branches listed in opposite directions, or
+a line beside a transformer, become circuits `1` and `2`. The contingency and
+monitored element binding reads the same ids.
+
 ### PSS/E DYR dynamics
 
 PSS/E `.dyr` is parsed separately from `.raw`/RAWX because it describes

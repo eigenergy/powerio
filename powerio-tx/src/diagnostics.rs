@@ -134,7 +134,7 @@ macro_rules! emit_family {
                 concat!("EMIT.", $scope, ".ELEMENT_RELABELED"),
                 DiagnosticSeverity::Warning,
                 concat!(
-                    "a normalized line reads as a transformer in the ",
+                    "a line is written as a transformer, or a transformer as a line, in the ",
                     $label,
                     " layout"
                 ),
