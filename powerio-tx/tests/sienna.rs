@@ -497,6 +497,172 @@ fn powersystems_rows<'a>(doc: &'a serde_json::Value, kind: &str) -> Vec<&'a serd
 }
 
 #[test]
+fn powersystems_uses_case9_generator_setpoints_and_restores_bus_state() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data");
+    let module = powerio_tx::parse(Source::open(root.join("case9.m")).unwrap()).unwrap();
+    let out = emit_module(&module, TargetFormat::PowerSystemsJson).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let buses = powersystems_rows(&doc, "ACBus");
+    for (number, expected) in [(1, 1.04), (2, 1.025), (3, 1.025)] {
+        let bus = buses.iter().find(|b| b["number"] == number).unwrap();
+        assert_eq!(bus["magnitude"], expected);
+    }
+    assert!(
+        !out.diagnostics
+            .iter()
+            .any(|d| d.message().contains("voltage setpoint"))
+    );
+    let read = |doc: &serde_json::Value| {
+        powerio_tx::parse(
+            Source::from_memory("system.json", serde_json::to_vec(doc).unwrap()).unwrap(),
+        )
+        .unwrap()
+    };
+    let back = read(&doc);
+    for g in back.value().generators() {
+        let source = module
+            .value()
+            .generators()
+            .iter()
+            .find(|s| s.bus == g.bus)
+            .unwrap();
+        assert_eq!(g.vg, source.vg);
+    }
+    assert!(back.value().buses().iter().all(|b| (b.vm - 1.0).abs() < f64::EPSILON));
+
+    // Editing the setpoint in PowerSystems changes Vg while the original Vm survives.
+    let bus = doc["data"]["components"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["__metadata__"]["type"] == "ACBus" && r["number"] == 1)
+        .unwrap();
+    bus["magnitude"] = serde_json::json!(1.06);
+    let edited = read(&doc);
+    let at_slack = edited
+        .value()
+        .generators()
+        .iter()
+        .find(|g| g.bus.0 == 1)
+        .unwrap();
+    assert_eq!(at_slack.vg, 1.06);
+    assert_eq!(
+        edited
+            .value()
+            .buses()
+            .iter()
+            .find(|b| b.id.0 == 1)
+            .unwrap()
+            .vm,
+        1.0
+    );
+}
+
+#[test]
+fn powersystems_keeps_an_initial_voltage_equal_to_the_setpoint() {
+    let mut module =
+        powerio_tx::parse(Source::from_memory("case2kv.m", CASE2KV.as_bytes().to_vec()).unwrap())
+            .unwrap();
+    let out = emit_module(&module, TargetFormat::PowerSystemsJson).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let bus = doc["data"]["components"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["__metadata__"]["type"] == "ACBus" && r["number"] == 1)
+        .unwrap();
+    bus["magnitude"] = serde_json::json!(1.05);
+    let back = powerio_tx::parse(
+        Source::from_memory("system.json", serde_json::to_vec(&doc).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(back.value().generators()[0].vg, 1.05);
+    assert_eq!(back.value().buses()[0].vm, 1.0);
+
+    module.value_mut().buses_mut()[0].vm = f64::NAN;
+    assert!(emit_module(&module, TargetFormat::PowerSystemsJson).is_err());
+}
+
+#[test]
+fn powersystems_uses_the_first_local_regulator_and_retains_other_setpoints() {
+    let source = Source::from_memory("case2kv.m", CASE2KV.as_bytes().to_vec()).unwrap();
+    let mut module = powerio_tx::parse(source).unwrap();
+    let net = module.value_mut();
+    let mut g = net.generators()[0].clone();
+    net.generators_mut().clear();
+    for (uid, bus, vg, online, regulating, remote) in [
+        ("offline", 1, 0.96, false, true, None),
+        ("disabled", 1, 0.97, true, false, None),
+        ("remote", 1, 0.98, true, true, Some(2)),
+        ("first", 1, 1.04, true, true, None),
+        ("second", 1, 1.07, true, true, None),
+        ("pq", 2, 1.02, true, true, None),
+    ] {
+        g.energy_source = if uid == "first" {
+            powerio_tx::network::GeneratorEnergySource::Hydro
+        } else {
+            powerio_tx::network::GeneratorEnergySource::Thermal
+        };
+        g.uid = Some(uid.into());
+        g.bus = powerio_tx::network::BusId(bus);
+        g.vg = vg;
+        g.in_service = online;
+        g.voltage_regulation_on = regulating;
+        g.regulated_bus = remote.map(powerio_tx::network::BusId);
+        net.generators_mut().push(g.clone());
+    }
+    let out = emit_module(&module, TargetFormat::PowerSystemsJson).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let buses = powersystems_rows(&doc, "ACBus");
+    assert_eq!(
+        buses.iter().find(|b| b["number"] == 1).unwrap()["magnitude"],
+        1.04
+    );
+    assert_eq!(
+        buses.iter().find(|b| b["number"] == 2).unwrap()["magnitude"],
+        1.0
+    );
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.code() == "EMIT.SIENNA.VALUE_COLLAPSED" && d.message().contains("bus 1"))
+    );
+    let back =
+        powerio_tx::parse(Source::from_memory("system.json", out.text.into_bytes()).unwrap())
+            .unwrap();
+    let fresh = emit_value(back.value(), TargetFormat::PowerSystemsJson).unwrap();
+    let fresh: serde_json::Value = serde_json::from_str(&fresh.text).unwrap();
+    assert_eq!(
+        powersystems_rows(&fresh, "ACBus")
+            .iter()
+            .find(|b| b["number"] == 1)
+            .unwrap()["magnitude"],
+        1.04
+    );
+    for expected in module.value().generators() {
+        let actual = back
+            .value()
+            .generators()
+            .iter()
+            .find(|g| g.uid == expected.uid)
+            .unwrap();
+        assert_eq!(actual.vg, expected.vg);
+        assert_eq!(actual.voltage_regulation_on, expected.voltage_regulation_on);
+        assert_eq!(actual.regulated_bus, expected.regulated_bus);
+    }
+
+    // PowerSystems identifies the remote bus by UUID, even if it is renumbered.
+    let mut renumbered = doc;
+    let pq = renumbered["data"]["components"].as_array_mut().unwrap().iter_mut()
+        .find(|r| r["__metadata__"]["type"] == "ACBus" && r["number"] == 2).unwrap();
+    pq["number"] = serde_json::json!(20);
+    let back = powerio_tx::parse(Source::from_memory("system.json", serde_json::to_vec(&renumbered).unwrap()).unwrap()).unwrap();
+    let remote = back.value().generators().iter().find(|g| g.uid.as_deref() == Some("remote")).unwrap();
+    assert_eq!(remote.regulated_bus, Some(powerio_tx::network::BusId(20)));
+
+}
+
+#[test]
 fn powersystems_writes_a_branch_across_voltage_levels_as_a_tap_transformer() {
     let source = Source::from_memory("case2kv.m", CASE2KV.as_bytes().to_vec()).unwrap();
     let module = powerio_tx::parse(source).unwrap();

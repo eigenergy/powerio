@@ -1,5 +1,95 @@
-use super::{BTreeMap, Diagnostics, Value, codes, json};
+use super::{BTreeMap, BalancedNetwork, Bus, BusId, BusType, Diagnostics, Value, codes, json};
 use crate::network::{Generator, GeneratorEnergySource};
+
+/// Only an enabled local regulator can supply its terminal bus's setpoint.
+pub(super) fn regulates_own_bus(g: &Generator) -> bool {
+    g.in_service && g.voltage_regulation_on && g.regulated_bus.is_none_or(|bus| bus == g.bus)
+}
+
+/// PowerSystems holds one magnitude per PV or reference bus. Use input order
+/// to choose between controllers and identify each competing target in the diagnostic.
+pub(super) fn bus_setpoints(
+    net: &BalancedNetwork,
+    buses: &BTreeMap<BusId, &Bus>,
+    warnings: &mut Diagnostics,
+) -> crate::Result<BTreeMap<BusId, f64>> {
+    let mut setpoints = BTreeMap::new();
+    for g in net.generators() {
+        if !regulates_own_bus(g) || !matches!(buses[&g.bus].kind, BusType::Pv | BusType::Ref) {
+            continue;
+        }
+        if !g.vg.is_finite() {
+            return Err(super::error(format!(
+                "non-finite generator voltage setpoint at bus {}",
+                g.bus.0
+            )));
+        }
+        let first = *setpoints.entry(g.bus).or_insert(g.vg);
+        if (first - g.vg).abs() > 1e-12 {
+            warnings.push(&codes::EMIT_SIENNA.value_collapsed, format!(
+                "bus {}: PowerSystems uses the first in-service regulator's voltage setpoint {first} pu; generator {:?} requests {} pu",
+                g.bus.0, g.uid, g.vg
+            ));
+        }
+    }
+    Ok(setpoints)
+}
+
+pub(super) fn record_voltage_and_caps(
+    doc: &mut Value,
+    id: i64,
+    g: &Generator,
+    bus_vm: f64,
+    setpoint: Option<f64>,
+    powersystems_buses: Option<&BTreeMap<BusId, i64>>,
+    warnings: &mut Diagnostics,
+) -> crate::Result<()> {
+    let local = setpoint.filter(|_| regulates_own_bus(g));
+    let native_vg = local == Some(g.vg);
+    let fields: &[&str] = if native_vg {
+        &["uid", "caps"]
+    } else {
+        &["uid", "vg", "caps"]
+    };
+    super::metadata::record(doc, id, g, fields)?;
+    if let Some(buses) = powersystems_buses
+        && (!g.voltage_regulation_on || g.regulated_bus.is_some()) {
+        let extra = super::metadata::ext_mut(doc, id);
+        extra["voltage_regulation_on"] = json!(g.voltage_regulation_on);
+        if let Some(bus) = g.regulated_bus {
+            extra["regulated_bus_component"] = json!(buses[&bus]);
+        }
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!("generator {id}: voltage regulation settings are retained in ext"),
+        );
+    }
+    let has_caps = g.caps.iter().flatten().any(|x| *x != 0.0);
+    if powersystems_buses.is_none() {
+        if (g.vg - bus_vm).abs() > 1e-12 || has_caps {
+            warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: voltage setpoint and capability columns without native fields are retained in ext; a Sienna consumer must explicitly handle those extension keys"));
+        }
+        return Ok(());
+    }
+    // Disagreeing local controllers have already been reported at their bus.
+    if local.is_none() && (g.vg - setpoint.unwrap_or(bus_vm)).abs() > 1e-12 {
+        let fields = if has_caps {
+            "voltage setpoint and capability columns"
+        } else {
+            "voltage setpoint"
+        };
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!("generator {id}: ext retains {fields} without native fields"),
+        );
+    } else if has_caps {
+        warnings.push(
+            &codes::EMIT_SIENNA.field_dropped,
+            format!("generator {id}: ext retains capability columns without native fields"),
+        );
+    }
+    Ok(())
+}
 
 /// The schema components a balanced generator can come from, in the order a
 /// retained row is looked up.

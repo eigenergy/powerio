@@ -265,6 +265,7 @@ pub(super) fn read(
     }
     let (areas, area_numbers, zone_numbers) = areas::read(root)?;
     let mut buses = Vec::new();
+    let mut native_setpoints = BTreeMap::new();
     let mut ids = BTreeMap::new();
     let mut numbers = BTreeSet::new();
     for row in rows(root, "ACBus")? {
@@ -313,6 +314,11 @@ pub(super) fn read(
                     format!("ACBus {id}: {field} absent; using the electrical profile default"),
                 );
             }
+        }
+        let extra = metadata::ext(root, id);
+        if matches!(bus.kind, BusType::Pv | BusType::Ref) && extra.get("bus_vm").is_some() {
+            native_setpoints.insert(bus.id, bus.vm);
+            bus.vm = number(extra, "bus_vm")?;
         }
         ids.insert(id, bus.id);
         metadata::restore(root, row, &mut bus, &["uid", "name", "extras"])?;
@@ -582,6 +588,7 @@ pub(super) fn read(
         shunts.push(shunts::read(root, row, &ids, &by_bus, actual)?);
     }
     let mut generators = Vec::new();
+    let mut first_regulator = BTreeMap::new();
     for kind in generators::KNOWN {
         for row in rows(root, kind)? {
             let p = power_scale(row)?;
@@ -615,7 +622,10 @@ pub(super) fn read(
             g.qmin = lo * p;
             g.qmax = hi * p;
             g.mbase = base(row)?;
-            g.vg = by_bus[&bus].vm;
+            g.vg = native_setpoints
+                .get(&bus)
+                .copied()
+                .unwrap_or(by_bus[&bus].vm);
             g.in_service = available(row)?
                 && row
                     .get("status")
@@ -625,13 +635,37 @@ pub(super) fn read(
             if let Some(c) = row.get("operation_cost") {
                 g.cost = read_cost(c, g.mbase, warnings)?;
             }
-            metadata::restore(root, row, &mut g, &["uid", "vg", "caps"])?;
+            metadata::restore(
+                root,
+                row,
+                &mut g,
+                &[
+                    "uid",
+                    "vg",
+                    "caps",
+                    "voltage_regulation_on",
+                    "regulated_bus",
+                ],
+            )?;
             if metadata::ext(root, integer(row, "id")?)["operation_cost_absent"] == true
                 && generators::absent_placeholder(g.cost.as_ref(), warnings.len() == cost_findings)
             {
                 g.cost = None;
             }
+            // Classes are read in groups. Keep a controller that follows the
+            // native setpoint ahead of competing controllers at the same bus.
+            let index = generators.len();
+            let mut position = index;
+            if native_setpoints.contains_key(&bus) && generators::regulates_own_bus(&g) {
+                let first = first_regulator.entry(bus).or_insert(Some(index));
+                if metadata::ext(root, integer(row, "id")?).get("vg").is_none()
+                    && let Some(earlier) = first.take()
+                {
+                    position = earlier;
+                }
+            }
             generators.push(g);
+            generators.swap(index, position);
         }
     }
     let mut storage = Vec::new();
@@ -1150,6 +1184,12 @@ pub(super) fn write_document(
         doc["schema_version"] = json!(format!("0.{selected}.0"));
     }
     let [area_ids, zone_ids] = areas::write(net, &mut doc, &mut ids, &mut warnings, selected)?;
+    let bus_by_id: BTreeMap<BusId, &Bus> = net.buses().iter().map(|b| (b.id, b)).collect();
+    let setpoints = if powersystems {
+        generators::bus_setpoints(net, &bus_by_id, &mut warnings)?
+    } else {
+        BTreeMap::new()
+    };
     for b in net.buses() {
         let id = ids.get(b.uid.as_deref());
         if let Some(written) = written.as_deref_mut() {
@@ -1157,13 +1197,24 @@ pub(super) fn write_document(
         }
         bus_ids.insert(b.id, id);
         metadata::record(&mut doc, id, b, &["uid", "name", "extras"])?;
+        let magnitude = if let Some(&target) = setpoints.get(&b.id) {
+            if !b.vm.is_finite() {
+                return Err(error(format!(
+                    "non-finite bus voltage magnitude at bus {}",
+                    b.id.0
+                )));
+            }
+            metadata::ext_mut(&mut doc, id)["bus_vm"] = json!(b.vm);
+            target
+        } else {
+            b.vm
+        };
         push(
             &mut doc,
             "ACBus",
-            json!({"id":id,"number":b.id.0,"name":b.name.clone().unwrap_or_else(||b.id.0.to_string()),"available":b.kind!=BusType::Isolated,"area":area_ids[&b.area],"load_zone":zone_ids[&b.zone],"bustype":match b.kind {BusType::Pq=>"PQ",BusType::Pv=>"PV",BusType::Ref=>"REF",BusType::Isolated=>"ISOLATED"},"base_voltage":b.base_kv,"angle":b.va.to_radians(),"magnitude":b.vm,"voltage_limits":minmax(b.vmin,b.vmax)}),
+            json!({"id":id,"number":b.id.0,"name":b.name.clone().unwrap_or_else(||b.id.0.to_string()),"available":b.kind!=BusType::Isolated,"area":area_ids[&b.area],"load_zone":zone_ids[&b.zone],"bustype":match b.kind {BusType::Pq=>"PQ",BusType::Pv=>"PV",BusType::Ref=>"REF",BusType::Isolated=>"ISOLATED"},"base_voltage":b.base_kv,"angle":b.va.to_radians(),"magnitude":magnitude,"voltage_limits":minmax(b.vmin,b.vmax)}),
         );
     }
-    let bus_by_id: BTreeMap<BusId, &Bus> = net.buses().iter().map(|b| (b.id, b)).collect();
     for b in net.branches() {
         let id = ids.get(b.uid.as_deref());
         if let Some(written) = written.as_deref_mut() {
@@ -1341,11 +1392,15 @@ pub(super) fn write_document(
         if let Some(written) = written.as_deref_mut() {
             written.generators.push(id);
         }
-        metadata::record(&mut doc, id, g, &["uid", "vg", "caps"])?;
-        if (g.vg - bus_by_id[&g.bus].vm).abs() > 1e-12 || g.caps.iter().flatten().any(|x| *x != 0.0)
-        {
-            warnings.push(&codes::EMIT_SIENNA.field_dropped, format!("generator {id}: voltage setpoint and capability columns without native fields are retained in ext; a Sienna consumer must explicitly handle those extension keys"));
-        }
+        generators::record_voltage_and_caps(
+            &mut doc,
+            id,
+            g,
+            bus_by_id[&g.bus].vm,
+            setpoints.get(&g.bus).copied(),
+            powersystems.then_some(&bus_ids),
+            &mut warnings,
+        )?;
         let cost = cost_json(g.cost.as_ref(), &mut warnings);
         let mut row = json!({"id":id,"name":format!("generator_{id}"),"available":g.in_service,"status":if g.in_service {"ONLINE"}else{"OFFLINE"},"bus":bus_ids[&g.bus],"active_power":g.pg,"reactive_power":g.qg,"rating":g.mbase.max(g.pmax.abs()).max(g.pg.abs()),"active_power_limits":minmax(g.pmin,g.pmax),"reactive_power_limits":minmax(g.qmin,g.qmax),"base_power":if g.mbase>0.0 {g.mbase}else{net.base_mva()},"power_units":"NATURAL_UNITS","operation_cost":cost});
         if g.qmin.is_nan()
