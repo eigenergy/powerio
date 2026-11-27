@@ -2299,7 +2299,7 @@ fn write_source_loading_limits(
         format!("{}.value", context.class)
     };
     if let Some(value) = context.limits.permanent_limit {
-        if value.is_finite() && value > 0.0 {
+        if value.is_finite() && value >= 0.0 {
             let type_id = source_limit_type(types, "patl", 0, true);
             let id = det_mrid(
                 "source_limit",
@@ -2320,15 +2320,15 @@ fn write_source_loading_limits(
             body.close(context.class);
         } else {
             warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
-                "operational limit set `{}` {} permanent limit `{value}` was not emitted because a CGMES limit must be positive and finite",
+                "operational limit set `{}` {} permanent limit `{value}` was not emitted because a CGMES limit must be nonnegative and finite",
                 context.group_id, context.class
             ));
         }
     }
     for (index, limit) in context.limits.temporary_limits.iter().enumerate() {
-        if !limit.value.is_finite() || limit.value <= 0.0 {
+        if !limit.value.is_finite() || limit.value < 0.0 {
             warnings.push_as(&codes::EMIT_CGMES.record_dropped, format!(
-                "operational limit set `{}` {} temporary limit `{}` with value `{}` and duration {} seconds was not emitted because a CGMES limit must be positive and finite",
+                "operational limit set `{}` {} temporary limit `{}` with value `{}` and duration {} seconds was not emitted because a CGMES limit must be nonnegative and finite",
                 context.group_id,
                 context.class,
                 limit.name,
@@ -4093,9 +4093,6 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             "network validation failed before CGMES emission: {error}"
         ))
     })?;
-    // Every ohm and siemens value is a per unit value times a base over the
-    // system base; refuse a base none can be formed over.
-    net.check_base_mva()?;
     // A CGMES BaseVoltage states a positive nominal voltage, and a per-unit
     // only case states none. The substitution keeps the per-unit model exact,
     // and the diagnostic below names the buses it applied to.
@@ -6014,7 +6011,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
         if linear {
             eq.text(
                 "LinearShuntCompensator.bPerSection",
-                powerio_core::electrical::calc_rated_admittance(sections[0].1, kv),
+                sections[0].1 / (kv * kv),
             );
             if !field_was_omitted(
                 detailed,
@@ -6024,7 +6021,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             ) {
                 eq.text(
                     "LinearShuntCompensator.gPerSection",
-                    powerio_core::electrical::calc_rated_admittance(sections[0].0, kv),
+                    sections[0].0 / (kv * kv),
                 );
             }
         }
@@ -6055,20 +6052,14 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     &id,
                 );
                 eq.text("NonlinearShuntCompensatorPoint.sectionNumber", section + 1);
-                eq.text(
-                    "NonlinearShuntCompensatorPoint.b",
-                    powerio_core::electrical::calc_rated_admittance(b, kv),
-                );
+                eq.text("NonlinearShuntCompensatorPoint.b", b / (kv * kv));
                 if !field_was_omitted(
                     detailed,
                     "shunt",
                     local_id,
                     OmittedFieldName::ShuntConductancePerSection,
                 ) {
-                    eq.text(
-                        "NonlinearShuntCompensatorPoint.g",
-                        powerio_core::electrical::calc_rated_admittance(g, kv),
-                    );
+                    eq.text("NonlinearShuntCompensatorPoint.g", g / (kv * kv));
                 }
                 eq.close("NonlinearShuntCompensatorPoint");
             }
@@ -6491,10 +6482,8 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             &mut w.warnings,
         );
         let kv = w.kv(branch.from)?;
-        let z_base =
-            powerio_core::electrical::calc_impedance_base(kv, net.base_mva()).unwrap_or(f64::NAN);
-        let y_base =
-            powerio_core::electrical::calc_admittance_base(kv, net.base_mva()).unwrap_or(f64::NAN);
+        let z_base = kv * kv / net.base_mva();
+        let y_base = net.base_mva() / (kv * kv);
         let charging = branch.calc_terminal_charging();
         let emits_as_transformer =
             branch.is_transformer() || source_branch_is_power_transformer(detailed, local_id);
@@ -6650,12 +6639,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             );
             // A generated linear phase tap has constant reactance on its
             // owning winding's base, exactly as stated on end 1 below.
-            let primary_x = branch.x
-                * powerio_core::electrical::calc_impedance_base(
-                    u1,
-                    net.base_mva() * secondary_scale,
-                )
-                .unwrap_or(f64::NAN);
+            let primary_x = branch.x * (u1 * u1 / (net.base_mva() * secondary_scale));
             let source_phase_1 = source_tap_changer(detailed, local_id, 1, TapChangerKind::Phase);
             let source_phase_2 = source_tap_changer(detailed, local_id, 2, TapChangerKind::Phase);
             let source_shift = source_phase_1
@@ -6711,11 +6695,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                 };
                 // The reader folds the secondary tap into the branch's
                 // impedance and terminal shunts; undo it in the winding data.
-                let end_z_base = powerio_core::electrical::calc_impedance_base(
-                    u,
-                    net.base_mva() * secondary_scale,
-                )
-                .unwrap_or(f64::NAN);
+                let end_z_base = u * u / (net.base_mva() * secondary_scale);
                 let (end_r, end_x) = if endno == 1 {
                     (branch.r * end_z_base, primary_x)
                 } else {
@@ -6859,11 +6839,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                     "OperationalLimit.OperationalLimitType",
                     &det_mrid("limittype", kind),
                 );
-                let amps = powerio_core::electrical::calc_line_current(
-                    mva * 1000.0,
-                    kv,
-                    powerio_core::electrical::SQRT_3,
-                );
+                let amps = mva * 1000.0 / (3f64.sqrt() * kv);
                 if v3 {
                     limit_body.text("CurrentLimit.normalValue", amps);
                 } else {
@@ -6961,8 +6937,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
             } else {
                 bus_kv
             };
-            let z_base = powerio_core::electrical::calc_impedance_base(rated_kv, net.base_mva())
-                .unwrap_or(f64::NAN);
+            let z_base = rated_kv * rated_kv / net.base_mva();
             let (star_r, star_x) = star_impedances[index];
             let base_ratio = rated_kv / bus_kv;
             let tap_factor = if base_ratio > 0.0 {
@@ -7145,11 +7120,7 @@ pub fn write_cgmes(net: &BalancedNetwork, version: CgmesVersion) -> Result<Cgmes
                         "OperationalLimit.OperationalLimitType",
                         &det_mrid("limittype", kind),
                     );
-                    let amps = powerio_core::electrical::calc_line_current(
-                        mva * 1000.0,
-                        bus_kv,
-                        powerio_core::electrical::SQRT_3,
-                    );
+                    let amps = mva * 1000.0 / (3f64.sqrt() * bus_kv);
                     if v3 {
                         limit_body.text("CurrentLimit.normalValue", amps);
                     } else {
@@ -7705,4 +7676,85 @@ fn rdf_object_reference_id(value: &str) -> Option<&str> {
         .or_else(|| value.strip_prefix('#'))
         .or_else(|| value.strip_prefix("urn:uuid:"))
         .filter(|id| !id.is_empty())
+}
+
+#[cfg(test)]
+mod operational_limit_tests {
+    use super::*;
+
+    #[test]
+    fn zero_loading_limits_are_emitted_for_both_cgmes_versions() {
+        for (version, value_property) in [
+            (CgmesVersion::V2_4_15, "ApparentPowerLimit.value"),
+            (CgmesVersion::V3_0, "ApparentPowerLimit.normalValue"),
+        ] {
+            let limits = LoadingLimits {
+                permanent_limit: Some(0.0),
+                permanent_limit_name: Some("zero permanent".into()),
+                temporary_limits: vec![crate::network::TemporaryLimit {
+                    name: "zero temporary".into(),
+                    value: 0.0,
+                    acceptable_duration_seconds: 30,
+                    fictitious: false,
+                }],
+            };
+            let mut body = Doc::new(Arc::new(HashMap::new()));
+            let mut types = Vec::new();
+            let mut warnings = CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped);
+
+            write_source_loading_limits(
+                &mut body,
+                &mut types,
+                LimitWriteContext {
+                    version,
+                    group_id: "group",
+                    class: "ApparentPowerLimit",
+                    limits: &limits,
+                },
+                &mut warnings,
+            );
+
+            assert_eq!(body.body.matches("<cim:ApparentPowerLimit ").count(), 2);
+            assert!(
+                body.body
+                    .contains(&format!("<cim:{value_property}>0</cim:{value_property}>")),
+                "{version:?}: {}",
+                body.body
+            );
+            assert!(
+                warnings.is_empty(),
+                "{version:?} unexpectedly emitted warnings"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_and_nonfinite_loading_limits_are_not_emitted() {
+        let limits = LoadingLimits {
+            permanent_limit: Some(-1.0),
+            permanent_limit_name: Some("negative".into()),
+            temporary_limits: vec![crate::network::TemporaryLimit {
+                name: "nonfinite".into(),
+                value: f64::INFINITY,
+                acceptable_duration_seconds: 30,
+                fictitious: false,
+            }],
+        };
+        let mut body = Doc::new(Arc::new(HashMap::new()));
+        let mut types = Vec::new();
+        let mut warnings = CgmesDiagnostics::new(&codes::EMIT_CGMES.record_dropped);
+        write_source_loading_limits(
+            &mut body,
+            &mut types,
+            LimitWriteContext {
+                version: CgmesVersion::V3_0,
+                group_id: "group",
+                class: "ApparentPowerLimit",
+                limits: &limits,
+            },
+            &mut warnings,
+        );
+        assert_eq!(body.body, "");
+        assert_eq!(warnings.len(), 2);
+    }
 }
